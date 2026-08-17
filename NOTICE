@@ -1,0 +1,19 @@
+Cageforge
+
+Cageforge is an independent project. It is not affiliated with, sponsored by,
+or endorsed by OpenAI.
+
+Source-derived portions of Cageforge are based on open-source sandboxing code
+from OpenAI Codex:
+https://github.com/openai/codex
+
+Copyright 2025 OpenAI.
+The applicable source-derived portions are licensed under the Apache License,
+Version 2.0, and have been reorganized and modified for Cageforge.
+
+This attribution is informational and does not grant permission to use OpenAI
+or Codex as the name or branding of this project.
+
+The initial architecture scaffold does not yet include the source-derived
+implementation. The release notice must be reviewed against the actual files
+and bundled components before every distribution.
