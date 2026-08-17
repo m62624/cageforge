@@ -25,6 +25,12 @@ were:
 This is a behavioral and boundary audit. Neither current Cageforge crate
 contains copied or source-derived Codex implementation.
 
+The audit was rechecked against the same local Codex `main` commit on
+2026-08-17. The portable policy and command boundaries remain aligned with the
+reviewed protocol, sandboxing, app-server, and execution inputs. The commit is
+now frozen in `upstream-review.toml`; future changes are review candidates for
+these two crates and are not pulled or merged automatically.
+
 ## Findings
 
 Every public item has one of three jobs:

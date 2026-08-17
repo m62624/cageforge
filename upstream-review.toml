@@ -1,31 +1,33 @@
 # Read-only upstream tracking configuration.
 #
 # The commit is metadata only. No upstream source snapshot is stored in this
-# repository. Fill this in after the first source audit and manual port.
+# repository. The baseline is intentionally frozen until a deliberate manual
+# Cageforge review selects a newer Codex commit.
 
 [upstream]
 repository = "https://github.com/openai/codex.git"
 path = "../codex"
 branch = "main"
-last_adapted_commit = ""
+last_adapted_commit = "c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc"
 
 [[scope]]
-name = "sandboxing"
-upstream_paths = ["codex-rs/sandboxing/"]
-local_paths = [
-    "crates/cageforge-core/",
-    "crates/cageforge-macos/",
-]
-
-[[scope]]
-name = "linux-sandbox"
+name = "cageforge-policy"
 upstream_paths = [
-    "codex-rs/linux-sandbox/",
-    "codex-rs/bwrap/",
+    "codex-rs/protocol/src/permissions.rs",
+    "codex-rs/protocol/src/models.rs",
+    "codex-rs/protocol/src/protocol.rs",
+    "codex-rs/sandboxing/src/policy_transforms.rs",
 ]
-local_paths = ["crates/cageforge-linux/"]
+local_paths = ["crates/cageforge-policy/"]
 
 [[scope]]
-name = "windows-sandbox"
-upstream_paths = ["codex-rs/windows-sandbox-rs/"]
-local_paths = ["crates/cageforge-windows/"]
+name = "cageforge-command"
+upstream_paths = [
+    "codex-rs/app-server-protocol/src/protocol/v2/command_exec.rs",
+    "codex-rs/app-server-protocol/src/protocol/v2/process.rs",
+    "codex-rs/protocol/src/models.rs",
+    "codex-rs/protocol/src/config_types.rs",
+    "codex-rs/sandboxing/src/spawn.rs",
+    "codex-rs/core/src/exec.rs",
+]
+local_paths = ["crates/cageforge-command/"]

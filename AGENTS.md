@@ -48,6 +48,10 @@ These rules are mandatory:
     Keep representations private, validate NUL/parent-traversal and mode
     invariants before backend handoff, and cover native POSIX and Windows path
     forms through black-box tests before widening the API.
+11. Keep the Codex baseline in `upstream-review.toml` frozen until a deliberate
+    review approves an advance. Never pull or fetch Codex automatically; the
+    upstream-review tool is read-only and only compares an externally updated
+    checkout.
 
 When in doubt, stop and update the specification or provenance records before
 changing source code.

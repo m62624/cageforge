@@ -1,6 +1,6 @@
 # Specification 0004: Upstream Review Tool
 
-Status: draft
+Status: accepted
 
 ## Purpose
 
@@ -22,8 +22,11 @@ The repository root contains upstream-review.toml. It records:
 - the full commit SHA represented by the current Cageforge adaptation;
 - explicit upstream scopes and their local Cageforge destinations.
 
-The initial pre-port configuration may leave last_adapted_commit empty. A diff
-is not allowed until an audited commit has been selected.
+The current configuration records the audited baseline
+`c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` for the first two independent
+Cageforge library crates. This baseline is frozen: the tool never pulls Codex,
+changes the commit, or imports source. Advancing it requires a manual review
+and an explicit configuration change.
 
 ## Commands
 
@@ -39,8 +42,10 @@ require the external checkout to exist.
 
 ## Review boundary
 
-The tool compares upstream commit A to upstream commit B. It does not claim
-that a rewritten Cageforge implementation is textually equivalent to Codex.
+The tool compares upstream commit A to upstream commit B. The configured
+`cageforge-policy` and `cageforge-command` scopes are behavioral review scopes;
+they do not claim that a rewritten Cageforge implementation is textually
+equivalent to Codex or source-derived from it.
 The manual provenance mapping in UPSTREAM.md remains authoritative for
 source-derived files and must record each imported path, commit, local path,
 license, and material adaptation.
