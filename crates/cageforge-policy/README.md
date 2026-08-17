@@ -1,9 +1,8 @@
-> ⚠️ **Provenance and independence**
+> ⚠️ **Independent project**
 >
-> Cageforge is an independent project. It is not affiliated with, sponsored by,
-> or endorsed by OpenAI. This crate was independently implemented in Cageforge.
-> Its behavior was reviewed against the open-source OpenAI Codex sandbox; it
-> contains no copied or source-derived Codex code.
+> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
+> crate adapts sandbox design ideas from open-source OpenAI Codex into an
+> independent library API and contains no copied Codex source.
 
 # cageforge-policy
 
@@ -53,8 +52,7 @@ an unchecked path selector by writing a public enum payload.
 
 The built-in `SandboxPolicy::read_only`, `SandboxPolicy::workspace`, and
 `SandboxPolicy::full_access` constructors are Cageforge presets. They are not
-aliases for Codex configuration fields and do not preserve a legacy policy
-system.
+legacy configuration aliases and do not preserve a second policy system.
 
 ## Quick start
 
@@ -119,21 +117,6 @@ normalized rules before compiling native enforcement.
 Network policy is independent from filesystem policy. A future backend may
 enforce domains through a proxy, firewall, or another native mechanism; this
 crate does not select or configure that mechanism.
-
-## Codex relationship
-
-The API boundary was checked against Codex filesystem policy, special-path,
-network, and native sandbox behavior. That review informed which portable
-semantics belong here, including recursive matching, external enforcement,
-read-only carve-outs, missing-path behavior, and explicit network defaults.
-The review is not a source import. The exact audit and keep/remove decisions
-are recorded in
-[`specs/0003-crate-api-audit.md`](https://github.com/m62624/cageforge/blob/main/specs/0003-crate-api-audit.md).
-
-If a future Cageforge crate contains copied or materially adapted upstream
-source, its README and source headers will name the exact upstream repository,
-commit, and path and will retain the applicable copyright and license notices.
-The current crate does not require a source-derived header.
 
 ## Tests and API documentation
 

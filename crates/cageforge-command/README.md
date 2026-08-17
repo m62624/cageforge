@@ -1,9 +1,8 @@
-> ⚠️ **Provenance and independence**
+> ⚠️ **Independent project**
 >
-> Cageforge is an independent project. It is not affiliated with, sponsored by,
-> or endorsed by OpenAI. This crate was independently implemented in Cageforge.
-> Its behavior was reviewed against the open-source OpenAI Codex execution
-> boundary; it contains no copied or source-derived Codex code.
+> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
+> crate adapts sandbox design ideas from open-source OpenAI Codex into an
+> independent library API and contains no copied Codex source.
 
 # cageforge-command
 
@@ -84,9 +83,9 @@ explicit `with_var` and `without_var` overrides. Setting a variable to an empty
 value is different from removing it. Names reject empty strings, `=`, and NUL;
 values reject NUL.
 
-The type does not reproduce Codex's product-specific environment filtering.
-Filtering, if needed, belongs in a future config or backend layer and must
-produce this canonical request model.
+The type does not include product-specific environment filtering. Filtering, if
+needed, belongs in a future config or backend layer and must produce this
+canonical request model.
 
 ## Standard streams and timeout
 
@@ -104,22 +103,6 @@ methods support independent routing with `Inherit`, `Null`, or `Pipe`.
 Cancellation is a separate lifecycle signal and can still terminate a request
 in any timeout state. PTY allocation, output caps, streaming, and process
 handles belong to a backend or harness adapter.
-
-## Codex relationship
-
-The request boundary was checked against Codex's `command/exec` and
-`process/spawn` protocol models, sandbox spawn inputs, environment overrides,
-stdio setup, and execution expiration. This review established the portable
-fields that belong in this crate and the concerns that stay outside it.
-
-The review is not a source import. The exact audit and keep/remove decisions
-are recorded in
-[`specs/0003-crate-api-audit.md`](https://github.com/m62624/cageforge/blob/main/specs/0003-crate-api-audit.md).
-
-If a future Cageforge crate contains copied or materially adapted upstream
-source, its README and source headers will name the exact upstream repository,
-commit, and path and will retain the applicable copyright and license notices.
-The current crate does not require a source-derived header.
 
 ## Tests and API documentation
 
