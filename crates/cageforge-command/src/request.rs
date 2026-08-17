@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::{CommandError, CommandSpec, EnvironmentSpec, StdioSpec};
+use crate::{CommandError, CommandSpec, EnvironmentSpec, StdioSpec, TimeoutPolicy};
 
 /// A complete portable request to execute one command.
 ///
@@ -18,7 +18,7 @@ pub struct CommandRequest {
     working_directory: Option<PathBuf>,
     environment: EnvironmentSpec,
     stdio: StdioSpec,
-    timeout: Option<Duration>,
+    timeout: TimeoutPolicy,
 }
 
 impl CommandRequest {
@@ -30,7 +30,7 @@ impl CommandRequest {
             working_directory: None,
             environment: EnvironmentSpec::default(),
             stdio: StdioSpec::default(),
-            timeout: None,
+            timeout: TimeoutPolicy::default(),
         }
     }
 
@@ -69,15 +69,28 @@ impl CommandRequest {
         self
     }
 
-    /// Sets the maximum execution duration.
+    /// Sets an explicit maximum execution duration.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
+        self.timeout = TimeoutPolicy::Limit(timeout);
         self
     }
 
-    /// Removes the execution timeout.
-    pub fn without_timeout(mut self) -> Self {
-        self.timeout = None;
+    /// Replaces the timeout intent with an explicit policy.
+    pub fn with_timeout_policy(mut self, timeout: TimeoutPolicy) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Uses the timeout selected by the backend or resolved profile.
+    pub fn use_backend_timeout(mut self) -> Self {
+        self.timeout = TimeoutPolicy::BackendDefault;
+        self
+    }
+
+    /// Disables the automatic timeout while leaving cancellation available to
+    /// the execution lifecycle.
+    pub fn disable_timeout(mut self) -> Self {
+        self.timeout = TimeoutPolicy::Disabled;
         self
     }
 
@@ -101,8 +114,8 @@ impl CommandRequest {
         self.stdio
     }
 
-    /// Returns the optional maximum execution duration.
-    pub fn timeout(&self) -> Option<Duration> {
+    /// Returns the timeout intent.
+    pub fn timeout_policy(&self) -> TimeoutPolicy {
         self.timeout
     }
 }

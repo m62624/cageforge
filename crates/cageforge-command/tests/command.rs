@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use cageforge_command::{
     CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentOverride,
-    EnvironmentSpec, StdioMode, StdioSpec,
+    EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
 use pretty_assertions::assert_eq;
 
@@ -154,21 +154,34 @@ fn request_composes_command_environment_stdio_cwd_and_timeout() {
     );
     assert_eq!(request.environment(), &environment);
     assert_eq!(request.stdio(), StdioSpec::inherited());
-    assert_eq!(request.timeout(), Some(Duration::from_secs(5)));
+    assert_eq!(
+        request.timeout_policy(),
+        TimeoutPolicy::Limit(Duration::from_secs(5))
+    );
 }
 
 #[test]
-fn request_can_remove_optional_values() {
+fn request_exposes_all_timeout_states_and_can_remove_cwd() {
     let command = CommandSpec::new("tool").expect("program should be accepted");
     let request = CommandRequest::new(command)
         .with_working_directory("workspace")
         .expect("non-empty cwd should be accepted")
         .with_timeout(Duration::ZERO)
         .without_working_directory()
-        .without_timeout();
+        .disable_timeout();
 
     assert_eq!(request.working_directory(), None);
-    assert_eq!(request.timeout(), None);
+    assert_eq!(request.timeout_policy(), TimeoutPolicy::Disabled);
+    assert_eq!(
+        request.use_backend_timeout().timeout_policy(),
+        TimeoutPolicy::BackendDefault
+    );
+    assert_eq!(
+        CommandRequest::new(CommandSpec::new("tool").expect("program should be accepted"))
+            .with_timeout_policy(TimeoutPolicy::Limit(Duration::from_secs(2)))
+            .timeout_policy(),
+        TimeoutPolicy::Limit(Duration::from_secs(2))
+    );
 }
 
 #[test]

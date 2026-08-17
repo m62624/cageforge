@@ -13,7 +13,7 @@ The request model has explicit types for:
 - an optional working directory;
 - inherited or empty environments with explicit set/unset overrides;
 - stdin, stdout, and stderr routing;
-- an optional execution timeout.
+- an explicit timeout policy: backend default, duration limit, or disabled.
 
 The crate is intentionally independent from product-specific command names and
 legacy configuration formats.

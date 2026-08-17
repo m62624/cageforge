@@ -55,12 +55,26 @@ Each of stdin, stdout, and stderr independently uses `Inherit`, `Null`, or
 non-interactive harness. PTY allocation and terminal resizing remain backend or
 adapter concerns.
 
+### `TimeoutPolicy`
+
+Timeout intent has three states:
+
+- `BackendDefault` uses the default selected by the backend or resolved
+  profile;
+- `Limit(Duration)` applies an explicit maximum duration;
+- `Disabled` removes the automatic timeout.
+
+Cancellation is intentionally not a fourth timeout variant. It is a separate
+execution-lifecycle signal that can terminate a request regardless of its
+timeout policy, matching the separation in Codex's `ExecExpiration` and native
+Windows execution inputs.
+
 ### `CommandRequest`
 
 The request combines a command, optional native working directory, environment,
-stdio routing, and optional `Duration` timeout. Relative working-directory
-resolution is deliberately deferred to the backend boundary, where the
-execution context and policy are available.
+stdio routing, and a `TimeoutPolicy`. Relative working-directory resolution is
+deliberately deferred to the backend boundary, where the execution context and
+policy are available.
 
 ## Dependency boundary
 
