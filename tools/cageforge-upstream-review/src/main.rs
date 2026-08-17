@@ -25,6 +25,10 @@ struct Cli {
     #[arg(long, default_value = DEFAULT_CONFIG)]
     config: PathBuf,
 
+    /// External Codex checkout used by status and diff.
+    #[arg(long, env = "CAGEFORGE_UPSTREAM_PATH")]
+    upstream_path: Option<PathBuf>,
+
     #[command(subcommand)]
     command: CommandKind,
 }
@@ -74,9 +78,9 @@ struct Scope {
 #[derive(Debug)]
 struct Repository {
     cageforge_root: PathBuf,
-    upstream_root: PathBuf,
     config_path: PathBuf,
     config: Config,
+    upstream_path_override: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -92,7 +96,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
-    let repository = Repository::load(&cli.config)?;
+    let repository = Repository::load(&cli.config, cli.upstream_path)?;
     validate_config(&repository.config)?;
 
     match cli.command {
@@ -103,7 +107,7 @@ fn run(cli: Cli) -> Result<(), String> {
 }
 
 impl Repository {
-    fn load(config_path: &Path) -> Result<Self, String> {
+    fn load(config_path: &Path, upstream_path_override: Option<PathBuf>) -> Result<Self, String> {
         let config_path = if config_path.is_absolute() {
             config_path.to_path_buf()
         } else {
@@ -122,26 +126,45 @@ impl Repository {
             .parent()
             .ok_or_else(|| "configuration path has no parent".to_owned())?;
         let cageforge_root = git_output(config_dir, ["rev-parse", "--show-toplevel"])?;
-        let upstream_root = config_dir
-            .join(&config.upstream.path)
-            .canonicalize()
-            .map_err(|error| {
-                format!(
-                    "cannot resolve upstream checkout {}: {error}",
-                    config.upstream.path.display()
-                )
-            })?;
-        let upstream_root = PathBuf::from(git_output(
-            &upstream_root,
-            ["rev-parse", "--show-toplevel"],
-        )?);
 
         Ok(Self {
             cageforge_root: PathBuf::from(cageforge_root),
-            upstream_root,
             config_path,
             config,
+            upstream_path_override,
         })
+    }
+
+    fn upstream_root(&self) -> Result<PathBuf, String> {
+        let configured_path = self
+            .upstream_path_override
+            .as_ref()
+            .map(|path| {
+                if path.is_absolute() {
+                    path.clone()
+                } else {
+                    env::current_dir()
+                        .map(|directory| directory.join(path))
+                        .unwrap_or_else(|_| path.clone())
+                }
+            })
+            .unwrap_or_else(|| {
+                self.config_path
+                    .parent()
+                    .expect("canonical config path has a parent")
+                    .join(&self.config.upstream.path)
+            });
+        let upstream_path = configured_path.canonicalize().map_err(|error| {
+            format!(
+                "cannot resolve upstream checkout {}: {error}; pass --upstream-path or set CAGEFORGE_UPSTREAM_PATH",
+                configured_path.display()
+            )
+        })?;
+
+        Ok(PathBuf::from(git_output(
+            &upstream_path,
+            ["rev-parse", "--show-toplevel"],
+        )?))
     }
 
     fn upstream_ref(&self) -> String {
@@ -207,7 +230,10 @@ fn check(repository: &Repository) -> Result<(), String> {
         "upstream repository: {}",
         repository.config.upstream.repository
     );
-    println!("upstream checkout: {}", repository.upstream_root.display());
+    println!(
+        "configured upstream checkout: {}",
+        repository.config.upstream.path.display()
+    );
     println!("configured scopes: {}", repository.config.scope.len());
 
     if repository.config.upstream.last_adapted_commit.is_empty() {
@@ -233,11 +259,13 @@ fn status(repository: &Repository) -> Result<(), String> {
         "Cageforge repository root: {}",
         repository.cageforge_root.display()
     );
+    let upstream_root = repository.upstream_root()?;
+    println!("upstream checkout: {}", upstream_root.display());
     println!("upstream branch: {}", repository.upstream_ref());
 
     let upstream_ref = repository.upstream_ref();
     match git_output(
-        &repository.upstream_root,
+        &upstream_root,
         ["rev-parse", "--verify", upstream_ref.as_str()],
     ) {
         Ok(commit) => println!("fetched upstream commit: {commit}"),
@@ -292,6 +320,7 @@ fn diff(
             .collect::<Vec<_>>()
     };
     let target = target.unwrap_or_else(|| repository.upstream_ref());
+    let upstream_root = repository.upstream_root()?;
     let pathspecs = scopes
         .iter()
         .flat_map(|scope| scope.upstream_paths.iter().map(String::as_str))
@@ -307,29 +336,17 @@ fn diff(
             .join(", ")
     );
     println!();
-    run_git_diff(
-        &repository.upstream_root,
-        baseline,
-        &target,
-        &pathspecs,
-        &["--stat"],
-    )?;
+    run_git_diff(&upstream_root, baseline, &target, &pathspecs, &["--stat"])?;
     println!();
     run_git_diff(
-        &repository.upstream_root,
+        &upstream_root,
         baseline,
         &target,
         &pathspecs,
         &["--name-status", "--find-renames"],
     )?;
     println!();
-    run_git_diff(
-        &repository.upstream_root,
-        baseline,
-        &target,
-        &pathspecs,
-        &[],
-    )?;
+    run_git_diff(&upstream_root, baseline, &target, &pathspecs, &[])?;
 
     Ok(())
 }

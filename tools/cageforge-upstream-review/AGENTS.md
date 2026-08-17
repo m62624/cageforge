@@ -10,6 +10,9 @@ Rules:
 - Do not fetch automatically.
 - Do not update last_adapted_commit.
 - Do not create branches, commits, pull requests, or review bundles.
+- check must work without an upstream checkout.
+- status and diff may require an external checkout from config,
+  --upstream-path, or CAGEFORGE_UPSTREAM_PATH.
 - Use Git arguments directly through Command; never invoke a shell.
 - Keep output deterministic and suitable for CI logs.
 

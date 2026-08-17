@@ -32,8 +32,10 @@ is not allowed until an audited commit has been selected.
 - diff prints a Git stat, changed-file list, and patch for configured scopes.
 
 The tool never fetches automatically. The caller updates the external Codex
-checkout manually and then supplies a commit or uses the configured branch.
-The external checkout is not copied into Cageforge.
+checkout manually. Status and diff use the path from the configuration, or an
+override supplied through --upstream-path or CAGEFORGE_UPSTREAM_PATH. The
+external checkout is not copied into Cageforge. The check command does not
+require the external checkout to exist.
 
 ## Review boundary
 
