@@ -50,8 +50,10 @@ read-only carve-outs, domain defaults, and Unix-socket defaults. The remaining
 OS-specific behavior stays below the policy boundary.
 
 These are design inputs for the future `cageforge-config`,
-`cageforge-command`, `cageforge-backend-api`, and native backend crates. They
-do not justify adding operating-system or process-launch dependencies to
+`cageforge-backend-api`, and native backend crates. The portable command
+intent boundary is now implemented in `cageforge-command`; it remains free of
+operating-system and process-launch dependencies. None of these details
+justify adding operating-system or process-launch dependencies to
 `cageforge-policy`.
 
 ## Deliberate non-porting decisions
@@ -79,10 +81,9 @@ The following Codex-specific concerns remain outside the policy crate:
 
 1. Add TOML profile resolution with inheritance and cycle/unknown-profile
    errors in `cageforge-config`.
-2. Add command/environment/cwd/stdio requests in `cageforge-command`.
-3. Define capability negotiation and explicit unsupported-policy errors in
+2. Define capability negotiation and explicit unsupported-policy errors in
    `cageforge-backend-api`.
-4. Implement and integration-test Linux, macOS, and Windows backends on their
+3. Implement and integration-test Linux, macOS, and Windows backends on their
    native CI runners.
 
 Every follow-up must retain the black-box integration-test rule and the hard

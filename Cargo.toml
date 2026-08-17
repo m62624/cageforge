@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/cageforge-command",
     "crates/cageforge-policy",
     "crates/cageforge-core",
     "tools/cageforge-upstream-review",

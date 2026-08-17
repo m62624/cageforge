@@ -1,0 +1,19 @@
+[package]
+name = "cageforge-command"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Platform-independent command invocation and stdio request types"
+readme = "README.md"
+
+[lib]
+name = "cageforge_command"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
