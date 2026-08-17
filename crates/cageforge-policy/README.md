@@ -1,10 +1,9 @@
-> **Provenance and independence**
+> ⚠️ **Provenance and independence**
 >
 > Cageforge is an independent project. It is not affiliated with, sponsored by,
 > or endorsed by OpenAI. This crate was independently implemented in Cageforge.
-> Its behavior was reviewed against the open-source OpenAI Codex sandbox at
-> commit `c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc`; it contains no copied or
-> source-derived Codex code.
+> Its behavior was reviewed against the open-source OpenAI Codex sandbox; it
+> contains no copied or source-derived Codex code.
 
 # cageforge-policy
 
