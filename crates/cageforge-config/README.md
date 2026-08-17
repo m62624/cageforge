@@ -92,6 +92,10 @@ NUL, environment, or ownership invariants after validation.
 The full API reference is available on
 [docs.rs](https://docs.rs/cageforge-config/latest/cageforge_config/).
 
+`ConfigError` separates TOML/profile errors from policy and command errors.
+The latter remain available as typed source errors, so a harness can handle a
+configuration problem at the correct layer without parsing error text.
+
 ## Tests
 
 The black-box integration suite is in `crates/cageforge-config/tests/`. It

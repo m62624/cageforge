@@ -12,6 +12,9 @@ name = "cageforge_command"
 path = "src/lib.rs"
 doctest = false
 
+[dependencies]
+thiserror = { workspace = true }
+
 [lints]
 workspace = true
 

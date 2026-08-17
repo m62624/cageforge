@@ -3,19 +3,20 @@
 
 use cageforge_command::CommandError;
 use cageforge_policy::PolicyError;
-use std::error::Error;
-use std::fmt;
 use std::path::PathBuf;
+use thiserror::Error;
 
 /// Errors returned while parsing or resolving a Cageforge configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     /// The TOML document could not be parsed or contained an unknown field.
+    #[error("invalid TOML: {message}")]
     InvalidToml {
         /// The parser's explanation.
         message: String,
     },
     /// The configuration file could not be read.
+    #[error("cannot read configuration {}: {message}", path.display())]
     ReadFile {
         /// The file that could not be read.
         path: PathBuf,
@@ -23,23 +24,28 @@ pub enum ConfigError {
         message: String,
     },
     /// A profile name is not a safe configuration identifier.
+    #[error("invalid profile name: {name:?}")]
     InvalidProfileName {
         /// The invalid profile name.
         name: String,
     },
     /// A referenced profile does not exist.
+    #[error("unknown profile: {name}")]
     UnknownProfile {
         /// The missing profile name.
         name: String,
     },
     /// `resolve_default` was requested without a configured default profile.
+    #[error("no default profile is configured")]
     NoDefaultProfile,
     /// Profile inheritance contains a cycle.
+    #[error("profile inheritance cycle: {}", chain.join(" -> "))]
     ProfileCycle {
         /// The cycle path, including the repeated profile at the end.
         chain: Vec<String>,
     },
     /// A profile field contains an invalid or incomplete value.
+    #[error("profile {profile:?} has invalid {field}: {value}")]
     InvalidValue {
         /// The profile containing the value.
         profile: String,
@@ -49,84 +55,29 @@ pub enum ConfigError {
         value: String,
     },
     /// A command profile did not provide a program after inheritance.
+    #[error("profile {profile:?} command has no program")]
     MissingCommandProgram {
         /// The profile containing the incomplete command.
         profile: String,
     },
     /// The policy model rejected a resolved profile value.
+    #[error("profile {profile:?} has an invalid policy: {source}")]
     Policy {
         /// The profile being resolved.
         profile: String,
         /// The policy validation error.
+        #[source]
         source: PolicyError,
     },
     /// The command model rejected a resolved profile value.
+    #[error("profile {profile:?} has an invalid command: {source}")]
     Command {
         /// The profile being resolved.
         profile: String,
         /// The command validation error.
+        #[source]
         source: CommandError,
     },
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidToml { message } => write!(formatter, "invalid TOML: {message}"),
-            Self::ReadFile { path, message } => {
-                write!(
-                    formatter,
-                    "cannot read configuration {}: {message}",
-                    path.display()
-                )
-            }
-            Self::InvalidProfileName { name } => {
-                write!(formatter, "invalid profile name: {name:?}")
-            }
-            Self::UnknownProfile { name } => write!(formatter, "unknown profile: {name}"),
-            Self::NoDefaultProfile => formatter.write_str("no default profile is configured"),
-            Self::ProfileCycle { chain } => {
-                write!(
-                    formatter,
-                    "profile inheritance cycle: {}",
-                    chain.join(" -> ")
-                )
-            }
-            Self::InvalidValue {
-                profile,
-                field,
-                value,
-            } => write!(
-                formatter,
-                "profile {profile:?} has invalid {field}: {value}"
-            ),
-            Self::MissingCommandProgram { profile } => {
-                write!(formatter, "profile {profile:?} command has no program")
-            }
-            Self::Policy { profile, source } => {
-                write!(
-                    formatter,
-                    "profile {profile:?} has an invalid policy: {source}"
-                )
-            }
-            Self::Command { profile, source } => {
-                write!(
-                    formatter,
-                    "profile {profile:?} has an invalid command: {source}"
-                )
-            }
-        }
-    }
-}
-
-impl Error for ConfigError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Policy { source, .. } => Some(source),
-            Self::Command { source, .. } => Some(source),
-            _ => None,
-        }
-    }
 }
 
 pub(crate) fn invalid_value(profile: &str, field: &str, value: impl Into<String>) -> ConfigError {

@@ -45,6 +45,9 @@ owned handoff for a process backend.
 | `TimeoutPolicy` | Backend default, explicit duration limit, or disabled automatic timeout. |
 | `CommandError` | Construction errors for invalid programs, paths, and environment values. |
 
+`CommandError` is a dedicated library error enum. Callers can match invalid
+programs, arguments, working directories, and environment values directly.
+
 ## Quick start
 
 The crate preserves native command-line values with `OsString` and never parses

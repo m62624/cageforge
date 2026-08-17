@@ -1,53 +1,36 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 /// Errors raised while constructing a portable command request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CommandError {
     /// The command program was empty.
+    #[error("command program must not be empty")]
     EmptyProgram,
     /// The command program contained a NUL character.
+    #[error("command program must not contain a NUL character")]
     ProgramContainsNul,
     /// A command argument contained a NUL character.
+    #[error("command argument must not contain a NUL character")]
     ArgumentContainsNul,
     /// The working-directory path was empty.
+    #[error("working directory must not be empty")]
     EmptyWorkingDirectory,
     /// The working-directory path contained a NUL character.
+    #[error("working directory must not contain a NUL character")]
     WorkingDirectoryContainsNul,
     /// An environment variable name was empty.
+    #[error("environment variable name must not be empty")]
     EmptyEnvironmentName,
     /// An environment variable name contained `=`.
+    #[error("environment variable name must not contain '='")]
     EnvironmentNameContainsEquals,
     /// An environment variable name contained a NUL character.
+    #[error("environment variable name must not contain a NUL character")]
     EnvironmentNameContainsNul,
     /// An environment variable value contained a NUL character.
+    #[error("environment variable value must not contain a NUL character")]
     EnvironmentValueContainsNul,
 }
-
-impl fmt::Display for CommandError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let message = match self {
-            Self::EmptyProgram => "command program must not be empty",
-            Self::ProgramContainsNul => "command program must not contain a NUL character",
-            Self::ArgumentContainsNul => "command argument must not contain a NUL character",
-            Self::EmptyWorkingDirectory => "working directory must not be empty",
-            Self::WorkingDirectoryContainsNul => {
-                "working directory must not contain a NUL character"
-            }
-            Self::EmptyEnvironmentName => "environment variable name must not be empty",
-            Self::EnvironmentNameContainsEquals => "environment variable name must not contain '='",
-            Self::EnvironmentNameContainsNul => {
-                "environment variable name must not contain a NUL character"
-            }
-            Self::EnvironmentValueContainsNul => {
-                "environment variable value must not contain a NUL character"
-            }
-        };
-        formatter.write_str(message)
-    }
-}
-
-impl Error for CommandError {}

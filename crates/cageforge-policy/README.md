@@ -52,6 +52,9 @@ an unchecked path selector by writing a public enum payload.
 | `DomainRule` and `UnixSocketRule` | Adds validated network destinations and decisions. |
 | `PolicyError` | Reports invalid paths, patterns, domains, contexts, and policy combinations. |
 
+`PolicyError` is a dedicated library error enum. Callers can match path,
+pattern, context, and policy-rule failures without parsing display strings.
+
 The built-in `SandboxPolicy::read_only`, `SandboxPolicy::workspace`, and
 `SandboxPolicy::full_access` constructors are Cageforge presets. They are not
 legacy configuration aliases and do not preserve a second policy system.
