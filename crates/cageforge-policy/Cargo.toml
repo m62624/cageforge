@@ -1,0 +1,19 @@
+[package]
+name = "cageforge-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Platform-independent filesystem and network sandbox policy types"
+readme = "../../README.md"
+
+[lib]
+name = "cageforge_policy"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

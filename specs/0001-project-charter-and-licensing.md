@@ -72,18 +72,27 @@ Codex repository. Upstream updates are reviewed with Git diffs and then
 ported manually into the independent Cageforge architecture. Automatic merges
 must not be treated as a security or licensing review.
 
-When a derived file is modified, the file should carry a prominent notice such
-as:
+When a file is copied or substantially adapted, it must carry the applicable
+upstream copyright and a prominent provenance notice. The exact required
+templates and the distinction from independently authored code are defined in
+`specs/0005-source-provenance-and-file-headers.md`. The adapted Apache-2.0
+form is:
 
 ```text
+Copyright 2025 OpenAI
+Copyright 2026 Mansur Azatbek
+SPDX-License-Identifier: Apache-2.0
+
 Originally derived from OpenAI Codex.
-Original copyright: Copyright 2025 OpenAI.
+Upstream repository: https://github.com/openai/codex
+Upstream path: codex-rs/<exact/path>
+Upstream commit: <full 40-character commit SHA>
 Modified and reorganized for Cageforge.
 ```
 
-New Cageforge code should use an SPDX license header appropriate to that file.
-The header must not claim Apache-2.0 for a file that contains third-party code
-under a different license.
+New Cageforge code that is not source-derived should use only its Cageforge
+SPDX header. The header must not claim Apache-2.0 for a file that contains
+third-party code under a different license.
 
 ## 5. Licensing policy
 
@@ -141,12 +150,20 @@ Apache-2.0 code.
 The workspace is planned as:
 
 ```text
-cageforge-core       platform-neutral policy and request types
-cageforge-linux      bubblewrap, namespaces, seccomp, and Landlock support
-cageforge-macos      Seatbelt policy generation and process launch
-cageforge-windows    restricted tokens, ACLs, WFP, and Windows process launch
-cageforge             ergonomic facade and backend selection
+cageforge-policy      platform-independent policy values and invariants
+cageforge-config      TOML loading and named-profile resolution
+cageforge-command     command, environment, and working-directory requests
+cageforge-backend-api backend capability and execution contracts
+cageforge-linux       bubblewrap, namespaces, seccomp, and Landlock support
+cageforge-macos       Seatbelt policy generation and process launch
+cageforge-windows     restricted tokens, ACLs, WFP, and Windows process launch
+cageforge-core        ergonomic facade and backend selection
 ```
+
+`cageforge-policy` is the first implementation crate. It is deliberately
+smaller than the future facade and contains only platform-independent policy
+semantics; it does not parse TOML or launch processes. The detailed first
+policy model is specified in `specs/0003-policy-model.md`.
 
 `cageforge-core` must not depend on Codex crates. The core API must not expose
 Codex `PermissionProfile`, Codex network-proxy types, Codex PTY types, Codex

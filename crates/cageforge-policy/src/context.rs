@@ -1,0 +1,87 @@
+// Copyright 2026 Mansur Azatbek
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::PathSelector;
+use crate::PolicyError;
+use std::path::Path;
+use std::path::PathBuf;
+
+/// Runtime paths needed to resolve platform-independent policy selectors.
+///
+/// The context is supplied by a harness or a platform backend. Constructing it
+/// never reads the filesystem, follows symlinks, or infers a workspace.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PathResolutionContext {
+    workspace_roots: Vec<PathBuf>,
+    minimal_paths: Vec<PathBuf>,
+    tmpdir: Option<PathBuf>,
+    slash_tmp: Option<PathBuf>,
+}
+
+impl PathResolutionContext {
+    /// Creates an empty context.
+    pub const fn new() -> Self {
+        Self {
+            workspace_roots: Vec::new(),
+            minimal_paths: Vec::new(),
+            tmpdir: None,
+            slash_tmp: None,
+        }
+    }
+
+    /// Adds one absolute workspace root.
+    pub fn with_workspace_root(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
+        self.workspace_roots.push(validated_absolute(path.into())?);
+        Ok(self)
+    }
+
+    /// Adds one absolute path required by ordinary process execution.
+    pub fn with_minimal_path(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
+        self.minimal_paths.push(validated_absolute(path.into())?);
+        Ok(self)
+    }
+
+    /// Sets the platform temporary directory.
+    pub fn with_tmpdir(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
+        self.tmpdir = Some(validated_absolute(path.into())?);
+        Ok(self)
+    }
+
+    /// Sets the conventional `/tmp` directory when the platform provides it.
+    pub fn with_slash_tmp(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
+        self.slash_tmp = Some(validated_absolute(path.into())?);
+        Ok(self)
+    }
+
+    /// Returns the configured workspace roots.
+    pub fn workspace_roots(&self) -> &[PathBuf] {
+        &self.workspace_roots
+    }
+
+    /// Returns the configured minimal runtime paths.
+    pub fn minimal_paths(&self) -> &[PathBuf] {
+        &self.minimal_paths
+    }
+
+    /// Returns the configured platform temporary directory.
+    pub fn tmpdir(&self) -> Option<&Path> {
+        self.tmpdir.as_deref()
+    }
+
+    /// Returns the configured conventional `/tmp` directory.
+    pub fn slash_tmp(&self) -> Option<&Path> {
+        self.slash_tmp.as_deref()
+    }
+}
+
+fn validated_absolute(path: PathBuf) -> Result<PathBuf, PolicyError> {
+    match PathSelector::absolute(path)? {
+        PathSelector::Absolute(path) => Ok(path),
+        PathSelector::WorkspaceRoot(_)
+        | PathSelector::Minimal
+        | PathSelector::Tmpdir
+        | PathSelector::SlashTmp => Err(PolicyError::InvalidContext {
+            message: "absolute path validation returned a non-absolute selector".to_string(),
+        }),
+    }
+}

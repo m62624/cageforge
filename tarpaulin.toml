@@ -1,0 +1,13 @@
+# Coverage is measured for library logic; native backend crates will be
+# excluded from the aggregate metric once they are added and tested on their
+# own operating systems.
+[default]
+workspace = true
+timeout = "300s"
+out = ["Html", "Lcov", "Stdout"]
+output-dir = "coverage"
+fail-under = 90
+exclude-files = [
+    "crates/*/tests/*",
+    "tools/*",
+]

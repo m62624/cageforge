@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/cageforge-policy",
     "crates/cageforge-core",
     "tools/cageforge-upstream-review",
 ]
@@ -11,7 +12,14 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.85"
 
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+
 [workspace.dependencies]
-clap = { version = "4.5", features = ["derive", "env"] }
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.4"
+pretty_assertions = "1.4.1"

@@ -18,6 +18,10 @@ These rules are mandatory:
 3. Every source-derived file must record its upstream repository path and
    commit, retain applicable original copyright, and identify material changes
    made for Cageforge.
+   Use the exact header and classification rules in
+   `specs/0005-source-provenance-and-file-headers.md`. Do not mark
+   independently authored files as Codex-derived merely because they implement
+   similar behavior.
 4. Cageforge-authored code is Apache-2.0. Third-party code keeps its own
    license: bundled bubblewrap is LGPL-2.0-or-later; do not relabel it as
    Apache-2.0.
