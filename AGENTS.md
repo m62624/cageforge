@@ -27,6 +27,14 @@ These rules are mandatory:
 6. Keep the public API independent from Codex protocols, telemetry, PTY,
    network-proxy, and product-specific types. Harness integrations belong in
    adapters, not in `cageforge-core`.
+7. Do not preserve Codex legacy configuration names, aliases, or compatibility
+   layers merely for compatibility. Design Cageforge's generalized capability
+   and profile model as the canonical API and default behavior. Any compatibility
+   layer requires an explicit project specification decision.
+8. Prefer black-box integration tests in each crate's `tests/` directory. Add
+   unit tests only for internal logic that cannot be meaningfully covered through
+   the crate's public API. Do not expand the public API or add test-only helpers
+   solely to make unit tests possible.
 
 When in doubt, stop and update the specification or provenance records before
 changing source code.
