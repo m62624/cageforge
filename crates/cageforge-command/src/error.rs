@@ -11,8 +11,12 @@ pub enum CommandError {
     EmptyProgram,
     /// The command program contained a NUL character.
     ProgramContainsNul,
+    /// A command argument contained a NUL character.
+    ArgumentContainsNul,
     /// The working-directory path was empty.
     EmptyWorkingDirectory,
+    /// The working-directory path contained a NUL character.
+    WorkingDirectoryContainsNul,
     /// An environment variable name was empty.
     EmptyEnvironmentName,
     /// An environment variable name contained `=`.
@@ -28,7 +32,11 @@ impl fmt::Display for CommandError {
         let message = match self {
             Self::EmptyProgram => "command program must not be empty",
             Self::ProgramContainsNul => "command program must not contain a NUL character",
+            Self::ArgumentContainsNul => "command argument must not contain a NUL character",
             Self::EmptyWorkingDirectory => "working directory must not be empty",
+            Self::WorkingDirectoryContainsNul => {
+                "working directory must not contain a NUL character"
+            }
             Self::EmptyEnvironmentName => "environment variable name must not be empty",
             Self::EnvironmentNameContainsEquals => "environment variable name must not contain '='",
             Self::EnvironmentNameContainsNul => {

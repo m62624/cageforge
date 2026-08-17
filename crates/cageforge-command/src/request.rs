@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::command::contains_nul;
 use crate::{CommandError, CommandSpec, EnvironmentSpec, StdioSpec, TimeoutPolicy};
 
 /// A complete portable request to execute one command.
@@ -46,6 +47,9 @@ impl CommandRequest {
         let path = path.into();
         if path.as_os_str().is_empty() {
             return Err(CommandError::EmptyWorkingDirectory);
+        }
+        if contains_nul(path.as_os_str()) {
+            return Err(CommandError::WorkingDirectoryContainsNul);
         }
         self.working_directory = Some(path);
         Ok(self)

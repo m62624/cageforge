@@ -19,6 +19,11 @@ pub enum PolicyError {
         /// The path that was supplied by the caller.
         path: PathBuf,
     },
+    /// A path contained a NUL character that an operating-system backend cannot use.
+    PathContainsNul {
+        /// The path that was supplied by the caller.
+        path: PathBuf,
+    },
     /// A workspace-relative path attempts to escape its root.
     ParentTraversal {
         /// The workspace-relative path that attempted to escape its root.
@@ -59,6 +64,13 @@ impl fmt::Display for PolicyError {
                 write!(
                     formatter,
                     "path must be workspace-relative: {}",
+                    path.display()
+                )
+            }
+            Self::PathContainsNul { path } => {
+                write!(
+                    formatter,
+                    "path must not contain a NUL character: {}",
                     path.display()
                 )
             }

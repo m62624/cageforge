@@ -3,6 +3,7 @@
 
 use crate::PathSelector;
 use crate::PolicyError;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -187,6 +188,11 @@ impl NetworkPolicy {
         pattern: impl Into<String>,
         access: DomainAccess,
     ) -> Result<Self, PolicyError> {
+        if self.mode == NetworkMode::External {
+            return Err(PolicyError::InvalidRule {
+                message: "network rules cannot be added to an external policy".to_string(),
+            });
+        }
         self.domains.push(DomainRule::new(pattern, access)?);
         Ok(self)
     }
@@ -197,11 +203,16 @@ impl NetworkPolicy {
         path: impl Into<PathBuf>,
         access: DomainAccess,
     ) -> Result<Self, PolicyError> {
+        if self.mode == NetworkMode::External {
+            return Err(PolicyError::InvalidRule {
+                message: "network rules cannot be added to an external policy".to_string(),
+            });
+        }
         self.unix_sockets.push(UnixSocketRule::new(path, access)?);
         Ok(self)
     }
 
-    /// Validates that an external or disabled mode has no contradictory rules.
+    /// Validates that an externally enforced mode has no local rules.
     pub fn validate(&self) -> Result<(), PolicyError> {
         if self.mode == NetworkMode::External
             && (!self.domains.is_empty() || !self.unix_sockets.is_empty())
@@ -248,7 +259,12 @@ impl NetworkPolicy {
 
     /// Returns whether a Unix socket path is allowed under the complete network mode.
     pub fn allows_unix_socket(&self, path: &Path) -> bool {
-        if !path.is_absolute() || matches!(self.mode, NetworkMode::Disabled | NetworkMode::External)
+        if !path.is_absolute()
+            || crate::path::contains_nul(path)
+            || path
+                .components()
+                .any(|component| component == Component::ParentDir)
+            || matches!(self.mode, NetworkMode::Disabled | NetworkMode::External)
         {
             return false;
         }
@@ -283,7 +299,8 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
         && !pattern.contains('?')
         && !pattern.contains('#')
         && !pattern.contains('*')
-        && !pattern.chars().any(char::is_whitespace);
+        && !pattern.chars().any(char::is_whitespace)
+        && !pattern.chars().any(char::is_control);
     if (valid_wildcard || valid_literal) && !pattern.is_empty() {
         Ok(pattern)
     } else {
@@ -300,6 +317,7 @@ fn valid_domain_suffix(suffix: &str) -> bool {
         && !suffix.contains('/')
         && !suffix.contains(':')
         && !suffix.chars().any(char::is_whitespace)
+        && !suffix.chars().any(char::is_control)
 }
 
 fn domain_matches(pattern: &str, domain: &str) -> bool {

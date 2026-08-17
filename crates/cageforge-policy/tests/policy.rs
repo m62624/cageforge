@@ -88,7 +88,10 @@ fn special_path_selectors_are_distinct() {
 fn access_modes_follow_security_precedence() {
     assert!(AccessMode::Write.can_read());
     assert!(AccessMode::Write.can_write());
+    assert!(AccessMode::Read.can_read());
     assert!(!AccessMode::Read.can_write());
+    assert!(!AccessMode::Deny.can_read());
+    assert!(!AccessMode::Deny.can_write());
     assert_eq!(
         AccessMode::Read.most_restrictive(AccessMode::Deny),
         AccessMode::Deny
@@ -96,6 +99,18 @@ fn access_modes_follow_security_precedence() {
     assert_eq!(
         AccessMode::Read.most_restrictive(AccessMode::Write),
         AccessMode::Write
+    );
+    assert_eq!(
+        AccessMode::Write.most_restrictive(AccessMode::Read),
+        AccessMode::Write
+    );
+    assert_eq!(
+        AccessMode::Write.most_restrictive(AccessMode::Deny),
+        AccessMode::Deny
+    );
+    assert_eq!(
+        AccessMode::Deny.most_restrictive(AccessMode::Read),
+        AccessMode::Deny
     );
     assert_eq!(
         AccessMode::Read.most_restrictive(AccessMode::Read),
@@ -117,6 +132,9 @@ fn policy_errors_have_actionable_display_messages() {
         },
         PolicyError::ExpectedRelative {
             path: "/absolute".into(),
+        },
+        PolicyError::PathContainsNul {
+            path: "bad\0path".into(),
         },
         PolicyError::ParentTraversal {
             path: "../outside".into(),
@@ -142,6 +160,7 @@ fn policy_errors_have_actionable_display_messages() {
             "path cannot be empty",
             "path must be absolute: relative",
             "path must be workspace-relative: /absolute",
+            "path must not contain a NUL character: bad\0path",
             "workspace-relative path cannot contain parent traversal: ../outside",
             "invalid domain pattern: https://example.com",
             "invalid glob pattern \"../secret\": parent traversal is not allowed",
@@ -247,6 +266,10 @@ fn path_patterns_validate_and_match_absolute_and_workspace_paths() {
             format!("invalid glob pattern {pattern:?}: {expected}")
         );
     }
+    assert!(matches!(
+        PathPattern::workspace("bad\0pattern"),
+        Err(PolicyError::InvalidGlobPattern { .. })
+    ));
 }
 
 #[test]
@@ -297,6 +320,10 @@ fn filesystem_resolution_is_recursive_and_most_specific() {
         Err(PolicyError::ExpectedAbsolute { .. })
     ));
     assert!(matches!(
+        policy.access_for_path(Path::new("/workspace/bad\0path"), &context),
+        Err(PolicyError::PathContainsNul { .. })
+    ));
+    assert!(matches!(
         policy.access_for_path(Path::new(&native_path("/workspace/../outside")), &context,),
         Err(PolicyError::ParentTraversal { .. })
     ));
@@ -311,9 +338,11 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         .with_missing_path_behavior(MissingPathBehavior::Skip)
         .with_read_only_subpath(
             PathSelector::workspace(".git").expect("protected subpath selector"),
-        );
+        )
+        .expect("writable rule can contain a read-only subpath");
     let policy = FilesystemPolicy::restricted([protected])
-        .with_glob_scan_max_depth(NonZeroUsize::new(4).expect("non-zero depth"));
+        .with_glob_scan_max_depth(NonZeroUsize::new(4).expect("non-zero depth"))
+        .expect("restricted policy can configure glob depth");
     assert_eq!(
         policy.entries()[0].missing_path_behavior(),
         MissingPathBehavior::Skip
@@ -331,10 +360,13 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
             .expect("protected lookup"),
         AccessMode::Read
     );
-    let explicit_write = policy.clone().with_rule(FilesystemRule::new(
-        PathSelector::workspace(".git").expect("explicit selector"),
-        AccessMode::Write,
-    ));
+    let explicit_write = policy
+        .clone()
+        .with_rule(FilesystemRule::new(
+            PathSelector::workspace(".git").expect("explicit selector"),
+            AccessMode::Write,
+        ))
+        .expect("restricted policy can add a rule");
     assert_eq!(
         explicit_write
             .access_for_path(Path::new(&native_path("/workspace/.git/config")), &context)
@@ -354,7 +386,8 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Read)
             .with_missing_path_behavior(MissingPathBehavior::Skip),
         FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write)
-            .with_read_only_subpath(PathSelector::minimal()),
+            .with_read_only_subpath(PathSelector::minimal())
+            .expect("writable rule can contain a read-only subpath"),
     ])
     .normalized()
     .expect("duplicate rules");
@@ -366,17 +399,12 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
     assert_eq!(normalized.entries()[0].read_only_subpaths().len(), 1);
     assert!(matches!(
         FilesystemPolicy::unrestricted()
-            .with_glob_scan_max_depth(NonZeroUsize::new(1).expect("depth"))
-            .validate(),
+            .with_glob_scan_max_depth(NonZeroUsize::new(1).expect("depth")),
         Err(PolicyError::InvalidRule { .. })
     ));
     assert!(matches!(
-        FilesystemPolicy::restricted([FilesystemRule::new(
-            PathSelector::workspace_root(),
-            AccessMode::Read,
-        )
-        .with_read_only_subpath(PathSelector::minimal())])
-        .validate(),
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Read,)
+            .with_read_only_subpath(PathSelector::minimal()),
         Err(PolicyError::InvalidRule { .. })
     ));
 }
@@ -423,12 +451,11 @@ fn filesystem_modes_have_explicit_access_behavior() {
 
 #[test]
 fn non_restricted_filesystem_rules_are_rejected() {
-    let policy = FilesystemPolicy::unrestricted().with_rule(FilesystemRule::new(
-        PathSelector::minimal(),
-        AccessMode::Read,
-    ));
     assert!(matches!(
-        policy.validate(),
+        FilesystemPolicy::unrestricted().with_rule(FilesystemRule::new(
+            PathSelector::minimal(),
+            AccessMode::Read,
+        )),
         Err(PolicyError::InvalidRule { .. })
     ));
 }
@@ -521,12 +548,17 @@ fn malformed_domains_and_non_absolute_sockets_are_rejected() {
         "bad?query",
         "bad#fragment",
         "bad domain",
+        "bad\0domain",
     ] {
         assert!(matches!(
             NetworkPolicy::enabled().with_domain(pattern, DomainAccess::Allow),
             Err(PolicyError::InvalidDomainPattern { .. })
         ));
     }
+    assert!(matches!(
+        NetworkPolicy::enabled().with_unix_socket("/run/bad\0.sock", DomainAccess::Allow),
+        Err(PolicyError::PathContainsNul { .. })
+    ));
 }
 
 #[test]
@@ -618,6 +650,18 @@ fn path_selector_validates_empty_and_absolute_workspace_paths() {
         PolicyError::EmptyPath
     ));
     assert!(matches!(
+        PathSelector::absolute("/workspace/bad\0path"),
+        Err(PolicyError::PathContainsNul { .. })
+    ));
+    assert!(matches!(
+        PathSelector::workspace("bad\0path"),
+        Err(PolicyError::PathContainsNul { .. })
+    ));
+    assert!(matches!(
+        PathResolutionContext::new().with_tmpdir("/tmp/bad\0path"),
+        Err(PolicyError::PathContainsNul { .. })
+    ));
+    assert!(matches!(
         PathSelector::workspace(native_path("/")).expect_err("absolute workspace path should fail"),
         PolicyError::ExpectedRelative { .. }
     ));
@@ -629,13 +673,68 @@ fn path_selector_validates_empty_and_absolute_workspace_paths() {
 
 #[test]
 fn external_network_policy_cannot_carry_local_rules() {
-    let policy = NetworkPolicy::external()
-        .with_domain("example.com", DomainAccess::Allow)
-        .expect("domain syntax is valid");
     assert!(matches!(
-        policy.validate(),
+        NetworkPolicy::external().with_domain("example.com", DomainAccess::Allow),
         Err(PolicyError::InvalidRule { .. })
     ));
+    assert!(matches!(
+        NetworkPolicy::external()
+            .with_unix_socket(native_path("/run/sandbox.sock"), DomainAccess::Allow,),
+        Err(PolicyError::InvalidRule { .. })
+    ));
+}
+
+#[test]
+fn socket_access_rejects_parent_traversal_and_nul() {
+    let policy = NetworkPolicy::enabled();
+    let parent_path = if cfg!(windows) {
+        r"C:\sandbox\..\outside.sock"
+    } else {
+        "/run/../outside.sock"
+    };
+    assert!(!policy.allows_unix_socket(Path::new(parent_path)));
+    assert!(!policy.allows_unix_socket(Path::new("/run/bad\0.sock")));
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_path_forms_are_validated_as_posix_paths() {
+    assert!(PathSelector::absolute("/var/lib/cageforge").is_ok());
+    assert_eq!(
+        PathSelector::workspace("src/lib.rs")
+            .expect("POSIX workspace path")
+            .path(),
+        Some(Path::new("src/lib.rs"))
+    );
+    assert!(PathPattern::absolute("/var/lib/cageforge/**/config.toml").is_ok());
+    assert!(
+        NetworkPolicy::enabled()
+            .with_unix_socket("/run/cageforge.sock", DomainAccess::Allow)
+            .is_ok()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_path_forms_are_validated_as_windows_paths() {
+    assert!(PathSelector::absolute(r"C:\var\lib\cageforge").is_ok());
+    assert!(PathSelector::absolute(r"\\server\share\cageforge").is_ok());
+    assert_eq!(
+        PathSelector::workspace(r"src\lib.rs")
+            .expect("Windows workspace path")
+            .path(),
+        Some(Path::new(r"src\lib.rs"))
+    );
+    assert!(matches!(
+        PathSelector::workspace(r"..\outside"),
+        Err(PolicyError::ParentTraversal { .. })
+    ));
+    assert!(PathPattern::absolute(r"C:\var\lib\cageforge\**\config.toml").is_ok());
+    assert!(
+        NetworkPolicy::enabled()
+            .with_unix_socket(r"C:\run\cageforge.sock", DomainAccess::Allow)
+            .is_ok()
+    );
 }
 
 #[test]

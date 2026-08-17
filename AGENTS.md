@@ -44,6 +44,10 @@ These rules are mandatory:
    a concise top banner. Keep exact commits, paths, license details, and audit
    history in the project specs and provenance records instead of repeating them
    throughout the README.
+10. Treat public policy and command constructors/builders as security boundaries.
+    Keep representations private, validate NUL/parent-traversal and mode
+    invariants before backend handoff, and cover native POSIX and Windows path
+    forms through black-box tests before widening the API.
 
 When in doubt, stop and update the specification or provenance records before
 changing source code.

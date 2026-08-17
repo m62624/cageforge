@@ -29,6 +29,9 @@ impl PathSelector {
         if path.as_os_str().is_empty() {
             return Err(PolicyError::EmptyPath);
         }
+        if contains_nul(&path) {
+            return Err(PolicyError::PathContainsNul { path });
+        }
         if !path.is_absolute() {
             return Err(PolicyError::ExpectedAbsolute { path });
         }
@@ -193,6 +196,12 @@ impl PathPattern {
                 reason: "pattern cannot be empty".to_string(),
             });
         }
+        if raw.contains('\0') {
+            return Err(PolicyError::InvalidGlobPattern {
+                pattern: raw,
+                reason: "pattern cannot contain a NUL character".to_string(),
+            });
+        }
         let path = Path::new(&raw);
         if absolute && !path.is_absolute() {
             return Err(PolicyError::InvalidGlobPattern {
@@ -253,6 +262,9 @@ fn normalize_relative_path(relative: PathBuf) -> Result<PathBuf, PolicyError> {
     if relative.as_os_str().is_empty() {
         return Err(PolicyError::EmptyPath);
     }
+    if contains_nul(&relative) {
+        return Err(PolicyError::PathContainsNul { path: relative });
+    }
     if relative.is_absolute() {
         return Err(PolicyError::ExpectedRelative { path: relative });
     }
@@ -273,6 +285,10 @@ fn normalize_relative_path(relative: PathBuf) -> Result<PathBuf, PolicyError> {
         normalized.push(".");
     }
     Ok(normalized)
+}
+
+pub(crate) fn contains_nul(path: &Path) -> bool {
+    path.as_os_str().to_string_lossy().contains('\0')
 }
 
 fn path_components(path: &Path) -> (Option<String>, Vec<String>) {

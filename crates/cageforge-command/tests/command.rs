@@ -15,7 +15,9 @@ fn command_spec_preserves_native_argv() {
     let command = CommandSpec::new("tool")
         .expect("program should be accepted")
         .with_args(["--flag", "", "value"])
-        .with_arg(OsString::from("native"));
+        .expect("arguments should be accepted")
+        .with_arg(OsString::from("native"))
+        .expect("native argument should be accepted");
 
     assert_eq!(command.program().to_string_lossy(), "tool");
     assert_eq!(
@@ -43,8 +45,24 @@ fn command_spec_rejects_invalid_programs_and_returns_parts() {
     let parts = CommandSpec::new("tool")
         .expect("program should be accepted")
         .with_arg("arg")
+        .expect("argument should be accepted")
         .into_parts();
     assert_eq!(parts, (OsString::from("tool"), vec![OsString::from("arg")]));
+
+    assert_eq!(
+        CommandSpec::new("tool")
+            .expect("program should be accepted")
+            .with_arg("bad\0argument")
+            .expect_err("NUL argument should fail"),
+        CommandError::ArgumentContainsNul
+    );
+    assert_eq!(
+        CommandSpec::new("tool")
+            .expect("program should be accepted")
+            .with_args(["valid", "bad\0argument"])
+            .expect_err("NUL argument should fail"),
+        CommandError::ArgumentContainsNul
+    );
 }
 
 #[test]
@@ -136,7 +154,8 @@ fn stdio_defaults_and_named_modes_are_explicit() {
 fn request_composes_command_environment_stdio_cwd_and_timeout() {
     let command = CommandSpec::new("tool")
         .expect("program should be accepted")
-        .with_arg("--check");
+        .with_arg("--check")
+        .expect("argument should be accepted");
     let environment = EnvironmentSpec::empty()
         .with_var("MODE", "test")
         .expect("valid variable should be accepted");
@@ -193,6 +212,14 @@ fn request_rejects_empty_working_directory() {
             .expect_err("empty cwd should fail"),
         CommandError::EmptyWorkingDirectory
     );
+
+    let command = CommandSpec::new("tool").expect("program should be accepted");
+    assert_eq!(
+        CommandRequest::new(command)
+            .with_working_directory("bad\0directory")
+            .expect_err("NUL cwd should fail"),
+        CommandError::WorkingDirectoryContainsNul
+    );
 }
 
 #[test]
@@ -204,8 +231,16 @@ fn errors_have_actionable_display_messages() {
             "program must not contain a NUL",
         ),
         (
+            CommandError::ArgumentContainsNul,
+            "argument must not contain a NUL",
+        ),
+        (
             CommandError::EmptyWorkingDirectory,
             "working directory must not be empty",
+        ),
+        (
+            CommandError::WorkingDirectoryContainsNul,
+            "working directory must not contain a NUL",
         ),
         (
             CommandError::EmptyEnvironmentName,
@@ -228,4 +263,32 @@ fn errors_have_actionable_display_messages() {
     for (error, message) in errors {
         assert!(error.to_string().contains(message), "{error}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_native_working_directories_are_preserved() {
+    let command = CommandSpec::new("tool").expect("program should be accepted");
+    let request = CommandRequest::new(command)
+        .with_working_directory("/var/empty")
+        .expect("POSIX absolute cwd should be accepted");
+
+    assert_eq!(
+        request.working_directory(),
+        Some(std::path::Path::new("/var/empty"))
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_native_working_directories_are_preserved() {
+    let command = CommandSpec::new("tool").expect("program should be accepted");
+    let request = CommandRequest::new(command)
+        .with_working_directory(r"C:\work\empty")
+        .expect("Windows absolute cwd should be accepted");
+
+    assert_eq!(
+        request.working_directory(),
+        Some(std::path::Path::new(r"C:\work\empty"))
+    );
 }

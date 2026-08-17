@@ -97,9 +97,14 @@ impl FilesystemRule {
     }
 
     /// Adds a read-only carve-out below a writable rule.
-    pub fn with_read_only_subpath(mut self, selector: PathSelector) -> Self {
+    pub fn with_read_only_subpath(mut self, selector: PathSelector) -> Result<Self, PolicyError> {
+        if self.access != AccessMode::Write {
+            return Err(PolicyError::InvalidRule {
+                message: "read-only subpaths require a writable parent rule".to_string(),
+            });
+        }
         self.read_only_subpaths.push(selector);
-        self
+        Ok(self)
     }
 
     /// Returns the rule target.
@@ -199,9 +204,14 @@ impl FilesystemPolicy {
     }
 
     /// Sets the maximum depth used when a backend expands glob targets.
-    pub const fn with_glob_scan_max_depth(mut self, depth: NonZeroUsize) -> Self {
+    pub fn with_glob_scan_max_depth(mut self, depth: NonZeroUsize) -> Result<Self, PolicyError> {
+        if self.mode != FilesystemMode::Restricted {
+            return Err(PolicyError::InvalidRule {
+                message: "glob scan depth requires a restricted filesystem policy".to_string(),
+            });
+        }
         self.glob_scan_max_depth = Some(depth);
-        self
+        Ok(self)
     }
 
     /// Returns the enforcement mode.
@@ -220,9 +230,14 @@ impl FilesystemPolicy {
     }
 
     /// Adds one rule while retaining the existing policy.
-    pub fn with_rule(mut self, rule: FilesystemRule) -> Self {
+    pub fn with_rule(mut self, rule: FilesystemRule) -> Result<Self, PolicyError> {
+        if self.mode != FilesystemMode::Restricted {
+            return Err(PolicyError::InvalidRule {
+                message: "filesystem rules require a restricted filesystem policy".to_string(),
+            });
+        }
         self.entries.push(rule);
-        self
+        Ok(self)
     }
 
     /// Validates the policy and rejects rules that are meaningless for its mode.
@@ -302,6 +317,11 @@ impl FilesystemPolicy {
         path: &Path,
         context: &PathResolutionContext,
     ) -> Result<AccessMode, PolicyError> {
+        if crate::path::contains_nul(path) {
+            return Err(PolicyError::PathContainsNul {
+                path: path.to_path_buf(),
+            });
+        }
         if !path.is_absolute() {
             return Err(PolicyError::ExpectedAbsolute {
                 path: path.to_path_buf(),

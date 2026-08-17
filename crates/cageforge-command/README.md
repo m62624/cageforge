@@ -58,7 +58,7 @@ use cageforge_command::{
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let command = CommandSpec::new("cargo")?.with_args(["test", "--workspace"]);
+    let command = CommandSpec::new("cargo")?.with_args(["test", "--workspace"])?;
     let environment = EnvironmentSpec::empty().with_var("RUST_BACKTRACE", "1")?;
     let request = CommandRequest::new(command)
         .with_working_directory(std::env::current_dir()?)?
@@ -72,8 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `CommandSpec::with_arg` and `with_args` append argv values without changing
-them. An empty program or a NUL-containing program is rejected. Empty argv
-arguments are valid.
+them and reject NUL-containing arguments. An empty program or a NUL-containing
+program is rejected; empty argv arguments are valid. Working-directory input
+also rejects empty and NUL-containing paths at the request boundary.
 
 ## Environment
 

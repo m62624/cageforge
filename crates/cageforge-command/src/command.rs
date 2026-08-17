@@ -29,19 +29,25 @@ impl CommandSpec {
     }
 
     /// Adds one argv argument and returns the updated command.
-    pub fn with_arg(mut self, argument: impl Into<OsString>) -> Self {
-        self.args.push(argument.into());
-        self
+    pub fn with_arg(mut self, argument: impl Into<OsString>) -> Result<Self, CommandError> {
+        let argument = argument.into();
+        validate_argument(&argument)?;
+        self.args.push(argument);
+        Ok(self)
     }
 
     /// Adds several argv arguments and returns the updated command.
-    pub fn with_args<I, S>(mut self, arguments: I) -> Self
+    pub fn with_args<I, S>(mut self, arguments: I) -> Result<Self, CommandError>
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        self.args.extend(arguments.into_iter().map(Into::into));
-        self
+        for argument in arguments {
+            let argument = argument.into();
+            validate_argument(&argument)?;
+            self.args.push(argument);
+        }
+        Ok(self)
     }
 
     /// Returns the executable program.
@@ -66,6 +72,13 @@ fn validate_program(program: &OsStr) -> Result<(), CommandError> {
     }
     if contains_nul(program) {
         return Err(CommandError::ProgramContainsNul);
+    }
+    Ok(())
+}
+
+fn validate_argument(argument: &OsStr) -> Result<(), CommandError> {
+    if contains_nul(argument) {
+        return Err(CommandError::ArgumentContainsNul);
     }
     Ok(())
 }

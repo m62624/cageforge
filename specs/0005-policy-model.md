@@ -58,12 +58,15 @@ same `SandboxPolicy` type.
 
 ## Security invariants
 
-- Workspace-relative selectors cannot contain parent traversal or become
-  absolute.
-- Absolute selectors are validated lexically without filesystem access or
-  symlink resolution.
+- Workspace-relative selectors cannot contain NUL characters, parent traversal,
+  or become absolute.
+- Absolute selectors and concrete access lookups reject NUL characters and
+  parent traversal. They are validated lexically without filesystem access or
+  symlink resolution; native backends must enforce the same boundary when
+  resolving filesystem objects.
 - Filesystem access is recursive and the most-specific matching target wins;
-  equal targets use deterministic access precedence.
+  equal targets use deterministic access precedence: `Deny` over `Write` over
+  `Read`, matching the audited Codex behavior.
 - Duplicate filesystem entries are normalized conservatively: the strongest
   access decision wins, with `Deny` stronger than `Write`, and `Write` stronger
   than `Read`.
@@ -73,7 +76,8 @@ same `SandboxPolicy` type.
 - Writable rules may carry read-only subpath carve-outs, and concrete targets
   may explicitly request skip-on-missing behavior.
 - Unrestricted and externally enforced filesystem policies cannot carry local
-  filesystem rules.
+  filesystem rules. Restriction-only builders reject those combinations at
+  construction time.
 - Domain patterns are normalized to lowercase and reject schemes, paths,
   whitespace, and unsupported wildcard shapes.
 - `*.example.com` matches subdomains but not the apex; `**.example.com`
@@ -81,7 +85,9 @@ same `SandboxPolicy` type.
 - Deny wins when multiple matching domain rules apply.
 - Domain and Unix-socket defaults are explicit: disabled, enabled, or
   restricted allowlist; backends never infer a default from rule presence.
-- External network policy cannot carry local domain or socket rules.
+- Disabled network mode always denies even when inert rules are retained for
+  inspection. External network policy cannot carry local domain or socket
+  rules; its rule builders reject the combination at construction time.
 - The policy crate never silently downgrades or broadens a requested policy.
 
 The comparison against the current Codex sandbox crates and the intentionally
@@ -91,11 +97,12 @@ deferred semantics are recorded in `specs/0006-codex-policy-audit.md`.
 
 The crate is tested as a library through black-box integration tests in
 `crates/cageforge-policy/tests/`. The suite covers native absolute paths,
-relative paths, parent traversal, special scopes, context expansion, path
-patterns, recursive resolution, access precedence, duplicate normalization,
-filesystem modes, carve-outs, missing-path behavior, domain normalization and
-wildcard semantics, Unix socket validation, external-policy validation, and
-built-in policies.
+relative paths, NUL and parent traversal rejection, special scopes, context
+expansion, POSIX and Windows-native path forms, path patterns, recursive
+resolution, access precedence, duplicate normalization, filesystem modes,
+carve-outs, missing-path behavior, domain normalization and wildcard
+semantics, Unix socket validation, external-policy validation, and built-in
+policies.
 
 Unit tests should be added only when private implementation logic cannot be
 meaningfully exercised through the public API.

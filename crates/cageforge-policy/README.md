@@ -29,9 +29,11 @@ named profiles. Use a native backend crate to enforce the resolved policy.
 
 Policy fields are private. Queries return shared references, slices,
 `Option<&T>`, or copyable enum values. Constructors and `with_*` methods build
-new values and validate input; they do not expose mutable collections or public
-fields that could bypass policy invariants. This keeps both direct library use
-and backend compilation on the same validated API.
+new values and validate input. Builders that could otherwise create
+contradictory policy states are fallible, and path inputs reject NUL characters
+and parent traversal before backend compilation. The API does not expose
+mutable collections or public fields that could bypass policy invariants. This
+keeps both direct library use and backend compilation on the same validated API.
 
 `PathSelector` is opaque. Create it with `absolute`, `workspace`,
 `workspace_root`, `minimal`, `tmpdir`, or `slash_tmp`; callers cannot construct
@@ -85,11 +87,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`access_for_path` requires an absolute path and rejects parent traversal. Rules
-are recursive. The most-specific matching rule wins; ties use deterministic
-precedence, with `Deny` stronger than `Write`, and `Write` stronger than
-`Read`. Call `normalized` before handing duplicate rules to a backend when a
-canonical rule list is needed.
+`access_for_path` requires an absolute path and rejects NUL characters and
+parent traversal. Rules are recursive. The most-specific matching rule wins;
+ties use deterministic precedence, with `Deny` stronger than `Write`, and
+`Write` stronger than `Read`. Call `normalized` before handing duplicate rules
+to a backend when a canonical rule list is needed.
 
 ## Filesystem model
 
@@ -114,9 +116,11 @@ domains and Unix socket paths. Domain patterns are normalized to lowercase;
 `allows_domain` and `allows_unix_socket` for complete decisions or inspect the
 normalized rules before compiling native enforcement.
 
-Network policy is independent from filesystem policy. A future backend may
-enforce domains through a proxy, firewall, or another native mechanism; this
-crate does not select or configure that mechanism.
+Network policy is independent from filesystem policy. Disabled mode always
+denies, even if rules are retained for inspection; external mode delegates the
+boundary and rejects local rules. A future backend may enforce domains through
+a proxy, firewall, or another native mechanism; this crate does not select or
+configure that mechanism.
 
 ## Tests and API documentation
 

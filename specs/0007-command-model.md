@@ -34,8 +34,9 @@ Codex process/session identifiers.
 ### `CommandSpec`
 
 An argv vector consists of one non-empty executable program and zero or more
-native `OsString` arguments. Shell parsing is never implicit. A caller that
-wants a shell must place the shell executable and its arguments in the vector.
+native `OsString` arguments. The program and arguments reject NUL characters at
+construction time. Shell parsing is never implicit. A caller that wants a
+shell must place the shell executable and its arguments in the vector.
 
 ### `EnvironmentSpec`
 
@@ -72,9 +73,10 @@ Windows execution inputs.
 ### `CommandRequest`
 
 The request combines a command, optional native working directory, environment,
-stdio routing, and a `TimeoutPolicy`. Relative working-directory resolution is
-deliberately deferred to the backend boundary, where the execution context and
-policy are available.
+stdio routing, and a `TimeoutPolicy`. Empty and NUL-containing working
+directories are rejected; relative working-directory resolution is deliberately
+deferred to the backend boundary, where the execution context and policy are
+available.
 
 ## Dependency boundary
 
@@ -96,11 +98,11 @@ produce both a `CommandRequest` and a `SandboxPolicy`.
 The public integration suite covers:
 
 - empty and NUL-containing program rejection;
-- native arguments, including empty arguments;
+- native arguments, including empty arguments and NUL rejection;
 - inherited/empty environments, deterministic overrides, set/remove
   distinction, and invalid names/values;
 - explicit and default stdio modes;
-- optional cwd and timeout replacement/removal;
+- optional native cwd, NUL rejection, and timeout replacement/removal;
 - complete object equality and error display.
 
 Portable command logic must retain at least 90% Tarpaulin coverage. Native
