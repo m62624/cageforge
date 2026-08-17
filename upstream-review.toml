@@ -1,0 +1,31 @@
+# Read-only upstream tracking configuration.
+#
+# The commit is metadata only. No upstream source snapshot is stored in this
+# repository. Fill this in after the first source audit and manual port.
+
+[upstream]
+repository = "https://github.com/openai/codex.git"
+path = "../codex"
+branch = "main"
+last_adapted_commit = ""
+
+[[scope]]
+name = "sandboxing"
+upstream_paths = ["codex-rs/sandboxing/"]
+local_paths = [
+    "crates/cageforge-core/",
+    "crates/cageforge-macos/",
+]
+
+[[scope]]
+name = "linux-sandbox"
+upstream_paths = [
+    "codex-rs/linux-sandbox/",
+    "codex-rs/bwrap/",
+]
+local_paths = ["crates/cageforge-linux/"]
+
+[[scope]]
+name = "windows-sandbox"
+upstream_paths = ["codex-rs/windows-sandbox-rs/"]
+local_paths = ["crates/cageforge-windows/"]

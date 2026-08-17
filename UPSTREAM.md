@@ -6,6 +6,11 @@
 - Tracking remote: `upstream`
 - Baseline commit: not selected yet
 
+The machine-readable tracking configuration is upstream-review.toml. It stores
+only the upstream location, configured source scopes, and the last adapted
+commit SHA. It does not store an upstream source snapshot in the Cageforge
+repository. The external checkout is updated manually before review.
+
 ## Planned source areas
 
 | Upstream path | Cageforge destination | Status |
