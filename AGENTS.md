@@ -39,6 +39,11 @@ These rules are mandatory:
    unit tests only for internal logic that cannot be meaningfully covered through
    the crate's public API. Do not expand the public API or add test-only helpers
    solely to make unit tests possible.
+9. Keep crate README files focused on the library's role, public API, and usage.
+   If upstream work informed a crate's design, mention that provenance once in
+   a concise top banner. Keep exact commits, paths, license details, and audit
+   history in the project specs and provenance records instead of repeating them
+   throughout the README.
 
 When in doubt, stop and update the specification or provenance records before
 changing source code.
