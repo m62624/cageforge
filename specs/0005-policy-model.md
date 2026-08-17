@@ -1,4 +1,4 @@
-# Specification 0003: Cageforge Policy Model
+# Specification 0005: Cageforge Policy Model
 
 Status: accepted for the first implementation milestone
 
@@ -85,7 +85,7 @@ same `SandboxPolicy` type.
 - The policy crate never silently downgrades or broadens a requested policy.
 
 The comparison against the current Codex sandbox crates and the intentionally
-deferred semantics are recorded in `specs/0004-codex-policy-audit.md`.
+deferred semantics are recorded in `specs/0006-codex-policy-audit.md`.
 
 ## Testing policy
 

@@ -1,4 +1,4 @@
-# Specification 0005: Source Provenance and File Headers
+# Specification 0002: Source Provenance and File Headers
 
 Status: accepted
 

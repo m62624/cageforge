@@ -75,13 +75,10 @@ impl PathResolutionContext {
 }
 
 fn validated_absolute(path: PathBuf) -> Result<PathBuf, PolicyError> {
-    match PathSelector::absolute(path)? {
-        PathSelector::Absolute(path) => Ok(path),
-        PathSelector::WorkspaceRoot(_)
-        | PathSelector::Minimal
-        | PathSelector::Tmpdir
-        | PathSelector::SlashTmp => Err(PolicyError::InvalidContext {
+    PathSelector::absolute(path)?
+        .path()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| PolicyError::InvalidContext {
             message: "absolute path validation returned a non-absolute selector".to_string(),
-        }),
-    }
+        })
 }

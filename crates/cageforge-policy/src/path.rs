@@ -9,16 +9,16 @@ use std::path::PathBuf;
 
 /// A platform-independent description of a filesystem scope.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum PathSelector {
-    /// A native absolute path. The path is not canonicalized or dereferenced.
+pub struct PathSelector {
+    kind: PathSelectorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum PathSelectorKind {
     Absolute(PathBuf),
-    /// A path relative to every workspace root supplied to a backend.
     WorkspaceRoot(PathBuf),
-    /// Platform and runtime paths required by ordinary developer tools.
     Minimal,
-    /// The platform temporary directory when available.
     Tmpdir,
-    /// The conventional `/tmp` directory when it exists.
     SlashTmp,
 }
 
@@ -38,52 +38,64 @@ impl PathSelector {
         {
             return Err(PolicyError::ParentTraversal { path });
         }
-        Ok(Self::Absolute(path))
+        Ok(Self {
+            kind: PathSelectorKind::Absolute(path),
+        })
     }
 
     /// Creates a selector for the workspace root itself.
     pub fn workspace_root() -> Self {
-        Self::WorkspaceRoot(PathBuf::from("."))
+        Self {
+            kind: PathSelectorKind::WorkspaceRoot(PathBuf::from(".")),
+        }
     }
 
     /// Creates a selector relative to every workspace root.
     pub fn workspace(relative: impl Into<PathBuf>) -> Result<Self, PolicyError> {
         let relative = relative.into();
         let normalized = normalize_relative_path(relative.clone())?;
-        Ok(Self::WorkspaceRoot(normalized))
+        Ok(Self {
+            kind: PathSelectorKind::WorkspaceRoot(normalized),
+        })
     }
 
     /// Creates the platform-minimal runtime scope.
     pub const fn minimal() -> Self {
-        Self::Minimal
+        Self {
+            kind: PathSelectorKind::Minimal,
+        }
     }
 
     /// Creates the platform temporary-directory scope.
     pub const fn tmpdir() -> Self {
-        Self::Tmpdir
+        Self {
+            kind: PathSelectorKind::Tmpdir,
+        }
     }
 
     /// Creates the conventional `/tmp` scope.
     pub const fn slash_tmp() -> Self {
-        Self::SlashTmp
+        Self {
+            kind: PathSelectorKind::SlashTmp,
+        }
     }
 
     /// Resolves this selector against a caller-provided runtime context.
     pub fn resolve(&self, context: &PathResolutionContext) -> Vec<PathBuf> {
-        match self {
-            Self::Absolute(path) => vec![path.clone()],
-            Self::WorkspaceRoot(relative) => context
+        match &self.kind {
+            PathSelectorKind::Absolute(path) => vec![path.clone()],
+            PathSelectorKind::WorkspaceRoot(relative) => context
                 .workspace_roots()
                 .iter()
                 .map(|root| root.join(relative))
                 .collect(),
-            Self::Minimal => context.minimal_paths().to_vec(),
-            Self::Tmpdir => context
+            PathSelectorKind::Minimal => context.minimal_paths().to_vec(),
+            PathSelectorKind::Tmpdir => context
                 .tmpdir()
                 .into_iter()
                 .map(Path::to_path_buf)
                 .collect(),
-            Self::SlashTmp => context
+            PathSelectorKind::SlashTmp => context
                 .slash_tmp()
                 .into_iter()
                 .map(Path::to_path_buf)
@@ -93,23 +105,30 @@ impl PathSelector {
 
     /// Returns the stored path for an absolute or workspace-relative selector.
     pub fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Absolute(path) | Self::WorkspaceRoot(path) => Some(path),
-            Self::Minimal | Self::Tmpdir | Self::SlashTmp => None,
+        match &self.kind {
+            PathSelectorKind::Absolute(path) | PathSelectorKind::WorkspaceRoot(path) => Some(path),
+            PathSelectorKind::Minimal | PathSelectorKind::Tmpdir | PathSelectorKind::SlashTmp => {
+                None
+            }
         }
     }
 
     /// Returns whether this selector is a special platform-defined scope.
     pub const fn is_special(&self) -> bool {
-        matches!(self, Self::Minimal | Self::Tmpdir | Self::SlashTmp)
+        matches!(
+            &self.kind,
+            PathSelectorKind::Minimal | PathSelectorKind::Tmpdir | PathSelectorKind::SlashTmp
+        )
     }
 
     /// Returns the number of concrete path components represented by this
     /// selector after resolution.
     pub(crate) fn specificity(&self, resolved: &Path) -> usize {
-        match self {
-            Self::Absolute(_) | Self::WorkspaceRoot(_) => resolved.components().count(),
-            Self::Minimal | Self::Tmpdir | Self::SlashTmp => 0,
+        match &self.kind {
+            PathSelectorKind::Absolute(_) | PathSelectorKind::WorkspaceRoot(_) => {
+                resolved.components().count()
+            }
+            PathSelectorKind::Minimal | PathSelectorKind::Tmpdir | PathSelectorKind::SlashTmp => 0,
         }
     }
 }

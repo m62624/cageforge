@@ -1,4 +1,4 @@
-# Specification 0002: Upstream Review Tool
+# Specification 0004: Upstream Review Tool
 
 Status: draft
 

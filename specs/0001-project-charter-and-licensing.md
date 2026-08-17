@@ -75,7 +75,7 @@ must not be treated as a security or licensing review.
 When a file is copied or substantially adapted, it must carry the applicable
 upstream copyright and a prominent provenance notice. The exact required
 templates and the distinction from independently authored code are defined in
-`specs/0005-source-provenance-and-file-headers.md`. The adapted Apache-2.0
+`specs/0002-source-provenance-and-file-headers.md`. The adapted Apache-2.0
 form is:
 
 ```text
@@ -163,7 +163,7 @@ cageforge-core        ergonomic facade and backend selection
 `cageforge-policy` is the first implementation crate. It is deliberately
 smaller than the future facade and contains only platform-independent policy
 semantics; it does not parse TOML or launch processes. The detailed first
-policy model is specified in `specs/0003-policy-model.md`.
+policy model is specified in `specs/0005-policy-model.md`.
 
 `cageforge-core` must not depend on Codex crates. The core API must not expose
 Codex `PermissionProfile`, Codex network-proxy types, Codex PTY types, Codex

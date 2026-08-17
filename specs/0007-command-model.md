@@ -1,4 +1,4 @@
-# Specification 0006: Portable Command Model
+# Specification 0007: Portable Command Model
 
 Status: accepted design
 

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Platform-independent filesystem and network sandbox policy types"
-readme = "../../README.md"
+readme = "README.md"
 
 [lib]
 name = "cageforge_policy"

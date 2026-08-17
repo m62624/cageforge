@@ -1,4 +1,4 @@
-# Specification 0004: Codex Policy Audit
+# Specification 0006: Codex Policy Audit
 
 Status: accepted audit baseline
 

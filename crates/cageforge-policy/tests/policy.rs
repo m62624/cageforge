@@ -29,8 +29,10 @@ fn native_absolute_paths_are_accepted_and_relative_paths_are_rejected() {
         "/workspace"
     };
     assert_eq!(
-        PathSelector::absolute(absolute).expect("native absolute path"),
-        PathSelector::Absolute(absolute.into())
+        PathSelector::absolute(absolute)
+            .expect("native absolute path")
+            .path(),
+        Some(Path::new(absolute))
     );
     assert!(matches!(
         PathSelector::absolute("workspace"),
@@ -621,7 +623,7 @@ fn path_selector_validates_empty_and_absolute_workspace_paths() {
     ));
     assert_eq!(
         PathSelector::workspace(".").expect("workspace root path"),
-        PathSelector::WorkspaceRoot(".".into())
+        PathSelector::workspace_root()
     );
 }
 
