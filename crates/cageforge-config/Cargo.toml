@@ -1,0 +1,25 @@
+[package]
+name = "cageforge-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Strict TOML profile resolution for Cageforge policies and commands"
+readme = "README.md"
+
+[lib]
+name = "cageforge_config"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+cageforge-command = { workspace = true }
+cageforge-policy = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true
