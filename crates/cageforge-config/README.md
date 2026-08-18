@@ -153,7 +153,10 @@ configuration problem at the correct layer without parsing error text.
 The black-box integration suite is in `crates/cageforge-config/tests/`. It
 covers strict parsing, inheritance order, platform-native paths, all policy
 and command modes, environment filtering, profile metadata, workspace roots,
-schema and diagnostics, invalid values, and policy-only profiles. The crate is
-required to maintain at least 90% line coverage.
+schema and diagnostics, invalid values, and policy-only profiles. Bounded
+`proptest` cases also exercise every filesystem target, generated paths and
+globs, domain/socket forms, profile/file resolution, schema validation, and
+typed failure paths. The crate is required to maintain at least 90% line
+coverage.
 
 Repository: [github.com/m62624/cageforge](https://github.com/m62624/cageforge).

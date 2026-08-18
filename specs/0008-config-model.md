@@ -181,4 +181,9 @@ strict unknown-field handling, inheritance order, cycle and unknown-profile
 errors, all profile section modes, command/environment/stdio/timeout mapping,
 environment filtering, protected metadata, profile metadata, workspace-root inheritance, schema and
 diagnostic serialization, policy validation failures, and a policy-only
-profile. The crate must maintain at least 90% line coverage.
+profile. Bounded `proptest` suites additionally generate every filesystem
+target and missing-path mode, absolute/workspace paths and globs, host forms
+with ports/IPv6/wildcards/trailing dots, Unix-socket paths, profile metadata,
+file loading, schema-valid documents, diagnostics, unknown-profile/default
+errors, and invalid enum/string values. The crate must maintain at least 90%
+line coverage.
