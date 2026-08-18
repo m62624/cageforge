@@ -29,6 +29,8 @@ upstream_paths = [
     "codex-rs/protocol/src/config_types.rs",
     "codex-rs/protocol/src/shell_environment.rs",
     "codex-rs/sandboxing/src/spawn.rs",
+    "codex-rs/core/src/sandboxing/mod.rs",
+    "codex-rs/core/src/spawn.rs",
     "codex-rs/core/src/exec.rs",
     "codex-rs/core/src/exec_env.rs",
 ]
@@ -45,6 +47,7 @@ upstream_paths = [
     "codex-rs/protocol/src/shell_environment.rs",
     "codex-rs/core/src/config/permissions.rs",
     "codex-rs/core/src/config/mod.rs",
+    "codex-rs/core/src/config/resolved_permission_profile.rs",
     "codex-rs/core/src/environment_selection.rs",
     "codex-rs/core/src/exec_env.rs",
 ]

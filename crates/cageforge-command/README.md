@@ -91,11 +91,13 @@ Names reject empty strings, `=`, and NUL; values and filter patterns reject NUL.
 `with_filter` accepts an explicit `Include` or `Exclude` action and portable `*`
 and `?` wildcards. The convenience methods `with_include_pattern` and
 `with_exclude_pattern` remain available for readable Rust call sites. Matching
-is case-insensitive, and excludes have precedence when a variable matches both
-actions. `apply_to` applies the portable stages in this order:
-`inherit → exclude → set/remove → include`. A variable removed by an exclude is
-not restored by an include; explicit set/remove entries are applied at their
-own stage. The backend still selects the platform-specific `Core` variables
+is case-insensitive, including explicit variable names and duplicate filter
+patterns. A later case variant replaces the same logical override. Excludes
+have precedence when a variable matches both actions. `apply_to` applies the
+portable stages in this order: `inherit → exclude → set/remove → include`. A
+variable removed by an exclude is not restored by an include, while an explicit
+set can intentionally restore it at the later set stage. The backend still
+selects the platform-specific `Core` variables
 and supplies the selected base map. This keeps process-environment discovery
 out of the platform-independent crate.
 

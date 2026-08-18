@@ -26,12 +26,15 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/app-server-protocol/src/protocol/v2/process.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/protocol/src/config_types.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/sandboxing/src/spawn.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
+| `codex-rs/core/src/sandboxing/mod.rs` | `crates/cageforge-command` | Execution-boundary inputs audited; independently implemented |
+| `codex-rs/core/src/spawn.rs` | `crates/cageforge-command` | Execution-boundary inputs audited; independently implemented |
 | `codex-rs/core/src/exec.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/protocol/src/shell_environment.rs` | `crates/cageforge-command` | Environment order and core-set behavior audited; Codex-only variables excluded |
 | `codex-rs/core/src/exec_env.rs` | `crates/cageforge-command` | Runtime environment application audited; Codex session/profile injection excluded |
 | `codex-rs/config/src/permissions_toml.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
 | `codex-rs/protocol/src/config_types.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
 | `codex-rs/core/src/config/permissions.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
+| `codex-rs/core/src/config/resolved_permission_profile.rs` | `crates/cageforge-config` | Profile-root state audited; Codex profile types excluded |
 | `codex-rs/core/src/exec_env.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
 | `codex-rs/config/src/config_toml.rs` | `crates/cageforge-config` | Behavior-tracked; product wiring audited, Codex-only fields excluded |
 | `codex-rs/config/src/merge.rs` | `crates/cageforge-config` | Profile inheritance merge behavior audited |

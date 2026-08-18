@@ -95,9 +95,11 @@ support is not uniform across Linux, macOS, and Windows.
 Command environments support `all`, `core`, and `none` inheritance bases;
 omitting `inherit` selects `core`. The `filters` table maps portable `*` and
 `?` patterns to `include` or `exclude`. Matching is case-insensitive and
-excludes take precedence. The command environment stages are
-`inherit → exclude → set/remove → include`; an include cannot restore an
-inherited variable already removed by an exclude. The backend decides which
+excludes take precedence over includes. Explicit set/remove names are also
+case-insensitive, and a later case variant replaces the same logical name.
+The command environment stages are `inherit → exclude → set/remove → include`;
+an include cannot restore an inherited variable already removed by an exclude,
+but an explicit set can intentionally do so. The backend decides which
 platform variables belong to the `core` set. Restricted filesystem profiles
 protect `.git` below writable scopes by default; trusted callers can request
 the explicit TOML opt-out

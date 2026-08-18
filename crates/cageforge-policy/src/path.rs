@@ -142,11 +142,10 @@ impl PathSelector {
 
     /// Returns the number of concrete path components represented by this
     /// selector after resolution.
-    pub(crate) fn specificity(&self, resolved: &Path) -> usize {
+    pub(crate) fn specificity(&self) -> usize {
         match &self.kind {
-            PathSelectorKind::Absolute(_) | PathSelectorKind::WorkspaceRoot(_) => {
-                resolved.components().count()
-            }
+            PathSelectorKind::Absolute(path) => normal_component_count(path),
+            PathSelectorKind::WorkspaceRoot(relative) => normal_component_count(relative),
             PathSelectorKind::Root
             | PathSelectorKind::Minimal
             | PathSelectorKind::Tmpdir
@@ -189,14 +188,12 @@ impl PathPattern {
         if self.absolute {
             let (prefix, components) = path_components(path);
             return path.is_absolute()
-                && prefix == self.prefix
+                && prefixes_equal(prefix.as_deref(), self.prefix.as_deref())
                 && glob_components_match(&self.components, &components);
         }
 
         context.workspace_roots().iter().any(|root| {
-            path.strip_prefix(root)
-                .ok()
-                .map(path_components_relative)
+            relative_path_components(path, root)
                 .is_some_and(|components| glob_components_match(&self.components, &components))
         })
     }
@@ -329,14 +326,25 @@ fn path_components(path: &Path) -> (Option<String>, Vec<String>) {
     (prefix, components)
 }
 
-fn path_components_relative(path: &Path) -> Vec<String> {
+fn normal_component_count(path: &Path) -> usize {
     path.components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
-            Component::CurDir => None,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => None,
-        })
-        .collect()
+        .filter(|component| matches!(component, Component::Normal(_)))
+        .count()
+}
+
+fn relative_path_components(path: &Path, root: &Path) -> Option<Vec<String>> {
+    let (path_prefix, path_parts) = path_components(path);
+    let (root_prefix, root_components) = path_components(root);
+    if !prefixes_equal(path_prefix.as_deref(), root_prefix.as_deref())
+        || root_components.len() > path_parts.len()
+        || !root_components
+            .iter()
+            .zip(&path_parts)
+            .all(|(root, path)| path_components_equal(path, root))
+    {
+        return None;
+    }
+    Some(path_parts[root_components.len()..].to_vec())
 }
 
 fn glob_components_match(pattern: &[String], path: &[String]) -> bool {
@@ -361,6 +369,10 @@ fn glob_components_match(pattern: &[String], path: &[String]) -> bool {
 }
 
 fn segment_matches(pattern: &str, value: &str) -> bool {
+    #[cfg(windows)]
+    let pattern = pattern.to_lowercase();
+    #[cfg(windows)]
+    let value = value.to_lowercase();
     let pattern = pattern.as_bytes();
     let value = value.as_bytes();
     let mut current = vec![false; value.len() + 1];
@@ -386,4 +398,32 @@ fn segment_matches(pattern: &str, value: &str) -> bool {
         current = next;
     }
     current[value.len()]
+}
+
+fn prefixes_equal(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => path_strings_equal(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn path_components_equal(left: &str, right: &str) -> bool {
+    path_strings_equal(left, right)
+}
+
+#[cfg(not(windows))]
+fn path_components_equal(left: &str, right: &str) -> bool {
+    left == right
+}
+
+#[cfg(windows)]
+fn path_strings_equal(left: &str, right: &str) -> bool {
+    left.to_lowercase() == right.to_lowercase()
+}
+
+#[cfg(not(windows))]
+fn path_strings_equal(left: &str, right: &str) -> bool {
+    left == right
 }

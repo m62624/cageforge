@@ -100,7 +100,11 @@ writable scope by default. Add more protected relative paths with
 `dangerously_allow_git_write` method is available only for trusted callers and
 may still be rejected by a future policy composer or backend. Call
 `normalized` before handing duplicate rules to a backend when a canonical rule
-list is needed.
+list is needed. Concrete path and glob comparisons follow native filesystem
+case rules: POSIX matching is case-sensitive, while Windows matching is
+case-insensitive. The portable crate does not resolve symlinks; that remains a
+native backend decision. The built-in protected-metadata check is deliberately
+conservative and remains case-insensitive on every host.
 
 `PathSelector::root()` is a symbolic request for every system root supplied in
 `PathResolutionContext`. POSIX callers normally provide `/`; Windows callers

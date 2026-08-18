@@ -18,11 +18,16 @@ The design was checked against the current Codex checkout at
 
 - `codex-rs/sandboxing/src/spawn.rs` for argv, cwd, environment, stdio intent,
   and timeout-adjacent launch inputs;
+- `codex-rs/core/src/sandboxing/mod.rs` and `codex-rs/core/src/spawn.rs` for
+  the execution boundary that consumes those launch inputs;
 - `codex-rs/app-server-protocol/src/protocol/v2/command_exec.rs` for command,
   cwd, environment overrides, output/streaming controls, and timeout concepts;
 - `codex-rs/protocol/src/models.rs` for the product-bound local shell request;
 - `codex-rs/protocol/src/config_types.rs` for environment inheritance and
   filtering semantics.
+- `codex-rs/protocol/src/shell_environment.rs` and
+  `codex-rs/core/src/exec_env.rs` for the final environment application
+  boundary, excluding Codex-only context-variable scrubbing.
 
 This is a behavioral audit, not a source import. The Cageforge implementation
 uses new types and a new API; it does not expose Codex protocol types, legacy
@@ -54,9 +59,11 @@ same request has safe behavior on Windows and POSIX systems. The portable
 application order is `inherit → exclude → set/remove → include`.
 `EnvironmentSpec::apply_to` applies the latter three stages to a base map that
 the backend selected according to `All`, `Core`, or `None`. A variable removed
-by an exclude is not restored by an include; explicit set/remove entries are
-applied at their own stage. Conflicting set/remove requests are rejected by
-the config layer. The portable crate does not define the contents of `Core`;
+by an exclude is not restored by an include; an explicit set can intentionally
+restore its named variable at the later set stage. Explicit names and filter
+patterns are canonicalized case-insensitively, so case variants cannot create
+two logical variables. Conflicting set/remove requests are rejected by the
+config layer. The portable crate does not define the contents of `Core`;
 each native backend supplies that platform's conservative base map before
 calling `apply_to`.
 

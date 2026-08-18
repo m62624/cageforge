@@ -105,14 +105,20 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
   an inherited declaration with `false`. Resolution returns enabled path
   declarations in deterministic lexical order; the backend resolves relative
   paths and registers absolute roots in its execution context.
+- The upstream runtime state that combines profile roots with harness/runtime
+  roots is tracked separately from TOML parsing; Cageforge keeps that merge at
+  the future backend/context boundary.
 - `root` is a symbolic filesystem target. The selected backend must populate
   `PathResolutionContext` with POSIX `/` or the relevant Windows drive/UNC
   roots; config resolution never discovers system roots.
 - Environment inheritance is `all`, `core`, or `none`; omitted inheritance
   means `core`. The canonical `filters` table maps patterns to `include` or
   `exclude`, rejects case-insensitive duplicate patterns, and merges exact
-  patterns by child override. Excludes have precedence over includes. The
-  backend defines the platform-specific `core` set.
+  patterns by child override. Variable set/remove names use the same
+  case-insensitive identity during validation and inheritance merge. Excludes
+  have precedence over includes; an explicit set is applied after exclusion
+  and may intentionally restore its named variable. The backend defines the
+  platform-specific `core` set.
 - `additional_protected_paths` is additive. Restricted profiles protect `.git`
   below writable scopes by default. The explicit
   `[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`

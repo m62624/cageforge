@@ -76,7 +76,8 @@ pub enum EnvironmentOverride {
 /// Overrides are kept in a sorted map for deterministic inspection and are
 /// applied by a backend after selecting the requested base environment. A
 /// value of [`EnvironmentOverride::Remove`] is distinct from setting an empty
-/// string.
+/// string. Variable names are one logical, case-insensitive namespace, so a
+/// later case variant replaces an earlier override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentSpec {
     base: EnvironmentBase,
@@ -129,7 +130,10 @@ impl EnvironmentSpec {
 
     /// Returns the override for one variable, if present.
     pub fn override_for(&self, name: &OsStr) -> Option<&EnvironmentOverride> {
-        self.overrides.get(name)
+        self.overrides
+            .iter()
+            .find(|(existing, _)| environment_names_equal(existing, name))
+            .map(|(_, override_value)| override_value)
     }
 
     /// Returns the filter action for a variable name, if a filter matches.
@@ -159,13 +163,17 @@ impl EnvironmentSpec {
     /// The caller selects the `All`, `Core`, or `None` base at the backend
     /// boundary. This method then applies the portable sequence
     /// `exclude -> set/remove -> include`. A variable removed by an exclude is
-    /// not restored by an include; an explicit set is applied at its named
-    /// stage and is therefore intentional.
+    /// not restored by an include; an explicit set is applied after exclusion
+    /// and can intentionally reintroduce that named variable.
     pub fn apply_to<I>(&self, variables: I) -> BTreeMap<OsString, OsString>
     where
         I: IntoIterator<Item = (OsString, OsString)>,
     {
-        let mut environment: BTreeMap<OsString, OsString> = variables.into_iter().collect();
+        let mut environment = BTreeMap::new();
+        for (name, value) in variables {
+            remove_environment_name(&mut environment, &name);
+            environment.insert(name, value);
+        }
         let has_include_filter = self
             .filters
             .values()
@@ -181,10 +189,11 @@ impl EnvironmentSpec {
         for (name, value) in &self.overrides {
             match value {
                 EnvironmentOverride::Set(value) => {
+                    remove_environment_name(&mut environment, name);
                     environment.insert(name.clone(), value.clone());
                 }
                 EnvironmentOverride::Remove => {
-                    environment.remove(name);
+                    remove_environment_name(&mut environment, name);
                 }
             }
         }
@@ -213,6 +222,7 @@ impl EnvironmentSpec {
         if contains_nul(&value) {
             return Err(CommandError::EnvironmentValueContainsNul);
         }
+        remove_environment_name(&mut self.overrides, &name);
         self.overrides.insert(name, EnvironmentOverride::Set(value));
         Ok(self)
     }
@@ -221,6 +231,7 @@ impl EnvironmentSpec {
     pub fn without_var(mut self, name: impl Into<OsString>) -> Result<Self, CommandError> {
         let name = name.into();
         validate_name(&name)?;
+        remove_environment_name(&mut self.overrides, &name);
         self.overrides.insert(name, EnvironmentOverride::Remove);
         Ok(self)
     }
@@ -235,7 +246,7 @@ impl EnvironmentSpec {
         if let Some(existing) = self
             .filters
             .keys()
-            .find(|existing| existing.as_str().eq_ignore_ascii_case(pattern.as_str()))
+            .find(|existing| environment_patterns_equal(existing, &pattern))
             .cloned()
         {
             self.filters.remove(&existing);
@@ -272,6 +283,24 @@ fn validate_name(name: &OsStr) -> Result<(), CommandError> {
         return Err(CommandError::EnvironmentNameContainsEquals);
     }
     Ok(())
+}
+
+fn remove_environment_name<V>(values: &mut BTreeMap<OsString, V>, name: &OsStr) {
+    if let Some(existing) = values
+        .keys()
+        .find(|existing| environment_names_equal(existing, name))
+        .cloned()
+    {
+        values.remove(&existing);
+    }
+}
+
+fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
+    left.to_string_lossy().to_lowercase() == right.to_string_lossy().to_lowercase()
+}
+
+fn environment_patterns_equal(left: &EnvironmentPattern, right: &EnvironmentPattern) -> bool {
+    left.as_str().to_lowercase() == right.as_str().to_lowercase()
 }
 
 fn wildcard_matches(pattern: &str, value: &str) -> bool {

@@ -20,7 +20,12 @@ were:
 - `codex-rs/app-server-protocol/src/protocol/v2/command_exec.rs`;
 - `codex-rs/app-server-protocol/src/protocol/v2/process.rs`;
 - `codex-rs/sandboxing/src/spawn.rs`;
-- `codex-rs/core/src/exec.rs`.
+- `codex-rs/core/src/sandboxing/mod.rs`;
+- `codex-rs/core/src/spawn.rs`;
+- `codex-rs/core/src/exec.rs`;
+- `codex-rs/core/src/exec_env.rs`;
+- `codex-rs/protocol/src/config_types.rs`;
+- `codex-rs/protocol/src/shell_environment.rs`.
 
 This is a behavioral and boundary audit. Neither current Cageforge crate
 contains copied or source-derived Codex implementation.
@@ -81,7 +86,7 @@ validation step.
 | Public surface | Public methods covered by this decision | Current use and Codex comparison | Decision |
 |---|---|---|---|
 | `CommandSpec` | `new`, `with_arg`, `with_args`, `program`, `args`, `into_parts` | Exercised by `tests/command.rs`; corresponds to Codex argv handling in `command_exec`, `process`, and `sandboxing::spawn`. | Keep. Argument builders are fallible and reject NUL before `into_parts`; `into_parts` is the owned handoff a process backend needs. |
-| `EnvironmentSpec` | `inherit_all`, `empty`, `base`, `overrides`, `override_for`, `filters`, `filter_action_for`, `with_var`, `without_var`, `with_filter`, `with_include_pattern`, `with_exclude_pattern`, `apply_to` | Exercised by environment tests; maps to Codex inherited/empty environment construction, filtering, and set/remove overrides without importing Codex filtering or telemetry rules. | Keep. The backend selects the platform-specific `Core` base map; this crate owns the portable filter order and precedence. |
+| `EnvironmentSpec` | `inherit_all`, `empty`, `base`, `overrides`, `override_for`, `filters`, `filter_action_for`, `with_var`, `without_var`, `with_filter`, `with_include_pattern`, `with_exclude_pattern`, `apply_to` | Exercised by environment tests; maps to Codex inherited/empty environment construction, filtering, and set/remove overrides without importing Codex filtering or telemetry rules. | Keep. Variable names and filter patterns use one case-insensitive logical namespace, and the backend selects the platform-specific `Core` base map. |
 | `CommandRequest` | `new`, `with_working_directory`, `without_working_directory`, `with_environment`, `with_stdio`, `with_timeout`, `with_timeout_policy`, `use_backend_timeout`, `disable_timeout`, `command`, `working_directory`, `environment`, `stdio`, `timeout_policy` | Exercised by request tests; combines the launch inputs split across Codex app-server protocol and execution code. | Keep. The named timeout methods keep call sites explicit, and cwd removal is required for reusable builder composition. |
 | `StdioSpec` | `new`, `captured`, `inherited`, `with_stdin`, `with_stdout`, `with_stderr`, `stdin`, `stdout`, `stderr` | Exercised by stdio tests; maps to Codex piped, inherited, and null stream setup. PTY allocation remains outside this crate. | Keep. Each stream is independently configurable without introducing PTY or OS handles. |
 | `TimeoutPolicy` | `BackendDefault`, `Limit`, `Disabled` | Exercised by timeout tests; matches Codex's default/custom/disabled timeout intent. Cancellation remains a separate lifecycle signal, as in Codex execution code. | Keep. Three variants are the complete portable timeout model. |

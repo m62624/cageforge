@@ -388,6 +388,72 @@ mode = "disabled"
 }
 
 #[test]
+fn environment_inheritance_replaces_case_variants_safely() {
+    let config = Config::from_toml(
+        r#"
+[profiles.base.command]
+program = "runner"
+
+[profiles.base.command.environment]
+set = { PATH = "/base/bin" }
+
+[profiles.child]
+inherits = ["base"]
+
+[profiles.child.command.environment]
+set = { path = "/child/bin" }
+"#,
+    )
+    .expect("case-variant environment override should parse");
+
+    let resolved = config.resolve("child").expect("child should resolve");
+    let environment = resolved
+        .command()
+        .expect("command should be inherited")
+        .environment();
+    assert_eq!(environment.overrides().len(), 1);
+    assert_eq!(
+        environment.override_for(OsStr::new("PATH")),
+        Some(&EnvironmentOverride::Set(OsString::from("/child/bin")))
+    );
+    assert_eq!(
+        environment.apply_to([(OsString::from("Path"), OsString::from("/system/bin"))]),
+        [(OsString::from("path"), OsString::from("/child/bin"))]
+            .into_iter()
+            .collect()
+    );
+
+    let remove_config = Config::from_toml(
+        r#"
+[profiles.base.command]
+program = "runner"
+
+[profiles.base.command.environment]
+set = { PATH = "/base/bin" }
+
+[profiles.child]
+inherits = ["base"]
+
+[profiles.child.command.environment]
+remove = ["path"]
+"#,
+    )
+    .expect("case-variant environment removal should parse");
+    let remove_environment = remove_config
+        .resolve("child")
+        .expect("child removal should resolve")
+        .command()
+        .expect("command should be inherited")
+        .environment()
+        .clone();
+    assert_eq!(remove_environment.overrides().len(), 1);
+    assert_eq!(
+        remove_environment.override_for(OsStr::new("PATH")),
+        Some(&EnvironmentOverride::Remove)
+    );
+}
+
+#[test]
 fn maps_all_policy_and_command_modes() {
     let root = absolute_path();
     let socket = absolute_socket();
@@ -640,6 +706,52 @@ path = "exclude"
     assert!(matches!(
         error,
         ConfigError::InvalidValue { field, .. } if field == "command.environment.filters"
+    ));
+
+    let error = Config::from_toml(
+        r#"
+[profiles.safe.command]
+program = "runner"
+
+[profiles.safe.command.environment]
+set = { PATH = "/one", path = "/two" }
+"#,
+    )
+    .expect_err("case-insensitive duplicate set variables");
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue { field, .. } if field == "command.environment"
+    ));
+
+    let error = Config::from_toml(
+        r#"
+[profiles.safe.command]
+program = "runner"
+
+[profiles.safe.command.environment]
+remove = ["PATH", "path"]
+"#,
+    )
+    .expect_err("case-insensitive duplicate removed variables");
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue { field, .. } if field == "command.environment.remove"
+    ));
+
+    let error = Config::from_toml(
+        r#"
+[profiles.safe.command]
+program = "runner"
+
+[profiles.safe.command.environment]
+set = { PATH = "/one" }
+remove = ["path"]
+"#,
+    )
+    .expect_err("case-insensitive set/remove conflict");
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue { field, .. } if field == "command.environment"
     ));
 }
 

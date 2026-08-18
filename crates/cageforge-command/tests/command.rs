@@ -107,6 +107,42 @@ fn environment_overrides_are_sorted_and_distinguish_set_from_remove() {
 }
 
 #[test]
+fn environment_override_names_are_case_insensitive() {
+    let environment = EnvironmentSpec::empty()
+        .with_var("PATH", "/usr/bin")
+        .expect("valid variable should be accepted")
+        .with_var("path", "/sandbox/bin")
+        .expect("case variant should replace the variable")
+        .without_var("PaTh")
+        .expect("case variant should replace the variable with removal");
+
+    assert_eq!(environment.overrides().len(), 1);
+    assert_eq!(
+        environment.override_for(OsString::from("PATH").as_os_str()),
+        Some(&EnvironmentOverride::Remove)
+    );
+    assert_eq!(
+        environment.apply_to([
+            (OsString::from("Path"), OsString::from("/usr/bin")),
+            (OsString::from("HOME"), OsString::from("/home/user")),
+        ]),
+        [(OsString::from("HOME"), OsString::from("/home/user"))]
+            .into_iter()
+            .collect()
+    );
+
+    let environment = EnvironmentSpec::empty()
+        .with_var("PATH", "/sandbox/bin")
+        .expect("valid variable should be accepted");
+    assert_eq!(
+        environment.apply_to([(OsString::from("path"), OsString::from("/usr/bin"))]),
+        [(OsString::from("PATH"), OsString::from("/sandbox/bin"))]
+            .into_iter()
+            .collect()
+    );
+}
+
+#[test]
 fn environment_patterns_are_validated_and_match_wildcards() {
     let environment = EnvironmentSpec::inherit_core()
         .with_filter("CARGO_*", EnvironmentFilterAction::Include)
@@ -182,6 +218,24 @@ fn environment_application_has_explicit_codex_compatible_stage_order() {
         [(OsString::from("PATH"), OsString::from("/custom/bin"))]
             .into_iter()
             .collect()
+    );
+
+    let restored = EnvironmentSpec::inherit_all()
+        .with_exclude_pattern("*TOKEN*")
+        .expect("exclude filter")
+        .with_var("ACCESS_TOKEN", "explicitly restored")
+        .expect("explicit set override");
+    assert_eq!(
+        restored.apply_to([(
+            OsString::from("ACCESS_TOKEN"),
+            OsString::from("inherited secret"),
+        )]),
+        [(
+            OsString::from("ACCESS_TOKEN"),
+            OsString::from("explicitly restored"),
+        )]
+        .into_iter()
+        .collect()
     );
 }
 

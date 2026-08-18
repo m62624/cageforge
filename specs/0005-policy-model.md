@@ -74,6 +74,9 @@ dangerous request.
 - Filesystem access is recursive and the most-specific matching target wins.
   Exact profile overrides and capability intersection are separate operations;
   an inherited policy must not accidentally widen a granted capability.
+- Specificity counts logical path components, excluding the native root or
+  drive prefix. This lets a workspace-relative deny glob such as
+  `Secrets/**` override the writable workspace-root rule it narrows.
 - Capability intersection is conservative: `Deny` over `Read` over `Write`.
   A profile may explicitly override an equal canonical target while resolving a
   requested policy, but the later backend grant intersection may only narrow
@@ -93,6 +96,10 @@ dangerous request.
 - Protected relative paths must be non-empty, relative, free of NUL and parent
   traversal components, and matched as path components (`.git` must not match
   `.gitignore`). Native backends must also prevent symlink-based escapes.
+- Concrete path matching follows host filesystem conventions: POSIX path
+  components and glob segments are case-sensitive, while Windows components,
+  drive prefixes, and glob segments are case-insensitive. Symlink resolution
+  remains a native backend responsibility.
 - Unrestricted and externally enforced filesystem policies cannot carry local
   filesystem rules. Restriction-only builders reject those combinations at
   construction time.

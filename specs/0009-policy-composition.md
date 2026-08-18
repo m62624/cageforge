@@ -33,7 +33,10 @@ backend capabilities.
 - Profile workspace roots are requests. They are resolved against the runtime
   context, deduplicated, and intersected with roots granted by the harness.
 - Environment policy is narrowed by combining base-environment limits and
-  filters. Excludes have precedence; includes cannot restore excluded values.
+  filters. The composer preserves the portable order `inherit → exclude →
+  set/remove → include`: includes cannot restore excluded values, while an
+  explicit set remains an intentional later override. Variable names and
+  filter patterns retain case-insensitive identity.
 - Protected metadata paths, initially `.git`, are retained in the effective
   policy by default. A requested dangerous `.git` opt-out must be explicitly
   granted by the harness/backend; otherwise the composer rejects or removes
@@ -63,7 +66,8 @@ Before a composer is implemented, its public integration tests must cover:
 - requested write reduced to read or deny by a grant;
 - network allowlists narrowed by a grant;
 - requested roots outside granted roots rejected or removed with a typed result;
-- excluded environment variables never restored by includes or overrides;
+- excluded environment variables never restored by includes, while explicit
+  set semantics remain available as an intentional later override;
 - default `.git` protection surviving every ordinary requested profile;
 - explicit acceptance or rejection of the dangerous `.git` opt-out;
 - explicit rejection of unsupported `unrestricted` and `external` transfers;

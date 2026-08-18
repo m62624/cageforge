@@ -471,7 +471,8 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         normalized.entries()[0].missing_path_behavior(),
         MissingPathBehavior::Error
     );
-    assert_eq!(normalized.entries()[0].read_only_subpaths().len(), 1);
+    assert!(normalized.entries()[0].read_only_subpaths().is_empty());
+    assert!(normalized.validate().is_ok());
     assert!(matches!(
         FilesystemPolicy::unrestricted()
             .with_glob_scan_max_depth(NonZeroUsize::new(1).expect("depth")),
@@ -500,6 +501,48 @@ fn filesystem_policy_normalizes_duplicate_rules_conservatively() {
     let normalized = policy.normalized().expect("valid policy");
     assert_eq!(normalized.entries().len(), 1);
     assert_eq!(normalized.access_for(&selector), FilesystemDecision::Deny);
+}
+
+#[cfg(unix)]
+#[test]
+fn filesystem_matching_preserves_posix_case_sensitivity() {
+    let context = PathResolutionContext::new()
+        .with_workspace_root("/workspace")
+        .expect("workspace root");
+    let policy = FilesystemPolicy::restricted([FilesystemRule::new(
+        PathSelector::workspace_root(),
+        AccessMode::Write,
+    )]);
+
+    assert_eq!(
+        policy
+            .access_for_path(Path::new("/workspace/file"), &context)
+            .expect("matching path"),
+        FilesystemDecision::Write
+    );
+    assert_eq!(
+        policy
+            .access_for_path(Path::new("/Workspace/file"), &context)
+            .expect("case-variant path"),
+        FilesystemDecision::Deny
+    );
+
+    let glob_policy = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        FilesystemRule::workspace_glob("Secrets/**", AccessMode::Deny).expect("deny glob"),
+    ]);
+    assert_eq!(
+        glob_policy
+            .access_for_path(Path::new("/workspace/Secrets/token"), &context)
+            .expect("matching glob"),
+        FilesystemDecision::Deny
+    );
+    assert_eq!(
+        glob_policy
+            .access_for_path(Path::new("/workspace/secrets/token"), &context)
+            .expect("case-variant glob"),
+        FilesystemDecision::Write
+    );
 }
 
 #[test]
@@ -824,6 +867,25 @@ fn windows_path_forms_are_validated_as_windows_paths() {
         NetworkPolicy::enabled()
             .with_unix_socket(r"C:\run\cageforge.sock", DomainAccess::Allow)
             .is_ok()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn filesystem_matching_is_case_insensitive_on_windows() {
+    let context = PathResolutionContext::new()
+        .with_workspace_root(r"C:\Workspace")
+        .expect("workspace root");
+    let policy = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        FilesystemRule::workspace_glob(r"Secrets\**", AccessMode::Deny).expect("deny glob"),
+    ]);
+
+    assert_eq!(
+        policy
+            .access_for_path(Path::new(r"c:\workspace\Secrets\token"), &context)
+            .expect("case-variant matching path"),
+        FilesystemDecision::Deny
     );
 }
 

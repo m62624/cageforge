@@ -188,8 +188,28 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
                         ));
                     }
                 }
+                let mut set_names = BTreeSet::new();
+                for variable in environment.set.keys() {
+                    let normalized = variable.to_lowercase();
+                    if !set_names.insert(normalized) {
+                        return Err(invalid_value(
+                            name,
+                            "command.environment",
+                            format!("duplicate set variable ignoring case {variable:?}"),
+                        ));
+                    }
+                }
+                let mut remove_names = BTreeSet::new();
                 for variable in &environment.remove {
-                    if environment.set.contains_key(variable) {
+                    let normalized = variable.to_lowercase();
+                    if !remove_names.insert(normalized.clone()) {
+                        return Err(invalid_value(
+                            name,
+                            "command.environment.remove",
+                            format!("duplicate removed variable ignoring case {variable:?}"),
+                        ));
+                    }
+                    if set_names.contains(&normalized) {
                         return Err(invalid_value(
                             name,
                             "command.environment",
@@ -394,16 +414,41 @@ fn merge_environment(parent: Option<RawEnvironment>, child: &RawEnvironment) -> 
         merged.filters.insert(child_pattern.clone(), *child_action);
     }
     for (name, value) in &child.set {
-        merged.remove.retain(|removed| removed != name);
+        merged
+            .remove
+            .retain(|removed| !environment_names_equal(removed, name));
+        if let Some(existing) = merged
+            .set
+            .keys()
+            .find(|existing| environment_names_equal(existing, name))
+            .cloned()
+        {
+            merged.set.remove(&existing);
+        }
         merged.set.insert(name.clone(), value.clone());
     }
     for name in &child.remove {
-        merged.set.remove(name);
-        if !merged.remove.contains(name) {
+        if let Some(existing) = merged
+            .set
+            .keys()
+            .find(|existing| environment_names_equal(existing, name))
+            .cloned()
+        {
+            merged.set.remove(&existing);
+        }
+        if !merged
+            .remove
+            .iter()
+            .any(|removed| environment_names_equal(removed, name))
+        {
             merged.remove.push(name.clone());
         }
     }
     merged
+}
+
+fn environment_names_equal(left: &str, right: &str) -> bool {
+    left.to_lowercase() == right.to_lowercase()
 }
 
 fn append_unique_case_insensitive(target: &mut Vec<String>, values: &[String]) {

@@ -136,8 +136,8 @@ impl FilesystemRule {
             FilesystemTarget::Scope(selector) => selector
                 .resolve(context)
                 .into_iter()
-                .filter(|root| path.starts_with(root))
-                .map(|root| (selector.specificity(&root), true))
+                .filter(|root| path_starts_with(path, root))
+                .map(|_| (selector.specificity(), true))
                 .max_by_key(|(specificity, _)| *specificity)
                 .unwrap_or((0, false)),
             FilesystemTarget::Glob(pattern) => {
@@ -155,8 +155,8 @@ impl FilesystemRule {
                 let matches = subpath
                     .resolve(context)
                     .into_iter()
-                    .filter(|root| path.starts_with(root))
-                    .map(|root| subpath.specificity(&root))
+                    .filter(|root| path_starts_with(path, root))
+                    .map(|_| subpath.specificity())
                     .max();
                 if let Some(subpath_specificity) = matches {
                     access = AccessMode::Read;
@@ -331,6 +331,9 @@ impl FilesystemPolicy {
                     if !existing.read_only_subpaths.contains(selector) {
                         existing.read_only_subpaths.push(selector.clone());
                     }
+                }
+                if existing.access != AccessMode::Write {
+                    existing.read_only_subpaths.clear();
                 }
             } else {
                 entries.push(rule.clone());
@@ -527,6 +530,30 @@ fn relative_paths_equal(left: &Path, right: &Path) -> bool {
                     .eq_ignore_ascii_case(&right.to_string_lossy()),
                 _ => false,
             })
+}
+
+fn path_starts_with(path: &Path, root: &Path) -> bool {
+    let mut path_components = path.components();
+    let mut root_components = root.components();
+
+    loop {
+        match (root_components.next(), path_components.next()) {
+            (None, _) => return true,
+            (Some(root), Some(path)) if path_components_equal(path, root) => {}
+            (Some(_), _) => return false,
+        }
+    }
+}
+
+#[cfg(windows)]
+fn path_components_equal(left: Component<'_>, right: Component<'_>) -> bool {
+    left.as_os_str().to_string_lossy().to_lowercase()
+        == right.as_os_str().to_string_lossy().to_lowercase()
+}
+
+#[cfg(not(windows))]
+fn path_components_equal(left: Component<'_>, right: Component<'_>) -> bool {
+    left == right
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
