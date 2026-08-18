@@ -56,6 +56,11 @@ The crate provides built-in constructors named `read_only`, `workspace`, and
 They are initial policy presets; future named TOML profiles will resolve to the
 same `SandboxPolicy` type.
 
+Restricted filesystem policies also carry mandatory protected metadata paths.
+The initial default is the relative path `.git`, applied below every writable
+scope. Callers may add more relative protected paths through an additive API,
+but ordinary policy configuration cannot remove the default protection.
+
 ## Security invariants
 
 - Workspace-relative selectors cannot contain NUL characters, parent traversal,
@@ -64,17 +69,25 @@ same `SandboxPolicy` type.
   parent traversal. They are validated lexically without filesystem access or
   symlink resolution; native backends must enforce the same boundary when
   resolving filesystem objects.
-- Filesystem access is recursive and the most-specific matching target wins;
-  equal targets use deterministic access precedence: `Deny` over `Write` over
-  `Read`, matching the audited Codex behavior.
-- Duplicate filesystem entries are normalized conservatively: the strongest
-  access decision wins, with `Deny` stronger than `Write`, and `Write` stronger
-  than `Read`.
+- Filesystem access is recursive and the most-specific matching target wins.
+  Exact profile overrides and capability intersection are separate operations;
+  an inherited policy must not accidentally widen a granted capability.
+- Capability intersection is conservative: `Deny` over `Read` over `Write`.
+  A profile may explicitly override an equal canonical target while resolving a
+  requested policy, but the later backend grant intersection may only narrow
+  it.
 - Glob patterns support component wildcards and recursive `**` matching,
   reject parent traversal and unsupported syntax, and carry an explicit scan
   depth for backend expansion.
 - Writable rules may carry read-only subpath carve-outs, and concrete targets
   may explicitly request skip-on-missing behavior.
+- `.git` is protected as read-only below every writable scope in a restricted
+  policy. Additional protected relative paths are additive and are evaluated
+  after ordinary rules, so a later write rule cannot bypass them. Protection
+  means that the path remains readable but is not writable.
+- Protected relative paths must be non-empty, relative, free of NUL and parent
+  traversal components, and matched as path components (`.git` must not match
+  `.gitignore`). Native backends must also prevent symlink-based escapes.
 - Unrestricted and externally enforced filesystem policies cannot carry local
   filesystem rules. Restriction-only builders reject those combinations at
   construction time.
@@ -88,7 +101,11 @@ same `SandboxPolicy` type.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
   rules; its rule builders reject the combination at construction time.
-- The policy crate never silently downgrades or broadens a requested policy.
+- Unrestricted and external enforcement are explicit ownership transfers. A
+  backend or policy composer may reject them when its grant does not permit the
+  transfer.
+- The policy crate never silently broadens an effective policy. Requested
+  profile resolution and effective capability composition remain separate.
 
 The comparison against the current Codex sandbox crates and the intentionally
 deferred semantics are recorded in `specs/0006-codex-policy-audit.md`.

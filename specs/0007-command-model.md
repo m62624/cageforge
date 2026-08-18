@@ -41,20 +41,26 @@ shell must place the shell executable and its arguments in the vector.
 ### `EnvironmentSpec`
 
 The caller chooses an `All`, `Core`, or `None` base environment and then
-applies optional include/exclude wildcard filters and explicit set/remove
-overrides. Set-to-empty and removal are distinct. Variable names reject empty
-values, `=`, and NUL; values and filter patterns reject NUL. `*` matches zero or
-more characters and `?` matches one character.
+applies canonical wildcard filters whose actions are `Include` or `Exclude`.
+The default is `Core`; callers must opt in explicitly to `All`. Set-to-empty
+and removal are distinct. Variable names reject empty values, `=`, and NUL;
+values and filter patterns reject NUL. `*` matches zero or more characters and
+`?` matches one character.
 
 The command crate stores the portable request only. `Core` is intentionally a
 backend-defined conservative environment set because safe variables are
-platform-specific. Include patterns retain matching names and exclude patterns
-remove matching names; a backend applies them to the environment it constructs.
+platform-specific. Environment variable matching is case-insensitive so the
+same request has safe behavior on Windows and POSIX systems. Exclude filters
+have deny precedence over include filters and an include never re-adds a
+variable removed by an exclude. Explicit overrides are subject to the same
+filter result; conflicting set/remove requests are rejected by the config
+layer.
 
-The type intentionally does not reproduce Codex's product-specific default
-excludes, environment discovery, or configuration compatibility rules. It
-stores only the generic filter intent; config parsing resolves profile data into
-this canonical model rather than introducing a second launch representation.
+The type intentionally does not reproduce Codex's product-specific secret
+patterns, environment discovery, shell profiles, or configuration compatibility
+rules. It stores only generic filter intent; config parsing resolves profile
+data into this canonical model rather than introducing a second launch
+representation.
 
 ### `StdioSpec`
 
@@ -107,7 +113,8 @@ The public integration suite covers:
 - empty and NUL-containing program rejection;
 - native arguments, including empty arguments and NUL rejection;
 - all/core/none environments, deterministic overrides, set/remove distinction,
-  wildcard filtering, and invalid names/values/patterns;
+  case-insensitive canonical include/exclude filtering, exclude precedence, and
+  invalid names/values/patterns;
 - explicit and default stdio modes;
 - optional native cwd, NUL rejection, and timeout replacement/removal;
 - complete object equality and error display.

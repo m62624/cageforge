@@ -41,10 +41,9 @@ description = "Workspace development profile"
 [profiles.workspace.filesystem]
 mode = "restricted"
 glob_scan_max_depth = 8
+additional_protected_paths = [".cargo"]
 rules = [
-  { target = "workspace-root", access = "write", read_only_subpaths = [
-      { target = "workspace", path = ".git" },
-  ] },
+  { target = "workspace-root", access = "write" },
 ]
 
 [profiles.workspace.network]
@@ -56,8 +55,10 @@ args = ["test", "--workspace"]
 
 [profiles.workspace.command.environment]
 inherit = "core"
-include = ["CARGO_*", "RUST_*"]
-exclude = ["*TOKEN*"]
+[profiles.workspace.command.environment.filters]
+"CARGO_*" = "include"
+"RUST_*" = "include"
+"TOKEN_*" = "exclude"
 set = { RUST_BACKTRACE = "1" }
 remove = ["CARGO_TERM_COLOR"]
 
@@ -83,9 +84,13 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
 ## Resolution rules
 
 - `default_profile` is optional in the document; `resolve_default` requires it.
-- `inherits` is an ordered list. Parent profiles are merged from left to right,
-  then the child overrides scalar values.
-- Filesystem rules, domains, and Unix socket rules append during inheritance.
+- `inherits` is an ordered list. Parent profiles are merged from left to right.
+  A child overrides scalar values and an exact canonical rule target, while
+  distinct rules remain available for specificity-based evaluation.
+- Filesystem, domain, and Unix-socket rules use deterministic canonical target
+  keys. An exact child target replaces an inherited target; overlapping but
+  distinct targets are evaluated by specificity, and equal-specificity
+  capability conflicts are resolved conservatively.
 - Command argv replaces as a complete list when specified by the child.
 - Environment assignments/removals and stdio fields merge by key; a child
   value overrides the inherited value.
@@ -96,9 +101,13 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
   an inherited declaration with `false`. Resolution returns enabled path
   declarations in deterministic lexical order; the backend resolves relative
   paths and registers absolute roots in its execution context.
-- Environment inheritance is `all`, `core`, or `none`. Include and exclude
-  patterns are merged uniquely in inheritance order and are validated by
-  `cageforge-command`; the backend defines the platform-specific `core` set.
+- Environment inheritance is `all`, `core`, or `none`; omitted inheritance
+  means `core`. The canonical `filters` table maps patterns to `include` or
+  `exclude`, rejects case-insensitive duplicate patterns, and merges exact
+  patterns by child override. Excludes have precedence over includes. The
+  backend defines the platform-specific `core` set.
+- `additional_protected_paths` is additive. Restricted profiles always protect
+  `.git` below writable scopes; configuration cannot remove that default.
 - Unknown TOML fields are errors. A typo must not silently produce a weaker
   policy.
 - Unknown profiles, invalid profile names, missing command programs, inheritance
@@ -106,8 +115,9 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
 - A profile without a filesystem section resolves to an empty restricted policy;
   a profile without a network section resolves to disabled networking.
 - A profile may omit `command`; this is useful for policy-only consumers.
-- The JSON Schema describes TOML structure and unknown-field rejection. It does
-  not replace semantic resolution checks such as inheritance cycles or policy
+- The JSON Schema uses typed enum values for modes, access, targets, filters,
+  stdio, and timeouts, and describes unknown-field rejection. It does not
+  replace semantic resolution checks such as inheritance cycles or policy
   safety validation.
 
 All final values are constructed through `cageforge-policy` and
@@ -136,6 +146,6 @@ state.
 Black-box integration tests in `crates/cageforge-config/tests/` cover parsing,
 strict unknown-field handling, inheritance order, cycle and unknown-profile
 errors, all profile section modes, command/environment/stdio/timeout mapping,
-environment filtering, profile metadata, workspace-root inheritance, schema and
+environment filtering, protected metadata, profile metadata, workspace-root inheritance, schema and
 diagnostic serialization, policy validation failures, and a policy-only
 profile. The crate must maintain at least 90% line coverage.

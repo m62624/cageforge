@@ -46,8 +46,11 @@ The policy and backend design must account for these upstream behaviors:
 The final `cageforge-policy` implementation now owns the portable parts of
 these semantics: runtime path context, recursive most-specific filesystem
 resolution, validated path globs, scan depth, missing-path behavior,
-read-only carve-outs, domain defaults, and Unix-socket defaults. The remaining
-OS-specific behavior stays below the policy boundary.
+read-only carve-outs, mandatory `.git` metadata protection, additive custom
+protected relative paths, domain defaults, and Unix-socket defaults. The
+remaining OS-specific behavior stays below the policy boundary. Codex's
+product-specific `.agents` and `.codex` names are not copied into the public
+API; callers can add generic protected relative paths when they need them.
 
 These are design inputs for the future `cageforge-config`,
 `cageforge-backend-api`, and native backend crates. The portable command
@@ -68,6 +71,12 @@ from filesystem entries, network settings, and future backend capabilities.
 The profile resolver may provide an ergonomic Cageforge preset, but it must
 resolve to the same canonical policy model and must not preserve Codex field
 names or legacy serialization.
+
+The requested profile and the effective backend policy are separate stages.
+Profile inheritance may express an explicit requested override, but capability
+intersection in the future backend composer is monotonic and may only narrow
+filesystem, network, roots, and environment access. Mandatory `.git` protection
+survives both stages.
 
 The following Codex-specific concerns remain outside the policy crate:
 
