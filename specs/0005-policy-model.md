@@ -106,7 +106,10 @@ dangerous request.
 - Domain inputs use host-boundary normalization: matching is case-insensitive,
   trailing dots and host ports are ignored, bracketed IPv6 literals are
   unwrapped, and IPv4/IPv6 literals are canonicalized. Schemes, paths,
-  whitespace, and unsupported wildcard shapes are rejected.
+  whitespace, empty labels, and unsupported wildcard syntax are rejected.
+- Domain patterns support `*` and `?` within labels, including mid-label
+  patterns such as `region*.example.com`; the `*.` and `**.` prefixes retain
+  their explicit subdomain-only and apex-plus-subdomains semantics.
 - `*.example.com` matches subdomains but not the apex; `**.example.com`
   matches the apex and subdomains.
 - Deny wins when multiple matching domain rules apply.

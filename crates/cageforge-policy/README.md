@@ -114,6 +114,11 @@ these roots itself. Glob rules are portable deny rules only. Read/write globs
 are rejected with `PolicyError::UnsupportedGlobAccess` until a backend
 capability contract can prove support on every target platform.
 
+A read-only carve-out must be below its writable scope. Concrete absolute and
+workspace-relative selectors that are visibly outside the parent are rejected
+when the rule is built. Symbolic selectors are retained when their relationship
+can only be determined after a backend resolves its runtime paths.
+
 ## Filesystem model
 
 `PathSelector` supports native absolute paths, system roots, paths relative to
@@ -137,7 +142,10 @@ domains and Unix socket paths. Domain inputs are normalized like the upstream
 host boundary: case is folded, trailing dots are removed, host ports are
 ignored, bracketed IPv6 literals are unwrapped, and IPv4/IPv6 literals are
 canonicalized. `*.example.com` matches subdomains but not the apex, while
-`**.example.com` matches the apex and its subdomains.
+`**.example.com` matches the apex and its subdomains. Domain patterns also
+support `*` and `?` within a host label, such as
+`region*.example.com`; wildcard characters never change host normalization or
+the explicit apex semantics of the prefixed forms.
 
 Use `decision_for_domain` and `decision_for_unix_socket` when a backend needs
 the complete result. They return `NetworkDecision::Allow`,

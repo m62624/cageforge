@@ -77,8 +77,11 @@ Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minim
 
 Domain patterns use the policy crate's host normalization: matching is
 case-insensitive, trailing dots and host ports are ignored, and bracketed
-IPv6 literals are accepted. For example, `Example.com:443` and
-`example.com:8443` address the same canonical host rule.
+IPv6 literals are accepted. `*` and `?` can be used for host globs, including
+mid-label patterns such as `region*.example.com`. For example,
+`Example.com:443` and `example.com:8443` address the same canonical host rule,
+so a child profile overrides an inherited rule even when it spells a port
+differently.
 
 Unknown TOML fields, unknown profiles, invalid profile names, inheritance
 cycles, missing command programs, invalid paths, NUL values, contradictory

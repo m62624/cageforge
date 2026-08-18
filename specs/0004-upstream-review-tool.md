@@ -22,6 +22,15 @@ The repository root contains upstream-review.toml. It records:
 - the full commit SHA represented by the current Cageforge adaptation;
 - explicit upstream scopes and their local Cageforge destinations.
 
+Scope paths are validated in two places: local destinations must exist in the
+Cageforge checkout, and configured upstream paths must exist at the recorded
+baseline when an external checkout is available. For each tracked Rust file,
+the tool also watches the same path without `.rs` (for example,
+`permissions.rs` and `permissions/`). This catches the common upstream module
+split without widening the review to an unrelated source directory. Additional
+directory paths can still be listed explicitly when a broader review boundary
+is intentional.
+
 The current configuration records the audited baseline
 `c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` for the current portable policy,
 command, and config crates. The policy scope also tracks Codex's
@@ -33,7 +42,7 @@ review and an explicit configuration change.
 ## Commands
 
 - status prints the configuration and locally available upstream ref;
-- check validates configuration and path scopes;
+- check validates configuration and local path scopes without an upstream checkout;
 - diff prints a Git stat, changed-file list, and patch for configured scopes.
 
 The tool never fetches automatically. The caller updates the external Codex
@@ -55,6 +64,10 @@ license, and material adaptation.
 ## Safety properties
 
 - Only configured repository-relative upstream paths are passed to Git.
+- Possible Rust module-directory splits next to a tracked `.rs` file are also
+  passed as narrow pathspecs.
+- Baseline upstream files and local Cageforge destinations are checked before
+  a review is shown.
 - The tracked commit must be a full commit SHA.
 - No shell is invoked by the tool.
 - No network, filesystem mutation, Git ref mutation, or source import occurs.

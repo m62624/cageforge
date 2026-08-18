@@ -2,7 +2,8 @@
 
 This is an internal, read-only repository tool. It tracks the exact upstream
 Codex commit represented by the current Cageforge adaptation and limits diffs
-to explicitly configured upstream scopes.
+to explicitly configured upstream scopes plus narrow module directories implied
+by tracked Rust files.
 
 Rules:
 

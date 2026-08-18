@@ -4,6 +4,7 @@
 //! locally fetched upstream ref. It never fetches, writes files, or updates
 //! the tracked commit. Porting remains a deliberate manual change.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -98,6 +99,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), String> {
     let repository = Repository::load(&cli.config, cli.upstream_path)?;
     validate_config(&repository.config)?;
+    validate_local_paths(&repository)?;
 
     match cli.command {
         CommandKind::Status => status(&repository),
@@ -214,12 +216,28 @@ fn validate_config(config: &Config) -> Result<(), String> {
 
 fn validate_repo_relative_path(path: &str, label: &str) -> Result<(), String> {
     let path = Path::new(path);
-    if path.is_absolute()
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
         || path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(format!("{label} must be repository-relative: {path:?}"));
+    }
+    Ok(())
+}
+
+fn validate_local_paths(repository: &Repository) -> Result<(), String> {
+    for scope in &repository.config.scope {
+        for path in &scope.local_paths {
+            let full_path = repository.cageforge_root.join(path);
+            if !full_path.exists() {
+                return Err(format!(
+                    "scope {} local path does not exist: {path}",
+                    scope.name
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -262,6 +280,19 @@ fn status(repository: &Repository) -> Result<(), String> {
     let upstream_root = repository.upstream_root()?;
     println!("upstream checkout: {}", upstream_root.display());
     println!("upstream branch: {}", repository.upstream_ref());
+
+    if !repository.config.upstream.last_adapted_commit.is_empty() {
+        validate_upstream_paths(
+            &upstream_root,
+            &repository.config.upstream.last_adapted_commit,
+            repository
+                .config
+                .scope
+                .iter()
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+    }
 
     let upstream_ref = repository.upstream_ref();
     match git_output(
@@ -321,10 +352,8 @@ fn diff(
     };
     let target = target.unwrap_or_else(|| repository.upstream_ref());
     let upstream_root = repository.upstream_root()?;
-    let pathspecs = scopes
-        .iter()
-        .flat_map(|scope| scope.upstream_paths.iter().map(String::as_str))
-        .collect::<Vec<_>>();
+    validate_upstream_paths(&upstream_root, baseline, &scopes)?;
+    let pathspecs = scope_pathspecs(&scopes);
 
     println!("diff: {baseline}..{target}");
     println!(
@@ -358,11 +387,45 @@ fn validate_commit(commit: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_upstream_paths(
+    upstream_root: &Path,
+    baseline: &str,
+    scopes: &[&Scope],
+) -> Result<(), String> {
+    for scope in scopes {
+        for path in &scope.upstream_paths {
+            let object = format!("{baseline}:{path}");
+            if git_output(upstream_root, ["cat-file", "-e", object.as_str()]).is_err() {
+                return Err(format!(
+                    "scope {} upstream path is missing at baseline {baseline}: {path}",
+                    scope.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn scope_pathspecs(scopes: &[&Scope]) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    for scope in scopes {
+        for path in &scope.upstream_paths {
+            paths.insert(path.clone());
+            if let Some((parent, file)) = path.rsplit_once('/')
+                && let Some(stem) = file.strip_suffix(".rs")
+            {
+                paths.insert(format!("{parent}/{stem}"));
+            }
+        }
+    }
+    paths.into_iter().collect()
+}
+
 fn run_git_diff(
     root: &Path,
     baseline: &str,
     target: &str,
-    pathspecs: &[&str],
+    pathspecs: &[String],
     options: &[&str],
 ) -> Result<(), String> {
     let mut arguments = vec!["diff".to_owned(), baseline.to_owned(), target.to_owned()];
@@ -384,6 +447,10 @@ fn run_git_diff(
     print!("{}", String::from_utf8_lossy(&output.stdout));
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;
 
 fn git_output<I, S>(directory: &Path, arguments: I) -> Result<String, String>
 where

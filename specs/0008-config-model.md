@@ -99,13 +99,17 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
 ## Resolution rules
 
 - `default_profile` is optional in the document; `resolve_default` requires it.
-- `inherits` is an ordered list. Parent profiles are merged from left to right.
-  A child overrides scalar values and an exact canonical rule target, while
-  distinct rules remain available for specificity-based evaluation.
+- `inherits` is an ordered list. Parent profiles are merged from left to right
+  using a stack-local cycle detector; shared ancestors are legal, while a
+  repeated profile on the current resolution chain is rejected with the full
+  cycle. A child overrides scalar values and an exact canonical rule target,
+  while distinct rules remain available for specificity-based evaluation.
 - Filesystem, domain, and Unix-socket rules use deterministic canonical target
-  keys. An exact child target replaces an inherited target; overlapping but
-  distinct targets are evaluated by specificity, and equal-specificity
-  capability conflicts are resolved conservatively.
+  keys. Domain keys use the policy crate's host normalization, including
+  ports, trailing dots, bracketed IP literals, and supported globs. An exact
+  child target replaces an inherited target; overlapping but distinct targets
+  are evaluated by specificity, and equal-specificity capability conflicts are
+  resolved conservatively.
 - Command argv replaces as a complete list when specified by the child.
 - Environment assignments/removals and stdio fields merge by key; a child
   value overrides the inherited value.

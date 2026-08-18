@@ -485,6 +485,24 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         Err(PolicyError::InvalidRule { .. })
     ));
     assert!(matches!(
+        FilesystemRule::new(
+            PathSelector::workspace("src").expect("workspace parent"),
+            AccessMode::Write,
+        )
+        .with_read_only_subpath(PathSelector::workspace(".git").expect("workspace child")),
+        Err(PolicyError::InvalidRule { .. })
+    ));
+    assert!(matches!(
+        FilesystemRule::new(
+            PathSelector::absolute(native_path("/workspace/src")).expect("absolute parent"),
+            AccessMode::Write,
+        )
+        .with_read_only_subpath(
+            PathSelector::absolute(native_path("/outside/.git")).expect("absolute child"),
+        ),
+        Err(PolicyError::InvalidRule { .. })
+    ));
+    assert!(matches!(
         FilesystemRule::absolute_glob(native_path("/workspace/**/*.lock"), AccessMode::Read),
         Err(PolicyError::UnsupportedGlobAccess {
             access: AccessMode::Read
@@ -693,6 +711,46 @@ fn domain_wildcards_have_explicit_apex_semantics() {
 }
 
 #[test]
+fn domain_rules_support_mid_label_globs() {
+    let policy = NetworkPolicy::enabled()
+        .with_domain("region*.v2.example.com", DomainAccess::Deny)
+        .expect("mid-label wildcard")
+        .with_domain("zone?.example.com", DomainAccess::Allow)
+        .expect("single-character wildcard");
+
+    assert_eq!(
+        policy
+            .access_for_domain("region1.v2.example.com")
+            .expect("domain lookup"),
+        Some(DomainAccess::Deny)
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("region.v2.example.com")
+            .expect("domain lookup"),
+        Some(DomainAccess::Deny)
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("xregion1.v2.example.com")
+            .expect("domain lookup"),
+        None
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("zone1.example.com")
+            .expect("domain lookup"),
+        Some(DomainAccess::Allow)
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("zone12.example.com")
+            .expect("domain lookup"),
+        None
+    );
+}
+
+#[test]
 fn malformed_domains_and_non_absolute_sockets_are_rejected() {
     assert!(matches!(
         NetworkPolicy::enabled().with_domain("https://example.com", DomainAccess::Allow),
@@ -705,11 +763,10 @@ fn malformed_domains_and_non_absolute_sockets_are_rejected() {
     for pattern in [
         "",
         "**.",
-        "*.bad*",
         "bad/path",
-        "bad?query",
         "bad#fragment",
         "bad domain",
+        "bad..domain",
         "bad\0domain",
     ] {
         assert!(matches!(

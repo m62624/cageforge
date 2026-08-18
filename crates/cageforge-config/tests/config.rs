@@ -390,6 +390,36 @@ mode = "disabled"
 }
 
 #[test]
+fn inherited_domain_rules_merge_after_host_normalization() {
+    let config = Config::from_toml(
+        r#"
+[profiles.base.network]
+mode = "enabled"
+domain_mode = "restricted"
+domains = [{ pattern = "example.com:443", access = "deny" }]
+
+[profiles.child]
+inherits = ["base"]
+
+[profiles.child.network]
+domains = [{ pattern = "EXAMPLE.COM:8443", access = "allow" }]
+"#,
+    )
+    .expect("normalized domain config should parse");
+
+    let resolved = config.resolve("child").expect("child should resolve");
+    let network = resolved.policy().network();
+    assert_eq!(network.domains().len(), 1);
+    assert_eq!(network.domains()[0].pattern(), "example.com");
+    assert_eq!(network.domains()[0].access(), DomainAccess::Allow);
+    assert!(
+        network
+            .allows_domain("example.com:443")
+            .expect("domain should be evaluated")
+    );
+}
+
+#[test]
 fn environment_inheritance_replaces_case_variants_safely() {
     let config = Config::from_toml(
         r#"
@@ -467,7 +497,7 @@ default_profile = "all"
 glob_scan_max_depth = 8
 rules = [
   {{ target = "absolute", path = '{root}', access = "read", missing_path = "skip" }},
-  {{ target = "workspace", path = "src", access = "write", read_only_subpaths = [{{ target = "workspace", path = ".git" }}] }},
+  {{ target = "workspace", path = ".", access = "write", read_only_subpaths = [{{ target = "workspace", path = ".git" }}] }},
   {{ target = "root", access = "read" }},
   {{ target = "workspace-root", access = "read" }},
   {{ target = "minimal", access = "read" }},
@@ -807,6 +837,39 @@ inherits = ["missing"]
         config.resolve("missing"),
         Err(ConfigError::UnknownProfile { name }) if name == "missing"
     ));
+}
+
+#[test]
+fn shared_inherited_ancestors_do_not_form_a_false_cycle() {
+    let config = Config::from_toml(
+        r#"
+[profiles.base.network]
+mode = "enabled"
+domain_mode = "enabled"
+domains = [{ pattern = "base.example", access = "deny" }]
+
+[profiles.left]
+inherits = ["base"]
+
+[profiles.right]
+inherits = ["base"]
+
+[profiles.child]
+inherits = ["left", "right"]
+"#,
+    )
+    .expect("shared ancestors should parse");
+
+    let resolved = config.resolve("child").expect("shared ancestors resolve");
+    assert_eq!(resolved.policy().network().domains().len(), 1);
+    assert_eq!(
+        resolved
+            .policy()
+            .network()
+            .access_for_domain("base.example")
+            .expect("domain lookup"),
+        Some(DomainAccess::Deny)
+    );
 }
 
 #[test]

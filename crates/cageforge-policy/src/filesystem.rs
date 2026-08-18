@@ -107,6 +107,13 @@ impl FilesystemRule {
                 message: "read-only subpaths require a writable parent rule".to_string(),
             });
         }
+        if let FilesystemTarget::Scope(parent) = &self.target
+            && selector.is_definitely_outside(parent)
+        {
+            return Err(PolicyError::InvalidRule {
+                message: "read-only subpath must be below the writable parent rule".to_string(),
+            });
+        }
         self.read_only_subpaths.push(selector);
         Ok(self)
     }

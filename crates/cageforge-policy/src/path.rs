@@ -152,6 +152,16 @@ impl PathSelector {
             | PathSelectorKind::SlashTmp => 0,
         }
     }
+
+    pub(crate) fn is_definitely_outside(&self, parent: &Self) -> bool {
+        match (&self.kind, &parent.kind) {
+            (PathSelectorKind::Absolute(child), PathSelectorKind::Absolute(parent))
+            | (PathSelectorKind::WorkspaceRoot(child), PathSelectorKind::WorkspaceRoot(parent)) => {
+                relative_path_components(child, parent).is_none()
+            }
+            _ => false,
+        }
+    }
 }
 
 /// A validated path glob used by a filesystem rule.

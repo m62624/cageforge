@@ -360,7 +360,6 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     let invalid_syntax = raw.is_empty()
         || raw.contains("://")
         || raw.contains('/')
-        || raw.contains('?')
         || raw.contains('#')
         || raw.chars().any(char::is_whitespace)
         || raw.chars().any(char::is_control);
@@ -383,11 +382,7 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     } else {
         format!("{prefix}{remainder}")
     };
-    let valid_wildcard = pattern == "*"
-        || pattern.strip_prefix("*.").is_some_and(valid_domain_suffix)
-        || pattern.strip_prefix("**.").is_some_and(valid_domain_suffix);
-    let valid_literal = valid_domain_literal(&pattern);
-    if (valid_wildcard || valid_literal) && !pattern.is_empty() {
+    if valid_domain_pattern(&pattern) {
         Ok(pattern)
     } else {
         Err(PolicyError::InvalidDomainPattern {
@@ -436,26 +431,81 @@ fn normalize_ip_literal(host: &str) -> Option<String> {
 fn valid_domain_literal(pattern: &str) -> bool {
     !pattern.is_empty()
         && !pattern.contains('*')
+        && !pattern.contains('?')
         && (!pattern.contains(':') || normalize_ip_literal(pattern).is_some())
 }
 
-fn valid_domain_suffix(suffix: &str) -> bool {
+fn valid_domain_pattern(pattern: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if pattern.contains(':') || pattern.contains('%') {
+        return valid_domain_literal(pattern);
+    }
+    let suffix = pattern
+        .strip_prefix("**.")
+        .or_else(|| pattern.strip_prefix("*."))
+        .unwrap_or(pattern);
     !suffix.is_empty()
-        && !suffix.contains('*')
-        && !suffix.contains('?')
-        && !suffix.contains('/')
-        && !suffix.contains(':')
-        && !suffix.contains('%')
-        && !suffix.chars().any(char::is_whitespace)
-        && !suffix.chars().any(char::is_control)
+        && suffix.split('.').all(|label| {
+            !label.is_empty()
+                && label.chars().all(|character| {
+                    !character.is_whitespace()
+                        && !character.is_control()
+                        && !matches!(character, ':' | '%')
+                })
+        })
 }
 
 fn domain_matches(pattern: &str, domain: &str) -> bool {
-    match pattern.strip_prefix("**.") {
-        Some(suffix) => domain == suffix || domain.ends_with(&format!(".{suffix}")),
-        None => match pattern.strip_prefix("*.") {
-            Some(suffix) => domain.ends_with(&format!(".{suffix}")) && domain != suffix,
-            None => pattern == "*" || pattern == domain,
-        },
+    if pattern == "*" {
+        return true;
     }
+    if let Some(suffix) = pattern.strip_prefix("**.") {
+        return domain_suffix_matches(suffix, domain, true);
+    }
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        return domain_suffix_matches(suffix, domain, false);
+    }
+    glob_matches(pattern, domain)
+}
+
+fn domain_suffix_matches(suffix: &str, domain: &str, include_apex: bool) -> bool {
+    let suffix_labels = suffix.split('.').collect::<Vec<_>>();
+    let domain_labels = domain.split('.').collect::<Vec<_>>();
+    if domain_labels.len() < suffix_labels.len()
+        || (!include_apex && domain_labels.len() == suffix_labels.len())
+    {
+        return false;
+    }
+    domain_labels[domain_labels.len() - suffix_labels.len()..]
+        .iter()
+        .zip(suffix_labels)
+        .all(|(domain, suffix)| glob_matches(suffix, domain))
+}
+
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.chars().collect::<Vec<_>>();
+    let value = value.chars().collect::<Vec<_>>();
+    let mut current = vec![false; value.len() + 1];
+    current[0] = true;
+    for pattern_character in pattern {
+        let mut next = vec![false; value.len() + 1];
+        match pattern_character {
+            '*' => {
+                next[0] = current[0];
+                for index in 1..=value.len() {
+                    next[index] = current[index] || next[index - 1];
+                }
+            }
+            '?' => next[1..].copy_from_slice(&current[..value.len()]),
+            character => {
+                for index in 1..=value.len() {
+                    next[index] = current[index - 1] && value[index - 1] == character;
+                }
+            }
+        }
+        current = next;
+    }
+    current[value.len()]
 }

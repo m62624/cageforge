@@ -9,7 +9,7 @@ use crate::model::{
     RawProfile, RawStdio, RawTimeout,
 };
 use cageforge_command::CommandRequest;
-use cageforge_policy::SandboxPolicy;
+use cageforge_policy::{DomainAccess, DomainRule, SandboxPolicy};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -349,12 +349,11 @@ fn merge_network(parent: Option<RawNetwork>, child: &RawNetwork) -> RawNetwork {
         merged.unix_socket_mode = child.unix_socket_mode;
     }
     for child_rule in &child.domains {
-        if let Some(parent_rule) = merged.domains.iter_mut().find(|parent_rule| {
-            parent_rule
-                .pattern
-                .trim_end_matches('.')
-                .eq_ignore_ascii_case(child_rule.pattern.trim_end_matches('.'))
-        }) {
+        if let Some(parent_rule) = merged
+            .domains
+            .iter_mut()
+            .find(|parent_rule| same_domain_rule(parent_rule, child_rule))
+        {
             *parent_rule = child_rule.clone();
         } else {
             merged.domains.push(child_rule.clone());
@@ -372,6 +371,22 @@ fn merge_network(parent: Option<RawNetwork>, child: &RawNetwork) -> RawNetwork {
         }
     }
     merged
+}
+
+fn same_domain_rule(
+    left: &crate::model::RawDomainRule,
+    right: &crate::model::RawDomainRule,
+) -> bool {
+    match (
+        DomainRule::new(left.pattern.clone(), DomainAccess::Allow),
+        DomainRule::new(right.pattern.clone(), DomainAccess::Allow),
+    ) {
+        (Ok(left), Ok(right)) => left.pattern() == right.pattern(),
+        _ => left
+            .pattern
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(right.pattern.trim_end_matches('.')),
+    }
 }
 
 fn merge_command(parent: Option<RawCommand>, child: &RawCommand) -> RawCommand {
