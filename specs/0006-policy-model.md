@@ -84,9 +84,10 @@ dangerous request.
   A profile may explicitly override an equal canonical target while resolving a
   requested policy, but the later backend grant intersection may only narrow
   it.
-- Glob patterns support component wildcards and recursive `**` matching,
-  reject parent traversal and unsupported syntax, and carry an explicit scan
-  depth for backend expansion.
+- Glob patterns support component wildcards, recursive `**` matching, and
+  `globset`-compatible character classes, ranges, negative classes, and
+  alternates. They reject parent traversal and malformed syntax and carry an
+  explicit scan depth for backend expansion.
 - Writable rules may carry read-only subpath carve-outs, and concrete targets
   may explicitly request skip-on-missing behavior.
 - `.git` is protected as read-only below every writable scope in a restricted
@@ -101,8 +102,9 @@ dangerous request.
   `.gitignore`). Native backends must also prevent symlink-based escapes.
 - Concrete path matching follows host filesystem conventions: POSIX path
   components and glob segments are case-sensitive, while Windows components,
-  drive prefixes, and glob segments are case-insensitive. Symlink resolution
-  remains a native backend responsibility.
+  drive prefixes, and glob segments are case-insensitive. Protected metadata
+  uses the same native comparison rules. Symlink resolution remains a native
+  backend responsibility.
 - Unrestricted and externally enforced filesystem policies cannot carry local
   filesystem rules. Restriction-only builders reject those combinations at
   construction time.
@@ -110,18 +112,20 @@ dangerous request.
   trailing dots and host ports are ignored, bracketed IPv6 literals are
   unwrapped, and IPv4/IPv6 literals are canonicalized. Schemes, paths,
   whitespace, empty labels, and unsupported wildcard syntax are rejected.
-- Domain patterns support `*` and `?` within labels, including mid-label
-  patterns such as `region*.example.com`; the `*.` and `**.` prefixes retain
-  their explicit subdomain-only and apex-plus-subdomains semantics.
+- Domain patterns support `*`, `?`, character classes, ranges, and negative
+  classes within labels, including mid-label patterns such as
+  `region*.example.com`; the `*.` and `**.` prefixes retain their explicit
+  subdomain-only and apex-plus-subdomains semantics.
 - `*.example.com` matches subdomains but not the apex; `**.example.com`
   matches the apex and subdomains.
 - Deny wins when multiple matching domain rules apply.
 - Domain and Unix-socket defaults are explicit: disabled, enabled, or
   restricted allowlist; backends never infer a default from rule presence.
 - Resolved domain targets use `LocalNetworkAccess::Deny` by default. Backends
-  pass all DNS results to the typed resolved-target query; empty resolution or
-  any non-public result is denied unless an explicit literal or policy opt-in
-  permits it. The policy crate never performs DNS or connection I/O.
+  pass all DNS results to the typed resolved-target query; empty resolution,
+  any non-public result, or the `localhost` hostname is denied unless an
+  explicit literal/hostname or policy opt-in permits it. The policy crate
+  never performs DNS or connection I/O.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
   rules; its rule builders reject the combination at construction time.

@@ -14,6 +14,21 @@ checks lexical and platform-neutral.
 The crate does not access the filesystem, resolve symlinks, or canonicalize
 paths. Native backends remain responsible for those operations.
 
+## Workspace role
+
+`cageforge-path` is the shared lexical path-semantics layer.
+
+| Crate | Role in the relationship |
+|---|---|
+| `cageforge-policy` | Uses component-aware equality, containment, and path-pattern comparison. |
+| `cageforge-command` | Validates command working-directory traversal. |
+| `cageforge-config` | Validates configured workspace-root declarations. |
+| `cageforge-policy-compose` | Deduplicates and compares effective workspace roots. |
+| `cageforge-upstream-review` | Validates repository-relative review paths. |
+
+The helpers define lexical relationships only. A backend still owns filesystem
+I/O, symlink resolution, canonicalization, and platform capability checks.
+
 ## API
 
 - `is_within(path, root)` checks component-aware containment and does not treat

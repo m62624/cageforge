@@ -23,16 +23,19 @@ alongside `cageforge-policy-compose`.
 
 ## Workspace role
 
-| Crate | Role | Runtime dependencies | Used by |
-|---|---|---|---|
-| `cageforge-policy` | Portable filesystem and network policy semantics | `cageforge-path` | This crate and backend integrations |
-| `cageforge-command` | Portable environment specification used during composition | `cageforge-path` | This crate and command/config integrations |
-| `cageforge-path` | Shared native path comparison semantics | None | This crate and the other path-bearing layers |
-| `cageforge-config` | Optional TOML source for requested values | Not a dependency of this crate | Applications wire its resolved values into this crate |
+`cageforge-policy-compose` is the optional policy-narrowing layer.
+
+| Crate | Role in the relationship |
+|---|---|
+| `cageforge-policy` | Supplies filesystem and network constraints to compose. |
+| `cageforge-command` | Supplies the environment specification used during composition. |
+| `cageforge-config` | Optionally provides requested values from TOML; it is not a dependency of this crate. |
+| Backend integrations | Inspect effective constraints and lower them to native execution APIs. |
 
 The dependency direction is deliberate: composition does not depend on a
-configuration format. An application can use TOML, JSON, Rust builders, or its
-own configuration system and pass the same validated policy values here.
+configuration format or a backend. An application can use TOML, JSON, Rust
+builders, or its own configuration system and pass the same validated values
+here.
 
 ## Example
 

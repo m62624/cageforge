@@ -19,9 +19,14 @@ backend.
 
 ## Workspace role
 
-| Crate | Role | Runtime dependencies | Used by |
-|---|---|---|---|
-| `cageforge-policy` | Portable filesystem and network policy semantics | `cageforge-path` | `cageforge-config`, `cageforge-policy-compose`, and backend integrations |
+`cageforge-policy` is the portable filesystem and network policy layer.
+
+| Crate | Role in the relationship |
+|---|---|
+| `cageforge-path` | Supplies shared lexical path equality, containment, and case semantics. |
+| `cageforge-config` | Builds validated policies from a configuration format. |
+| `cageforge-policy-compose` | Narrows policy decisions with an outer policy ceiling. |
+| Backend integrations | Consume the validated policy and lower it to native enforcement. |
 
 The crate is the shared policy value between those layers. A project can pair
 it with its own configuration format and backend while keeping the same
@@ -107,14 +112,16 @@ may still be rejected by a future policy composer or backend. Call
 list is needed. Concrete path and glob comparisons follow native filesystem
 case rules: POSIX matching is case-sensitive, while Windows matching is
 case-insensitive. The portable crate does not resolve symlinks; that remains a
-native backend decision. The built-in protected-metadata check is deliberately
-conservative and remains case-insensitive on every host.
+native backend decision. Built-in protected metadata follows the same native
+path case rules.
 
 `PathSelector::root()` is a symbolic request for every system root supplied in
 `PathResolutionContext`. POSIX callers normally provide `/`; Windows callers
 may provide multiple drive or UNC roots. The policy crate never discovers
-these roots itself. Glob rules are portable deny rules only. Read/write globs
-are rejected with `PolicyError::UnsupportedGlobAccess` until a backend
+these roots itself. Glob rules are portable deny rules only. They support `*`,
+`?`, recursive `**`, character classes such as `[a-z]`, negative classes such
+as `[!secret]`, and ranges. Read/write globs are rejected with
+`PolicyError::UnsupportedGlobAccess` until a backend
 capability contract can prove support on every target platform.
 
 A read-only carve-out must be below its writable scope. Concrete absolute and
@@ -146,9 +153,10 @@ host boundary: case is folded, trailing dots are removed, host ports are
 ignored, bracketed IPv6 literals are unwrapped, and IPv4/IPv6 literals are
 canonicalized. `*.example.com` matches subdomains but not the apex, while
 `**.example.com` matches the apex and its subdomains. Domain patterns also
-support `*` and `?` within a host label, such as
-`region*.example.com`; wildcard characters never change host normalization or
-the explicit apex semantics of the prefixed forms.
+support `*`, `?`, character classes such as `[a-c]`, negative classes such as
+`[!x]`, and ranges within a host label, such as `region*.example.com`;
+wildcard characters never change host normalization or the explicit apex
+semantics of the prefixed forms.
 
 Use `decision_for_domain` and `decision_for_unix_socket` when a backend needs
 the complete result. They return `NetworkDecision::Allow`,
@@ -161,12 +169,14 @@ Network policy is independent from filesystem policy. Disabled mode denies
 destinations, while external mode records that another trusted boundary owns
 network enforcement. A project can connect these values to a proxy, firewall,
 or native network mechanism in the backend it uses. The default
-`LocalNetworkAccess::Deny` also protects domain rules from DNS rebinding: a
+`LocalNetworkAccess::Deny` also protects domain rules from DNS rebinding and
+recognizes `localhost` as a local hostname before trusting DNS results. A
 backend passes every resolved address to
 `decision_for_domain_with_resolved_ips`, and an empty list represents failed or
 timed-out resolution. Any non-public result is denied. An exact literal IP
-allow rule or the explicit `LocalNetworkAccess::Allow` builder is required to
-opt into local destinations. The policy crate performs no DNS or network I/O.
+allow rule, an exact `localhost` allow rule, or the explicit
+`LocalNetworkAccess::Allow` builder is required to opt into local destinations.
+The policy crate performs no DNS or network I/O.
 
 ## Using it with other crates
 

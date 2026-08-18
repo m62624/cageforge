@@ -3,7 +3,9 @@
 
 use crate::PathResolutionContext;
 use crate::PolicyError;
-use cageforge_path::{case_fold, contains_parent_traversal, paths_equal, strings_equal};
+use cageforge_path::{contains_parent_traversal, paths_equal, strings_equal};
+use globset::{GlobBuilder, GlobMatcher};
+use std::hash::{Hash, Hasher};
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -177,12 +179,50 @@ pub(crate) fn selectors_equal(left: &PathSelector, right: &PathSelector) -> bool
 }
 
 /// A validated path glob used by a filesystem rule.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct PathPattern {
     raw: String,
     absolute: bool,
     prefix: Option<String>,
     components: Vec<String>,
+    matchers: Vec<GlobMatcher>,
+}
+
+impl PartialEq for PathPattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+            && self.absolute == other.absolute
+            && self.prefix == other.prefix
+            && self.components == other.components
+    }
+}
+
+impl Eq for PathPattern {}
+
+impl Hash for PathPattern {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+        self.absolute.hash(state);
+        self.prefix.hash(state);
+        self.components.hash(state);
+    }
+}
+
+impl PartialOrd for PathPattern {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PathPattern {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (&self.raw, self.absolute, &self.prefix, &self.components).cmp(&(
+            &other.raw,
+            other.absolute,
+            &other.prefix,
+            &other.components,
+        ))
+    }
 }
 
 impl PathPattern {
@@ -211,19 +251,20 @@ impl PathPattern {
             let (prefix, components) = path_components(path);
             return path.is_absolute()
                 && prefixes_equal(prefix.as_deref(), self.prefix.as_deref())
-                && glob_components_match(&self.components, &components);
+                && glob_components_match(&self.components, &self.matchers, &components);
         }
 
         context.workspace_roots().iter().any(|root| {
-            relative_path_components(path, root)
-                .is_some_and(|components| glob_components_match(&self.components, &components))
+            relative_path_components(path, root).is_some_and(|components| {
+                glob_components_match(&self.components, &self.matchers, &components)
+            })
         })
     }
 
     pub(crate) fn specificity(&self) -> usize {
         self.components
             .iter()
-            .filter(|component| !component.contains('*') && !component.contains('?'))
+            .filter(|component| !contains_glob_meta(component))
             .count()
     }
 
@@ -255,6 +296,7 @@ impl PathPattern {
         }
 
         let mut components = Vec::new();
+        let mut matchers = Vec::new();
         let mut prefix = None;
         for component in path.components() {
             match component {
@@ -271,12 +313,7 @@ impl PathPattern {
                 }
                 Component::Normal(value) => {
                     let component = value.to_string_lossy();
-                    if component.contains('[') || component.contains(']') {
-                        return Err(PolicyError::InvalidGlobPattern {
-                            pattern: raw,
-                            reason: "character classes are not supported".to_string(),
-                        });
-                    }
+                    matchers.push(compile_glob_component(&component, &raw)?);
                     components.push(component.into_owned());
                 }
             }
@@ -292,6 +329,7 @@ impl PathPattern {
             absolute,
             prefix,
             components,
+            matchers,
         })
     }
 }
@@ -369,10 +407,10 @@ fn relative_path_components(path: &Path, root: &Path) -> Option<Vec<String>> {
     Some(path_parts[root_components.len()..].to_vec())
 }
 
-fn glob_components_match(pattern: &[String], path: &[String]) -> bool {
+fn glob_components_match(pattern: &[String], matchers: &[GlobMatcher], path: &[String]) -> bool {
     let mut current = vec![false; path.len() + 1];
     current[0] = true;
-    for pattern_component in pattern {
+    for (pattern_index, pattern_component) in pattern.iter().enumerate() {
         let mut next = vec![false; path.len() + 1];
         if pattern_component == "**" {
             next[0] = current[0];
@@ -380,9 +418,9 @@ fn glob_components_match(pattern: &[String], path: &[String]) -> bool {
                 next[index] = current[index] || next[index - 1];
             }
         } else {
+            let matcher = &matchers[pattern_index];
             for index in 1..=path.len() {
-                next[index] =
-                    current[index - 1] && segment_matches(pattern_component, &path[index - 1]);
+                next[index] = current[index - 1] && matcher.is_match(&path[index - 1]);
             }
         }
         current = next;
@@ -390,34 +428,25 @@ fn glob_components_match(pattern: &[String], path: &[String]) -> bool {
     current[path.len()]
 }
 
-fn segment_matches(pattern: &str, value: &str) -> bool {
-    let pattern = case_fold(pattern);
-    let value = case_fold(value);
-    let pattern = pattern.as_bytes();
-    let value = value.as_bytes();
-    let mut current = vec![false; value.len() + 1];
-    current[0] = true;
-    for pattern_byte in pattern {
-        let mut next = vec![false; value.len() + 1];
-        match pattern_byte {
-            b'*' => {
-                next[0] = current[0];
-                for index in 1..=value.len() {
-                    next[index] = current[index] || next[index - 1];
-                }
-            }
-            b'?' => {
-                next[1..].copy_from_slice(&current[..value.len()]);
-            }
-            byte => {
-                for index in 1..=value.len() {
-                    next[index] = current[index - 1] && value[index - 1] == *byte;
-                }
-            }
-        }
-        current = next;
-    }
-    current[value.len()]
+fn compile_glob_component(component: &str, pattern: &str) -> Result<GlobMatcher, PolicyError> {
+    let mut builder = GlobBuilder::new(component);
+    builder
+        .case_insensitive(cfg!(windows))
+        .literal_separator(true)
+        .backslash_escape(false);
+    builder
+        .build()
+        .map(|glob| glob.compile_matcher())
+        .map_err(|error| PolicyError::InvalidGlobPattern {
+            pattern: pattern.to_string(),
+            reason: format!("invalid glob syntax: {error}"),
+        })
+}
+
+fn contains_glob_meta(component: &str) -> bool {
+    component
+        .chars()
+        .any(|character| matches!(character, '*' | '?' | '[' | ']' | '{' | '}'))
 }
 
 fn prefixes_equal(left: Option<&str>, right: Option<&str>) -> bool {

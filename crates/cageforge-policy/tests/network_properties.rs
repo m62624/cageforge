@@ -73,6 +73,22 @@ proptest! {
     }
 
     #[test]
+    fn localhost_is_denied_even_when_dns_reports_public_addresses(
+        public in public_ip(),
+    ) {
+        let policy = NetworkPolicy::enabled()
+            .with_domain("*", DomainAccess::Allow)
+            .expect("valid wildcard domain");
+
+        prop_assert_eq!(
+            policy
+                .decision_for_domain_with_resolved_ips("localhost", &[public])
+                .expect("valid localhost hostname"),
+            NetworkDecision::Deny,
+        );
+    }
+
+    #[test]
     fn explicit_local_opt_in_allows_non_public_results_but_not_failed_resolution(
         local in non_public_ip(),
     ) {

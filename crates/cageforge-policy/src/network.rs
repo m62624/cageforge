@@ -4,6 +4,7 @@
 use crate::PathSelector;
 use crate::PolicyError;
 use cageforge_path::is_within;
+use globset::GlobBuilder;
 use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -337,7 +338,7 @@ impl NetworkPolicy {
 
         if let Some(literal) = parse_ip_literal(&normalized_domain) {
             return Ok(
-                if self.has_exact_literal_allow(&normalized_domain)
+                if self.has_exact_allow(&normalized_domain)
                     || self.local_network_access == LocalNetworkAccess::Allow
                     || !is_non_public_ip(literal)
                 {
@@ -351,6 +352,12 @@ impl NetworkPolicy {
         if resolved_ips.is_empty()
             || (self.local_network_access == LocalNetworkAccess::Deny
                 && resolved_ips.iter().copied().any(is_non_public_ip))
+        {
+            return Ok(NetworkDecision::Deny);
+        }
+        if normalized_domain == "localhost"
+            && self.local_network_access == LocalNetworkAccess::Deny
+            && !self.has_exact_allow(&normalized_domain)
         {
             return Ok(NetworkDecision::Deny);
         }
@@ -422,7 +429,7 @@ impl NetworkPolicy {
         result
     }
 
-    fn has_exact_literal_allow(&self, domain: &str) -> bool {
+    fn has_exact_allow(&self, domain: &str) -> bool {
         self.domains.iter().any(|rule| {
             rule.access() == DomainAccess::Allow
                 && !rule.pattern().contains('*')
@@ -459,7 +466,7 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     } else {
         format!("{prefix}{remainder}")
     };
-    if valid_domain_pattern(&pattern) {
+    if valid_domain_pattern(&pattern) && domain_glob_is_valid(&pattern) {
         Ok(pattern)
     } else {
         Err(PolicyError::InvalidDomainPattern {
@@ -472,6 +479,7 @@ fn normalize_host(host: &str) -> String {
     let host = host.trim();
     if host.starts_with('[')
         && let Some(end) = host.find(']')
+        && (host[1..end].contains(':') || normalize_ip_literal(&host[1..end]).is_some())
     {
         return normalize_dns_host_or_ip_literal(&host[1..end]);
     }
@@ -601,27 +609,15 @@ fn domain_suffix_matches(suffix: &str, domain: &str, include_apex: bool) -> bool
 }
 
 fn glob_matches(pattern: &str, value: &str) -> bool {
-    let pattern = pattern.chars().collect::<Vec<_>>();
-    let value = value.chars().collect::<Vec<_>>();
-    let mut current = vec![false; value.len() + 1];
-    current[0] = true;
-    for pattern_character in pattern {
-        let mut next = vec![false; value.len() + 1];
-        match pattern_character {
-            '*' => {
-                next[0] = current[0];
-                for index in 1..=value.len() {
-                    next[index] = current[index] || next[index - 1];
-                }
-            }
-            '?' => next[1..].copy_from_slice(&current[..value.len()]),
-            character => {
-                for index in 1..=value.len() {
-                    next[index] = current[index - 1] && value[index - 1] == character;
-                }
-            }
-        }
-        current = next;
-    }
-    current[value.len()]
+    let Ok(glob) = GlobBuilder::new(pattern).case_insensitive(true).build() else {
+        return false;
+    };
+    glob.compile_matcher().is_match(value)
+}
+
+fn domain_glob_is_valid(pattern: &str) -> bool {
+    GlobBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+        .is_ok()
 }

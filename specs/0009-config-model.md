@@ -95,7 +95,9 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
 
 Domain patterns are passed through `cageforge-policy` host normalization:
 matching is case-insensitive, trailing dots and host ports are ignored,
-bracketed IPv6 literals are unwrapped, and IP literals are canonicalized.
+bracketed IPv6 literals are unwrapped, IP literals are canonicalized, and
+`globset`-compatible wildcards, classes, ranges, and negative classes are
+validated before resolution.
 Working-directory values are passed to `cageforge-command`, which rejects
 empty, NUL-containing, and parent-traversing paths before backend resolution.
 

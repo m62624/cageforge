@@ -16,17 +16,17 @@ an execution layer, or narrowed first with `cageforge-policy-compose` and a
 
 ## Workspace role
 
-| Crate | Role | Runtime dependencies | Used by |
-|---|---|---|---|
-| `cageforge-config` | Strict TOML profile parsing and inheritance | `cageforge-policy`, `cageforge-command` | Application integrations and backend API crates |
-| `cageforge-policy` | Portable filesystem and network policy semantics | `cageforge-path` | This crate, policy composition, and backend integrations |
-| `cageforge-command` | Portable command and process-launch intent | None | This crate and backend API integrations |
-| `cageforge-path` | Shared native path comparison and parent-traversal semantics | None | Policy, command, config, composition, and review tooling |
+`cageforge-config` is the strict configuration adapter.
 
-The dependencies are local workspace crates, declared through
-`[workspace.dependencies]` in the Plugmem-style workspace layout. The config
-crate consumes only their public APIs, so every resolved value keeps the
-invariants enforced by those model crates.
+| Crate | Role in the relationship |
+|---|---|
+| `cageforge-policy` | Supplies the validated filesystem and network policy model. |
+| `cageforge-command` | Supplies the validated command and environment request model. |
+| `cageforge-policy-compose` | Optionally narrows resolved values with an outer policy ceiling. |
+| Backend integrations | Resolve declared roots and consume the resulting policy and command values. |
+
+The config crate consumes only the public APIs of the model crates. It does not
+own process launching or native filesystem or network enforcement.
 
 ## Configuration example
 
@@ -81,8 +81,9 @@ permits loopback, private, or link-local destinations. Stdio modes are
 
 Domain patterns use the policy crate's host normalization: matching is
 case-insensitive, trailing dots and host ports are ignored, and bracketed
-IPv6 literals are accepted. `*` and `?` can be used for host globs, including
-mid-label patterns such as `region*.example.com`. For example,
+IPv6 literals are accepted. `*`, `?`, character classes such as `[a-c]`,
+negative classes such as `[!x]`, and ranges can be used for host globs,
+including mid-label patterns such as `region*.example.com`. For example,
 `Example.com:443` and `example.com:8443` address the same canonical host rule,
 so a child profile overrides an inherited rule even when it spells a port
 differently.
@@ -104,8 +105,9 @@ current directory.
 The filesystem target `root` is symbolic as well: the backend supplies POSIX
 `/` or the relevant Windows drive/UNC roots to the policy context. Config
 resolution never discovers system roots. Portable glob rules support
-`access = "deny"`; read/write glob requests are rejected because native
-support is not uniform across Linux, macOS, and Windows.
+`access = "deny"` and Codex-compatible glob syntax; read/write glob requests
+are rejected because native support is not uniform across Linux, macOS, and
+Windows.
 
 Command environments support `all`, `core`, and `none` inheritance bases;
 omitting `inherit` selects `core`. The `filters` table maps portable `*` and

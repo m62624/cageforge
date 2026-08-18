@@ -285,7 +285,6 @@ fn path_patterns_validate_and_match_absolute_and_workspace_paths() {
         ("../secret", "parent traversal is not allowed"),
         (".", "pattern must contain at least one component"),
         ("*.toml", "absolute glob must use a native absolute path"),
-        ("[secret]", "character classes are not supported"),
     ] {
         let result = if pattern == "*.toml" {
             PathPattern::absolute(pattern)
@@ -301,6 +300,43 @@ fn path_patterns_validate_and_match_absolute_and_workspace_paths() {
         PathPattern::workspace("bad\0pattern"),
         Err(PolicyError::InvalidGlobPattern { .. })
     ));
+    assert!(matches!(
+        PathPattern::workspace("[abc"),
+        Err(PolicyError::InvalidGlobPattern { .. })
+    ));
+}
+
+#[test]
+fn filesystem_globs_support_character_classes_and_ranges() {
+    let context = PathResolutionContext::new()
+        .with_workspace_root("/workspace")
+        .expect("workspace root");
+    let policy = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        FilesystemRule::workspace_glob("Secrets/[a-z][0-9].token", AccessMode::Deny)
+            .expect("range glob"),
+        FilesystemRule::workspace_glob("Secrets/[!x]oken", AccessMode::Deny)
+            .expect("negative class glob"),
+    ]);
+
+    assert_eq!(
+        policy
+            .access_for_path(Path::new("/workspace/Secrets/a7.token"), &context)
+            .expect("range match"),
+        FilesystemDecision::Deny
+    );
+    assert_eq!(
+        policy
+            .access_for_path(Path::new("/workspace/Secrets/token"), &context)
+            .expect("negative class match"),
+        FilesystemDecision::Deny
+    );
+    assert_eq!(
+        policy
+            .access_for_path(Path::new("/workspace/Secrets/xoken"), &context)
+            .expect("negative class non-match"),
+        FilesystemDecision::Write
+    );
 }
 
 #[test]
@@ -394,8 +430,12 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
     assert_eq!(
         policy
             .access_for_path(Path::new(&native_path("/workspace/.GIT/config")), &context)
-            .expect("case-insensitive protected lookup"),
-        FilesystemDecision::Read
+            .expect("case-variant protected lookup"),
+        if cfg!(windows) {
+            FilesystemDecision::Read
+        } else {
+            FilesystemDecision::Write
+        }
     );
     let exact_mixed_case = FilesystemPolicy::restricted([FilesystemRule::new(
         PathSelector::workspace(".GIT").expect("protected selector"),
@@ -403,7 +443,11 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
     )]);
     assert_eq!(
         exact_mixed_case.access_for(&PathSelector::workspace(".GIT").expect("protected selector")),
-        FilesystemDecision::Read
+        if cfg!(windows) {
+            FilesystemDecision::Read
+        } else {
+            FilesystemDecision::Write
+        }
     );
     let explicit_write = policy
         .clone()
@@ -767,6 +811,46 @@ fn domain_rules_support_mid_label_globs() {
 }
 
 #[test]
+fn domain_rules_support_character_classes() {
+    let policy = NetworkPolicy::enabled()
+        .with_domain("[a-c].example.com", DomainAccess::Allow)
+        .expect("character class domain")
+        .with_domain("[!x].blocked.example.com", DomainAccess::Deny)
+        .expect("negative character class domain");
+
+    assert_eq!(
+        policy
+            .access_for_domain("a.example.com")
+            .expect("domain lookup"),
+        Some(DomainAccess::Allow)
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("c.example.com")
+            .expect("domain lookup"),
+        Some(DomainAccess::Allow)
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("d.example.com")
+            .expect("domain lookup"),
+        None
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("a.blocked.example.com")
+            .expect("domain lookup"),
+        Some(DomainAccess::Deny)
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("x.blocked.example.com")
+            .expect("domain lookup"),
+        None
+    );
+}
+
+#[test]
 fn malformed_domains_and_non_absolute_sockets_are_rejected() {
     assert!(matches!(
         NetworkPolicy::enabled().with_domain("https://example.com", DomainAccess::Allow),
@@ -784,6 +868,7 @@ fn malformed_domains_and_non_absolute_sockets_are_rejected() {
         "bad domain",
         "bad..domain",
         "bad\0domain",
+        "[abc",
     ] {
         assert!(matches!(
             NetworkPolicy::enabled().with_domain(pattern, DomainAccess::Allow),
@@ -992,6 +1077,19 @@ fn resolved_domains_support_explicit_literal_and_policy_opt_ins() {
             .decision_for_domain_with_resolved_ips("service.example", &[])
             .expect("failed resolution"),
         NetworkDecision::Deny
+    );
+
+    let localhost = NetworkPolicy::enabled()
+        .with_domain("localhost", DomainAccess::Allow)
+        .expect("localhost allow rule");
+    assert_eq!(
+        localhost
+            .decision_for_domain_with_resolved_ips(
+                "LOCALHOST.",
+                &["93.184.216.34".parse().expect("public address")],
+            )
+            .expect("explicit localhost access"),
+        NetworkDecision::Allow
     );
 }
 

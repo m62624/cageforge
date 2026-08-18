@@ -7,7 +7,7 @@ use crate::PathPattern;
 use crate::PathResolutionContext;
 use crate::PathSelector;
 use crate::PolicyError;
-use cageforge_path::{contains_parent_traversal, is_within};
+use cageforge_path::{contains_parent_traversal, is_within, paths_equal, strings_equal};
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
@@ -279,7 +279,7 @@ impl FilesystemPolicy {
         if !self
             .protected_relative_paths
             .iter()
-            .any(|existing| relative_paths_equal(existing, &path))
+            .any(|existing| paths_equal(existing, &path))
         {
             self.protected_relative_paths.push(path);
         }
@@ -292,7 +292,7 @@ impl FilesystemPolicy {
     /// backend or policy composer may still reject the resulting request.
     pub fn dangerously_allow_git_write(mut self) -> Self {
         self.protected_relative_paths
-            .retain(|path| !relative_paths_equal(path, Path::new(".git")));
+            .retain(|path| !paths_equal(path, Path::new(".git")));
         self
     }
 
@@ -476,7 +476,15 @@ impl FilesystemPolicy {
                 .collect();
             components
                 .windows(protected_components.len())
-                .any(|window| paths_equal(window, &protected_components))
+                .any(|window| {
+                    window.len() == protected_components.len()
+                        && window
+                            .iter()
+                            .zip(&protected_components)
+                            .all(|(left, right)| {
+                                strings_equal(&left.to_string_lossy(), &right.to_string_lossy())
+                            })
+                })
         })
     }
 }
@@ -531,29 +539,6 @@ fn validate_protected_relative_path(path: PathBuf) -> Result<PathBuf, PolicyErro
         });
     }
     Ok(normalized)
-}
-
-fn paths_equal(left: &[&std::ffi::OsStr], right: &[&std::ffi::OsStr]) -> bool {
-    left.len() == right.len()
-        && left.iter().zip(right).all(|(left, right)| {
-            left.to_string_lossy()
-                .eq_ignore_ascii_case(&right.to_string_lossy())
-        })
-}
-
-fn relative_paths_equal(left: &Path, right: &Path) -> bool {
-    let left: Vec<_> = left.components().collect();
-    let right: Vec<_> = right.components().collect();
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| match (left, right) {
-                (Component::Normal(left), Component::Normal(right)) => left
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(&right.to_string_lossy()),
-                _ => false,
-            })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

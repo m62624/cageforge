@@ -32,7 +32,8 @@ The policy and backend design must account for these upstream behaviors:
   system roots, platform-minimal paths, the platform temporary directory, and
   `/tmp`;
 - writable roots may carry read-only subpaths and protected metadata roots;
-- deny-read entries may be exact subtree roots or validated glob patterns;
+- deny-read entries may be exact subtree roots or validated `globset`-compatible
+  glob patterns;
 - glob expansion has an explicit maximum depth and malformed patterns must
   fail closed;
 - missing filesystem entries can be skipped instead of materialized;
@@ -62,7 +63,10 @@ queries; the boolean helpers intentionally expose only local `Allow`.
 decision boundary for loopback/private/DNS-rebinding protection without adding
 DNS or proxy dependencies; a native backend supplies the resolver results.
 Portable glob rules are deny-only; a read/write glob is rejected as
-unsupported rather than silently delegated.
+unsupported rather than silently delegated. Filesystem and domain matching use
+the same `globset`-compatible character classes, ranges, and negative classes
+as the audited Codex matcher, while Cageforge keeps the matcher behind its own
+portable API.
 The remaining OS-specific behavior stays below the policy boundary. Codex's
 product-specific `.agents` and `.codex` names are not copied into the public
 API; callers can add generic protected relative paths when they need them.

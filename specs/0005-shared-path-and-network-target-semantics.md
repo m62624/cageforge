@@ -43,9 +43,11 @@ slice when resolution fails or times out. With the default
 
 - a hostname resolving to any non-public address is denied;
 - a hostname with no resolved addresses is denied;
+- the `localhost` hostname is denied before trusting a public DNS result;
 - a literal IP is denied when it is non-public unless an exact literal allow
   rule exists;
-- public results remain subject to the ordinary domain rules;
+- public results remain subject to the ordinary domain rules, and an exact
+  `localhost` allow rule is an explicit local opt-in;
 - `LocalNetworkAccess::Allow` is an explicit opt-in after the ordinary domain
   policy has allowed the destination.
 
@@ -67,8 +69,10 @@ Profile inheritance treats it as a scalar child override.
 ## Verification
 
 Black-box tests cover component-aware containment, Windows case behavior,
-parent-traversal rejection, path deduplication, public/private/mixed/empty DNS
-results, IPv4/IPv6 targets, exact literal opt-in, explicit local-network
-opt-in, composition narrowing, config mapping, and config inheritance.
+parent-traversal rejection, path deduplication, native protected-metadata case
+behavior, character-class and range globs, public/private/mixed/empty DNS
+results, IPv4/IPv6 targets, `localhost` DNS spoofing resistance, exact literal
+opt-in, explicit local-network opt-in, composition narrowing, config mapping,
+and config inheritance.
 Bounded property tests exercise these combinations without performing DNS or
 network I/O, so CI remains deterministic and short.
