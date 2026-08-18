@@ -98,11 +98,11 @@ fn access_modes_follow_security_precedence() {
     );
     assert_eq!(
         AccessMode::Read.most_restrictive(AccessMode::Write),
-        AccessMode::Write
+        AccessMode::Read
     );
     assert_eq!(
         AccessMode::Write.most_restrictive(AccessMode::Read),
-        AccessMode::Write
+        AccessMode::Read
     );
     assert_eq!(
         AccessMode::Write.most_restrictive(AccessMode::Deny),
@@ -360,6 +360,20 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
             .expect("protected lookup"),
         AccessMode::Read
     );
+    assert_eq!(
+        policy
+            .access_for_path(Path::new(&native_path("/workspace/.GIT/config")), &context)
+            .expect("case-insensitive protected lookup"),
+        AccessMode::Read
+    );
+    let exact_mixed_case = FilesystemPolicy::restricted([FilesystemRule::new(
+        PathSelector::workspace(".GIT").expect("protected selector"),
+        AccessMode::Write,
+    )]);
+    assert_eq!(
+        exact_mixed_case.access_for(&PathSelector::workspace(".GIT").expect("protected selector")),
+        AccessMode::Read
+    );
     let explicit_write = policy
         .clone()
         .with_rule(FilesystemRule::new(
@@ -371,8 +385,40 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         explicit_write
             .access_for_path(Path::new(&native_path("/workspace/.git/config")), &context)
             .expect("explicit write lookup"),
+        AccessMode::Read
+    );
+    let default_only = FilesystemPolicy::restricted([FilesystemRule::new(
+        PathSelector::workspace_root(),
+        AccessMode::Write,
+    )]);
+    assert_eq!(
+        default_only
+            .dangerously_allow_git_write()
+            .access_for_path(Path::new(&native_path("/workspace/.git/config")), &context)
+            .expect("explicitly unprotected lookup"),
         AccessMode::Write
     );
+    let protected_metadata = policy
+        .clone()
+        .with_additional_protected_relative_path(".cargo")
+        .expect("additional protected path");
+    assert_eq!(
+        protected_metadata.protected_relative_paths(),
+        &[
+            std::path::PathBuf::from(".git"),
+            std::path::PathBuf::from(".cargo")
+        ]
+    );
+    assert!(matches!(
+        policy
+            .clone()
+            .with_additional_protected_relative_path("../escape"),
+        Err(PolicyError::InvalidProtectedPath { .. })
+    ));
+    assert!(matches!(
+        FilesystemPolicy::unrestricted().with_additional_protected_relative_path(".cargo"),
+        Err(PolicyError::InvalidRule { .. })
+    ));
     let absolute_rule =
         FilesystemRule::absolute_glob(native_path("/workspace/**/*.lock"), AccessMode::Deny)
             .expect("absolute glob rule");

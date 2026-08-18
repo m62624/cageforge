@@ -56,10 +56,12 @@ The crate provides built-in constructors named `read_only`, `workspace`, and
 They are initial policy presets; future named TOML profiles will resolve to the
 same `SandboxPolicy` type.
 
-Restricted filesystem policies also carry mandatory protected metadata paths.
+Restricted filesystem policies also carry protected metadata paths by default.
 The initial default is the relative path `.git`, applied below every writable
 scope. Callers may add more relative protected paths through an additive API,
-but ordinary policy configuration cannot remove the default protection.
+and an explicitly named `dangerously_allow_git_write` operation can request
+removal of the default. A later policy composer or backend may reject that
+dangerous request.
 
 ## Security invariants
 
@@ -82,9 +84,12 @@ but ordinary policy configuration cannot remove the default protection.
 - Writable rules may carry read-only subpath carve-outs, and concrete targets
   may explicitly request skip-on-missing behavior.
 - `.git` is protected as read-only below every writable scope in a restricted
-  policy. Additional protected relative paths are additive and are evaluated
-  after ordinary rules, so a later write rule cannot bypass them. Protection
-  means that the path remains readable but is not writable.
+  policy by default. Additional protected relative paths are additive and are
+  evaluated after ordinary rules, so a later write rule cannot bypass them.
+  The library exposes only the explicitly named
+  `dangerously_allow_git_write` opt-out; a later composer or backend may still
+  reject it. Protection means that the path remains readable but is not
+  writable.
 - Protected relative paths must be non-empty, relative, free of NUL and parent
   traversal components, and matched as path components (`.git` must not match
   `.gitignore`). Native backends must also prevent symlink-based escapes.

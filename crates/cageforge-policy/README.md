@@ -92,9 +92,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `access_for_path` requires an absolute path and rejects NUL characters and
 parent traversal. Rules are recursive. The most-specific matching rule wins;
-ties use deterministic precedence, with `Deny` stronger than `Write`, and
-`Write` stronger than `Read`. Call `normalized` before handing duplicate rules
-to a backend when a canonical rule list is needed.
+ties use deterministic precedence, with `Deny` stronger than `Read`, and
+`Read` stronger than `Write`. Restricted policies protect `.git` below every
+writable scope by default. Add more protected relative paths with
+`with_additional_protected_relative_path`; the explicit
+`dangerously_allow_git_write` method is available only for trusted callers and
+may still be rejected by a future policy composer or backend. Call
+`normalized` before handing duplicate rules to a backend when a canonical rule
+list is needed.
 
 ## Filesystem model
 

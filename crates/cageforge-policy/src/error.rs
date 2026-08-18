@@ -51,6 +51,14 @@ pub enum PolicyError {
         /// The reason the pattern is invalid.
         reason: String,
     },
+    /// A protected relative path is empty or unsafe.
+    #[error("invalid protected relative path {path:?}: {reason}")]
+    InvalidProtectedPath {
+        /// The protected path that failed validation.
+        path: PathBuf,
+        /// The reason the path is invalid.
+        reason: String,
+    },
     /// A path resolution context contains an invalid value.
     #[error("{message}")]
     InvalidContext {

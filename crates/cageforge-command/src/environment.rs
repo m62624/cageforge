@@ -18,11 +18,20 @@ pub enum EnvironmentBase {
     None,
 }
 
+/// The action applied to a matching environment-variable pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EnvironmentFilterAction {
+    /// Retain matching variables when the include allowlist is active.
+    Include,
+    /// Remove matching variables with deny precedence over inclusion.
+    Exclude,
+}
+
 /// A wildcard pattern matched against an environment variable name.
 ///
 /// The pattern language is deliberately small and portable: `*` matches zero
-/// or more Unicode scalar values and `?` matches one. Backends apply the
-/// include and exclude lists to the environment they actually construct.
+/// or more Unicode scalar values and `?` matches one. Matching is
+/// case-insensitive so the same policy is safe on POSIX and Windows hosts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnvironmentPattern(String);
 
@@ -49,7 +58,7 @@ impl EnvironmentPattern {
 
     /// Returns whether this pattern matches an environment variable name.
     pub fn matches(&self, name: &str) -> bool {
-        wildcard_matches(self.as_str(), name)
+        wildcard_matches(&self.as_str().to_lowercase(), &name.to_lowercase())
     }
 }
 
@@ -72,8 +81,7 @@ pub enum EnvironmentOverride {
 pub struct EnvironmentSpec {
     base: EnvironmentBase,
     overrides: BTreeMap<OsString, EnvironmentOverride>,
-    include_patterns: Vec<EnvironmentPattern>,
-    exclude_patterns: Vec<EnvironmentPattern>,
+    filters: BTreeMap<EnvironmentPattern, EnvironmentFilterAction>,
 }
 
 impl EnvironmentSpec {
@@ -82,8 +90,7 @@ impl EnvironmentSpec {
         Self {
             base: EnvironmentBase::All,
             overrides: BTreeMap::new(),
-            include_patterns: Vec::new(),
-            exclude_patterns: Vec::new(),
+            filters: BTreeMap::new(),
         }
     }
 
@@ -92,8 +99,7 @@ impl EnvironmentSpec {
         Self {
             base: EnvironmentBase::None,
             overrides: BTreeMap::new(),
-            include_patterns: Vec::new(),
-            exclude_patterns: Vec::new(),
+            filters: BTreeMap::new(),
         }
     }
 
@@ -102,8 +108,7 @@ impl EnvironmentSpec {
         Self {
             base: EnvironmentBase::Core,
             overrides: BTreeMap::new(),
-            include_patterns: Vec::new(),
-            exclude_patterns: Vec::new(),
+            filters: BTreeMap::new(),
         }
     }
 
@@ -117,19 +122,35 @@ impl EnvironmentSpec {
         &self.overrides
     }
 
-    /// Returns patterns that retain matching variables after exclusion.
-    pub fn include_patterns(&self) -> &[EnvironmentPattern] {
-        &self.include_patterns
-    }
-
-    /// Returns patterns that remove matching variables before inclusion.
-    pub fn exclude_patterns(&self) -> &[EnvironmentPattern] {
-        &self.exclude_patterns
+    /// Returns canonical environment filters in deterministic pattern order.
+    pub fn filters(&self) -> &BTreeMap<EnvironmentPattern, EnvironmentFilterAction> {
+        &self.filters
     }
 
     /// Returns the override for one variable, if present.
     pub fn override_for(&self, name: &OsStr) -> Option<&EnvironmentOverride> {
         self.overrides.get(name)
+    }
+
+    /// Returns the filter action for a variable name, if a filter matches.
+    ///
+    /// Exclude always wins when both actions match. A backend can use the
+    /// presence of any include filter together with this result to implement
+    /// the complete inherited-environment decision without reimplementing
+    /// wildcard precedence.
+    pub fn filter_action_for(&self, name: &str) -> Option<EnvironmentFilterAction> {
+        let mut include_matches = false;
+        for (pattern, action) in &self.filters {
+            if pattern.matches(name) {
+                match action {
+                    EnvironmentFilterAction::Include => include_matches = true,
+                    EnvironmentFilterAction::Exclude => {
+                        return Some(EnvironmentFilterAction::Exclude);
+                    }
+                }
+            }
+        }
+        include_matches.then_some(EnvironmentFilterAction::Include)
     }
 
     /// Adds a variable assignment and returns the updated environment.
@@ -156,34 +177,39 @@ impl EnvironmentSpec {
         Ok(self)
     }
 
-    /// Adds an include-only pattern.
-    pub fn with_include_pattern(
+    /// Adds or replaces a canonical environment filter.
+    pub fn with_filter(
         mut self,
         pattern: impl Into<String>,
+        action: EnvironmentFilterAction,
     ) -> Result<Self, CommandError> {
         let pattern = EnvironmentPattern::new(pattern)?;
-        if !self.include_patterns.contains(&pattern) {
-            self.include_patterns.push(pattern);
+        if let Some(existing) = self
+            .filters
+            .keys()
+            .find(|existing| existing.as_str().eq_ignore_ascii_case(pattern.as_str()))
+            .cloned()
+        {
+            self.filters.remove(&existing);
         }
+        self.filters.insert(pattern, action);
         Ok(self)
     }
 
-    /// Adds an exclude pattern.
-    pub fn with_exclude_pattern(
-        mut self,
-        pattern: impl Into<String>,
-    ) -> Result<Self, CommandError> {
-        let pattern = EnvironmentPattern::new(pattern)?;
-        if !self.exclude_patterns.contains(&pattern) {
-            self.exclude_patterns.push(pattern);
-        }
-        Ok(self)
+    /// Adds an include filter.
+    pub fn with_include_pattern(self, pattern: impl Into<String>) -> Result<Self, CommandError> {
+        self.with_filter(pattern, EnvironmentFilterAction::Include)
+    }
+
+    /// Adds an exclude filter.
+    pub fn with_exclude_pattern(self, pattern: impl Into<String>) -> Result<Self, CommandError> {
+        self.with_filter(pattern, EnvironmentFilterAction::Exclude)
     }
 }
 
 impl Default for EnvironmentSpec {
     fn default() -> Self {
-        Self::inherit_all()
+        Self::inherit_core()
     }
 }
 

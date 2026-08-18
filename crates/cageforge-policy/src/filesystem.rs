@@ -7,7 +7,7 @@ use crate::PathResolutionContext;
 use crate::PathSelector;
 use crate::PolicyError;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// The enforcement ownership for filesystem access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -173,6 +173,7 @@ pub struct FilesystemPolicy {
     mode: FilesystemMode,
     entries: Vec<FilesystemRule>,
     glob_scan_max_depth: Option<NonZeroUsize>,
+    protected_relative_paths: Vec<PathBuf>,
 }
 
 impl FilesystemPolicy {
@@ -182,6 +183,7 @@ impl FilesystemPolicy {
             mode: FilesystemMode::Restricted,
             entries: entries.into_iter().collect(),
             glob_scan_max_depth: None,
+            protected_relative_paths: vec![PathBuf::from(".git")],
         }
     }
 
@@ -191,6 +193,7 @@ impl FilesystemPolicy {
             mode: FilesystemMode::Unrestricted,
             entries: Vec::new(),
             glob_scan_max_depth: None,
+            protected_relative_paths: Vec::new(),
         }
     }
 
@@ -200,6 +203,7 @@ impl FilesystemPolicy {
             mode: FilesystemMode::External,
             entries: Vec::new(),
             glob_scan_max_depth: None,
+            protected_relative_paths: Vec::new(),
         }
     }
 
@@ -229,6 +233,43 @@ impl FilesystemPolicy {
         self.glob_scan_max_depth
     }
 
+    /// Returns protected relative paths applied below writable scopes.
+    pub fn protected_relative_paths(&self) -> &[PathBuf] {
+        &self.protected_relative_paths
+    }
+
+    /// Adds a protected relative path without removing the mandatory `.git`
+    /// protection.
+    pub fn with_additional_protected_relative_path(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, PolicyError> {
+        if self.mode != FilesystemMode::Restricted {
+            return Err(PolicyError::InvalidRule {
+                message: "protected paths require a restricted filesystem policy".to_string(),
+            });
+        }
+        let path = validate_protected_relative_path(path.into())?;
+        if !self
+            .protected_relative_paths
+            .iter()
+            .any(|existing| relative_paths_equal(existing, &path))
+        {
+            self.protected_relative_paths.push(path);
+        }
+        Ok(self)
+    }
+
+    /// Explicitly disables the default `.git` write protection.
+    ///
+    /// This opt-out is intentionally named as a dangerous operation. A
+    /// backend or policy composer may still reject the resulting request.
+    pub fn dangerously_allow_git_write(mut self) -> Self {
+        self.protected_relative_paths
+            .retain(|path| !relative_paths_equal(path, Path::new(".git")));
+        self
+    }
+
     /// Adds one rule while retaining the existing policy.
     pub fn with_rule(mut self, rule: FilesystemRule) -> Result<Self, PolicyError> {
         if self.mode != FilesystemMode::Restricted {
@@ -256,6 +297,9 @@ impl FilesystemPolicy {
                     message: "read-only subpaths require a writable parent rule".to_string(),
                 });
             }
+        }
+        for path in &self.protected_relative_paths {
+            validate_protected_relative_path(path.clone())?;
         }
         Ok(())
     }
@@ -294,7 +338,7 @@ impl FilesystemPolicy {
 
     /// Resolves a rule for an exact selector, defaulting to deny in restricted mode.
     pub fn access_for(&self, selector: &PathSelector) -> AccessMode {
-        match self.mode {
+        let access = match self.mode {
             FilesystemMode::Unrestricted => AccessMode::Write,
             FilesystemMode::External => AccessMode::Deny,
             FilesystemMode::Restricted => self
@@ -308,6 +352,15 @@ impl FilesystemPolicy {
                 })
                 .reduce(AccessMode::most_restrictive)
                 .unwrap_or(AccessMode::Deny),
+        };
+        if access == AccessMode::Write
+            && selector
+                .path()
+                .is_some_and(|path| self.is_protected_path(path))
+        {
+            AccessMode::Read
+        } else {
+            access
         }
     }
 
@@ -340,8 +393,10 @@ impl FilesystemPolicy {
             FilesystemMode::External => Ok(AccessMode::Deny),
             FilesystemMode::Restricted => {
                 let mut best: Option<RuleMatch> = None;
+                let mut writable_match = false;
                 for rule in &self.entries {
                     if let Some(candidate) = rule.matches_path(path, context) {
+                        writable_match |= candidate.access == AccessMode::Write;
                         best = Some(match best {
                             Some(current) if current.specificity > candidate.specificity => current,
                             Some(current) if current.specificity == candidate.specificity => {
@@ -354,10 +409,107 @@ impl FilesystemPolicy {
                         });
                     }
                 }
-                Ok(best.map_or(AccessMode::Deny, |matched| matched.access))
+                let access = best.map_or(AccessMode::Deny, |matched| matched.access);
+                if writable_match && access == AccessMode::Write && self.is_protected_path(path) {
+                    Ok(AccessMode::Read)
+                } else {
+                    Ok(access)
+                }
             }
         }
     }
+
+    fn is_protected_path(&self, path: &Path) -> bool {
+        let components: Vec<_> = path
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(value) => Some(value),
+                Component::CurDir
+                | Component::ParentDir
+                | Component::RootDir
+                | Component::Prefix(_) => None,
+            })
+            .collect();
+        self.protected_relative_paths.iter().any(|protected| {
+            let protected_components: Vec<_> = protected
+                .components()
+                .filter_map(|component| match component {
+                    Component::Normal(value) => Some(value),
+                    Component::CurDir
+                    | Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_) => None,
+                })
+                .collect();
+            components
+                .windows(protected_components.len())
+                .any(|window| paths_equal(window, &protected_components))
+        })
+    }
+}
+
+fn validate_protected_relative_path(path: PathBuf) -> Result<PathBuf, PolicyError> {
+    if path.as_os_str().is_empty() {
+        return Err(PolicyError::InvalidProtectedPath {
+            path,
+            reason: "path must not be empty".to_string(),
+        });
+    }
+    if crate::path::contains_nul(&path) {
+        return Err(PolicyError::InvalidProtectedPath {
+            path,
+            reason: "path must not contain a NUL character".to_string(),
+        });
+    }
+    if path.is_absolute() {
+        return Err(PolicyError::InvalidProtectedPath {
+            path,
+            reason: "path must be relative".to_string(),
+        });
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(value) => normalized.push(value),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(PolicyError::InvalidProtectedPath {
+                    path,
+                    reason: "path must not contain parent traversal or a root".to_string(),
+                });
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(PolicyError::InvalidProtectedPath {
+            path,
+            reason: "path must name a descendant".to_string(),
+        });
+    }
+    Ok(normalized)
+}
+
+fn paths_equal(left: &[&std::ffi::OsStr], right: &[&std::ffi::OsStr]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.to_string_lossy()
+                .eq_ignore_ascii_case(&right.to_string_lossy())
+        })
+}
+
+fn relative_paths_equal(left: &Path, right: &Path) -> bool {
+    let left: Vec<_> = left.components().collect();
+    let right: Vec<_> = right.components().collect();
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| match (left, right) {
+                (Component::Normal(left), Component::Normal(right)) => left
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&right.to_string_lossy()),
+                _ => false,
+            })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

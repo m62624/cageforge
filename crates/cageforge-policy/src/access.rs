@@ -23,15 +23,15 @@ impl AccessMode {
         matches!(self, Self::Write)
     }
 
-    /// Returns the higher-precedence decision for two conflicting rules.
+    /// Returns the more restrictive capability for two conflicting grants.
     ///
-    /// The order is `Deny` over `Write` over `Read`, matching the conflict
-    /// precedence used by the policy model and the audited Codex behavior.
+    /// The order is `Deny` over `Read` over `Write`. Explicit profile
+    /// replacement is a separate operation owned by the config resolver.
     pub const fn most_restrictive(self, other: Self) -> Self {
         match (self, other) {
             (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
-            (Self::Write, _) | (_, Self::Write) => Self::Write,
-            (Self::Read, Self::Read) => Self::Read,
+            (Self::Read, _) | (_, Self::Read) => Self::Read,
+            (Self::Write, Self::Write) => Self::Write,
         }
     }
 

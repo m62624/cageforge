@@ -88,10 +88,13 @@ inherited variables. All forms accept explicit `with_var` and `without_var`
 overrides. Setting a variable to an empty value is different from removing it.
 Names reject empty strings, `=`, and NUL; values and filter patterns reject NUL.
 
-`with_include_pattern` and `with_exclude_pattern` accept portable `*` and `?`
-wildcards. The model stores the validated filters; the backend applies them to
-the environment it constructs. This keeps process-environment discovery out of
-the platform-independent crate.
+`with_filter` accepts an explicit `Include` or `Exclude` action and portable `*`
+and `?` wildcards. The convenience methods `with_include_pattern` and
+`with_exclude_pattern` remain available for readable Rust call sites. Matching
+is case-insensitive, and excludes have precedence when a variable matches both
+actions. The model stores the validated filters; the backend applies them to
+the environment it constructs. This keeps process-environment discovery out
+of the platform-independent crate.
 
 ## Standard streams and timeout
 

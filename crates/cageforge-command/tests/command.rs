@@ -5,8 +5,8 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use cageforge_command::{
-    CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentOverride,
-    EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
+    CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentFilterAction,
+    EnvironmentOverride, EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
 use pretty_assertions::assert_eq;
 
@@ -67,7 +67,7 @@ fn command_spec_rejects_invalid_programs_and_returns_parts() {
 
 #[test]
 fn environment_defaults_and_bases_are_explicit() {
-    assert_eq!(EnvironmentSpec::default().base(), EnvironmentBase::All);
+    assert_eq!(EnvironmentSpec::default().base(), EnvironmentBase::Core);
     assert!(EnvironmentSpec::default().overrides().is_empty());
     assert_eq!(EnvironmentSpec::empty().base(), EnvironmentBase::None);
     assert_eq!(
@@ -109,20 +109,37 @@ fn environment_overrides_are_sorted_and_distinguish_set_from_remove() {
 #[test]
 fn environment_patterns_are_validated_and_match_wildcards() {
     let environment = EnvironmentSpec::inherit_core()
-        .with_include_pattern("CARGO_*")
+        .with_filter("CARGO_*", EnvironmentFilterAction::Include)
         .expect("include pattern")
-        .with_exclude_pattern("*TOKEN*")
+        .with_filter("*TOKEN*", EnvironmentFilterAction::Exclude)
         .expect("exclude pattern")
-        .with_include_pattern("CARGO_*")
+        .with_filter("CARGO_*", EnvironmentFilterAction::Include)
         .expect("duplicate include pattern");
 
-    assert_eq!(environment.include_patterns().len(), 1);
-    assert_eq!(environment.exclude_patterns().len(), 1);
-    assert_eq!(environment.include_patterns()[0].as_str(), "CARGO_*");
-    assert!(environment.include_patterns()[0].matches("CARGO_HOME"));
-    assert!(!environment.include_patterns()[0].matches("HOME"));
-    assert!(environment.exclude_patterns()[0].matches("API_TOKEN"));
-    assert!(!environment.exclude_patterns()[0].matches("PATH"));
+    assert_eq!(environment.filters().len(), 2);
+    let include = EnvironmentPattern::new("CARGO_*").expect("include key");
+    let exclude = EnvironmentPattern::new("*TOKEN*").expect("exclude key");
+    assert_eq!(
+        environment.filters().get(&include),
+        Some(&EnvironmentFilterAction::Include)
+    );
+    assert_eq!(
+        environment.filters().get(&exclude),
+        Some(&EnvironmentFilterAction::Exclude)
+    );
+    assert!(include.matches("cargo_home"));
+    assert!(!include.matches("HOME"));
+    assert!(exclude.matches("API_TOKEN"));
+    assert!(!exclude.matches("PATH"));
+    assert_eq!(
+        environment.filter_action_for("cargo_token"),
+        Some(EnvironmentFilterAction::Exclude)
+    );
+    assert_eq!(
+        environment.filter_action_for("cargo_home"),
+        Some(EnvironmentFilterAction::Include)
+    );
+    assert_eq!(environment.filter_action_for("HOME"), None);
     let single_character = EnvironmentPattern::new("A?C").expect("single-character pattern");
     assert!(single_character.matches("ABC"));
     assert!(!single_character.matches("AC"));
