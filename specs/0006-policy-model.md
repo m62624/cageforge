@@ -1,4 +1,4 @@
-# Specification 0005: Cageforge Policy Model
+# Specification 0006: Cageforge Policy Model
 
 Status: accepted; portable implementation complete
 
@@ -136,7 +136,7 @@ dangerous request.
   profile resolution and effective capability composition remain separate.
 
 The comparison against the current Codex sandbox crates and the intentionally
-deferred semantics are recorded in `specs/0006-codex-policy-audit.md`.
+deferred semantics are recorded in `specs/0007-codex-policy-audit.md`.
 
 ## Testing policy
 

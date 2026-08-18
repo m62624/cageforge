@@ -1,4 +1,4 @@
-# Specification 0010: Shared Path and Network Target Semantics
+# Specification 0005: Shared Path and Network Target Semantics
 
 Status: accepted; portable implementation complete
 
@@ -68,5 +68,7 @@ Profile inheritance treats it as a scalar child override.
 
 Black-box tests cover component-aware containment, Windows case behavior,
 parent-traversal rejection, path deduplication, public/private/mixed/empty DNS
-results, exact literal opt-in, explicit local-network opt-in, composition
-narrowing, config mapping, and config inheritance.
+results, IPv4/IPv6 targets, exact literal opt-in, explicit local-network
+opt-in, composition narrowing, config mapping, and config inheritance.
+Bounded property tests exercise these combinations without performing DNS or
+network I/O, so CI remains deterministic and short.

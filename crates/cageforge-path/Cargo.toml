@@ -13,3 +13,6 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

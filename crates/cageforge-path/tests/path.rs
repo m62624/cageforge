@@ -1,5 +1,7 @@
 use cageforge_path::{contains_parent_traversal, is_within, paths_equal};
+use proptest::prelude::*;
 use std::path::Path;
+use std::path::PathBuf;
 
 #[test]
 fn containment_is_component_aware() {
@@ -30,6 +32,52 @@ fn complete_paths_compare_components() {
 fn parent_traversal_is_detected_without_filesystem_access() {
     assert!(contains_parent_traversal(Path::new("workspace/../outside")));
     assert!(!contains_parent_traversal(Path::new("workspace/src")));
+}
+
+fn absolute_root() -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(r"C:\workspace")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/workspace")
+    }
+}
+
+fn append_segments(mut path: PathBuf, segments: &[String]) -> PathBuf {
+    for segment in segments {
+        path.push(segment);
+    }
+    path
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    #[test]
+    fn generated_descendants_use_component_aware_native_containment(
+        root_segments in prop::collection::vec(prop::string::string_regex("[a-z]{1,6}").expect("segment regex"), 0..=4),
+        child_segments in prop::collection::vec(prop::string::string_regex("[a-z]{1,6}").expect("segment regex"), 0..=4),
+    ) {
+        let root = append_segments(absolute_root(), &root_segments);
+        let descendant = append_segments(root.clone(), &child_segments);
+        let dotted = append_segments(root.join("."), &child_segments);
+
+        prop_assert!(is_within(&descendant, &root));
+        prop_assert!(paths_equal(&descendant, &dotted));
+        prop_assert!(!is_within(&descendant, &PathBuf::from("/workspace-other")));
+        prop_assert!(!contains_parent_traversal(&descendant));
+    }
+
+    #[test]
+    fn generated_parent_components_are_always_rejected(
+        segments in prop::collection::vec(prop::string::string_regex("[a-z]{1,6}").expect("segment regex"), 0..=4),
+    ) {
+        let escaped = append_segments(absolute_root(), &segments).join("..").join("outside");
+
+        prop_assert!(contains_parent_traversal(&escaped));
+    }
 }
 
 #[cfg(windows)]

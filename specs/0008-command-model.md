@@ -1,4 +1,4 @@
-# Specification 0007: Portable Command Model
+# Specification 0008: Portable Command Model
 
 Status: accepted; portable implementation complete
 

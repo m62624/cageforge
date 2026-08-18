@@ -1,6 +1,7 @@
 use cageforge_config::Config;
-use cageforge_policy::{DomainAccess, NetworkDecision};
+use cageforge_policy::{DomainAccess, LocalNetworkAccess, NetworkDecision};
 use proptest::prelude::*;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 fn domain_kind() -> impl Strategy<Value = u8> {
@@ -14,6 +15,30 @@ fn domain_label() -> impl Strategy<Value = String> {
 fn domain_base() -> impl Strategy<Value = String> {
     prop::collection::vec(domain_label(), 1..=2)
         .prop_map(|labels| format!("{}.example.test", labels.join(".")))
+}
+
+fn local_network_access() -> impl Strategy<Value = &'static str> {
+    prop_oneof![Just("deny"), Just("allow")]
+}
+
+fn public_ip() -> impl Strategy<Value = IpAddr> {
+    prop::sample::select(vec![
+        IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+        IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        IpAddr::V6(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888)),
+    ])
+}
+
+fn non_public_ip() -> impl Strategy<Value = IpAddr> {
+    prop::sample::select(vec![
+        IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        IpAddr::V4(Ipv4Addr::new(169, 254, 0, 1)),
+        IpAddr::V4(Ipv4Addr::new(192, 168, 0, 1)),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1)),
+        IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)),
+    ])
 }
 
 fn domain_case(kind: u8, base: &str) -> (String, String, String) {
@@ -79,6 +104,20 @@ domains = [
   {{ pattern = "{pattern}", access = "allow" }},
   {{ pattern = "blocked.example.com", access = "deny" }},
 ]
+"#
+    )
+}
+
+fn render_resolved_domain_config(local_access: &str) -> String {
+    format!(
+        r#"
+default_profile = "network"
+
+[profiles.network.network]
+mode = "enabled"
+domain_mode = "restricted"
+local_network_access = "{local_access}"
+domains = [{{ pattern = "service.example", access = "allow" }}]
 "#
     )
 }
@@ -168,6 +207,48 @@ proptest! {
         prop_assert_eq!(
             network.decision_for_unix_socket(&unknown).unwrap(),
             expected_unknown
+        );
+    }
+
+    #[test]
+    fn resolved_network_targets_survive_toml_mapping(
+        local_access in local_network_access(),
+        public in public_ip(),
+        local in non_public_ip(),
+    ) {
+        let resolved = Config::from_toml(&render_resolved_domain_config(local_access))
+            .expect("generated resolved network config should parse")
+            .resolve_default()
+            .expect("generated resolved network config should resolve");
+        let network = resolved.policy().network();
+        let expected_access = if local_access == "allow" {
+            LocalNetworkAccess::Allow
+        } else {
+            LocalNetworkAccess::Deny
+        };
+
+        prop_assert_eq!(network.local_network_access(), expected_access);
+        prop_assert_eq!(
+            network
+                .decision_for_domain_with_resolved_ips("service.example", &[public])
+                .unwrap(),
+            NetworkDecision::Allow,
+        );
+        prop_assert_eq!(
+            network
+                .decision_for_domain_with_resolved_ips("service.example", &[local])
+                .unwrap(),
+            if local_access == "allow" {
+                NetworkDecision::Allow
+            } else {
+                NetworkDecision::Deny
+            },
+        );
+        prop_assert_eq!(
+            network
+                .decision_for_domain_with_resolved_ips("service.example", &[])
+                .unwrap(),
+            NetworkDecision::Deny,
         );
     }
 }

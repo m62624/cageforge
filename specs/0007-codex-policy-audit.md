@@ -1,4 +1,4 @@
-# Specification 0006: Portable Sandbox Policy Boundary
+# Specification 0007: Portable Sandbox Policy Boundary
 
 Status: accepted
 

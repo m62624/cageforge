@@ -53,10 +53,22 @@ These rules are mandatory:
     Keep representations private, validate NUL/parent-traversal and mode
     invariants before backend handoff, and cover native POSIX and Windows path
     forms through black-box tests before widening the API.
+    Use `cageforge-path` for shared lexical path equality, containment, and
+    parent-traversal decisions; platform-specific path comparison code belongs
+    there, while other crates may keep only platform-specific test fixtures.
 11. Keep the Codex baseline in `upstream-review.toml` frozen until a deliberate
     review approves an advance. Never pull or fetch Codex automatically; the
     upstream-review tool is read-only and only compares an externally updated
     checkout.
+
+## Specification ordering
+
+Keep specifications ordered from broad contracts to narrow implementation
+contracts. The current order is project charter, provenance, cross-crate API,
+upstream tooling, shared semantics, then crate-specific and boundary-specific
+contracts in dependency order. When adding or renumbering a specification,
+update its filename, title, and every repository reference, then verify that
+no stale links or mentions remain before committing.
 
 When in doubt, stop and update the specification or provenance records before
 changing source code.

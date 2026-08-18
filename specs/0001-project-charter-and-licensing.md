@@ -163,7 +163,7 @@ cageforge-core        ergonomic facade and backend selection
 `cageforge-policy` is the first implementation crate. It is deliberately
 smaller than the future facade and contains only platform-independent policy
 semantics; it does not parse TOML or launch processes. The detailed first
-policy model is specified in `specs/0005-policy-model.md`.
+policy model is specified in `specs/0006-policy-model.md`.
 
 `cageforge-core` must not depend on Codex crates. The core API must not expose
 Codex `PermissionProfile`, Codex network-proxy types, Codex PTY types, Codex

@@ -1,4 +1,4 @@
-# Specification 0008: Cageforge Config Model
+# Specification 0009: Cageforge Config Model
 
 Status: accepted; portable implementation complete
 

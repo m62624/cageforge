@@ -1,4 +1,4 @@
-# Specification 0009: Effective Policy Composition
+# Specification 0010: Effective Policy Composition
 
 Status: accepted; `cageforge-policy-compose` implemented
 
