@@ -5,7 +5,7 @@ use crate::PathSelector;
 use crate::PolicyError;
 use cageforge_path::is_within;
 use globset::GlobBuilder;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -82,6 +82,58 @@ impl NetworkDecision {
     /// Returns whether another trusted component owns enforcement.
     pub const fn is_externally_enforced(self) -> bool {
         matches!(self, Self::ExternallyEnforced)
+    }
+}
+
+/// A normalized hostname or literal together with the exact addresses a
+/// backend resolved for one connection attempt.
+///
+/// The address list is a snapshot. A backend must connect to one of these
+/// exact `SocketAddr` values and must call
+/// [`NetworkPolicy::decision_for_connected_address`] immediately before the
+/// connection is established. This prevents a second DNS lookup or a changed
+/// address list from bypassing the policy decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedNetworkTarget {
+    domain: String,
+    addresses: Vec<SocketAddr>,
+}
+
+impl ResolvedNetworkTarget {
+    /// Creates a target from a host and the addresses resolved for it.
+    ///
+    /// An empty address list represents failed or timed-out resolution and is
+    /// retained so policy evaluation can fail closed with `Deny`.
+    pub fn new(
+        domain: impl Into<String>,
+        addresses: impl IntoIterator<Item = SocketAddr>,
+    ) -> Result<Self, PolicyError> {
+        let domain = normalize_domain_pattern(&domain.into())?;
+        let mut unique_addresses = Vec::new();
+        for address in addresses {
+            if !unique_addresses.contains(&address) {
+                unique_addresses.push(address);
+            }
+        }
+        Ok(Self {
+            domain,
+            addresses: unique_addresses,
+        })
+    }
+
+    /// Returns the normalized host used for policy matching.
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+
+    /// Returns the exact addresses captured for this resolution attempt.
+    pub fn addresses(&self) -> &[SocketAddr] {
+        &self.addresses
+    }
+
+    /// Returns whether an actual connection address belongs to this snapshot.
+    pub fn contains_address(&self, address: SocketAddr) -> bool {
+        self.addresses.contains(&address)
     }
 }
 
@@ -328,6 +380,40 @@ impl NetworkPolicy {
         }
     }
 
+    /// Evaluates a resolved target without performing DNS or network I/O.
+    ///
+    /// This is the safe policy-level entry point for a backend that has
+    /// already resolved a host. It checks every captured address and fails
+    /// closed for an empty address list.
+    pub fn decision_for_resolved_target(
+        &self,
+        target: &ResolvedNetworkTarget,
+    ) -> Result<NetworkDecision, PolicyError> {
+        let resolved_ips: Vec<_> = target.addresses().iter().map(SocketAddr::ip).collect();
+        self.decision_for_domain_with_resolved_ips(target.domain(), &resolved_ips)
+    }
+
+    /// Evaluates the exact address a backend is about to connect to.
+    ///
+    /// A locally allowed target is denied when the actual address was not in
+    /// the original resolution snapshot. External ownership remains external
+    /// because the other enforcement boundary owns the connection check.
+    pub fn decision_for_connected_address(
+        &self,
+        target: &ResolvedNetworkTarget,
+        connected: SocketAddr,
+    ) -> Result<NetworkDecision, PolicyError> {
+        let decision = self.decision_for_resolved_target(target)?;
+        if !decision.is_allowed() {
+            return Ok(decision);
+        }
+        Ok(if target.contains_address(connected) {
+            NetworkDecision::Allow
+        } else {
+            NetworkDecision::Deny
+        })
+    }
+
     /// Evaluates a domain together with addresses resolved by a future
     /// network backend.
     ///
@@ -336,7 +422,10 @@ impl NetworkPolicy {
     /// resolution fails or times out. Hostnames resolving to any non-public
     /// address are denied by default to prevent DNS rebinding from bypassing
     /// the domain policy. A literal IP may be allowed by an exact literal
-    /// domain rule or by [`LocalNetworkAccess::Allow`].
+    /// domain rule or by [`LocalNetworkAccess::Allow`]. Prefer
+    /// [`Self::decision_for_resolved_target`] in new backend code so the
+    /// checked addresses remain attached to the host through the connection
+    /// step.
     pub fn decision_for_domain_with_resolved_ips(
         &self,
         domain: &str,

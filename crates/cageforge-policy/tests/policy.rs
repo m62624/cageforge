@@ -18,10 +18,12 @@ use cageforge_policy::PathPattern;
 use cageforge_policy::PathResolutionContext;
 use cageforge_policy::PathSelector;
 use cageforge_policy::PolicyError;
+use cageforge_policy::ResolvedNetworkTarget;
 use cageforge_policy::SandboxPolicy;
 use cageforge_policy::UnixSocketMode;
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeSet, HashSet};
+use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::path::Path;
 
@@ -42,6 +44,37 @@ fn native_absolute_paths_are_accepted_and_relative_paths_are_rejected() {
         PathSelector::absolute("workspace"),
         Err(PolicyError::ExpectedAbsolute { .. })
     ));
+}
+
+#[test]
+fn resolved_network_target_rejects_address_changes() {
+    let public = IpAddr::V4("8.8.8.8".parse().expect("public address"));
+    let checked = SocketAddr::new(public, 443);
+    let changed = SocketAddr::new("1.1.1.1".parse().expect("public address"), 443);
+    let target = ResolvedNetworkTarget::new("service.example", [checked])
+        .expect("valid resolved network target");
+    let policy = NetworkPolicy::enabled()
+        .with_domain("service.example", DomainAccess::Allow)
+        .expect("valid domain rule");
+
+    assert_eq!(
+        policy
+            .decision_for_resolved_target(&target)
+            .expect("resolved target decision"),
+        NetworkDecision::Allow
+    );
+    assert_eq!(
+        policy
+            .decision_for_connected_address(&target, checked)
+            .expect("checked connection decision"),
+        NetworkDecision::Allow
+    );
+    assert_eq!(
+        policy
+            .decision_for_connected_address(&target, changed)
+            .expect("changed connection decision"),
+        NetworkDecision::Deny
+    );
 }
 
 #[test]

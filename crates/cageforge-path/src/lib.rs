@@ -44,6 +44,28 @@ pub fn is_within(path: &Path, root: &Path) -> bool {
     }
 }
 
+/// Returns whether `path` contains `needle` as a contiguous component path.
+///
+/// This is useful for relative metadata protections such as `.git` or
+/// `.cache`. The comparison uses the same native component semantics as
+/// [`paths_equal`] and [`is_within`]. It is lexical only and does not inspect
+/// the filesystem.
+pub fn contains_component_path(path: &Path, needle: &Path) -> bool {
+    let path_components: Vec<_> = path.components().collect();
+    let needle_components: Vec<_> = needle.components().collect();
+    if needle_components.is_empty() || needle_components.len() > path_components.len() {
+        return false;
+    }
+    path_components
+        .windows(needle_components.len())
+        .any(|window| {
+            window
+                .iter()
+                .zip(&needle_components)
+                .all(|(left, right)| components_equal(*left, *right))
+        })
+}
+
 /// Compares two path components with the target platform's path case rules.
 pub fn components_equal(left: Component<'_>, right: Component<'_>) -> bool {
     #[cfg(windows)]

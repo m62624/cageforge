@@ -19,6 +19,7 @@ upstream_paths = [
     "codex-rs/sandboxing/src/policy_transforms.rs",
     "codex-rs/network-proxy/src/policy.rs",
     "codex-rs/network-proxy/src/runtime.rs",
+    "codex-rs/network-proxy/src/connect_policy.rs",
 ]
 local_paths = ["crates/cageforge-policy/"]
 

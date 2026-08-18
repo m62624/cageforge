@@ -16,6 +16,8 @@ The policy boundary is compared with the Codex commit recorded in
 - `codex-rs/network-proxy/src/policy.rs` for host and domain normalization;
 - `codex-rs/network-proxy/src/runtime.rs` for resolved-address loopback,
   private-network, and DNS-rebinding protection.
+- `codex-rs/network-proxy/src/connect_policy.rs` for checking the actual
+  `SocketAddr` at the connection boundary.
 
 This is a design boundary, not a source import. No Codex implementation code
 is included in Cageforge by this specification.
@@ -61,7 +63,8 @@ preserves `Allow`, `Deny`, and `ExternallyEnforced` for domain and socket
 queries; the boolean helpers intentionally expose only local `Allow`.
 `LocalNetworkAccess` and the resolved-address query provide the portable
 decision boundary for loopback/private/DNS-rebinding protection without adding
-DNS or proxy dependencies; a native backend supplies the resolver results.
+DNS or proxy dependencies; a native backend supplies the resolver results and
+must use `ResolvedNetworkTarget` to bind them to the actual connection.
 Portable glob rules are deny-only; a read/write glob is rejected as
 unsupported rather than silently delegated. Filesystem and domain matching use
 the same `globset`-compatible character classes, ranges, and negative classes

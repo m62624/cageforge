@@ -45,12 +45,14 @@ declared spelling at the API boundary.
 
 Domain rules alone cannot prevent a hostname from resolving to loopback,
 private, link-local, multicast, or other non-public addresses. The portable
-network model therefore exposes `LocalNetworkAccess` and
-`decision_for_domain_with_resolved_ips`.
+network model therefore exposes `LocalNetworkAccess` and the resolved-target
+API (`ResolvedNetworkTarget` plus `decision_for_resolved_target`). The older
+slice-based query remains available for inspection, but it does not bind the
+result to a future socket connection.
 
 The policy crate does not perform DNS or network I/O. A consuming backend must
-resolve the hostname and pass every result to the method. It passes an empty
-slice when resolution fails or times out. With the default
+resolve the hostname and pass every result to the target. It passes an empty
+address snapshot when resolution fails or times out. With the default
 `LocalNetworkAccess::Deny`:
 
 - a hostname resolving to any non-public address is denied, even when its
@@ -90,3 +92,17 @@ opt-in, explicit local-network opt-in, composition narrowing, config mapping,
 and config inheritance.
 Bounded property tests exercise these combinations without performing DNS or
 network I/O, so CI remains deterministic and short.
+
+## Responsibility boundaries
+
+`globset` belongs to `cageforge-policy`, not to `cageforge-path`. A glob is
+interpreted there as a filesystem or domain policy rule with access modes,
+deny precedence, and portability restrictions. `cageforge-path` owns only
+native path identity and containment, so it remains reusable by projects that
+do not use policy globs.
+
+`cageforge-policy` exposes `ResolvedNetworkTarget` for a normalized host and
+one exact resolution snapshot. A native backend must evaluate that target,
+connect only to one of its `SocketAddr` values, and call
+`decision_for_connected_address` immediately before connecting. A second DNS
+lookup or an address outside the snapshot is denied.

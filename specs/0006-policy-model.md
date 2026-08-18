@@ -169,3 +169,19 @@ The workspace `tarpaulin.toml` sets a hard 90% line-coverage floor. Native
 platform backends will later be excluded from the aggregate Tarpaulin metric
 because their enforcement tests must run on their respective operating systems;
 they remain required in the native CI matrix.
+
+## Native enforcement boundary
+
+Portable filesystem evaluation is lexical. It does not resolve symlinks or
+Windows junction/reparse points and cannot close mount or TOCTOU races. Native
+backends must apply OS-level enforcement and safe file-opening rules instead of
+treating `access_for_path` as sufficient authorization.
+
+Network host evaluation has the same boundary. `decision_for_domain` is a
+declarative policy query, not a connection authorization. Backends use
+`ResolvedNetworkTarget`, check all resolution results, and verify the exact
+connected `SocketAddr` immediately before connecting.
+
+Restricted policies protect `.git` below writable scopes by default. Additional
+protected paths are generic. `dangerously_allow_git_write` is a trusted opt-in
+that a stricter ceiling or backend may reject.

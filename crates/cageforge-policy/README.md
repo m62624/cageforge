@@ -59,6 +59,7 @@ an unchecked path selector by writing a public enum payload.
 | `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults; `enabled()` keeps local destinations denied, while `unrestricted()` removes that local restriction explicitly. |
 | `LocalNetworkAccess` | Controls whether resolved loopback/private/link-local addresses are allowed. |
 | `NetworkDecision` | Distinguishes local allow/deny from externally owned network enforcement. |
+| `ResolvedNetworkTarget` | Keeps one normalized host and its exact resolved socket addresses together for a safe connection check. |
 | `DomainRule` and `UnixSocketRule` | Adds validated network destinations and decisions. |
 | `PolicyError` | Reports invalid paths, patterns, domains, contexts, and policy combinations. |
 
@@ -160,8 +161,14 @@ support `*`, `?`, character classes such as `[a-c]`, negative classes such as
 wildcard characters never change host normalization or the explicit apex
 semantics of the prefixed forms.
 
-Use `decision_for_domain` and `decision_for_unix_socket` when a backend needs
-the complete result. They return `NetworkDecision::Allow`,
+Use `decision_for_domain` only for declarative host-policy inspection; it is not
+an authorization to connect because it does not contain a resolved address.
+For a connection, construct `ResolvedNetworkTarget`, call
+`decision_for_resolved_target`, and immediately call
+`decision_for_connected_address` with the exact `SocketAddr` that the backend
+will connect to. A changed or freshly resolved address is denied. Use
+`decision_for_unix_socket` when a backend needs the complete result. These
+methods return `NetworkDecision::Allow`,
 `NetworkDecision::Deny`, or `NetworkDecision::ExternallyEnforced`. The
 `allows_domain` and `allows_unix_socket` helpers remain as local boolean
 queries and return `true` only for `Allow`; they intentionally do not collapse
@@ -178,7 +185,9 @@ backend passes every resolved address to
 timed-out resolution. Any non-public result for a hostname is denied. An exact literal IP
 allow rule, an exact `localhost` allow rule, or the explicit
 `LocalNetworkAccess::Allow` builder is required to opt into local destinations.
-The policy crate performs no DNS or network I/O.
+The policy crate performs no DNS or network I/O. It also cannot prove that a
+caller actually connected to the checked address; the native backend must use
+the target snapshot instead of resolving the hostname again.
 
 ## Using it with other crates
 

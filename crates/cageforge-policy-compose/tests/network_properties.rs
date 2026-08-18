@@ -3,11 +3,12 @@
 
 use cageforge_command::EnvironmentSpec;
 use cageforge_policy::{
-    DomainAccess, LocalNetworkAccess, NetworkDecision, NetworkPolicy, SandboxPolicy,
+    DomainAccess, LocalNetworkAccess, NetworkDecision, NetworkPolicy, ResolvedNetworkTarget,
+    SandboxPolicy,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use proptest::prelude::*;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 fn public_ip() -> impl Strategy<Value = IpAddr> {
     prop::sample::select(vec![
@@ -94,6 +95,25 @@ proptest! {
                 .network()
                 .decision_for_domain_with_resolved_ips("service.example", &[])
                 .expect("failed resolution"),
+            NetworkDecision::Deny,
+        );
+
+        let checked = SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 443);
+        let changed = SocketAddr::new(Ipv4Addr::new(1, 1, 1, 1).into(), 443);
+        let target = ResolvedNetworkTarget::new("service.example", [checked])
+            .expect("valid resolved target");
+        prop_assert_eq!(
+            effective
+                .network()
+                .decision_for_connected_address(&target, checked)
+                .expect("checked address"),
+            NetworkDecision::Allow,
+        );
+        prop_assert_eq!(
+            effective
+                .network()
+                .decision_for_connected_address(&target, changed)
+                .expect("changed address"),
             NetworkDecision::Deny,
         );
     }

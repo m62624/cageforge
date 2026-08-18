@@ -7,6 +7,8 @@ use std::sync::Arc;
 ///
 /// Cloning an owner preserves its identity. Independent owners do not compare
 /// equal, so unrelated external boundaries cannot be composed accidentally.
+/// This identity is a trusted caller declaration only; it does not prove that
+/// an external sandbox exists or that it enforces the declared boundary.
 /// The `Arc<()>` payload stores no platform or harness data: the allocation's
 /// identity is the proof, and `Arc::ptr_eq` is the comparison. This keeps the
 /// type reusable wherever one trusted enforcement boundary owns both sides.

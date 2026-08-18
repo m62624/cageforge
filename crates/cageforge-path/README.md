@@ -33,6 +33,8 @@ I/O, symlink resolution, canonicalization, and platform capability checks.
 
 - `is_within(path, root)` checks component-aware containment and does not treat
   `/work-other` as a child of `/work`.
+- `contains_component_path(path, needle)` finds a complete relative component
+  path such as `.git` without matching a partial component such as `.github`.
 - `paths_equal(left, right)` compares complete native path components.
 - `strings_equal(left, right)` and `case_fold(value)` expose the same native
   comparison rule for path-derived glob matching.

@@ -7,7 +7,7 @@ use crate::PathPattern;
 use crate::PathResolutionContext;
 use crate::PathSelector;
 use crate::PolicyError;
-use cageforge_path::{contains_parent_traversal, is_within, paths_equal, strings_equal};
+use cageforge_path::{contains_component_path, contains_parent_traversal, is_within, paths_equal};
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
@@ -397,6 +397,10 @@ impl FilesystemPolicy {
     }
 
     /// Resolves access for an absolute path using recursive and most-specific matching.
+    ///
+    /// This is a lexical policy decision, not native filesystem enforcement.
+    /// A backend must additionally protect symlink, junction/reparse-point,
+    /// mount, and TOCTOU boundaries before opening or mutating the path.
     pub fn access_for_path(
         &self,
         path: &Path,
@@ -449,39 +453,9 @@ impl FilesystemPolicy {
     }
 
     fn is_protected_path(&self, path: &Path) -> bool {
-        let components: Vec<_> = path
-            .components()
-            .filter_map(|component| match component {
-                Component::Normal(value) => Some(value),
-                Component::CurDir
-                | Component::ParentDir
-                | Component::RootDir
-                | Component::Prefix(_) => None,
-            })
-            .collect();
-        self.protected_relative_paths.iter().any(|protected| {
-            let protected_components: Vec<_> = protected
-                .components()
-                .filter_map(|component| match component {
-                    Component::Normal(value) => Some(value),
-                    Component::CurDir
-                    | Component::ParentDir
-                    | Component::RootDir
-                    | Component::Prefix(_) => None,
-                })
-                .collect();
-            components
-                .windows(protected_components.len())
-                .any(|window| {
-                    window.len() == protected_components.len()
-                        && window
-                            .iter()
-                            .zip(&protected_components)
-                            .all(|(left, right)| {
-                                strings_equal(&left.to_string_lossy(), &right.to_string_lossy())
-                            })
-                })
-        })
+        self.protected_relative_paths
+            .iter()
+            .any(|protected| contains_component_path(path, protected))
     }
 }
 

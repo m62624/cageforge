@@ -68,9 +68,10 @@ After composition, a backend API can inspect the effective constraints, check
 native capabilities, and lower them for Linux, macOS, or Windows execution.
 
 `External` is accepted only when both policy sides use the same opaque
-`ExternalOwner` proof. The proof is not a harness, OS, process, or network
-backend identifier; it only prevents two unrelated external enforcement
-boundaries from being treated as one:
+`ExternalOwner` proof. The proof is not evidence that an external sandbox
+exists, is trusted, or is enforcing anything; it is only a caller-supplied
+identity token that prevents two unrelated declarations from being treated as
+one boundary:
 
 ```rust
 use cageforge_policy_compose::ExternalOwner;
@@ -94,9 +95,11 @@ assert_ne!(ExternalOwner::new(), owner);
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
   that are constrained by both policies and retain both inputs for backend
   lowering. `glob_scan_max_depth` returns the widest depth required by all
-  effective deny-glob rules. `EffectiveNetworkPolicy::decision_for_domain_with_resolved_ips`
-  applies the same DNS-rebinding-safe narrowing to every resolved address
-  supplied by a backend; it performs no DNS lookup itself.
+  effective deny-glob rules. `EffectiveNetworkPolicy::decision_for_resolved_target`
+  and `decision_for_connected_address` apply the same DNS-rebinding-safe
+  narrowing to one resolved target and the exact socket address supplied by a
+  backend; they perform no DNS lookup themselves. The backend must not resolve
+  the host again between these calls.
 - `EffectiveEnvironment` exposes the least-permissive base and applies both
   environment transformations only to an `EnvironmentInput` whose selected
   base is no broader than the effective base.

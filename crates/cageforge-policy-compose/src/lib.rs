@@ -8,7 +8,8 @@
 //! a backend, inspect an operating system, start a process, or decide whether
 //! a native backend supports a particular rule. The result keeps both policy
 //! sides available so a later backend can compile the same constraint without
-//! accidentally widening it.
+//! accidentally widening it. Network backends should use the resolved-target
+//! methods and verify the exact address immediately before connecting.
 
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]

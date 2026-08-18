@@ -1,4 +1,4 @@
-use cageforge_path::{contains_parent_traversal, is_within, paths_equal};
+use cageforge_path::{contains_component_path, contains_parent_traversal, is_within, paths_equal};
 use proptest::prelude::*;
 use std::path::Path;
 use std::path::PathBuf;
@@ -25,6 +25,40 @@ fn complete_paths_compare_components() {
     assert!(!paths_equal(
         Path::new("/workspace/src"),
         Path::new("/workspace/src2")
+    ));
+}
+
+#[test]
+fn component_path_matching_does_not_match_partial_components() {
+    assert!(contains_component_path(
+        Path::new("/workspace/project/.git/config"),
+        Path::new(".git"),
+    ));
+    assert!(contains_component_path(
+        Path::new("/workspace/project/.cache/tool/state"),
+        Path::new(".cache/tool"),
+    ));
+    assert!(!contains_component_path(
+        Path::new("/workspace/project/.github/config"),
+        Path::new(".git"),
+    ));
+}
+
+#[cfg(windows)]
+#[test]
+fn protected_component_matching_is_case_insensitive_on_windows() {
+    assert!(contains_component_path(
+        Path::new(r"C:\workspace\.GIT\config"),
+        Path::new(".git"),
+    ));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn protected_component_matching_is_case_sensitive_on_posix() {
+    assert!(!contains_component_path(
+        Path::new("/workspace/.GIT/config"),
+        Path::new(".git"),
     ));
 }
 
@@ -68,6 +102,17 @@ proptest! {
         prop_assert!(paths_equal(&descendant, &dotted));
         prop_assert!(!is_within(&descendant, &PathBuf::from("/workspace-other")));
         prop_assert!(!contains_parent_traversal(&descendant));
+    }
+
+    #[test]
+    fn generated_metadata_paths_match_only_complete_components(
+        prefix in prop::collection::vec(prop::string::string_regex("[a-z]{1,6}").expect("segment regex"), 0..=4),
+    ) {
+        let path = append_segments(absolute_root(), &prefix).join(".git").join("config");
+        let partial = append_segments(absolute_root(), &prefix).join(".github").join("config");
+
+        prop_assert!(contains_component_path(&path, Path::new(".git")));
+        prop_assert!(!contains_component_path(&partial, Path::new(".git")));
     }
 
     #[test]

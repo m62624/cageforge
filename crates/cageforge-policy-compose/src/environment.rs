@@ -82,6 +82,10 @@ impl EnvironmentInput {
     }
 
     /// Creates an input containing the backend's selected core variables.
+    ///
+    /// This constructor does not verify the contents. The caller must build
+    /// the map from the platform-specific core allowlist, not from the full
+    /// parent environment, before handing it to composition.
     pub fn core<I>(variables: I) -> Self
     where
         I: IntoIterator<Item = (OsString, OsString)>,

@@ -34,6 +34,7 @@ pub use network::LocalNetworkAccess;
 pub use network::NetworkDecision;
 pub use network::NetworkMode;
 pub use network::NetworkPolicy;
+pub use network::ResolvedNetworkTarget;
 pub use network::UnixSocketMode;
 pub use network::UnixSocketRule;
 pub use path::PathPattern;

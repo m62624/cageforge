@@ -25,6 +25,12 @@ The workspace declares these local crates in `[workspace.dependencies]`. The
 config crate consumes their public APIs and never reaches into their private
 modules. It produces requested values; it does not apply a `PolicyCeiling`.
 
+Configuration is trusted application input. Resolution memoizes completed
+profiles and tracks the active inheritance stack by name, so shared ancestors
+are not recomputed for every branch of a large legal inheritance graph. No
+arbitrary size or depth limit is imposed by this crate; callers handling an
+untrusted wire format must apply an input-size boundary before parsing.
+
 ## TOML shape
 
 ```toml

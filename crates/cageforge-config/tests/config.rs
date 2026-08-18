@@ -934,6 +934,23 @@ inherits = ["left", "right"]
 }
 
 #[test]
+fn resolves_a_long_inheritance_chain_without_recursive_stack_growth() {
+    const DEPTH: usize = 2_048;
+    let mut source = format!("default_profile = \"p{}\"\n\n", DEPTH - 1);
+    for index in 0..DEPTH {
+        source.push_str(&format!("[profiles.p{index}]\n"));
+        if index > 0 {
+            source.push_str(&format!("inherits = [\"p{}\"]\n", index - 1));
+        }
+    }
+
+    let config = Config::from_toml(&source).expect("long trusted configuration parses");
+    config
+        .resolve_default()
+        .expect("long inheritance chain resolves iteratively");
+}
+
+#[test]
 fn rejects_invalid_policy_values_and_unused_fields() {
     let cases = [
         (

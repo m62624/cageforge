@@ -1,11 +1,12 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use cageforge_policy::{
     AccessMode, FilesystemDecision, FilesystemMode, NetworkDecision, NetworkMode, PathSelector,
+    ResolvedNetworkTarget,
 };
 
 use crate::context::EffectivePathContext;
@@ -162,6 +163,52 @@ impl EffectiveNetworkPolicy {
         let ceiling = self
             .ceiling()
             .decision_for_domain_with_resolved_ips(domain, resolved_ips)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        Ok(combine_network_decisions(requested, ceiling))
+    }
+
+    /// Evaluates one resolved network target against both component policies.
+    pub fn decision_for_resolved_target(
+        &self,
+        target: &ResolvedNetworkTarget,
+    ) -> Result<NetworkDecision, CompositionError> {
+        let requested = self
+            .requested()
+            .decision_for_resolved_target(target)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        let ceiling = self
+            .ceiling()
+            .decision_for_resolved_target(target)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        Ok(combine_network_decisions(requested, ceiling))
+    }
+
+    /// Evaluates the exact address a backend is about to connect to against
+    /// both component policies.
+    pub fn decision_for_connected_address(
+        &self,
+        target: &ResolvedNetworkTarget,
+        connected: SocketAddr,
+    ) -> Result<NetworkDecision, CompositionError> {
+        let requested = self
+            .requested()
+            .decision_for_connected_address(target, connected)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        let ceiling = self
+            .ceiling()
+            .decision_for_connected_address(target, connected)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
                 source,

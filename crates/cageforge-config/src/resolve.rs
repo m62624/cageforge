@@ -11,7 +11,7 @@ use crate::model::{
 use cageforge_command::CommandRequest;
 use cageforge_path::{contains_parent_traversal, paths_equal, strings_equal};
 use cageforge_policy::{DomainAccess, DomainRule, SandboxPolicy};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// A parsed Cageforge TOML document.
@@ -62,8 +62,8 @@ impl Config {
 
     /// Resolves one named profile through its inheritance graph.
     pub fn resolve(&self, name: &str) -> Result<ResolvedProfile, ConfigError> {
-        let mut stack = Vec::new();
-        let merged = self.resolve_raw(name, &mut stack)?;
+        let mut cache = HashMap::new();
+        let merged = self.resolve_raw(name, &mut cache)?;
         let policy =
             build::build_policy(merged.filesystem.as_ref(), merged.network.as_ref(), name)?;
         let command = build::build_command(merged.command.as_ref(), name)?;
@@ -91,29 +91,72 @@ impl Config {
     fn resolve_raw(
         &self,
         name: &str,
-        stack: &mut Vec<String>,
+        cache: &mut HashMap<String, MergedProfile>,
     ) -> Result<MergedProfile, ConfigError> {
-        if let Some(start) = stack.iter().position(|profile| profile == name) {
-            let mut chain = stack[start..].to_vec();
-            chain.push(name.to_owned());
-            return Err(ConfigError::ProfileCycle { chain });
+        if let Some(merged) = cache.get(name) {
+            return Ok(merged.clone());
         }
-        let profile = self
-            .raw
-            .profiles
-            .get(name)
-            .ok_or_else(|| ConfigError::UnknownProfile {
+        if !self.raw.profiles.contains_key(name) {
+            return Err(ConfigError::UnknownProfile {
                 name: name.to_owned(),
-            })?;
-        stack.push(name.to_owned());
-        let mut merged = MergedProfile::default();
-        for parent in &profile.inherits {
-            let parent = self.resolve_raw(parent, stack)?;
-            merged = merge_profiles(merged, parent);
+            });
         }
-        merged = apply_profile(merged, profile);
-        stack.pop();
-        Ok(merged)
+
+        let mut frames = vec![ResolveFrame::new(name.to_owned())];
+        let mut active = HashMap::new();
+        let mut active_names = Vec::new();
+        active.insert(name.to_owned(), 0);
+        active_names.push(name.to_owned());
+
+        loop {
+            let frame_index = frames.len() - 1;
+            let frame_name = frames[frame_index].name.clone();
+            let profile =
+                self.raw
+                    .profiles
+                    .get(&frame_name)
+                    .ok_or_else(|| ConfigError::UnknownProfile {
+                        name: frame_name.clone(),
+                    })?;
+
+            if let Some(parent_name) = profile
+                .inherits
+                .get(frames[frame_index].next_parent)
+                .cloned()
+            {
+                frames[frame_index].next_parent += 1;
+                if let Some(parent) = cache.get(&parent_name).cloned() {
+                    let merged = std::mem::take(&mut frames[frame_index].merged);
+                    frames[frame_index].merged = merge_profiles(merged, parent);
+                    continue;
+                }
+                if let Some(start) = active.get(&parent_name) {
+                    let mut chain = active_names[*start..].to_vec();
+                    chain.push(parent_name);
+                    return Err(ConfigError::ProfileCycle { chain });
+                }
+                if !self.raw.profiles.contains_key(&parent_name) {
+                    return Err(ConfigError::UnknownProfile { name: parent_name });
+                }
+                active.insert(parent_name.clone(), active_names.len());
+                active_names.push(parent_name.clone());
+                frames.push(ResolveFrame::new(parent_name));
+                continue;
+            }
+
+            let frame = frames.pop().expect("resolution frame exists");
+            let merged = apply_profile(frame.merged, profile);
+            active.remove(&frame.name);
+            active_names.pop();
+            cache.insert(frame.name, merged.clone());
+
+            if let Some(parent) = frames.last_mut() {
+                let parent_merged = std::mem::take(&mut parent.merged);
+                parent.merged = merge_profiles(parent_merged, merged);
+            } else {
+                return Ok(merged);
+            }
+        }
     }
 }
 
@@ -150,6 +193,22 @@ struct MergedProfile {
     filesystem: Option<RawFilesystem>,
     network: Option<RawNetwork>,
     command: Option<RawCommand>,
+}
+
+struct ResolveFrame {
+    name: String,
+    next_parent: usize,
+    merged: MergedProfile,
+}
+
+impl ResolveFrame {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            next_parent: 0,
+            merged: MergedProfile::default(),
+        }
+    }
 }
 
 fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {

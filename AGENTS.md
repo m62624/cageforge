@@ -56,10 +56,31 @@ These rules are mandatory:
     Use `cageforge-path` for shared lexical path equality, containment, and
     parent-traversal decisions; platform-specific path comparison code belongs
     there, while other crates may keep only platform-specific test fixtures.
-11. Keep the Codex baseline in `upstream-review.toml` frozen until a deliberate
+    Path-pattern compilation belongs to `cageforge-policy`: `cageforge-path`
+    must remain independent of policy, glob access modes, domain rules, and
+    backend semantics. A dependency such as `globset` belongs in the crate that
+    interprets the pattern as a policy rule, not automatically in the shared
+    path crate.
+11. A network backend must use `ResolvedNetworkTarget` and verify the exact
+    `SocketAddr` immediately before connecting. `decision_for_domain` and
+    `decision_for_domain_with_resolved_ips` are policy queries, not proof that
+    a later connection uses the checked address. A filesystem backend must
+    combine policy evaluation with native symlink, reparse-point, mount, and
+    TOCTOU-safe enforcement.
+12. `ExternalOwner` is an identity token supplied by a trusted caller. It is
+    not evidence that an external sandbox exists or is enforcing anything.
+    `EnvironmentInput::core` likewise requires a backend-selected core
+    environment; the label must never be applied to the complete process
+    environment.
+13. Keep the Codex baseline in `upstream-review.toml` frozen until a deliberate
     review approves an advance. Never pull or fetch Codex automatically; the
     upstream-review tool is read-only and only compares an externally updated
     checkout.
+14. Configuration files are trusted application input, not an untrusted wire
+    format. Keep resolution efficient for large files and shared inheritance
+    graphs through memoization and shared native comparisons. Do not add
+    arbitrary resource limits or silently truncate valid configuration without
+    a separate specification decision.
 
 ## Specification ordering
 

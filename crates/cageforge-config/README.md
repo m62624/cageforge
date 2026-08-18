@@ -10,6 +10,12 @@
 named profiles into validated `SandboxPolicy` and optional `CommandRequest`
 values that other crates or applications can consume.
 
+Configuration is treated as trusted input. Resolution memoizes completed
+profiles and tracks the active inheritance stack by name, so shared ancestors
+are not repeatedly recomputed and legal diamond-shaped inheritance remains
+efficient for large configuration files. Native path identity is still used
+when merging roots.
+
 The schema is Cageforge's own schema. Profile values can be passed directly to
 an execution layer, or narrowed first with `cageforge-policy-compose` and a
 `PolicyCeiling`.

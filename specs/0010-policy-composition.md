@@ -39,9 +39,9 @@ accidentally grant access.
   allowed only when both policies allow it.
 - Resolved domain decisions are evaluated independently with the same complete
   address set on both sides through
-  `EffectiveNetworkPolicy::decision_for_domain_with_resolved_ips`. The
-  composer performs no DNS lookup; an empty set represents failed resolution
-  and the default local-network denial remains monotonic.
+  `EffectiveNetworkPolicy::decision_for_resolved_target`. The composer
+  performs no DNS lookup; an empty target snapshot represents failed
+  resolution and the default local-network denial remains monotonic.
 - `External` ownership is accepted only when both sides use external
   enforcement and the request and ceiling carry the same opaque
   `ExternalOwner` token. A local/external mismatch, missing owner proof, or
@@ -119,3 +119,17 @@ The crate's black-box integration suite covers:
 Portable composition logic must retain at least 90% line coverage. Native
 capability and enforcement tests are added to each backend crate on its native
 CI runner; they are not simulated in this crate.
+
+## Backend safety contracts
+
+Backends should use `ResolvedNetworkTarget` and
+`EffectiveNetworkPolicy::decision_for_connected_address`. A hostname is not
+authorized merely because its rule matched; the exact connected `SocketAddr`
+must belong to the checked resolution snapshot.
+
+`ExternalOwner` is only an opaque caller identity token. It does not prove
+that an external sandbox exists or that it is enforcing anything.
+
+`EnvironmentInput::core` is also a backend contract: its map must already be
+selected from the platform's core environment. The type label does not
+authorize arbitrary inherited variables.
