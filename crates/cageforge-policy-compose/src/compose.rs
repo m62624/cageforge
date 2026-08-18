@@ -4,15 +4,17 @@
 use std::path::{Path, PathBuf};
 
 use cageforge_policy::{
-    AccessMode, FilesystemDecision, FilesystemMode, NetworkDecision, NetworkMode,
-    PathResolutionContext, PathSelector,
+    AccessMode, FilesystemDecision, FilesystemMode, NetworkDecision, NetworkMode, PathSelector,
 };
 
+use crate::context::EffectivePathContext;
+use crate::environment::EffectiveEnvironment;
 use crate::error::{CompositionBoundary, CompositionError};
+use crate::filesystem::EffectiveFilesystemPolicy;
 use crate::model::{
-    CompositionRequest, EffectiveEnvironment, EffectiveFilesystemPolicy, EffectiveNetworkPolicy,
-    EffectiveSandbox, normalize_roots, root_is_within,
+    CompositionRequest, EffectiveNetworkPolicy, EffectiveSandbox, normalize_roots, root_is_within,
 };
+use crate::ownership::ExternalOwner;
 
 /// Computes a safe effective sandbox from a requested policy and a ceiling.
 ///
@@ -42,9 +44,29 @@ pub fn compose(request: CompositionRequest<'_>) -> Result<EffectiveSandbox, Comp
         request.ceiling.policy().network().mode(),
         CompositionBoundary::Network,
     )?;
+    validate_external_owner(
+        request.requested_policy.filesystem().mode() == FilesystemMode::External,
+        request.external_owner.as_ref(),
+        request.ceiling.external_owner(),
+        CompositionBoundary::Filesystem,
+    )?;
+    validate_external_owner(
+        request.requested_policy.network().mode() == NetworkMode::External,
+        request.external_owner.as_ref(),
+        request.ceiling.external_owner(),
+        CompositionBoundary::Network,
+    )?;
+    if request.requested_policy.filesystem().mode() != FilesystemMode::External
+        && request.requested_policy.network().mode() != NetworkMode::External
+        && (request.external_owner.is_some() || request.ceiling.external_owner().is_some())
+    {
+        return Err(CompositionError::UnexpectedExternalOwner {
+            boundary: CompositionBoundary::Filesystem,
+        });
+    }
 
     let workspace_roots = intersect_workspace_roots(
-        request.requested_workspace_roots,
+        request.requested_workspace_roots.as_deref(),
         request.ceiling.workspace_roots(),
     )?;
 
@@ -78,18 +100,18 @@ impl EffectiveFilesystemPolicy {
     pub fn access_for_path(
         &self,
         path: &Path,
-        context: &PathResolutionContext,
+        context: &EffectivePathContext,
     ) -> Result<FilesystemDecision, CompositionError> {
         let requested = self
             .requested()
-            .access_for_path(path, context)
+            .access_for_path(path, context.as_ref())
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Filesystem,
                 source,
             })?;
         let ceiling = self
             .ceiling()
-            .access_for_path(path, context)
+            .access_for_path(path, context.as_ref())
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Filesystem,
                 source,
@@ -152,6 +174,18 @@ fn validate_ownership(
     Ok(())
 }
 
+fn validate_external_owner(
+    external: bool,
+    requested_owner: Option<&ExternalOwner>,
+    ceiling_owner: Option<&ExternalOwner>,
+    boundary: CompositionBoundary,
+) -> Result<(), CompositionError> {
+    if external && (requested_owner != ceiling_owner || requested_owner.is_none()) {
+        return Err(CompositionError::ExternalOwnerMismatch { boundary });
+    }
+    Ok(())
+}
+
 trait EnforcementMode {
     fn delegates_enforcement(self) -> bool;
 }
@@ -202,18 +236,27 @@ fn combine_network_decisions(
 }
 
 fn intersect_workspace_roots(
-    requested_roots: &[PathBuf],
+    requested_roots: Option<&[PathBuf]>,
     ceiling_roots: Option<&[PathBuf]>,
-) -> Result<Vec<PathBuf>, CompositionError> {
-    let requested_roots = normalize_roots(requested_roots.iter().cloned())?;
-    let Some(ceiling_roots) = ceiling_roots else {
-        return Ok(requested_roots);
-    };
+) -> Result<Option<Vec<PathBuf>>, CompositionError> {
+    let requested_roots = requested_roots
+        .map(|roots| normalize_roots(roots.iter().cloned()))
+        .transpose()?;
+    let ceiling_roots = ceiling_roots
+        .map(|roots| normalize_roots(roots.iter().cloned()))
+        .transpose()?;
 
-    for root in &requested_roots {
-        if !root_is_within(root, ceiling_roots) {
-            return Err(CompositionError::WorkspaceRootNotGranted { path: root.clone() });
+    match (requested_roots, ceiling_roots) {
+        (Some(requested), Some(ceiling)) => {
+            for root in &requested {
+                if !root_is_within(root, &ceiling) {
+                    return Err(CompositionError::WorkspaceRootNotGranted { path: root.clone() });
+                }
+            }
+            Ok(Some(requested))
         }
+        (Some(requested), None) => Ok(Some(requested)),
+        (None, Some(ceiling)) => Ok(Some(ceiling)),
+        (None, None) => Ok(None),
     }
-    Ok(requested_roots)
 }

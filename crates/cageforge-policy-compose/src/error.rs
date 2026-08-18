@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use cageforge_command::EnvironmentBase;
 use cageforge_policy::PolicyError;
 use thiserror::Error;
 
@@ -55,10 +56,38 @@ pub enum CompositionError {
         /// The root that could not be granted.
         path: PathBuf,
     },
+    /// The effective runtime path context could not be rebuilt safely.
+    #[error("effective path context is invalid: {source}")]
+    InvalidPathContext {
+        /// The underlying path-context validation error.
+        #[source]
+        source: PolicyError,
+    },
+    /// The caller supplied an environment base broader than the effective
+    /// composition allows.
+    #[error("environment input base {supplied:?} is broader than effective base {required:?}")]
+    EnvironmentBaseTooPermissive {
+        /// The narrowest base accepted by the effective policy.
+        required: EnvironmentBase,
+        /// The base supplied by the backend caller.
+        supplied: EnvironmentBase,
+    },
     /// One side delegates enforcement while the other expects local enforcement.
     #[error("{boundary} enforcement ownership cannot be composed safely")]
     EnforcementOwnershipConflict {
         /// The boundary with incompatible ownership.
+        boundary: CompositionBoundary,
+    },
+    /// External enforcement was requested without one shared owner proof.
+    #[error("{boundary} external enforcement requires one shared owner proof")]
+    ExternalOwnerMismatch {
+        /// The boundary with unrelated or missing external owners.
+        boundary: CompositionBoundary,
+    },
+    /// An external owner proof was attached to a locally enforced boundary.
+    #[error("{boundary} external owner proof is only valid for external enforcement")]
+    UnexpectedExternalOwner {
+        /// The boundary with an unexpected owner proof.
         boundary: CompositionBoundary,
     },
     /// Evaluating one component policy failed after composition.

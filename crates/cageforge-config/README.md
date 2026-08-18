@@ -91,7 +91,10 @@ section denies networking; the command section is optional.
 `workspace_roots` is an inheritable path-to-enabled map. `true` enables a root
 and `false` disables an inherited root. The resolved paths are declarations;
 the backend resolves relative paths against its execution context before
-registering absolute roots in its path context.
+registering absolute roots in its path context. When passing these roots to
+`cageforge-policy-compose`, resolve them first: composition accepts only
+absolute runtime roots so its ceiling comparison cannot depend on an unstated
+current directory.
 
 The filesystem target `root` is symbolic as well: the backend supplies POSIX
 `/` or the relevant Windows drive/UNC roots to the policy context. Config

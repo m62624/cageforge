@@ -14,10 +14,16 @@ ordinary process launch.
 
 ## Workspace role
 
-`cageforge-command` is the command-intent layer. `cageforge-config` can build a
-`CommandRequest` from TOML, while a backend API can consume it together with a
-`cageforge-policy` value. The crate is also useful on its own in projects that
-need validated command inputs without using Cageforge's configuration format.
+`cageforge-command` is the command-intent layer.
+
+| Crate | Role in the relationship |
+|---|---|
+| `cageforge-config` | Builds validated `CommandRequest` and `EnvironmentSpec` values from TOML. |
+| `cageforge-policy-compose` | Composes `EnvironmentSpec` with an outer policy ceiling. |
+| Backend integrations | Consume the request alongside policy values before process launch. |
+
+The crate is also useful on its own in projects that need validated command
+inputs without using Cageforge's configuration format.
 
 ## Library API and ownership
 

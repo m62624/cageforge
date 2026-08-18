@@ -38,35 +38,45 @@ accidentally grant access.
 - Network decisions are evaluated independently. A domain or Unix socket is
   allowed only when both policies allow it.
 - `External` ownership is accepted only when both sides use external
-  enforcement. A local/external mismatch is a typed composition error rather
-  than a silent allow or deny conversion.
+  enforcement and the request and ceiling carry the same opaque
+  `ExternalOwner` token. A local/external mismatch, missing owner proof, or
+  unrelated owner is a typed composition error rather than a silent allow or
+  deny conversion.
 - Workspace roots are deduplicated and retained only when each requested root
-  is inside one of the optional ceiling roots. The composer performs lexical
-  declaration checks; runtime path resolution and symlink behavior remain at
-  the backend/context boundary.
+  is inside one of the optional ceiling roots. Composition accepts only
+  runtime-resolved absolute roots. `EffectiveSandbox::path_context` creates an
+  opaque context whose workspace roots cannot be replaced by a broader caller
+  context; symlink behavior remains at the backend boundary.
 - Environment composition chooses the least permissive base (`None`,
   `Core`, or `All`), applies the requested transformation, then applies the
-  ceiling transformation. The ceiling cannot introduce a variable absent from
-  the requested result. The command crate's portable order remains
-  `inherit → exclude → set/remove → include`.
+  ceiling transformation. The caller must pass an `EnvironmentInput` whose
+  selected base is no broader than the effective base; a broader input is a
+  typed error. The ceiling cannot introduce a variable absent from the
+  requested result. The command crate's portable order remains `inherit →
+  exclude → set/remove → include`.
 - `.git` protection is preserved because every filesystem decision is checked
   against both complete policies. If either side retains the default protected
   path, a write request below it cannot become writable through composition.
   A dangerous opt-out is effective only if both input policies opt out.
 
 The effective types expose the two component policies to a future backend
-lowering layer. They do not claim that a particular OS can implement every
-rule. This is the pure-intersection option: backend capability checks and
-typed unsupported-capability errors belong to `cageforge-backend-api`.
+lowering layer. `EffectiveFilesystemPolicy::glob_scan_max_depth` combines the
+depth requirements conservatively: the larger bounded depth wins, and any
+relevant unbounded deny-glob makes the result unbounded. The backend must still
+preserve both component policies, including their rules and protected paths;
+the composer does not concatenate them into an unsafe allowlist. Backend
+capability checks and typed unsupported-capability errors belong to
+`cageforge-backend-api`.
 
 ## Ownership boundary
 
 `cageforge-policy-compose` owns:
 
 - monotonic filesystem, network, environment, and workspace-root narrowing;
-- external-enforcement ownership checks;
+- external-enforcement owner-proof checks;
 - typed composition and policy-evaluation errors;
-- keeping the inputs available for later backend lowering.
+- keeping the inputs available for later backend lowering;
+- construction of a workspace-root-constrained runtime path context.
 
 It does not own:
 
@@ -93,7 +103,13 @@ The crate's black-box integration suite covers:
   ceiling-only variable additions;
 - default `.git` protection surviving an ordinary writable request;
 - explicit external/local ownership mismatch errors;
-- matching external ownership remaining externally enforced.
+- matching external ownership remaining externally enforced;
+- unrelated external owner proofs rejected;
+- workspace-root ceilings enforced by the generated effective path context;
+- effective deny-glob decisions and conservative glob scan depth;
+- broader-than-effective environment inputs rejected;
+- runtime root, minimal, temporary-directory, and `/tmp` context values
+  preserved while workspace roots are narrowed.
 
 Portable composition logic must retain at least 90% line coverage. Native
 capability and enforcement tests are added to each backend crate on its native

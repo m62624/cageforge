@@ -1,9 +1,8 @@
-<!--
-⚠️ Cageforge is an independent project. It is not affiliated with, sponsored
-by, or endorsed by OpenAI. This crate independently implements a portable
-policy-composition API informed by the public sandbox concepts reviewed in
-OpenAI Codex.
--->
+> ⚠️ **Independent project**
+>
+> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
+> crate adapts sandbox design ideas from open-source OpenAI Codex into an
+> independent library API and contains no copied Codex source.
 
 # cageforge-policy-compose
 
@@ -22,6 +21,18 @@ The composition crate works with the public types from `cageforge-policy` and
 `cageforge-command`, so an integrating project declares those crates directly
 alongside `cageforge-policy-compose`.
 
+## Workspace role
+
+| Crate | Role | Runtime dependencies | Used by |
+|---|---|---|---|
+| `cageforge-policy` | Portable filesystem and network policy semantics | None beyond Rust's standard library | This crate and backend integrations |
+| `cageforge-command` | Portable environment specification used during composition | None beyond Rust's standard library | This crate and command/config integrations |
+| `cageforge-config` | Optional TOML source for requested values | Not a dependency of this crate | Applications wire its resolved values into this crate |
+
+The dependency direction is deliberate: composition does not depend on a
+configuration format. An application can use TOML, JSON, Rust builders, or its
+own configuration system and pass the same validated policy values here.
+
 ## Example
 
 ```rust
@@ -37,7 +48,6 @@ let ceiling = PolicyCeiling::new(
 let effective = compose(CompositionRequest::new(
     &requested,
     &EnvironmentSpec::inherit_all(),
-    &[],
     &ceiling,
 ))?;
 
@@ -53,18 +63,37 @@ assert_eq!(
 After composition, a backend API can inspect the effective constraints, check
 native capabilities, and lower them for Linux, macOS, or Windows execution.
 
+`External` is accepted only when both policy sides use the same opaque
+`ExternalOwner` proof. The proof is not a harness, OS, process, or network
+backend identifier; it only prevents two unrelated external enforcement
+boundaries from being treated as one:
+
+```rust
+use cageforge_policy_compose::ExternalOwner;
+
+let owner = ExternalOwner::new();
+assert_eq!(owner.clone(), owner);
+assert_ne!(ExternalOwner::new(), owner);
+```
+
 ## API guide
 
 - `PolicyCeiling` stores the outer portable maximum policy, environment rules,
   and optional workspace-root limit.
 - `CompositionRequest` supplies a requested policy without taking ownership of
-  the caller's values.
+  the caller's values. Runtime-resolved workspace roots can be added with
+  `with_workspace_roots`.
 - `compose` returns `EffectiveSandbox`.
+- `EffectiveSandbox::path_context` creates the only context accepted by
+  effective filesystem path evaluation, so a workspace-root ceiling cannot be
+  silently replaced by a broader runtime context.
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
   that are constrained by both policies and retain both inputs for backend
-  lowering.
+  lowering. `glob_scan_max_depth` returns the widest depth required by all
+  effective deny-glob rules.
 - `EffectiveEnvironment` exposes the least-permissive base and applies both
-  environment transformations.
+  environment transformations only to an `EnvironmentInput` whose selected
+  base is no broader than the effective base.
 
 The complete API is documented on [docs.rs](https://docs.rs/) when the crate is
 published.

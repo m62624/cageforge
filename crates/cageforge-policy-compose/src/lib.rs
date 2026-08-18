@@ -14,12 +14,17 @@
 #![deny(missing_docs)]
 
 mod compose;
+mod context;
+mod environment;
 mod error;
+mod filesystem;
 mod model;
+mod ownership;
 
 pub use compose::compose;
+pub use context::EffectivePathContext;
+pub use environment::{EffectiveEnvironment, EnvironmentInput};
 pub use error::{CompositionBoundary, CompositionError};
-pub use model::{
-    CompositionRequest, EffectiveEnvironment, EffectiveFilesystemPolicy, EffectiveNetworkPolicy,
-    EffectiveSandbox, PolicyCeiling,
-};
+pub use filesystem::EffectiveFilesystemPolicy;
+pub use model::{CompositionRequest, EffectiveNetworkPolicy, EffectiveSandbox, PolicyCeiling};
+pub use ownership::ExternalOwner;
