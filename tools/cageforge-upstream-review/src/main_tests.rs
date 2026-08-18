@@ -24,3 +24,20 @@ fn scope_pathspecs_watch_possible_rust_module_directories() {
         ]
     );
 }
+
+#[test]
+fn scope_pathspecs_watch_the_parent_of_mod_rs() {
+    let scope = Scope {
+        name: "sandboxing".to_owned(),
+        upstream_paths: vec!["codex-rs/core/src/sandboxing/mod.rs".to_owned()],
+        local_paths: Vec::new(),
+    };
+
+    assert_eq!(
+        scope_pathspecs(&[&scope]),
+        [
+            "codex-rs/core/src/sandboxing".to_owned(),
+            "codex-rs/core/src/sandboxing/mod.rs".to_owned()
+        ]
+    );
+}

@@ -25,11 +25,13 @@ The repository root contains upstream-review.toml. It records:
 Scope paths are validated in two places: local destinations must exist in the
 Cageforge checkout, and configured upstream paths must exist at the recorded
 baseline when an external checkout is available. For each tracked Rust file,
-the tool also watches the same path without `.rs` (for example,
-`permissions.rs` and `permissions/`). This catches the common upstream module
-split without widening the review to an unrelated source directory. Additional
-directory paths can still be listed explicitly when a broader review boundary
-is intentional.
+the tool also watches the same path without `.rs`. For example, it watches both
+`permissions.rs` and `permissions/`. A tracked `mod.rs` is special: the tool
+watches the containing directory, such as both `sandboxing/mod.rs` and
+`sandboxing/`, because Rust module children are added next to `mod.rs`. This
+catches module splits without widening the review to an unrelated source
+directory. Additional directory paths can still be listed explicitly when a
+broader review boundary is intentional.
 
 The current configuration records the frozen baseline
 `c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` for the current portable policy,

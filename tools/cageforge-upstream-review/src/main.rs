@@ -411,10 +411,12 @@ fn scope_pathspecs(scopes: &[&Scope]) -> Vec<String> {
     for scope in scopes {
         for path in &scope.upstream_paths {
             paths.insert(path.clone());
-            if let Some((parent, file)) = path.rsplit_once('/')
-                && let Some(stem) = file.strip_suffix(".rs")
-            {
-                paths.insert(format!("{parent}/{stem}"));
+            if let Some((parent, file)) = path.rsplit_once('/') {
+                if file == "mod.rs" {
+                    paths.insert(parent.to_owned());
+                } else if let Some(stem) = file.strip_suffix(".rs") {
+                    paths.insert(format!("{parent}/{stem}"));
+                }
             }
         }
     }
