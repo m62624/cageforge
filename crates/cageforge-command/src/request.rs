@@ -1,11 +1,12 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::command::contains_nul;
 use crate::{CommandError, CommandSpec, EnvironmentSpec, StdioSpec, TimeoutPolicy};
+use cageforge_path::contains_parent_traversal;
 
 /// A complete portable request to execute one command.
 ///
@@ -52,10 +53,7 @@ impl CommandRequest {
         if contains_nul(path.as_os_str()) {
             return Err(CommandError::WorkingDirectoryContainsNul);
         }
-        if path
-            .components()
-            .any(|component| component == Component::ParentDir)
-        {
+        if contains_parent_traversal(&path) {
             return Err(CommandError::WorkingDirectoryParentTraversal { path });
         }
         self.working_directory = Some(path);

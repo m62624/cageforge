@@ -9,6 +9,7 @@ use cageforge_policy::FilesystemMode;
 use cageforge_policy::FilesystemPolicy;
 use cageforge_policy::FilesystemRule;
 use cageforge_policy::FilesystemTarget;
+use cageforge_policy::LocalNetworkAccess;
 use cageforge_policy::MissingPathBehavior;
 use cageforge_policy::NetworkDecision;
 use cageforge_policy::NetworkMode;
@@ -522,6 +523,21 @@ fn filesystem_policy_normalizes_duplicate_rules_conservatively() {
     assert_eq!(normalized.access_for(&selector), FilesystemDecision::Deny);
 }
 
+#[cfg(windows)]
+#[test]
+fn filesystem_normalization_merges_case_variants_on_windows() {
+    let upper = PathSelector::absolute(r"C:\Workspace\src").expect("absolute path");
+    let lower = PathSelector::absolute(r"c:\workspace\src").expect("absolute path");
+    let policy = FilesystemPolicy::restricted([
+        FilesystemRule::new(upper, AccessMode::Write),
+        FilesystemRule::new(lower, AccessMode::Read),
+    ]);
+
+    let normalized = policy.normalized().expect("valid policy");
+    assert_eq!(normalized.entries().len(), 1);
+    assert_eq!(normalized.entries()[0].access(), AccessMode::Read);
+}
+
 #[cfg(unix)]
 #[test]
 fn filesystem_matching_preserves_posix_case_sensitivity() {
@@ -888,6 +904,95 @@ fn network_decisions_preserve_external_enforcement() {
     );
     assert!(NetworkDecision::ExternallyEnforced.is_externally_enforced());
     assert!(!NetworkDecision::ExternallyEnforced.is_allowed());
+}
+
+#[test]
+fn resolved_domains_reject_private_addresses_and_dns_failures_by_default() {
+    let policy = NetworkPolicy::enabled()
+        .with_domain("*", DomainAccess::Allow)
+        .expect("wildcard domain");
+
+    assert_eq!(
+        policy
+            .decision_for_domain_with_resolved_ips(
+                "service.example",
+                &["93.184.216.34".parse().expect("public address")],
+            )
+            .expect("public domain"),
+        NetworkDecision::Allow
+    );
+    assert_eq!(
+        policy
+            .decision_for_domain_with_resolved_ips(
+                "service.example",
+                &["127.0.0.1".parse().expect("loopback address")],
+            )
+            .expect("loopback domain"),
+        NetworkDecision::Deny
+    );
+    assert_eq!(
+        policy
+            .decision_for_domain_with_resolved_ips("service.example", &[])
+            .expect("failed resolution"),
+        NetworkDecision::Deny
+    );
+    assert_eq!(
+        policy
+            .decision_for_domain_with_resolved_ips(
+                "service.example",
+                &[
+                    "93.184.216.34".parse().expect("public address"),
+                    "10.0.0.1".parse().expect("private address"),
+                ],
+            )
+            .expect("mixed resolution"),
+        NetworkDecision::Deny
+    );
+    for address in ["169.254.1.1", "::1", "fc00::1"] {
+        assert_eq!(
+            policy
+                .decision_for_domain_with_resolved_ips(
+                    "service.example",
+                    &[address.parse().expect("non-public address")],
+                )
+                .expect("non-public domain"),
+            NetworkDecision::Deny,
+            "{address} must remain denied"
+        );
+    }
+}
+
+#[test]
+fn resolved_domains_support_explicit_literal_and_policy_opt_ins() {
+    let literal = NetworkPolicy::enabled()
+        .with_domain("127.0.0.1", DomainAccess::Allow)
+        .expect("literal allow rule");
+    assert_eq!(
+        literal
+            .decision_for_domain_with_resolved_ips("127.0.0.1", &[])
+            .expect("literal address"),
+        NetworkDecision::Allow
+    );
+
+    let opted_in = NetworkPolicy::enabled()
+        .with_domain("service.example", DomainAccess::Allow)
+        .expect("domain allow rule")
+        .with_local_network_access(LocalNetworkAccess::Allow);
+    assert_eq!(
+        opted_in
+            .decision_for_domain_with_resolved_ips(
+                "service.example",
+                &["192.168.1.10".parse().expect("private address")],
+            )
+            .expect("explicit local access"),
+        NetworkDecision::Allow
+    );
+    assert_eq!(
+        opted_in
+            .decision_for_domain_with_resolved_ips("service.example", &[])
+            .expect("failed resolution"),
+        NetworkDecision::Deny
+    );
 }
 
 #[test]

@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 cageforge-command.workspace = true
+cageforge-path.workspace = true
 cageforge-policy.workspace = true
 thiserror.workspace = true
 

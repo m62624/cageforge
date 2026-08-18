@@ -1,9 +1,10 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use cageforge_command::EnvironmentSpec;
+use cageforge_path::{contains_parent_traversal, is_within, paths_equal};
 use cageforge_policy::{NetworkPolicy, PathResolutionContext, SandboxPolicy};
 
 use crate::CompositionError;
@@ -242,11 +243,14 @@ where
     I: IntoIterator<Item = P>,
     P: Into<PathBuf>,
 {
-    let mut normalized = Vec::new();
+    let mut normalized: Vec<PathBuf> = Vec::new();
     for root in roots {
         let root = root.into();
         validate_root(&root)?;
-        if !normalized.iter().any(|existing| existing == &root) {
+        if !normalized
+            .iter()
+            .any(|existing| paths_equal(existing, &root))
+        {
             normalized.push(root);
         }
     }
@@ -266,10 +270,7 @@ pub(crate) fn validate_root(path: &Path) -> Result<(), CompositionError> {
             reason: "root must not contain NUL",
         });
     }
-    if path
-        .components()
-        .any(|component| component == Component::ParentDir)
-    {
+    if contains_parent_traversal(path) {
         return Err(CompositionError::InvalidWorkspaceRoot {
             path: path.to_path_buf(),
             reason: "parent traversal is not allowed",
@@ -287,5 +288,5 @@ pub(crate) fn validate_root(path: &Path) -> Result<(), CompositionError> {
 pub(crate) fn root_is_within(root: &Path, ceiling_roots: &[PathBuf]) -> bool {
     ceiling_roots
         .iter()
-        .any(|ceiling_root| root.starts_with(ceiling_root))
+        .any(|ceiling_root| is_within(root, ceiling_root))
 }

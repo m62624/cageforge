@@ -21,7 +21,7 @@ backend.
 
 | Crate | Role | Runtime dependencies | Used by |
 |---|---|---|---|
-| `cageforge-policy` | Portable filesystem and network policy semantics | None beyond Rust's standard library | `cageforge-config`, `cageforge-policy-compose`, and backend integrations |
+| `cageforge-policy` | Portable filesystem and network policy semantics | `cageforge-path` | `cageforge-config`, `cageforge-policy-compose`, and backend integrations |
 
 The crate is the shared policy value between those layers. A project can pair
 it with its own configuration format and backend while keeping the same
@@ -52,6 +52,7 @@ an unchecked path selector by writing a public enum payload.
 | `PathPattern` | Represents validated absolute or workspace-relative globs. |
 | `AccessMode` | Expresses `Read`, `Write`, or `Deny`. |
 | `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults. |
+| `LocalNetworkAccess` | Controls whether resolved loopback/private/link-local addresses are allowed. |
 | `NetworkDecision` | Distinguishes local allow/deny from externally owned network enforcement. |
 | `DomainRule` and `UnixSocketRule` | Adds validated network destinations and decisions. |
 | `PolicyError` | Reports invalid paths, patterns, domains, contexts, and policy combinations. |
@@ -159,7 +160,13 @@ external ownership into permission.
 Network policy is independent from filesystem policy. Disabled mode denies
 destinations, while external mode records that another trusted boundary owns
 network enforcement. A project can connect these values to a proxy, firewall,
-or native network mechanism in the backend it uses.
+or native network mechanism in the backend it uses. The default
+`LocalNetworkAccess::Deny` also protects domain rules from DNS rebinding: a
+backend passes every resolved address to
+`decision_for_domain_with_resolved_ips`, and an empty list represents failed or
+timed-out resolution. Any non-public result is denied. An exact literal IP
+allow rule or the explicit `LocalNetworkAccess::Allow` builder is required to
+opt into local destinations. The policy crate performs no DNS or network I/O.
 
 ## Using it with other crates
 

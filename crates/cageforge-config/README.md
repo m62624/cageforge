@@ -19,8 +19,9 @@ an execution layer, or narrowed first with `cageforge-policy-compose` and a
 | Crate | Role | Runtime dependencies | Used by |
 |---|---|---|---|
 | `cageforge-config` | Strict TOML profile parsing and inheritance | `cageforge-policy`, `cageforge-command` | Application integrations and backend API crates |
-| `cageforge-policy` | Portable filesystem and network policy semantics | None | This crate, policy composition, and backend integrations |
+| `cageforge-policy` | Portable filesystem and network policy semantics | `cageforge-path` | This crate, policy composition, and backend integrations |
 | `cageforge-command` | Portable command and process-launch intent | None | This crate and backend API integrations |
+| `cageforge-path` | Shared native path comparison and parent-traversal semantics | None | Policy, command, config, composition, and review tooling |
 
 The dependencies are local workspace crates, declared through
 `[workspace.dependencies]` in the Plugmem-style workspace layout. The config
@@ -49,6 +50,7 @@ rules = [
 
 [profiles.workspace.network]
 mode = "disabled"
+local_network_access = "deny"
 
 [profiles.workspace.command]
 program = "cargo"
@@ -71,8 +73,11 @@ native Unix/macOS versus Windows path forms.
 Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minimal`,
 `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`. Network modes are
 `disabled`, `enabled`, and `external`; domain and Unix-socket defaults are
-`disabled`, `enabled`, or `restricted`. Stdio modes are `inherit`, `null`, and
-`pipe`. Timeout modes are `backend-default`, `limit`, and `disabled`.
+`disabled`, `enabled`, or `restricted`. `local_network_access` is `deny` by
+default and can be set to `allow` only when the consuming boundary intentionally
+permits loopback, private, or link-local destinations. Stdio modes are
+`inherit`, `null`, and `pipe`. Timeout modes are `backend-default`, `limit`, and
+`disabled`.
 
 Domain patterns use the policy crate's host normalization: matching is
 case-insensitive, trailing dots and host ports are ignored, and bracketed

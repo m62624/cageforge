@@ -10,6 +10,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use cageforge_path::contains_parent_traversal;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
@@ -216,12 +217,7 @@ fn validate_config(config: &Config) -> Result<(), String> {
 
 fn validate_repo_relative_path(path: &str, label: &str) -> Result<(), String> {
     let path = Path::new(path);
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
+    if path.as_os_str().is_empty() || path.is_absolute() || contains_parent_traversal(path) {
         return Err(format!("{label} must be repository-relative: {path:?}"));
     }
     Ok(())

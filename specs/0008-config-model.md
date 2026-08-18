@@ -52,6 +52,7 @@ dangerously_allow_git_write = false
 [profiles.workspace.network]
 mode = "enabled"
 domain_mode = "restricted"
+local_network_access = "deny"
 domains = [
   { pattern = "api.example.com:443", access = "allow" },
   { pattern = "[2001:db8::1]:443", access = "deny" },
@@ -86,7 +87,9 @@ Filesystem rule targets are `absolute`, `workspace`, `workspace-root`, `root`,
 Absolute and workspace paths are still validated by `cageforge-policy`.
 
 Network modes are `disabled`, `enabled`, and `external`. Domain and Unix
-socket defaults are `disabled`, `enabled`, or `restricted`. Command stdio
+socket defaults are `disabled`, `enabled`, or `restricted`.
+`local_network_access` is `deny` by default and can be explicitly set to
+`allow` for resolved non-public destinations. Command stdio
 modes are `inherit`, `null`, and `pipe`; timeout modes are
 `backend-default`, `limit`, and `disabled`.
 
@@ -133,7 +136,10 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   case-insensitive identity during validation and inheritance merge. Excludes
   have precedence over includes; an explicit set is applied after exclusion
   and may intentionally restore its named variable. The backend defines the
-  platform-specific `core` set.
+  platform-specific `core` set. A backend that evaluates a hostname with
+  `decision_for_domain_with_resolved_ips` supplies every resolved address and
+  supplies an empty list after a failed or timed-out lookup. The config crate
+  only stores the typed local-network choice; it never performs DNS.
 - `additional_protected_paths` is additive. Restricted profiles protect `.git`
   below writable scopes by default. The explicit
   `[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`

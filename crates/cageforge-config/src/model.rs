@@ -61,6 +61,13 @@ pub(crate) enum RawUnixSocketMode {
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+pub(crate) enum RawLocalNetworkAccess {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum RawDomainAccess {
     Allow,
     Deny,
@@ -179,6 +186,7 @@ pub(crate) struct RawNetwork {
     pub(crate) mode: Option<RawNetworkMode>,
     pub(crate) domain_mode: Option<RawDomainMode>,
     pub(crate) unix_socket_mode: Option<RawUnixSocketMode>,
+    pub(crate) local_network_access: Option<RawLocalNetworkAccess>,
     #[serde(default)]
     pub(crate) domains: Vec<RawDomainRule>,
     #[serde(default)]

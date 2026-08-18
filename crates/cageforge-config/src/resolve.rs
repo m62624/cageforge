@@ -9,6 +9,7 @@ use crate::model::{
     RawProfile, RawStdio, RawTimeout,
 };
 use cageforge_command::CommandRequest;
+use cageforge_path::{contains_parent_traversal, paths_equal, strings_equal};
 use cageforge_policy::{DomainAccess, DomainRule, SandboxPolicy};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -256,6 +257,13 @@ fn validate_workspace_root(profile: &str, root: &str) -> Result<(), ConfigError>
             "path must not contain a NUL character",
         ));
     }
+    if contains_parent_traversal(Path::new(root)) {
+        return Err(invalid_value(
+            profile,
+            "workspace_roots",
+            "path must not contain parent traversal",
+        ));
+    }
     Ok(())
 }
 
@@ -348,6 +356,9 @@ fn merge_network(parent: Option<RawNetwork>, child: &RawNetwork) -> RawNetwork {
     if child.unix_socket_mode.is_some() {
         merged.unix_socket_mode = child.unix_socket_mode;
     }
+    if child.local_network_access.is_some() {
+        merged.local_network_access = child.local_network_access;
+    }
     for child_rule in &child.domains {
         if let Some(parent_rule) = merged
             .domains
@@ -360,11 +371,9 @@ fn merge_network(parent: Option<RawNetwork>, child: &RawNetwork) -> RawNetwork {
         }
     }
     for child_rule in &child.unix_sockets {
-        if let Some(parent_rule) = merged
-            .unix_sockets
-            .iter_mut()
-            .find(|parent_rule| parent_rule.path == child_rule.path)
-        {
+        if let Some(parent_rule) = merged.unix_sockets.iter_mut().find(|parent_rule| {
+            paths_equal(Path::new(&parent_rule.path), Path::new(&child_rule.path))
+        }) {
             *parent_rule = child_rule.clone();
         } else {
             merged.unix_sockets.push(child_rule.clone());
@@ -478,7 +487,17 @@ fn append_unique_case_insensitive(target: &mut Vec<String>, values: &[String]) {
 }
 
 fn same_filesystem_rule_target(left: &RawFilesystemRule, right: &RawFilesystemRule) -> bool {
-    left.target == right.target && left.path == right.path && left.pattern == right.pattern
+    left.target == right.target
+        && optional_path_strings_equal(left.path.as_deref(), right.path.as_deref())
+        && optional_path_strings_equal(left.pattern.as_deref(), right.pattern.as_deref())
+}
+
+fn optional_path_strings_equal(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => strings_equal(left, right),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn merge_stdio(parent: Option<RawStdio>, child: &RawStdio) -> RawStdio {

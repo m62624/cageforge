@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -85,6 +86,28 @@ fn denies_workspace_roots_outside_the_ceiling() {
         CompositionError::WorkspaceRootNotGranted {
             path: absolute_root("other")
         }
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn workspace_root_containment_uses_windows_case_rules() {
+    let ceiling = PolicyCeiling::new(SandboxPolicy::read_only(), EnvironmentSpec::empty())
+        .with_workspace_roots([absolute_root("Project")])
+        .expect("valid ceiling root");
+    let requested = requested_policy();
+    let requested_root = absolute_root("project/src");
+
+    let effective = compose(
+        CompositionRequest::new(&requested, &EnvironmentSpec::empty(), &ceiling)
+            .with_workspace_roots([requested_root.clone()])
+            .expect("valid requested root"),
+    )
+    .expect("Windows paths with different case remain inside the root");
+
+    assert_eq!(
+        effective.workspace_roots(),
+        Some([requested_root].as_slice())
     );
 }
 
@@ -642,5 +665,43 @@ fn combines_domain_allowlists_by_denying_unshared_access() {
             .decision_for_domain("one.example")
             .expect("valid domain"),
         cageforge_policy::NetworkDecision::Deny
+    );
+}
+
+#[test]
+fn composes_resolved_domain_safety_from_both_policies() {
+    let requested_network = NetworkPolicy::enabled()
+        .with_domain("service.example", DomainAccess::Allow)
+        .expect("valid domain");
+    let ceiling_network = NetworkPolicy::enabled()
+        .with_domain("service.example", DomainAccess::Allow)
+        .expect("valid domain");
+    let requested = SandboxPolicy::new(FilesystemPolicy::unrestricted(), requested_network);
+    let ceiling = PolicyCeiling::new(
+        SandboxPolicy::new(FilesystemPolicy::unrestricted(), ceiling_network),
+        EnvironmentSpec::empty(),
+    );
+    let effective = compose(CompositionRequest::new(
+        &requested,
+        &EnvironmentSpec::empty(),
+        &ceiling,
+    ))
+    .expect("valid policies compose");
+
+    let private: IpAddr = "10.0.0.8".parse().expect("private address");
+    assert_eq!(
+        effective
+            .network()
+            .decision_for_domain_with_resolved_ips("service.example", &[private])
+            .expect("valid domain"),
+        cageforge_policy::NetworkDecision::Deny
+    );
+    let public: IpAddr = "93.184.216.34".parse().expect("public address");
+    assert_eq!(
+        effective
+            .network()
+            .decision_for_domain_with_resolved_ips("service.example", &[public])
+            .expect("valid domain"),
+        cageforge_policy::NetworkDecision::Allow
     );
 }

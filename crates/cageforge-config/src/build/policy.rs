@@ -4,13 +4,13 @@
 use super::super::error::{ConfigError, invalid_value};
 use super::super::model::{
     RawAccessMode, RawDomainAccess, RawDomainMode, RawDomainRule, RawFilesystem, RawFilesystemMode,
-    RawFilesystemRule, RawFilesystemTarget, RawMissingPathBehavior, RawNetwork, RawNetworkMode,
-    RawSelector, RawUnixSocketMode, RawUnixSocketRule,
+    RawFilesystemRule, RawFilesystemTarget, RawLocalNetworkAccess, RawMissingPathBehavior,
+    RawNetwork, RawNetworkMode, RawSelector, RawUnixSocketMode, RawUnixSocketRule,
 };
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemPolicy, FilesystemRule,
-    FilesystemTarget, MissingPathBehavior, NetworkMode, NetworkPolicy, PathPattern, PathSelector,
-    SandboxPolicy, UnixSocketMode,
+    FilesystemTarget, LocalNetworkAccess, MissingPathBehavior, NetworkMode, NetworkPolicy,
+    PathPattern, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -277,6 +277,9 @@ fn build_network(raw: Option<&RawNetwork>, profile: &str) -> Result<NetworkPolic
     if let Some(mode) = raw.unix_socket_mode {
         policy = policy.with_unix_socket_mode(unix_socket_mode(mode));
     }
+    if let Some(access) = raw.local_network_access {
+        policy = policy.with_local_network_access(local_network_access(access));
+    }
     for RawDomainRule { pattern, access } in &raw.domains {
         policy = policy
             .with_domain(pattern, domain_access(*access))
@@ -329,6 +332,13 @@ fn unix_socket_mode(value: RawUnixSocketMode) -> UnixSocketMode {
         RawUnixSocketMode::Disabled => UnixSocketMode::Disabled,
         RawUnixSocketMode::Enabled => UnixSocketMode::Enabled,
         RawUnixSocketMode::Restricted => UnixSocketMode::Restricted,
+    }
+}
+
+fn local_network_access(value: RawLocalNetworkAccess) -> LocalNetworkAccess {
+    match value {
+        RawLocalNetworkAccess::Allow => LocalNetworkAccess::Allow,
+        RawLocalNetworkAccess::Deny => LocalNetworkAccess::Deny,
     }
 }
 

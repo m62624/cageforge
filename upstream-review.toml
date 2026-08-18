@@ -18,6 +18,7 @@ upstream_paths = [
     "codex-rs/protocol/src/protocol.rs",
     "codex-rs/sandboxing/src/policy_transforms.rs",
     "codex-rs/network-proxy/src/policy.rs",
+    "codex-rs/network-proxy/src/runtime.rs",
 ]
 local_paths = ["crates/cageforge-policy/"]
 
@@ -43,6 +44,7 @@ upstream_paths = [
     "codex-rs/config/src/config_toml.rs",
     "codex-rs/config/src/merge.rs",
     "codex-rs/config/src/permissions_toml.rs",
+    "codex-rs/config/src/schema.rs",
     "codex-rs/config/src/shell_environment_policy.rs",
     "codex-rs/protocol/src/permissions.rs",
     "codex-rs/protocol/src/models.rs",

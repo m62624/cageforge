@@ -1,6 +1,7 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use cageforge_policy::{
@@ -133,6 +134,34 @@ impl EffectiveNetworkPolicy {
         let ceiling = self
             .ceiling()
             .decision_for_domain(domain)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        Ok(combine_network_decisions(requested, ceiling))
+    }
+
+    /// Evaluates a domain and all addresses resolved for it against both
+    /// policies.
+    ///
+    /// The resolver belongs to the consuming backend. Passing every resolved
+    /// address, or an empty slice after a failed lookup, keeps DNS and network
+    /// I/O outside this pure composition crate while preserving narrowing.
+    pub fn decision_for_domain_with_resolved_ips(
+        &self,
+        domain: &str,
+        resolved_ips: &[IpAddr],
+    ) -> Result<NetworkDecision, CompositionError> {
+        let requested = self
+            .requested()
+            .decision_for_domain_with_resolved_ips(domain, resolved_ips)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        let ceiling = self
+            .ceiling()
+            .decision_for_domain_with_resolved_ips(domain, resolved_ips)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
                 source,

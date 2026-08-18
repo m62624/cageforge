@@ -16,8 +16,11 @@ product-specific protocol types.
 ## Crate boundary
 
 ```text
+cageforge-path
+    shared native path comparison and lexical validation
+
 cageforge-policy
-    pure policy semantics and validation
+    pure policy semantics and validation; consumes cageforge-path
 
 cageforge-config
     future TOML loader and named-profile composition
@@ -48,7 +51,7 @@ The first crate exposes:
 - `FilesystemRule`, `FilesystemTarget`, `FilesystemMode`,
   `MissingPathBehavior`, and `FilesystemPolicy`;
 - `DomainRule`, `DomainAccess`, `DomainMode`, `UnixSocketRule`,
-  `UnixSocketMode`, `NetworkMode`, and `NetworkPolicy`;
+  `UnixSocketMode`, `NetworkMode`, `LocalNetworkAccess`, and `NetworkPolicy`;
 - `SandboxPolicy`, which combines filesystem and network policy.
 
 The crate provides built-in constructors named `read_only`, `workspace`, and
@@ -115,6 +118,10 @@ dangerous request.
 - Deny wins when multiple matching domain rules apply.
 - Domain and Unix-socket defaults are explicit: disabled, enabled, or
   restricted allowlist; backends never infer a default from rule presence.
+- Resolved domain targets use `LocalNetworkAccess::Deny` by default. Backends
+  pass all DNS results to the typed resolved-target query; empty resolution or
+  any non-public result is denied unless an explicit literal or policy opt-in
+  permits it. The policy crate never performs DNS or connection I/O.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
   rules; its rule builders reject the combination at construction time.

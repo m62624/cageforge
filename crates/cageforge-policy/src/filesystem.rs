@@ -7,6 +7,7 @@ use crate::PathPattern;
 use crate::PathResolutionContext;
 use crate::PathSelector;
 use crate::PolicyError;
+use cageforge_path::{contains_parent_traversal, is_within};
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
@@ -46,6 +47,20 @@ pub struct FilesystemRule {
     access: AccessMode,
     missing_path_behavior: MissingPathBehavior,
     read_only_subpaths: Vec<PathSelector>,
+}
+
+fn targets_equal(left: &FilesystemTarget, right: &FilesystemTarget) -> bool {
+    match (left, right) {
+        (FilesystemTarget::Scope(left), FilesystemTarget::Scope(right)) => {
+            crate::path::selectors_equal(left, right)
+        }
+        (FilesystemTarget::Glob(left), FilesystemTarget::Glob(right)) => {
+            left.is_absolute() == right.is_absolute()
+                && cageforge_path::case_fold(left.as_str())
+                    == cageforge_path::case_fold(right.as_str())
+        }
+        _ => false,
+    }
 }
 
 impl FilesystemRule {
@@ -143,7 +158,7 @@ impl FilesystemRule {
             FilesystemTarget::Scope(selector) => selector
                 .resolve(context)
                 .into_iter()
-                .filter(|root| path_starts_with(path, root))
+                .filter(|root| is_within(path, root))
                 .map(|_| (selector.specificity(), true))
                 .max_by_key(|(specificity, _)| *specificity)
                 .unwrap_or((0, false)),
@@ -162,7 +177,7 @@ impl FilesystemRule {
                 let matches = subpath
                     .resolve(context)
                     .into_iter()
-                    .filter(|root| path_starts_with(path, root))
+                    .filter(|root| is_within(path, root))
                     .map(|_| subpath.specificity())
                     .max();
                 if let Some(subpath_specificity) = matches {
@@ -326,16 +341,19 @@ impl FilesystemPolicy {
 
         let mut entries = Vec::new();
         for rule in &self.entries {
-            if let Some(existing) = entries
-                .iter_mut()
-                .find(|existing: &&mut FilesystemRule| existing.target == rule.target)
-            {
+            if let Some(existing) = entries.iter_mut().find(|existing: &&mut FilesystemRule| {
+                targets_equal(existing.target(), rule.target())
+            }) {
                 existing.access = existing.access.most_restrictive(rule.access);
                 existing.missing_path_behavior = existing
                     .missing_path_behavior
                     .min(rule.missing_path_behavior);
                 for selector in &rule.read_only_subpaths {
-                    if !existing.read_only_subpaths.contains(selector) {
+                    if !existing
+                        .read_only_subpaths
+                        .iter()
+                        .any(|existing| crate::path::selectors_equal(existing, selector))
+                    {
                         existing.read_only_subpaths.push(selector.clone());
                     }
                 }
@@ -361,7 +379,9 @@ impl FilesystemPolicy {
                 .entries
                 .iter()
                 .filter_map(|entry| match entry.target() {
-                    FilesystemTarget::Scope(candidate) if candidate == selector => {
+                    FilesystemTarget::Scope(candidate)
+                        if crate::path::selectors_equal(candidate, selector) =>
+                    {
                         Some(entry.access())
                     }
                     FilesystemTarget::Scope(_) | FilesystemTarget::Glob(_) => None,
@@ -396,10 +416,7 @@ impl FilesystemPolicy {
                 path: path.to_path_buf(),
             });
         }
-        if path
-            .components()
-            .any(|component| component == std::path::Component::ParentDir)
-        {
+        if contains_parent_traversal(path) {
             return Err(PolicyError::ParentTraversal {
                 path: path.to_path_buf(),
             });
@@ -537,30 +554,6 @@ fn relative_paths_equal(left: &Path, right: &Path) -> bool {
                     .eq_ignore_ascii_case(&right.to_string_lossy()),
                 _ => false,
             })
-}
-
-fn path_starts_with(path: &Path, root: &Path) -> bool {
-    let mut path_components = path.components();
-    let mut root_components = root.components();
-
-    loop {
-        match (root_components.next(), path_components.next()) {
-            (None, _) => return true,
-            (Some(root), Some(path)) if path_components_equal(path, root) => {}
-            (Some(_), _) => return false,
-        }
-    }
-}
-
-#[cfg(windows)]
-fn path_components_equal(left: Component<'_>, right: Component<'_>) -> bool {
-    left.as_os_str().to_string_lossy().to_lowercase()
-        == right.as_os_str().to_string_lossy().to_lowercase()
-}
-
-#[cfg(not(windows))]
-fn path_components_equal(left: Component<'_>, right: Component<'_>) -> bool {
-    left == right
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

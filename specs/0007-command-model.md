@@ -10,6 +10,9 @@ policy-composition and backend layers.
 
 The crate does not launch processes, parse TOML, apply sandbox restrictions,
 allocate PTYs, manage process sessions, or expose a harness protocol.
+Working-directory validation uses the shared `cageforge-path` crate so its
+lexical parent-traversal and Windows path semantics match policy, config, and
+composition layers.
 
 ## Upstream design inputs
 

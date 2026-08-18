@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cageforge-command",
     "crates/cageforge-config",
+    "crates/cageforge-path",
     "crates/cageforge-policy",
     "crates/cageforge-policy-compose",
     "crates/cageforge-core",
@@ -25,6 +26,7 @@ all = "warn"
 cageforge-command = { path = "crates/cageforge-command", version = "0.1.0" }
 cageforge-policy = { path = "crates/cageforge-policy", version = "0.1.0" }
 cageforge-policy-compose = { path = "crates/cageforge-policy-compose", version = "0.1.0" }
+cageforge-path = { path = "crates/cageforge-path", version = "0.1.0" }
 clap = { version = "4.6.6", features = ["derive", "env"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"

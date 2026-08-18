@@ -14,6 +14,7 @@ doctest = false
 
 [dependencies]
 cageforge-command = { workspace = true }
+cageforge-path = { workspace = true }
 cageforge-policy = { workspace = true }
 serde = { workspace = true }
 schemars = { workspace = true }

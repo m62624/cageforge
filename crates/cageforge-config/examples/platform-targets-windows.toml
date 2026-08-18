@@ -29,6 +29,7 @@ rules = [
 mode = "enabled"
 domain_mode = "restricted"
 unix_socket_mode = "restricted"
+local_network_access = "deny"
 domains = [
   { pattern = "**.example.com", access = "allow" },
   { pattern = "API.Example.com:443", access = "allow" },

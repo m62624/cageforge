@@ -13,7 +13,9 @@ The policy boundary is compared with the Codex commit recorded in
 - `codex-rs/linux-sandbox`;
 - `codex-rs/windows-sandbox-rs`;
 - `codex-rs/bwrap`.
-- `codex-rs/network-proxy/src/policy.rs` for host and domain normalization.
+- `codex-rs/network-proxy/src/policy.rs` for host and domain normalization;
+- `codex-rs/network-proxy/src/runtime.rs` for resolved-address loopback,
+  private-network, and DNS-rebinding protection.
 
 This is a design boundary, not a source import. No Codex implementation code
 is included in Cageforge by this specification.
@@ -38,6 +40,8 @@ The policy and backend design must account for these upstream behaviors:
   domain and Unix-socket defaults must be explicit rather than inferred;
   host matching must normalize case, trailing dots, ports, and bracketed IP
   literals before policy evaluation;
+  resolved hostnames must not silently reach loopback or private addresses,
+  and failed DNS resolution must fail closed;
   Linux additionally needs process and socket syscall restrictions, while
   macOS has explicit Unix-socket policy generation;
 - Linux backend selection must account for system bubblewrap capabilities,
@@ -54,6 +58,9 @@ protected relative paths, explicit external-enforcement decisions, domain
 defaults, host normalization, and Unix-socket defaults. `NetworkDecision`
 preserves `Allow`, `Deny`, and `ExternallyEnforced` for domain and socket
 queries; the boolean helpers intentionally expose only local `Allow`.
+`LocalNetworkAccess` and the resolved-address query provide the portable
+decision boundary for loopback/private/DNS-rebinding protection without adding
+DNS or proxy dependencies; a native backend supplies the resolver results.
 Portable glob rules are deny-only; a read/write glob is rejected as
 unsupported rather than silently delegated.
 The remaining OS-specific behavior stays below the policy boundary. Codex's

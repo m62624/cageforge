@@ -22,6 +22,7 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/protocol/src/models.rs` | `crates/cageforge-policy`, `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/protocol/src/protocol.rs` | `crates/cageforge-policy` | Behavior-tracked; independently implemented |
 | `codex-rs/sandboxing/src/policy_transforms.rs` | `crates/cageforge-policy` | Behavior-tracked; independently implemented |
+| `codex-rs/network-proxy/src/runtime.rs` | `crates/cageforge-policy`, future network backends | Resolved-address local-network protection generalized without importing proxy or DNS runtime code |
 | `codex-rs/sandboxing/src/policy_transforms.rs` | `crates/cageforge-policy-compose` | Portable intersection behavior audited; independently implemented |
 | `codex-rs/protocol/src/permissions.rs` | `crates/cageforge-policy-compose` | Decision and ownership concepts audited; independently implemented |
 | `codex-rs/protocol/src/models.rs` | `crates/cageforge-policy-compose` | Portable policy request usage audited; product types excluded |
@@ -35,6 +36,7 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/protocol/src/shell_environment.rs` | `crates/cageforge-command` | Environment order and core-set behavior audited; Codex-only variables excluded |
 | `codex-rs/core/src/exec_env.rs` | `crates/cageforge-command` | Runtime environment application audited; Codex session/profile injection excluded |
 | `codex-rs/config/src/permissions_toml.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
+| `codex-rs/config/src/schema.rs` | `crates/cageforge-config` | Upstream schema concepts are tracked while Cageforge keeps an independent schema |
 | `codex-rs/protocol/src/config_types.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
 | `codex-rs/core/src/config/permissions.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
 | `codex-rs/core/src/config/resolved_permission_profile.rs` | `crates/cageforge-config` | Profile-root state audited; Codex profile types excluded |

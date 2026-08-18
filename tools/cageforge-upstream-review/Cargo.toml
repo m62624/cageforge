@@ -14,6 +14,7 @@ name = "cageforge-review"
 path = "src/main.rs"
 
 [dependencies]
+cageforge-path = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }

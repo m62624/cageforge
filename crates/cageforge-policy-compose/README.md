@@ -25,8 +25,9 @@ alongside `cageforge-policy-compose`.
 
 | Crate | Role | Runtime dependencies | Used by |
 |---|---|---|---|
-| `cageforge-policy` | Portable filesystem and network policy semantics | None beyond Rust's standard library | This crate and backend integrations |
-| `cageforge-command` | Portable environment specification used during composition | None beyond Rust's standard library | This crate and command/config integrations |
+| `cageforge-policy` | Portable filesystem and network policy semantics | `cageforge-path` | This crate and backend integrations |
+| `cageforge-command` | Portable environment specification used during composition | `cageforge-path` | This crate and command/config integrations |
+| `cageforge-path` | Shared native path comparison semantics | None | This crate and the other path-bearing layers |
 | `cageforge-config` | Optional TOML source for requested values | Not a dependency of this crate | Applications wire its resolved values into this crate |
 
 The dependency direction is deliberate: composition does not depend on a
@@ -90,7 +91,9 @@ assert_ne!(ExternalOwner::new(), owner);
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
   that are constrained by both policies and retain both inputs for backend
   lowering. `glob_scan_max_depth` returns the widest depth required by all
-  effective deny-glob rules.
+  effective deny-glob rules. `EffectiveNetworkPolicy::decision_for_domain_with_resolved_ips`
+  applies the same DNS-rebinding-safe narrowing to every resolved address
+  supplied by a backend; it performs no DNS lookup itself.
 - `EffectiveEnvironment` exposes the least-permissive base and applies both
   environment transformations only to an `EnvironmentInput` whose selected
   base is no broader than the effective base.

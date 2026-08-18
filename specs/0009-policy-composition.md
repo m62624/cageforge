@@ -37,6 +37,11 @@ accidentally grant access.
   than `Read`, and `Read` is stronger than `Write`.
 - Network decisions are evaluated independently. A domain or Unix socket is
   allowed only when both policies allow it.
+- Resolved domain decisions are evaluated independently with the same complete
+  address set on both sides through
+  `EffectiveNetworkPolicy::decision_for_domain_with_resolved_ips`. The
+  composer performs no DNS lookup; an empty set represents failed resolution
+  and the default local-network denial remains monotonic.
 - `External` ownership is accepted only when both sides use external
   enforcement and the request and ceiling carry the same opaque
   `ExternalOwner` token. A local/external mismatch, missing owner proof, or

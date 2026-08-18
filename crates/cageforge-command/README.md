@@ -47,6 +47,11 @@ owned handoff for a process backend.
 `CommandError` is a dedicated library error enum. Callers can match invalid
 programs, arguments, working directories, and environment values directly.
 
+Working-directory parent traversal uses the shared `cageforge-path` semantics,
+so command requests, policy scopes, workspace ceilings, and review paths agree
+about Windows case handling without making this crate depend on a policy or
+backend.
+
 ## Quick start
 
 The crate preserves native command-line values with `OsString` and never parses

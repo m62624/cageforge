@@ -3,6 +3,7 @@
 
 use crate::PathResolutionContext;
 use crate::PolicyError;
+use cageforge_path::{case_fold, contains_parent_traversal, paths_equal, strings_equal};
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -36,10 +37,7 @@ impl PathSelector {
         if !path.is_absolute() {
             return Err(PolicyError::ExpectedAbsolute { path });
         }
-        if path
-            .components()
-            .any(|component| component == Component::ParentDir)
-        {
+        if contains_parent_traversal(&path) {
             return Err(PolicyError::ParentTraversal { path });
         }
         Ok(Self {
@@ -161,6 +159,20 @@ impl PathSelector {
             }
             _ => false,
         }
+    }
+}
+
+pub(crate) fn selectors_equal(left: &PathSelector, right: &PathSelector) -> bool {
+    match (&left.kind, &right.kind) {
+        (PathSelectorKind::Absolute(left), PathSelectorKind::Absolute(right))
+        | (PathSelectorKind::WorkspaceRoot(left), PathSelectorKind::WorkspaceRoot(right)) => {
+            paths_equal(left, right)
+        }
+        (PathSelectorKind::Root, PathSelectorKind::Root)
+        | (PathSelectorKind::Minimal, PathSelectorKind::Minimal)
+        | (PathSelectorKind::Tmpdir, PathSelectorKind::Tmpdir)
+        | (PathSelectorKind::SlashTmp, PathSelectorKind::SlashTmp) => true,
+        _ => false,
     }
 }
 
@@ -350,7 +362,7 @@ fn relative_path_components(path: &Path, root: &Path) -> Option<Vec<String>> {
         || !root_components
             .iter()
             .zip(&path_parts)
-            .all(|(root, path)| path_components_equal(path, root))
+            .all(|(root, path)| strings_equal(path, root))
     {
         return None;
     }
@@ -379,10 +391,8 @@ fn glob_components_match(pattern: &[String], path: &[String]) -> bool {
 }
 
 fn segment_matches(pattern: &str, value: &str) -> bool {
-    #[cfg(windows)]
-    let pattern = pattern.to_lowercase();
-    #[cfg(windows)]
-    let value = value.to_lowercase();
+    let pattern = case_fold(pattern);
+    let value = case_fold(value);
     let pattern = pattern.as_bytes();
     let value = value.as_bytes();
     let mut current = vec![false; value.len() + 1];
@@ -412,28 +422,8 @@ fn segment_matches(pattern: &str, value: &str) -> bool {
 
 fn prefixes_equal(left: Option<&str>, right: Option<&str>) -> bool {
     match (left, right) {
-        (Some(left), Some(right)) => path_strings_equal(left, right),
+        (Some(left), Some(right)) => strings_equal(left, right),
         (None, None) => true,
         _ => false,
     }
-}
-
-#[cfg(windows)]
-fn path_components_equal(left: &str, right: &str) -> bool {
-    path_strings_equal(left, right)
-}
-
-#[cfg(not(windows))]
-fn path_components_equal(left: &str, right: &str) -> bool {
-    left == right
-}
-
-#[cfg(windows)]
-fn path_strings_equal(left: &str, right: &str) -> bool {
-    left.to_lowercase() == right.to_lowercase()
-}
-
-#[cfg(not(windows))]
-fn path_strings_equal(left: &str, right: &str) -> bool {
-    left == right
 }

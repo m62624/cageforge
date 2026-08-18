@@ -4,8 +4,8 @@ use cageforge_command::{
 };
 use cageforge_config::{Config, ConfigError, DiagnosticSeverity};
 use cageforge_policy::{
-    AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemTarget, MissingPathBehavior,
-    NetworkMode, PathSelector, UnixSocketMode,
+    AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemTarget, LocalNetworkAccess,
+    MissingPathBehavior, NetworkMode, PathSelector, UnixSocketMode,
 };
 use pretty_assertions::assert_eq;
 use std::error::Error;
@@ -173,6 +173,7 @@ fn platform_example_exercises_every_config_field() {
     assert_eq!(network.mode(), NetworkMode::Enabled);
     assert_eq!(network.domain_mode(), DomainMode::Restricted);
     assert_eq!(network.unix_socket_mode(), UnixSocketMode::Restricted);
+    assert_eq!(network.local_network_access(), LocalNetworkAccess::Deny);
     assert_eq!(network.domains().len(), 4);
     assert_eq!(network.domains()[1].pattern(), "api.example.com");
     assert_eq!(network.domains()[2].pattern(), "2001:db8::1");
@@ -420,6 +421,34 @@ domains = [{ pattern = "EXAMPLE.COM:8443", access = "allow" }]
 }
 
 #[test]
+fn local_network_access_is_inherited_and_overridden() {
+    let config = Config::from_toml(
+        r#"
+[profiles.base.network]
+mode = "enabled"
+local_network_access = "deny"
+
+[profiles.child]
+inherits = ["base"]
+
+[profiles.child.network]
+local_network_access = "allow"
+"#,
+    )
+    .expect("local network access config should parse");
+
+    assert_eq!(
+        config
+            .resolve("child")
+            .expect("child should resolve")
+            .policy()
+            .network()
+            .local_network_access(),
+        LocalNetworkAccess::Allow
+    );
+}
+
+#[test]
 fn environment_inheritance_replaces_case_variants_safely() {
     let config = Config::from_toml(
         r#"
@@ -511,6 +540,7 @@ rules = [
 mode = "enabled"
 domain_mode = "restricted"
 unix_socket_mode = "restricted"
+local_network_access = "deny"
 domains = [
   {{ pattern = "**.example.com", access = "allow" }},
   {{ pattern = "blocked.example.com", access = "deny" }},
@@ -565,6 +595,7 @@ mode = "backend-default"
     assert_eq!(network.mode(), NetworkMode::Enabled);
     assert_eq!(network.domain_mode(), DomainMode::Restricted);
     assert_eq!(network.unix_socket_mode(), UnixSocketMode::Restricted);
+    assert_eq!(network.local_network_access(), LocalNetworkAccess::Deny);
     assert_eq!(network.domains().len(), 2);
     assert_eq!(network.unix_sockets().len(), 1);
     assert!(network.allows_domain("good.example.com").expect("domain"));

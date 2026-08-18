@@ -1,0 +1,72 @@
+# Specification 0010: Shared Path and Network Target Semantics
+
+Status: accepted; portable implementation complete
+
+## Purpose
+
+Several Cageforge crates accept paths, but none of them should invent its own
+Windows comparison rules. `cageforge-path` is the small shared crate for those
+lexical operations. It is intentionally independent of policy, configuration,
+process launching, DNS, and native enforcement.
+
+## Shared path contract
+
+`cageforge-path` owns:
+
+- component-aware `is_within` checks;
+- complete-path `paths_equal` checks;
+- platform-aware component and string comparisons;
+- lexical `contains_parent_traversal` validation.
+
+On POSIX targets comparisons are case-sensitive. On Windows they are
+case-insensitive, including drive-prefix and component comparisons. The helpers
+never use filesystem I/O, canonicalization, or symlink resolution. A backend
+must perform those operations when it prepares a native enforcement boundary.
+
+The shared helpers are used by policy filesystem matching, Unix-socket rules,
+command working-directory validation, config rule merging, policy-composition
+workspace ceilings, and upstream-review path validation. This keeps a path
+that is equal or inside another path under the same native semantics in every
+layer.
+
+## Resolved network target contract
+
+Domain rules alone cannot prevent a hostname from resolving to loopback,
+private, link-local, multicast, or other non-public addresses. The portable
+network model therefore exposes `LocalNetworkAccess` and
+`decision_for_domain_with_resolved_ips`.
+
+The policy crate does not perform DNS or network I/O. A consuming backend must
+resolve the hostname and pass every result to the method. It passes an empty
+slice when resolution fails or times out. With the default
+`LocalNetworkAccess::Deny`:
+
+- a hostname resolving to any non-public address is denied;
+- a hostname with no resolved addresses is denied;
+- a literal IP is denied when it is non-public unless an exact literal allow
+  rule exists;
+- public results remain subject to the ordinary domain rules;
+- `LocalNetworkAccess::Allow` is an explicit opt-in after the ordinary domain
+  policy has allowed the destination.
+
+The same check is exposed by `cageforge-policy-compose`, which evaluates both
+the requested policy and the ceiling with the same resolved address set. The
+composer does not resolve DNS, select a proxy, or implement firewall rules.
+
+This boundary captures the portable safety decision while leaving DNS
+configuration, resolver choice, connection races, socket enforcement, and
+platform capability errors to the future network backend.
+
+## Configuration
+
+`cageforge-config` maps the TOML field
+`[profiles.<name>.network].local_network_access` to this typed policy value.
+The field defaults to `deny`; `allow` must be an explicit profile choice.
+Profile inheritance treats it as a scalar child override.
+
+## Verification
+
+Black-box tests cover component-aware containment, Windows case behavior,
+parent-traversal rejection, path deduplication, public/private/mixed/empty DNS
+results, exact literal opt-in, explicit local-network opt-in, composition
+narrowing, config mapping, and config inheritance.

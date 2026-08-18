@@ -1,0 +1,15 @@
+[package]
+name = "cageforge-path"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared native path comparison and validation primitives"
+readme = "README.md"
+
+[lib]
+name = "cageforge_path"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

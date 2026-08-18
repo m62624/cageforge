@@ -3,6 +3,7 @@
 
 use crate::PathSelector;
 use crate::PolicyError;
+use cageforge_path::is_within;
 use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -39,6 +40,16 @@ pub enum UnixSocketMode {
     Enabled,
     /// Reject Unix socket paths by default and allow only matching allow rules.
     Restricted,
+}
+
+/// Controls access to loopback, private, link-local, and otherwise
+/// non-public IP addresses reached through a domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LocalNetworkAccess {
+    /// Reject non-public destinations unless the caller explicitly opts in.
+    Deny,
+    /// Permit non-public destinations after the ordinary domain policy allows.
+    Allow,
 }
 
 /// Whether a domain or socket is allowed or denied.
@@ -130,6 +141,7 @@ pub struct NetworkPolicy {
     mode: NetworkMode,
     domain_mode: DomainMode,
     unix_socket_mode: UnixSocketMode,
+    local_network_access: LocalNetworkAccess,
     domains: Vec<DomainRule>,
     unix_sockets: Vec<UnixSocketRule>,
 }
@@ -141,6 +153,7 @@ impl NetworkPolicy {
             mode: NetworkMode::Disabled,
             domain_mode: DomainMode::Disabled,
             unix_socket_mode: UnixSocketMode::Disabled,
+            local_network_access: LocalNetworkAccess::Deny,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
         }
@@ -152,6 +165,7 @@ impl NetworkPolicy {
             mode: NetworkMode::Enabled,
             domain_mode: DomainMode::Enabled,
             unix_socket_mode: UnixSocketMode::Enabled,
+            local_network_access: LocalNetworkAccess::Deny,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
         }
@@ -163,6 +177,7 @@ impl NetworkPolicy {
             mode: NetworkMode::External,
             domain_mode: DomainMode::Disabled,
             unix_socket_mode: UnixSocketMode::Disabled,
+            local_network_access: LocalNetworkAccess::Deny,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
         }
@@ -183,6 +198,11 @@ impl NetworkPolicy {
         self.unix_socket_mode
     }
 
+    /// Returns the policy for non-public IP addresses reached through domains.
+    pub const fn local_network_access(&self) -> LocalNetworkAccess {
+        self.local_network_access
+    }
+
     /// Sets the default behavior for unmatched domains.
     pub const fn with_domain_mode(mut self, mode: DomainMode) -> Self {
         self.domain_mode = mode;
@@ -192,6 +212,12 @@ impl NetworkPolicy {
     /// Sets the default behavior for unmatched Unix socket paths.
     pub const fn with_unix_socket_mode(mut self, mode: UnixSocketMode) -> Self {
         self.unix_socket_mode = mode;
+        self
+    }
+
+    /// Sets whether resolved non-public IP addresses may be reached.
+    pub const fn with_local_network_access(mut self, access: LocalNetworkAccess) -> Self {
+        self.local_network_access = access;
         self
     }
 
@@ -289,6 +315,48 @@ impl NetworkPolicy {
         }
     }
 
+    /// Evaluates a domain together with addresses resolved by a future
+    /// network backend.
+    ///
+    /// This method deliberately performs no DNS lookup. The backend must
+    /// resolve the name, pass every result here, and pass an empty slice when
+    /// resolution fails or times out. Hostnames resolving to any non-public
+    /// address are denied by default to prevent DNS rebinding from bypassing
+    /// the domain policy. A literal IP may be allowed by an exact literal
+    /// domain rule or by [`LocalNetworkAccess::Allow`].
+    pub fn decision_for_domain_with_resolved_ips(
+        &self,
+        domain: &str,
+        resolved_ips: &[IpAddr],
+    ) -> Result<NetworkDecision, PolicyError> {
+        let normalized_domain = normalize_domain_pattern(domain)?;
+        let decision = self.decision_for_domain(&normalized_domain)?;
+        if !decision.is_allowed() {
+            return Ok(decision);
+        }
+
+        if let Some(literal) = parse_ip_literal(&normalized_domain) {
+            return Ok(
+                if self.has_exact_literal_allow(&normalized_domain)
+                    || self.local_network_access == LocalNetworkAccess::Allow
+                    || !is_non_public_ip(literal)
+                {
+                    NetworkDecision::Allow
+                } else {
+                    NetworkDecision::Deny
+                },
+            );
+        }
+
+        if resolved_ips.is_empty()
+            || (self.local_network_access == LocalNetworkAccess::Deny
+                && resolved_ips.iter().copied().any(is_non_public_ip))
+        {
+            return Ok(NetworkDecision::Deny);
+        }
+        Ok(NetworkDecision::Allow)
+    }
+
     /// Evaluates a Unix socket path against the complete network policy.
     ///
     /// The path is validated even when enforcement is external so malformed
@@ -303,7 +371,7 @@ impl NetworkPolicy {
         }
         let mut result = None;
         for rule in &self.unix_sockets {
-            if path.starts_with(rule.path()) {
+            if is_within(path, rule.path()) {
                 result = Some(match (result, rule.access()) {
                     (Some(DomainAccess::Deny), _) | (_, DomainAccess::Deny) => DomainAccess::Deny,
                     _ => DomainAccess::Allow,
@@ -352,6 +420,15 @@ impl NetworkPolicy {
             }
         }
         result
+    }
+
+    fn has_exact_literal_allow(&self, domain: &str) -> bool {
+        self.domains.iter().any(|rule| {
+            rule.access() == DomainAccess::Allow
+                && !rule.pattern().contains('*')
+                && !rule.pattern().contains('?')
+                && rule.pattern() == domain
+        })
     }
 }
 
@@ -426,6 +503,45 @@ fn normalize_ip_literal(host: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn parse_ip_literal(host: &str) -> Option<IpAddr> {
+    host.split_once('%').map_or_else(
+        || host.parse().ok(),
+        |(address, _scope)| address.parse().ok(),
+    )
+}
+
+fn is_non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(address) => {
+            let value = u32::from(address);
+            address.is_loopback()
+                || address.is_private()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.is_broadcast()
+                || (value & 0xff00_0000) == 0
+                || (value & 0xffc0_0000) == 0x6440_0000
+                || (value & 0xffff_ff00) == 0xc000_0000
+                || (value & 0xffff_ff00) == 0xc000_0200
+                || (value & 0xfffe_0000) == 0xc612_0000
+                || (value & 0xffff_ff00) == 0xc633_6400
+                || (value & 0xffff_ff00) == 0xcb00_7100
+                || (value & 0xf000_0000) == 0xf000_0000
+        }
+        IpAddr::V6(address) => {
+            address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.is_unique_local()
+                || address.is_unicast_link_local()
+                || address
+                    .to_ipv4()
+                    .is_some_and(|address| is_non_public_ip(IpAddr::V4(address)))
+        }
+    }
 }
 
 fn valid_domain_literal(pattern: &str) -> bool {
