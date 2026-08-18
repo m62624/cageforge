@@ -57,17 +57,34 @@ pub(crate) fn build_command(
 }
 
 fn build_environment(raw: &RawEnvironment, profile: &str) -> Result<EnvironmentSpec, ConfigError> {
-    let mut environment = match raw.base.as_deref().unwrap_or("inherit") {
-        "inherit" => EnvironmentSpec::inherit_all(),
-        "empty" => EnvironmentSpec::empty(),
+    let mut environment = match raw.inherit.as_deref().unwrap_or("all") {
+        "all" => EnvironmentSpec::inherit_all(),
+        "core" => EnvironmentSpec::inherit_core(),
+        "none" => EnvironmentSpec::empty(),
         value => {
             return Err(invalid_value(
                 profile,
-                "command.environment.base",
+                "command.environment.inherit",
                 format!("unsupported base {value:?}"),
             ));
         }
     };
+    for pattern in &raw.exclude {
+        environment = environment
+            .with_exclude_pattern(pattern)
+            .map_err(|source| ConfigError::Command {
+                profile: profile.to_owned(),
+                source,
+            })?;
+    }
+    for pattern in &raw.include {
+        environment = environment
+            .with_include_pattern(pattern)
+            .map_err(|source| ConfigError::Command {
+                profile: profile.to_owned(),
+                source,
+            })?;
+    }
     for (name, value) in &raw.set {
         environment = environment
             .with_var(name, value)

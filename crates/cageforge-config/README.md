@@ -35,6 +35,11 @@ default_profile = "workspace"
 
 [profiles.workspace]
 inherits = ["base"]
+description = "Workspace development profile"
+
+[profiles.workspace.workspace_roots]
+"/work/shared" = true
+"/work/generated" = false
 
 [profiles.workspace.filesystem]
 mode = "restricted"
@@ -49,6 +54,11 @@ mode = "disabled"
 [profiles.workspace.command]
 program = "cargo"
 args = ["test", "--workspace"]
+
+[profiles.workspace.command.environment]
+inherit = "core"
+include = ["CARGO_*", "RUST_*"]
+exclude = ["*TOKEN*"]
 
 [profiles.workspace.command.timeout]
 mode = "limit"
@@ -66,6 +76,16 @@ cycles, missing command programs, invalid paths, NUL values, contradictory
 policy modes, and invalid enum values are rejected. A profile without a
 filesystem section is an empty restricted policy; a profile without a network
 section denies networking; the command section is optional.
+
+`workspace_roots` is an inheritable path-to-enabled map. `true` enables a root
+and `false` disables an inherited root. The resolved paths are declarations;
+the backend resolves relative paths against its execution context before
+registering absolute roots in its path context.
+
+Command environments support `all`, `core`, and `none` inheritance bases.
+Include and exclude patterns use portable `*` and `?` matching and are exposed
+as validated values in `cageforge-command`. The backend decides which
+platform variables belong to the `core` set.
 
 ## Library API
 
@@ -92,6 +112,12 @@ NUL, environment, or ownership invariants after validation.
 The full API reference is available on
 [docs.rs](https://docs.rs/cageforge-config/latest/cageforge_config/).
 
+`config_schema_json()` returns the structural JSON Schema for editor tooling
+and preflight validation. `ConfigError::diagnostic()` returns a stable,
+machine-readable diagnostic with an error code, profile/field context, and a
+source location when the TOML parser provides one. Neither API replaces the
+typed resolution errors used by the library.
+
 `ConfigError` separates TOML/profile errors from policy and command errors.
 The latter remain available as typed source errors, so a harness can handle a
 configuration problem at the correct layer without parsing error text.
@@ -100,7 +126,8 @@ configuration problem at the correct layer without parsing error text.
 
 The black-box integration suite is in `crates/cageforge-config/tests/`. It
 covers strict parsing, inheritance order, platform-native paths, all policy
-and command modes, invalid values, and policy-only profiles. The crate is
+and command modes, environment filtering, profile metadata, workspace roots,
+schema and diagnostics, invalid values, and policy-only profiles. The crate is
 required to maintain at least 90% line coverage.
 
 Repository: [github.com/m62624/cageforge](https://github.com/m62624/cageforge).

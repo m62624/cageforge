@@ -1,8 +1,8 @@
 use cageforge_command::{
-    CommandRequest, CommandSpec, EnvironmentBase, EnvironmentOverride, EnvironmentSpec, StdioMode,
-    StdioSpec, TimeoutPolicy,
+    CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentOverride,
+    EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
-use cageforge_config::{Config, ConfigError};
+use cageforge_config::{Config, ConfigError, DiagnosticSeverity};
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemTarget, MissingPathBehavior,
     NetworkMode, PathSelector, UnixSocketMode,
@@ -53,7 +53,7 @@ args = ["hello", "world"]
 working_directory = "work"
 
 [profiles.workspace.command.environment]
-base = "empty"
+inherit = "none"
 set = { LANG = "C" }
 
 [profiles.workspace.command.stdio]
@@ -123,7 +123,9 @@ program = "base-program"
 args = ["base"]
 
 [profiles.base.command.environment]
-base = "empty"
+inherit = "none"
+include = ["BASE_*"]
+exclude = ["*SECRET*"]
 set = { BASE = "one", SHARED = "base" }
 
 [profiles.base.command.timeout]
@@ -140,6 +142,8 @@ domains = [{ pattern = "blocked.example.com", access = "deny" }]
 working_directory = "child"
 
 [profiles.override.command.environment]
+include = ["OVERRIDE_*"]
+exclude = ["*TOKEN*"]
 set = { OVERRIDE = "yes", SHARED = "override" }
 
 [profiles.final]
@@ -152,6 +156,7 @@ rules = [{ target = "slash-tmp", access = "write" }]
 args = ["final"]
 
 [profiles.final.command.environment]
+include = ["FINAL_*"]
 remove = ["BASE"]
 
 [profiles.final.command.timeout]
@@ -189,7 +194,25 @@ mode = "disabled"
     assert_eq!(command.command().program(), OsStr::new("base-program"));
     assert_eq!(command.command().args(), [OsString::from("final")]);
     assert_eq!(command.working_directory(), Some(Path::new("child")));
-    assert_eq!(command.environment().base(), EnvironmentBase::Empty);
+    assert_eq!(command.environment().base(), EnvironmentBase::None);
+    assert_eq!(
+        command
+            .environment()
+            .include_patterns()
+            .iter()
+            .map(|pattern| pattern.as_str())
+            .collect::<Vec<_>>(),
+        ["BASE_*", "OVERRIDE_*", "FINAL_*"]
+    );
+    assert_eq!(
+        command
+            .environment()
+            .exclude_patterns()
+            .iter()
+            .map(|pattern| pattern.as_str())
+            .collect::<Vec<_>>(),
+        ["*SECRET*", "*TOKEN*"]
+    );
     assert_eq!(
         command.environment().override_for(OsStr::new("BASE")),
         Some(&EnvironmentOverride::Remove)
@@ -304,6 +327,93 @@ fn policy_only_profile_uses_safe_defaults() {
     assert!(resolved.policy().filesystem().entries().is_empty());
     assert_eq!(resolved.policy().network().mode(), NetworkMode::Disabled);
     assert_eq!(resolved.command(), None);
+}
+
+#[test]
+fn resolves_profile_metadata_and_workspace_roots() {
+    let config = Config::from_toml(
+        r#"
+[profiles.parent]
+description = "shared workspace policy"
+
+[profiles.parent.workspace_roots]
+"/workspace/shared" = true
+"/workspace/removed" = true
+
+[profiles.child]
+inherits = ["parent"]
+description = "child workspace policy"
+
+[profiles.child.workspace_roots]
+"/workspace/removed" = false
+"relative/shared" = true
+"/workspace/shared" = true
+"relative/disabled" = false
+"#,
+    )
+    .expect("metadata and workspace roots should parse");
+
+    assert_eq!(
+        config
+            .resolve("parent")
+            .expect("parent resolves")
+            .description(),
+        Some("shared workspace policy")
+    );
+    let resolved = config.resolve("child").expect("child resolves");
+    assert_eq!(resolved.description(), Some("child workspace policy"));
+    assert_eq!(
+        resolved.workspace_roots(),
+        &[
+            PathBuf::from("/workspace/shared"),
+            PathBuf::from("relative/shared"),
+        ]
+    );
+}
+
+#[test]
+fn resolves_all_environment_bases_and_filters() {
+    for (inherit, expected_base) in [
+        ("all", EnvironmentBase::All),
+        ("core", EnvironmentBase::Core),
+        ("none", EnvironmentBase::None),
+    ] {
+        let source = format!(
+            r#"
+default_profile = "profile"
+
+[profiles.profile.command]
+program = "runner"
+
+[profiles.profile.command.environment]
+inherit = "{inherit}"
+include = ["CARGO_*", "PATH"]
+exclude = ["*TOKEN*"]
+"#
+        );
+        let resolved = Config::from_toml(&source)
+            .expect("environment source should parse")
+            .resolve_default()
+            .expect("environment should resolve");
+        let environment = resolved.command().expect("command").environment();
+        assert_eq!(environment.base(), expected_base);
+        assert_eq!(
+            environment
+                .include_patterns()
+                .iter()
+                .map(|pattern| pattern.as_str())
+                .collect::<Vec<_>>(),
+            ["CARGO_*", "PATH"]
+        );
+        assert_eq!(
+            environment
+                .exclude_patterns()
+                .iter()
+                .map(|pattern| pattern.as_str())
+                .collect::<Vec<_>>(),
+            ["*TOKEN*"]
+        );
+    }
 }
 
 #[test]
@@ -549,12 +659,20 @@ fn rejects_remaining_policy_and_command_builder_errors() {
         ),
         ("[profiles.p.command]\n", "missing command program"),
         (
-            "[profiles.p.command]\nprogram = \"runner\"\n[profiles.p.command.environment]\nbase = \"unknown\"\n",
+            "[profiles.p.command]\nprogram = \"runner\"\n[profiles.p.command.environment]\ninherit = \"unknown\"\n",
             "unknown environment base",
         ),
         (
             "[profiles.p.command]\nprogram = \"runner\"\n[profiles.p.command.environment]\nremove = [\"\"]\n",
             "empty environment name",
+        ),
+        (
+            "[profiles.p.command.environment]\ninclude = [\"\"]\n",
+            "empty environment include pattern",
+        ),
+        (
+            "[profiles.p.command.environment]\nexclude = [\"BAD=NAME\"]\n",
+            "invalid environment exclude pattern",
         ),
         (
             "[profiles.p.command]\nprogram = \"runner\"\nargs = [\"\\u0000\"]\n",
@@ -572,6 +690,14 @@ fn rejects_remaining_policy_and_command_builder_errors() {
             .unwrap_or_else(|error| panic!("{label} should parse: {error}"));
         assert!(config.resolve_default().is_err(), "{label} should fail");
     }
+
+    let error =
+        Config::from_toml("default_profile = \"p\"\n[profiles.p.workspace_roots]\n\"\" = true\n")
+            .expect_err("empty workspace root should fail validation");
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue { field, .. } if field == "workspace_roots"
+    ));
 }
 
 #[test]
@@ -579,6 +705,7 @@ fn config_errors_have_context_and_sources() {
     let errors = [
         ConfigError::InvalidToml {
             message: "bad syntax".to_owned(),
+            location: None,
         },
         ConfigError::ReadFile {
             path: PathBuf::from("config.toml"),
@@ -611,9 +738,30 @@ fn config_errors_have_context_and_sources() {
             source: cageforge_command::CommandError::EmptyProgram,
         },
     ];
-    for error in errors {
+    for error in &errors {
         assert!(!error.to_string().is_empty());
     }
+    let expected_codes = [
+        "invalid_toml",
+        "config_file_unreadable",
+        "invalid_profile_name",
+        "unknown_profile",
+        "missing_default_profile",
+        "profile_inheritance_cycle",
+        "invalid_value",
+        "missing_command_program",
+        "invalid_policy",
+        "invalid_command",
+    ];
+    for (error, code) in errors.iter().zip(expected_codes) {
+        let diagnostic = error.diagnostic();
+        assert_eq!(diagnostic.code(), code);
+        assert_eq!(diagnostic.severity(), DiagnosticSeverity::Error);
+        assert_eq!(diagnostic.message(), error.to_string());
+    }
+    assert_eq!(errors[6].diagnostic().profile(), Some("safe"));
+    assert_eq!(errors[6].diagnostic().field(), Some("filesystem.mode"));
+    assert_eq!(errors[0].diagnostic().location(), None);
     let policy = ConfigError::Policy {
         profile: "safe".to_owned(),
         source: cageforge_policy::PolicyError::EmptyPath,
@@ -625,4 +773,45 @@ fn config_errors_have_context_and_sources() {
     };
     assert!(command.source().is_some());
     assert!(ConfigError::NoDefaultProfile.source().is_none());
+}
+
+#[test]
+fn exposes_json_schema_and_structured_diagnostics() {
+    let schema = cageforge_config::config_schema_json().expect("schema serializes");
+    let schema_json: serde_json::Value =
+        serde_json::from_str(&schema).expect("schema is valid JSON");
+    assert_eq!(schema_json["type"], "object");
+    let schema_text = schema_json.to_string();
+    assert!(schema_text.contains("workspace_roots"));
+    assert!(schema_text.contains("description"));
+    assert!(schema_text.contains("include"));
+    assert!(schema_text.contains("exclude"));
+
+    let error = Config::from_toml("default_profile = [").expect_err("invalid TOML");
+    let diagnostic = error.diagnostic();
+    assert_eq!(diagnostic.code(), "invalid_toml");
+    assert_eq!(diagnostic.severity(), DiagnosticSeverity::Error);
+    assert!(diagnostic.location().is_some());
+    let diagnostic_json: serde_json::Value =
+        serde_json::from_str(&diagnostic.to_json().expect("diagnostic serializes"))
+            .expect("diagnostic is valid JSON");
+    assert_eq!(diagnostic_json["code"], "invalid_toml");
+    assert_eq!(diagnostic_json["severity"], "error");
+
+    let error = Config::from_toml(
+        "default_profile = \"profile\"\n[profiles.profile.command]\nprogram = \"runner\"\n[profiles.profile.command.environment]\ninclude = [\"\"]\n",
+    )
+    .expect("invalid pattern source should parse")
+    .resolve_default()
+    .expect_err("invalid pattern should fail resolution");
+    assert!(matches!(
+        error,
+        ConfigError::Command {
+            source: CommandError::EmptyEnvironmentPattern,
+            ..
+        }
+    ));
+    let diagnostic = error.diagnostic();
+    assert_eq!(diagnostic.code(), "invalid_command");
+    assert_eq!(diagnostic.profile(), Some("profile"));
 }

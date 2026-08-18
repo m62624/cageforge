@@ -1,11 +1,13 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawConfig {
     #[serde(default)]
     pub(crate) default_profile: Option<String>,
@@ -13,18 +15,24 @@ pub(crate) struct RawConfig {
     pub(crate) profiles: BTreeMap<String, RawProfile>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawProfile {
     #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
     pub(crate) inherits: Vec<String>,
+    #[serde(default)]
+    pub(crate) workspace_roots: BTreeMap<String, bool>,
     pub(crate) filesystem: Option<RawFilesystem>,
     pub(crate) network: Option<RawNetwork>,
     pub(crate) command: Option<RawCommand>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawFilesystem {
     pub(crate) mode: Option<String>,
     pub(crate) glob_scan_max_depth: Option<usize>,
@@ -32,8 +40,9 @@ pub(crate) struct RawFilesystem {
     pub(crate) rules: Vec<RawFilesystemRule>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawFilesystemRule {
     pub(crate) target: String,
     pub(crate) path: Option<String>,
@@ -44,15 +53,17 @@ pub(crate) struct RawFilesystemRule {
     pub(crate) read_only_subpaths: Vec<RawSelector>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawSelector {
     pub(crate) target: String,
     pub(crate) path: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawNetwork {
     pub(crate) mode: Option<String>,
     pub(crate) domain_mode: Option<String>,
@@ -63,22 +74,25 @@ pub(crate) struct RawNetwork {
     pub(crate) unix_sockets: Vec<RawUnixSocketRule>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawDomainRule {
     pub(crate) pattern: String,
     pub(crate) access: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawUnixSocketRule {
     pub(crate) path: String,
     pub(crate) access: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawCommand {
     pub(crate) program: Option<String>,
     pub(crate) args: Option<Vec<String>>,
@@ -88,26 +102,33 @@ pub(crate) struct RawCommand {
     pub(crate) timeout: Option<RawTimeout>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawEnvironment {
-    pub(crate) base: Option<String>,
+    pub(crate) inherit: Option<String>,
+    #[serde(default)]
+    pub(crate) include: Vec<String>,
+    #[serde(default)]
+    pub(crate) exclude: Vec<String>,
     #[serde(default)]
     pub(crate) set: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) remove: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawStdio {
     pub(crate) stdin: Option<String>,
     pub(crate) stdout: Option<String>,
     pub(crate) stderr: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RawTimeout {
     pub(crate) mode: Option<String>,
     pub(crate) milliseconds: Option<u64>,

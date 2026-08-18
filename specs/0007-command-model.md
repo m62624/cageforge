@@ -40,14 +40,21 @@ shell must place the shell executable and its arguments in the vector.
 
 ### `EnvironmentSpec`
 
-The caller chooses either inherited or empty base environment and then applies
-explicit set/remove overrides. Set-to-empty and removal are distinct. Variable
-names reject empty values, `=`, and NUL; values reject NUL.
+The caller chooses an `All`, `Core`, or `None` base environment and then
+applies optional include/exclude wildcard filters and explicit set/remove
+overrides. Set-to-empty and removal are distinct. Variable names reject empty
+values, `=`, and NUL; values and filter patterns reject NUL. `*` matches zero or
+more characters and `?` matches one character.
 
-The type intentionally does not reproduce Codex's product-specific filtering
-policy. Pattern-based environment filtering belongs in the future config layer
-if Cageforge needs it, and must resolve to this canonical model rather than
-introduce a second launch representation.
+The command crate stores the portable request only. `Core` is intentionally a
+backend-defined conservative environment set because safe variables are
+platform-specific. Include patterns retain matching names and exclude patterns
+remove matching names; a backend applies them to the environment it constructs.
+
+The type intentionally does not reproduce Codex's product-specific default
+excludes, environment discovery, or configuration compatibility rules. It
+stores only the generic filter intent; config parsing resolves profile data into
+this canonical model rather than introducing a second launch representation.
 
 ### `StdioSpec`
 
@@ -99,8 +106,8 @@ The public integration suite covers:
 
 - empty and NUL-containing program rejection;
 - native arguments, including empty arguments and NUL rejection;
-- inherited/empty environments, deterministic overrides, set/remove
-  distinction, and invalid names/values;
+- all/core/none environments, deterministic overrides, set/remove distinction,
+  wildcard filtering, and invalid names/values/patterns;
 - explicit and default stdio modes;
 - optional native cwd, NUL rejection, and timeout replacement/removal;
 - complete object equality and error display.

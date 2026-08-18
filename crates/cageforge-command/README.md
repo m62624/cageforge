@@ -40,7 +40,7 @@ owned handoff for a process backend.
 |---|---|
 | `CommandRequest` | Complete portable request passed to a future execution backend. |
 | `CommandSpec` | Native argv vector with a non-empty executable. |
-| `EnvironmentSpec` | Inherited or empty base environment plus explicit set/remove overrides. |
+| `EnvironmentSpec` | All/core/none base environment plus validated filters and explicit set/remove overrides. |
 | `StdioSpec` and `StdioMode` | Independent routing for stdin, stdout, and stderr. |
 | `TimeoutPolicy` | Backend default, explicit duration limit, or disabled automatic timeout. |
 | `CommandError` | Construction errors for invalid programs, paths, and environment values. |
@@ -81,15 +81,17 @@ also rejects empty and NUL-containing paths at the request boundary.
 
 ## Environment
 
-`EnvironmentSpec::inherit_all` starts with the launching process environment.
-`EnvironmentSpec::empty` starts with no inherited variables. Both forms accept
-explicit `with_var` and `without_var` overrides. Setting a variable to an empty
-value is different from removing it. Names reject empty strings, `=`, and NUL;
-values reject NUL.
+`EnvironmentSpec::inherit_all` starts with the launching process environment,
+`EnvironmentSpec::inherit_core` requests the backend's conservative
+platform-specific core set, and `EnvironmentSpec::empty` starts with no
+inherited variables. All forms accept explicit `with_var` and `without_var`
+overrides. Setting a variable to an empty value is different from removing it.
+Names reject empty strings, `=`, and NUL; values and filter patterns reject NUL.
 
-The type does not include product-specific environment filtering. Filtering, if
-needed, belongs in a future config or backend layer and must produce this
-canonical request model.
+`with_include_pattern` and `with_exclude_pattern` accept portable `*` and `?`
+wildcards. The model stores the validated filters; the backend applies them to
+the environment it constructs. This keeps process-environment discovery out of
+the platform-independent crate.
 
 ## Standard streams and timeout
 
@@ -113,7 +115,7 @@ handles belong to a backend or harness adapter.
 The black-box integration suite lives in
 `crates/cageforge-command/tests/command.rs`. It covers native argv values,
 validation, environment bases and overrides, stdio routing, cwd handling,
-timeout states, and error display.
+environment filters, timeout states, and error display.
 
 API reference: [`cageforge-command` on docs.rs](https://docs.rs/cageforge-command/latest/cageforge_command/).
 

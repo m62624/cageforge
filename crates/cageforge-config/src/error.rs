@@ -3,8 +3,22 @@
 
 use cageforge_command::CommandError;
 use cageforge_policy::PolicyError;
+use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
+
+/// A byte-based location in the source TOML document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SourceLocation {
+    /// One-based line number.
+    pub line: usize,
+    /// One-based column number.
+    pub column: usize,
+    /// Zero-based byte offset into the source document.
+    pub offset: usize,
+    /// Number of bytes covered by the parser span.
+    pub length: usize,
+}
 
 /// Errors returned while parsing or resolving a Cageforge configuration.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -14,6 +28,8 @@ pub enum ConfigError {
     InvalidToml {
         /// The parser's explanation.
         message: String,
+        /// The parser span, when TOML provided one.
+        location: Option<SourceLocation>,
     },
     /// The configuration file could not be read.
     #[error("cannot read configuration {}: {message}", path.display())]

@@ -10,8 +10,8 @@ use crate::model::{
 };
 use cageforge_command::CommandRequest;
 use cageforge_policy::SandboxPolicy;
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 /// A parsed Cageforge TOML document.
 #[derive(Debug, Clone)]
@@ -22,6 +22,8 @@ pub struct Config {
 /// A fully resolved profile ready for a backend or harness adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedProfile {
+    description: Option<String>,
+    workspace_roots: Vec<PathBuf>,
     policy: SandboxPolicy,
     command: Option<CommandRequest>,
 }
@@ -31,6 +33,7 @@ impl Config {
     pub fn from_toml(source: &str) -> Result<Self, ConfigError> {
         let raw = toml::from_str(source).map_err(|error| ConfigError::InvalidToml {
             message: error.to_string(),
+            location: error.span().map(|span| source_location(source, span)),
         })?;
         validate_raw_config(&raw)?;
         Ok(Self { raw })
@@ -63,7 +66,17 @@ impl Config {
         let policy =
             build::build_policy(merged.filesystem.as_ref(), merged.network.as_ref(), name)?;
         let command = build::build_command(merged.command.as_ref(), name)?;
-        Ok(ResolvedProfile { policy, command })
+        let workspace_roots = merged
+            .workspace_roots
+            .into_iter()
+            .filter_map(|(path, enabled)| enabled.then_some(PathBuf::from(path)))
+            .collect();
+        Ok(ResolvedProfile {
+            description: merged.description,
+            workspace_roots,
+            policy,
+            command,
+        })
     }
 
     /// Resolves the configured default profile.
@@ -104,6 +117,20 @@ impl Config {
 }
 
 impl ResolvedProfile {
+    /// Returns the selected profile's description, if configured.
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    /// Returns enabled workspace roots declared by the selected profile.
+    ///
+    /// The paths are declarations only. A backend or harness resolves relative
+    /// paths against its execution context and registers the resulting
+    /// absolute paths in [`cageforge_policy::PathResolutionContext`].
+    pub fn workspace_roots(&self) -> &[PathBuf] {
+        &self.workspace_roots
+    }
+
     /// Returns the resolved sandbox policy.
     pub fn policy(&self) -> &SandboxPolicy {
         &self.policy
@@ -117,6 +144,8 @@ impl ResolvedProfile {
 
 #[derive(Debug, Clone, Default)]
 struct MergedProfile {
+    description: Option<String>,
+    workspace_roots: BTreeMap<String, bool>,
     filesystem: Option<RawFilesystem>,
     network: Option<RawNetwork>,
     command: Option<RawCommand>,
@@ -133,6 +162,9 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
     }
     for (name, profile) in &config.profiles {
         validate_profile_name(name)?;
+        for root in profile.workspace_roots.keys() {
+            validate_workspace_root(name, root)?;
+        }
         let mut inherited = BTreeSet::new();
         for parent in &profile.inherits {
             validate_profile_name(parent)?;
@@ -179,7 +211,44 @@ fn validate_profile_name(name: &str) -> Result<(), ConfigError> {
     }
 }
 
+fn validate_workspace_root(profile: &str, root: &str) -> Result<(), ConfigError> {
+    if root.is_empty() {
+        return Err(invalid_value(
+            profile,
+            "workspace_roots",
+            "path must not be empty",
+        ));
+    }
+    if root.contains('\0') {
+        return Err(invalid_value(
+            profile,
+            "workspace_roots",
+            "path must not contain a NUL character",
+        ));
+    }
+    Ok(())
+}
+
+fn source_location(source: &str, span: std::ops::Range<usize>) -> crate::SourceLocation {
+    let offset = span.start.min(source.len());
+    let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    crate::SourceLocation {
+        line: source[..offset]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1,
+        column: source[line_start..offset].chars().count() + 1,
+        offset,
+        length: span.end.saturating_sub(span.start),
+    }
+}
+
 fn apply_profile(mut merged: MergedProfile, profile: &RawProfile) -> MergedProfile {
+    merged.description = profile.description.clone();
+    merged
+        .workspace_roots
+        .extend(profile.workspace_roots.clone());
     if let Some(filesystem) = &profile.filesystem {
         merged.filesystem = Some(merge_filesystem(merged.filesystem.take(), filesystem));
     }
@@ -193,6 +262,7 @@ fn apply_profile(mut merged: MergedProfile, profile: &RawProfile) -> MergedProfi
 }
 
 fn merge_profiles(mut left: MergedProfile, right: MergedProfile) -> MergedProfile {
+    left.workspace_roots.extend(right.workspace_roots);
     if let Some(filesystem) = right.filesystem {
         left.filesystem = Some(merge_filesystem(left.filesystem.take(), &filesystem));
     }
@@ -258,9 +328,11 @@ fn merge_command(parent: Option<RawCommand>, child: &RawCommand) -> RawCommand {
 
 fn merge_environment(parent: Option<RawEnvironment>, child: &RawEnvironment) -> RawEnvironment {
     let mut merged = parent.unwrap_or_default();
-    if child.base.is_some() {
-        merged.base = child.base.clone();
+    if child.inherit.is_some() {
+        merged.inherit = child.inherit.clone();
     }
+    append_unique(&mut merged.include, &child.include);
+    append_unique(&mut merged.exclude, &child.exclude);
     for (name, value) in &child.set {
         merged.remove.retain(|removed| removed != name);
         merged.set.insert(name.clone(), value.clone());
@@ -272,6 +344,14 @@ fn merge_environment(parent: Option<RawEnvironment>, child: &RawEnvironment) -> 
         }
     }
     merged
+}
+
+fn append_unique<T: PartialEq + Clone>(target: &mut Vec<T>, values: &[T]) {
+    for value in values {
+        if !target.contains(value) {
+            target.push(value.clone());
+        }
+    }
 }
 
 fn merge_stdio(parent: Option<RawStdio>, child: &RawStdio) -> RawStdio {

@@ -10,12 +10,16 @@
 #![deny(missing_docs)]
 
 mod build;
+mod diagnostics;
 mod error;
 mod model;
 mod resolve;
+mod schema;
 
-pub use error::ConfigError;
+pub use diagnostics::{ConfigDiagnostic, DiagnosticSeverity};
+pub use error::{ConfigError, SourceLocation};
 pub use resolve::{Config, ResolvedProfile};
+pub use schema::config_schema_json;
 
 pub use cageforge_command::CommandRequest;
 pub use cageforge_policy::SandboxPolicy;

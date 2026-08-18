@@ -18,7 +18,7 @@ mod stdio;
 mod timeout;
 
 pub use command::CommandSpec;
-pub use environment::{EnvironmentBase, EnvironmentOverride, EnvironmentSpec};
+pub use environment::{EnvironmentBase, EnvironmentOverride, EnvironmentPattern, EnvironmentSpec};
 pub use error::CommandError;
 pub use request::CommandRequest;
 pub use stdio::{StdioMode, StdioSpec};

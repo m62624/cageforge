@@ -33,4 +33,13 @@ pub enum CommandError {
     /// An environment variable value contained a NUL character.
     #[error("environment variable value must not contain a NUL character")]
     EnvironmentValueContainsNul,
+    /// An environment-variable filter pattern was empty.
+    #[error("environment variable pattern must not be empty")]
+    EmptyEnvironmentPattern,
+    /// An environment-variable filter pattern contained a NUL character.
+    #[error("environment variable pattern must not contain a NUL character")]
+    EnvironmentPatternContainsNul,
+    /// An environment-variable filter pattern contained `=`.
+    #[error("environment variable pattern must not contain '='")]
+    EnvironmentPatternContainsEquals,
 }

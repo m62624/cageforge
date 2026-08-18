@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use cageforge_command::{
     CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentOverride,
-    EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
+    EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
 use pretty_assertions::assert_eq;
 
@@ -67,9 +67,13 @@ fn command_spec_rejects_invalid_programs_and_returns_parts() {
 
 #[test]
 fn environment_defaults_and_bases_are_explicit() {
-    assert_eq!(EnvironmentSpec::default().base(), EnvironmentBase::Inherit);
+    assert_eq!(EnvironmentSpec::default().base(), EnvironmentBase::All);
     assert!(EnvironmentSpec::default().overrides().is_empty());
-    assert_eq!(EnvironmentSpec::empty().base(), EnvironmentBase::Empty);
+    assert_eq!(EnvironmentSpec::empty().base(), EnvironmentBase::None);
+    assert_eq!(
+        EnvironmentSpec::inherit_core().base(),
+        EnvironmentBase::Core
+    );
 }
 
 #[test]
@@ -82,7 +86,7 @@ fn environment_overrides_are_sorted_and_distinguish_set_from_remove() {
         .with_var("MIDDLE", "value")
         .expect("valid variable should be accepted");
 
-    assert_eq!(environment.base(), EnvironmentBase::Empty);
+    assert_eq!(environment.base(), EnvironmentBase::None);
     assert_eq!(
         environment.override_for("A_REMOVE".as_ref()),
         Some(&EnvironmentOverride::Remove)
@@ -99,6 +103,41 @@ fn environment_overrides_are_sorted_and_distinguish_set_from_remove() {
             &OsString::from("MIDDLE"),
             &OsString::from("Z_LAST")
         ]
+    );
+}
+
+#[test]
+fn environment_patterns_are_validated_and_match_wildcards() {
+    let environment = EnvironmentSpec::inherit_core()
+        .with_include_pattern("CARGO_*")
+        .expect("include pattern")
+        .with_exclude_pattern("*TOKEN*")
+        .expect("exclude pattern")
+        .with_include_pattern("CARGO_*")
+        .expect("duplicate include pattern");
+
+    assert_eq!(environment.include_patterns().len(), 1);
+    assert_eq!(environment.exclude_patterns().len(), 1);
+    assert_eq!(environment.include_patterns()[0].as_str(), "CARGO_*");
+    assert!(environment.include_patterns()[0].matches("CARGO_HOME"));
+    assert!(!environment.include_patterns()[0].matches("HOME"));
+    assert!(environment.exclude_patterns()[0].matches("API_TOKEN"));
+    assert!(!environment.exclude_patterns()[0].matches("PATH"));
+    let single_character = EnvironmentPattern::new("A?C").expect("single-character pattern");
+    assert!(single_character.matches("ABC"));
+    assert!(!single_character.matches("AC"));
+
+    assert_eq!(
+        EnvironmentPattern::new("").expect_err("empty pattern"),
+        CommandError::EmptyEnvironmentPattern
+    );
+    assert_eq!(
+        EnvironmentPattern::new("BAD=NAME").expect_err("equals in pattern"),
+        CommandError::EnvironmentPatternContainsEquals
+    );
+    assert_eq!(
+        EnvironmentPattern::new("BAD\0NAME").expect_err("NUL in pattern"),
+        CommandError::EnvironmentPatternContainsNul
     );
 }
 
@@ -257,6 +296,18 @@ fn errors_have_actionable_display_messages() {
         (
             CommandError::EnvironmentValueContainsNul,
             "environment variable value must not contain a NUL",
+        ),
+        (
+            CommandError::EmptyEnvironmentPattern,
+            "environment variable pattern must not be empty",
+        ),
+        (
+            CommandError::EnvironmentPatternContainsNul,
+            "environment variable pattern must not contain a NUL",
+        ),
+        (
+            CommandError::EnvironmentPatternContainsEquals,
+            "environment variable pattern must not contain '='",
         ),
     ];
 
