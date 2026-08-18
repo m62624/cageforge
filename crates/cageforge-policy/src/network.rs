@@ -172,6 +172,18 @@ impl NetworkPolicy {
         }
     }
 
+    /// Creates a network policy with no local restrictions.
+    pub const fn unrestricted() -> Self {
+        Self {
+            mode: NetworkMode::Enabled,
+            domain_mode: DomainMode::Enabled,
+            unix_socket_mode: UnixSocketMode::Enabled,
+            local_network_access: LocalNetworkAccess::Allow,
+            domains: Vec::new(),
+            unix_sockets: Vec::new(),
+        }
+    }
+
     /// Creates a policy whose network boundary is owned externally.
     pub const fn external() -> Self {
         Self {
@@ -349,15 +361,18 @@ impl NetworkPolicy {
             );
         }
 
-        if resolved_ips.is_empty()
-            || (self.local_network_access == LocalNetworkAccess::Deny
-                && resolved_ips.iter().copied().any(is_non_public_ip))
+        let explicit_localhost_allow =
+            normalized_domain == "localhost" && self.has_exact_allow(&normalized_domain);
+        if normalized_domain == "localhost"
+            && self.local_network_access == LocalNetworkAccess::Deny
+            && !explicit_localhost_allow
         {
             return Ok(NetworkDecision::Deny);
         }
-        if normalized_domain == "localhost"
-            && self.local_network_access == LocalNetworkAccess::Deny
-            && !self.has_exact_allow(&normalized_domain)
+        if resolved_ips.is_empty()
+            || (self.local_network_access == LocalNetworkAccess::Deny
+                && !explicit_localhost_allow
+                && resolved_ips.iter().copied().any(is_non_public_ip))
         {
             return Ok(NetworkDecision::Deny);
         }

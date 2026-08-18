@@ -55,9 +55,10 @@ The first crate exposes:
 - `SandboxPolicy`, which combines filesystem and network policy.
 
 The crate provides built-in constructors named `read_only`, `workspace`, and
-`full_access`. These are Cageforge concepts, not Codex compatibility aliases.
-They are initial policy presets; future named TOML profiles will resolve to the
-same `SandboxPolicy` type.
+`full_access`; `NetworkPolicy` also provides the explicit `unrestricted` network
+preset. These are Cageforge concepts, not Codex compatibility aliases. They are
+initial policy presets; future named TOML profiles will resolve to the same
+policy types.
 
 Restricted filesystem policies also carry protected metadata paths by default.
 The initial default is the relative path `.git`, applied below every writable
@@ -122,10 +123,12 @@ dangerous request.
 - Domain and Unix-socket defaults are explicit: disabled, enabled, or
   restricted allowlist; backends never infer a default from rule presence.
 - Resolved domain targets use `LocalNetworkAccess::Deny` by default. Backends
-  pass all DNS results to the typed resolved-target query; empty resolution,
-  any non-public result, or the `localhost` hostname is denied unless an
-  explicit literal/hostname or policy opt-in permits it. The policy crate
-  never performs DNS or connection I/O.
+  pass all DNS results to the typed resolved-target query; empty resolution and
+  any non-public result are denied for hostnames even when the hostname is
+  explicitly allowlisted, preventing DNS rebinding. Local literals such as an
+  exact IP or `localhost` may opt in through an exact literal allow rule or
+  `LocalNetworkAccess::Allow`. The policy crate never performs DNS or
+  connection I/O.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
   rules; its rule builders reject the combination at construction time.

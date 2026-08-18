@@ -21,6 +21,7 @@ use cageforge_policy::PolicyError;
 use cageforge_policy::SandboxPolicy;
 use cageforge_policy::UnixSocketMode;
 use pretty_assertions::assert_eq;
+use std::collections::{BTreeSet, HashSet};
 use std::num::NonZeroUsize;
 use std::path::Path;
 
@@ -86,6 +87,28 @@ fn special_path_selectors_are_distinct() {
     assert!(selectors.iter().all(|selector| selector.path().is_none()));
     assert_ne!(selectors[0], selectors[1]);
     assert_ne!(selectors[1], selectors[2]);
+}
+
+#[cfg(windows)]
+#[test]
+fn path_selector_collections_use_windows_path_identity() {
+    let upper = PathSelector::absolute(r"C:\Workspace").expect("absolute path");
+    let lower = PathSelector::absolute(r"c:\workspace").expect("absolute path");
+
+    assert_eq!(upper, lower);
+    assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 1);
+    assert_eq!(BTreeSet::from([upper, lower]).len(), 1);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn path_selector_collections_use_posix_path_identity() {
+    let upper = PathSelector::absolute("/Workspace").expect("absolute path");
+    let lower = PathSelector::absolute("/workspace").expect("absolute path");
+
+    assert_ne!(upper, lower);
+    assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 2);
+    assert_eq!(BTreeSet::from([upper, lower]).len(), 2);
 }
 
 #[test]
@@ -1091,6 +1114,30 @@ fn resolved_domains_support_explicit_literal_and_policy_opt_ins() {
             .expect("explicit localhost access"),
         NetworkDecision::Allow
     );
+    for address in ["127.0.0.1", "::1"] {
+        assert_eq!(
+            localhost
+                .decision_for_domain_with_resolved_ips(
+                    "localhost",
+                    &[address.parse().expect("loopback address")],
+                )
+                .expect("explicit localhost loopback access"),
+            NetworkDecision::Allow
+        );
+    }
+
+    let hostname = NetworkPolicy::enabled()
+        .with_domain("service.example", DomainAccess::Allow)
+        .expect("hostname allow rule");
+    assert_eq!(
+        hostname
+            .decision_for_domain_with_resolved_ips(
+                "service.example",
+                &["127.0.0.1".parse().expect("loopback address")],
+            )
+            .expect("hostname with loopback resolution"),
+        NetworkDecision::Deny
+    );
 }
 
 #[test]
@@ -1228,6 +1275,20 @@ fn built_in_policies_are_documented_and_distinct() {
     assert_eq!(read_only.network().mode(), NetworkMode::Disabled);
     assert_eq!(workspace.network().mode(), NetworkMode::Disabled);
     assert_eq!(full_access.network().mode(), NetworkMode::Enabled);
+    assert_eq!(
+        full_access.network().local_network_access(),
+        LocalNetworkAccess::Allow
+    );
+    assert_eq!(
+        full_access
+            .network()
+            .decision_for_domain_with_resolved_ips(
+                "service.example",
+                &["127.0.0.1".parse().expect("loopback address")],
+            )
+            .expect("unrestricted network decision"),
+        NetworkDecision::Allow
+    );
     assert_eq!(
         workspace
             .filesystem()

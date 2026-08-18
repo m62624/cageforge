@@ -284,9 +284,7 @@ fn source_location(source: &str, span: std::ops::Range<usize>) -> crate::SourceL
 
 fn apply_profile(mut merged: MergedProfile, profile: &RawProfile) -> MergedProfile {
     merged.description = profile.description.clone();
-    merged
-        .workspace_roots
-        .extend(profile.workspace_roots.clone());
+    merge_workspace_roots(&mut merged.workspace_roots, profile.workspace_roots.clone());
     if let Some(filesystem) = &profile.filesystem {
         merged.filesystem = Some(merge_filesystem(merged.filesystem.take(), filesystem));
     }
@@ -300,7 +298,7 @@ fn apply_profile(mut merged: MergedProfile, profile: &RawProfile) -> MergedProfi
 }
 
 fn merge_profiles(mut left: MergedProfile, right: MergedProfile) -> MergedProfile {
-    left.workspace_roots.extend(right.workspace_roots);
+    merge_workspace_roots(&mut left.workspace_roots, right.workspace_roots);
     if let Some(filesystem) = right.filesystem {
         left.filesystem = Some(merge_filesystem(left.filesystem.take(), &filesystem));
     }
@@ -311,6 +309,22 @@ fn merge_profiles(mut left: MergedProfile, right: MergedProfile) -> MergedProfil
         left.command = Some(merge_command(left.command.take(), &command));
     }
     left
+}
+
+fn merge_workspace_roots(
+    target: &mut BTreeMap<String, bool>,
+    values: impl IntoIterator<Item = (String, bool)>,
+) {
+    for (path, enabled) in values {
+        if let Some(existing) = target
+            .keys()
+            .find(|existing| paths_equal(Path::new(existing), Path::new(&path)))
+            .cloned()
+        {
+            target.remove(&existing);
+        }
+        target.insert(path, enabled);
+    }
 }
 
 fn merge_filesystem(parent: Option<RawFilesystem>, child: &RawFilesystem) -> RawFilesystem {

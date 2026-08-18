@@ -691,6 +691,36 @@ description = "child workspace policy"
 }
 
 #[test]
+fn workspace_root_overrides_use_native_path_identity() {
+    let (parent_root, child_root) = if cfg!(windows) {
+        ("C:/Workspace", "c:/workspace")
+    } else {
+        ("/workspace/shared", "/workspace/shared/")
+    };
+    let source = format!(
+        r#"
+[profiles.parent.workspace_roots]
+"{parent_root}" = true
+
+[profiles.child]
+inherits = ["parent"]
+
+[profiles.child.workspace_roots]
+"{child_root}" = false
+"#
+    );
+    let config = Config::from_toml(&source).expect("workspace root override should parse");
+
+    assert!(
+        config
+            .resolve("child")
+            .expect("child profile should resolve")
+            .workspace_roots()
+            .is_empty()
+    );
+}
+
+#[test]
 fn resolves_all_environment_bases_and_filters() {
     for (inherit, expected_base) in [
         ("all", EnvironmentBase::All),

@@ -3,20 +3,25 @@
 
 use crate::PathResolutionContext;
 use crate::PolicyError;
+#[cfg(windows)]
+use cageforge_path::case_fold;
 use cageforge_path::{contains_parent_traversal, paths_equal, strings_equal};
 use globset::{GlobBuilder, GlobMatcher};
+use std::cmp::Ordering;
+#[cfg(not(windows))]
+use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
 /// A platform-independent description of a filesystem scope.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct PathSelector {
     kind: PathSelectorKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 enum PathSelectorKind {
     Absolute(PathBuf),
     WorkspaceRoot(PathBuf),
@@ -24,6 +29,43 @@ enum PathSelectorKind {
     Minimal,
     Tmpdir,
     SlashTmp,
+}
+
+impl PartialEq for PathSelector {
+    fn eq(&self, other: &Self) -> bool {
+        selectors_equal(self, other)
+    }
+}
+
+impl Eq for PathSelector {}
+
+impl Hash for PathSelector {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        selector_kind_rank(&self.kind).hash(state);
+        if let Some(path) = self.path() {
+            semantic_path_parts(path).hash(state);
+        }
+    }
+}
+
+impl PartialOrd for PathSelector {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PathSelector {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let kind_order = selector_kind_rank(&self.kind).cmp(&selector_kind_rank(&other.kind));
+        if kind_order != Ordering::Equal {
+            return kind_order;
+        }
+        match (self.path(), other.path()) {
+            (Some(left), Some(right)) => semantic_path_parts(left).cmp(&semantic_path_parts(right)),
+            (None, None) => Ordering::Equal,
+            _ => Ordering::Equal,
+        }
+    }
 }
 
 impl PathSelector {
@@ -176,6 +218,43 @@ pub(crate) fn selectors_equal(left: &PathSelector, right: &PathSelector) -> bool
         | (PathSelectorKind::SlashTmp, PathSelectorKind::SlashTmp) => true,
         _ => false,
     }
+}
+
+fn selector_kind_rank(kind: &PathSelectorKind) -> u8 {
+    match kind {
+        PathSelectorKind::Absolute(_) => 0,
+        PathSelectorKind::WorkspaceRoot(_) => 1,
+        PathSelectorKind::Root => 2,
+        PathSelectorKind::Minimal => 3,
+        PathSelectorKind::Tmpdir => 4,
+        PathSelectorKind::SlashTmp => 5,
+    }
+}
+
+#[cfg(windows)]
+fn semantic_path_parts(path: &Path) -> Vec<(u8, String)> {
+    path.components()
+        .map(|component| match component {
+            Component::Prefix(prefix) => (0, case_fold(&prefix.as_os_str().to_string_lossy())),
+            Component::RootDir => (1, String::new()),
+            Component::CurDir => (2, String::new()),
+            Component::ParentDir => (3, String::new()),
+            Component::Normal(value) => (4, case_fold(&value.to_string_lossy())),
+        })
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn semantic_path_parts(path: &Path) -> Vec<(u8, OsString)> {
+    path.components()
+        .map(|component| match component {
+            Component::Prefix(prefix) => (0, prefix.as_os_str().to_os_string()),
+            Component::RootDir => (1, OsString::new()),
+            Component::CurDir => (2, OsString::new()),
+            Component::ParentDir => (3, OsString::new()),
+            Component::Normal(value) => (4, value.to_os_string()),
+        })
+        .collect()
 }
 
 /// A validated path glob used by a filesystem rule.

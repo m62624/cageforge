@@ -54,7 +54,10 @@ impl SandboxPolicy {
 
     /// Creates a fully unrestricted policy.
     pub const fn full_access() -> Self {
-        Self::new(FilesystemPolicy::unrestricted(), NetworkPolicy::enabled())
+        Self::new(
+            FilesystemPolicy::unrestricted(),
+            NetworkPolicy::unrestricted(),
+        )
     }
 
     /// Returns the filesystem boundary.

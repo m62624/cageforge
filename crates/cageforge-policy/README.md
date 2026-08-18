@@ -56,7 +56,7 @@ an unchecked path selector by writing a public enum payload.
 | `PathSelector` and `PathResolutionContext` | Represents absolute, system-root, workspace, minimal-runtime, and temporary-directory scopes. |
 | `PathPattern` | Represents validated absolute or workspace-relative globs. |
 | `AccessMode` | Expresses `Read`, `Write`, or `Deny`. |
-| `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults. |
+| `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults; `enabled()` keeps local destinations denied, while `unrestricted()` removes that local restriction explicitly. |
 | `LocalNetworkAccess` | Controls whether resolved loopback/private/link-local addresses are allowed. |
 | `NetworkDecision` | Distinguishes local allow/deny from externally owned network enforcement. |
 | `DomainRule` and `UnixSocketRule` | Adds validated network destinations and decisions. |
@@ -173,7 +173,7 @@ or native network mechanism in the backend it uses. The default
 recognizes `localhost` as a local hostname before trusting DNS results. A
 backend passes every resolved address to
 `decision_for_domain_with_resolved_ips`, and an empty list represents failed or
-timed-out resolution. Any non-public result is denied. An exact literal IP
+timed-out resolution. Any non-public result for a hostname is denied. An exact literal IP
 allow rule, an exact `localhost` allow rule, or the explicit
 `LocalNetworkAccess::Allow` builder is required to opt into local destinations.
 The policy crate performs no DNS or network I/O.

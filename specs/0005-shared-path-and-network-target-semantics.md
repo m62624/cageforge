@@ -29,6 +29,11 @@ workspace ceilings, and upstream-review path validation. This keeps a path
 that is equal or inside another path under the same native semantics in every
 layer.
 
+`PathSelector` delegates its equality, hashing, and ordering identity to the
+same native component rules. Config profile inheritance applies those rules to
+`workspace_roots`, so a child cannot leave a semantically duplicate inherited
+root active by changing only Windows path case or equivalent lexical spelling.
+
 ## Resolved network target contract
 
 Domain rules alone cannot prevent a hostname from resolving to loopback,
@@ -41,13 +46,15 @@ resolve the hostname and pass every result to the method. It passes an empty
 slice when resolution fails or times out. With the default
 `LocalNetworkAccess::Deny`:
 
-- a hostname resolving to any non-public address is denied;
+- a hostname resolving to any non-public address is denied, even when its
+  hostname rule is explicitly allowlisted;
 - a hostname with no resolved addresses is denied;
 - the `localhost` hostname is denied before trusting a public DNS result;
 - a literal IP is denied when it is non-public unless an exact literal allow
   rule exists;
 - public results remain subject to the ordinary domain rules, and an exact
-  `localhost` allow rule is an explicit local opt-in;
+  `localhost` allow rule is an explicit local-literal opt-in that may also
+  accept its loopback resolution;
 - `LocalNetworkAccess::Allow` is an explicit opt-in after the ordinary domain
   policy has allowed the destination.
 
