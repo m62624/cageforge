@@ -111,6 +111,28 @@ fn path_selector_collections_use_posix_path_identity() {
     assert_eq!(BTreeSet::from([upper, lower]).len(), 2);
 }
 
+#[cfg(windows)]
+#[test]
+fn path_pattern_collections_use_windows_matching_identity() {
+    let upper = PathPattern::workspace(r"Secrets\**").expect("upper-case glob");
+    let lower = PathPattern::workspace(r"secrets\**").expect("lower-case glob");
+
+    assert_eq!(upper, lower);
+    assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 1);
+    assert_eq!(BTreeSet::from([upper, lower]).len(), 1);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn path_pattern_collections_use_posix_matching_identity() {
+    let upper = PathPattern::workspace("Secrets/**").expect("upper-case glob");
+    let lower = PathPattern::workspace("secrets/**").expect("lower-case glob");
+
+    assert_ne!(upper, lower);
+    assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 2);
+    assert_eq!(BTreeSet::from([upper, lower]).len(), 2);
+}
+
 #[test]
 fn access_modes_follow_security_precedence() {
     assert!(AccessMode::Write.can_read());

@@ -3,9 +3,7 @@
 
 use crate::PathResolutionContext;
 use crate::PolicyError;
-#[cfg(windows)]
-use cageforge_path::case_fold;
-use cageforge_path::{contains_parent_traversal, paths_equal, strings_equal};
+use cageforge_path::{case_fold, contains_parent_traversal, paths_equal, strings_equal};
 use globset::{GlobBuilder, GlobMatcher};
 use std::cmp::Ordering;
 #[cfg(not(windows))]
@@ -269,10 +267,7 @@ pub struct PathPattern {
 
 impl PartialEq for PathPattern {
     fn eq(&self, other: &Self) -> bool {
-        self.raw == other.raw
-            && self.absolute == other.absolute
-            && self.prefix == other.prefix
-            && self.components == other.components
+        self.semantic_key() == other.semantic_key()
     }
 }
 
@@ -280,10 +275,7 @@ impl Eq for PathPattern {}
 
 impl Hash for PathPattern {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.raw.hash(state);
-        self.absolute.hash(state);
-        self.prefix.hash(state);
-        self.components.hash(state);
+        self.semantic_key().hash(state);
     }
 }
 
@@ -295,12 +287,7 @@ impl PartialOrd for PathPattern {
 
 impl Ord for PathPattern {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (&self.raw, self.absolute, &self.prefix, &self.components).cmp(&(
-            &other.raw,
-            other.absolute,
-            &other.prefix,
-            &other.components,
-        ))
+        self.semantic_key().cmp(&other.semantic_key())
     }
 }
 
@@ -345,6 +332,17 @@ impl PathPattern {
             .iter()
             .filter(|component| !contains_glob_meta(component))
             .count()
+    }
+
+    fn semantic_key(&self) -> (bool, Option<String>, Vec<String>) {
+        (
+            self.absolute,
+            self.prefix.as_deref().map(case_fold),
+            self.components
+                .iter()
+                .map(|component| case_fold(component))
+                .collect(),
+        )
     }
 
     fn new(raw: String, absolute: bool) -> Result<Self, PolicyError> {

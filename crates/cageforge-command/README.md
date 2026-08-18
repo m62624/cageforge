@@ -98,7 +98,9 @@ Names reject empty strings, `=`, and NUL; values and filter patterns reject NUL.
 and `?` wildcards. The convenience methods `with_include_pattern` and
 `with_exclude_pattern` remain available for readable Rust call sites. Matching
 is case-insensitive, including explicit variable names and duplicate filter
-patterns. A later case variant replaces the same logical override. Excludes
+patterns. `EnvironmentPattern` equality, hashing, and ordering use that same
+case-insensitive identity; `as_str()` preserves the declared spelling for
+diagnostics and serialization. A later case variant replaces the same logical override. Excludes
 have precedence when a variable matches both actions. `apply_to` applies the
 portable stages in this order: `inherit → exclude → set/remove → include`. A
 variable removed by an exclude is not restored by an include, while an explicit

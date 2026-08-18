@@ -54,11 +54,7 @@ fn targets_equal(left: &FilesystemTarget, right: &FilesystemTarget) -> bool {
         (FilesystemTarget::Scope(left), FilesystemTarget::Scope(right)) => {
             crate::path::selectors_equal(left, right)
         }
-        (FilesystemTarget::Glob(left), FilesystemTarget::Glob(right)) => {
-            left.is_absolute() == right.is_absolute()
-                && cageforge_path::case_fold(left.as_str())
-                    == cageforge_path::case_fold(right.as_str())
-        }
+        (FilesystemTarget::Glob(left), FilesystemTarget::Glob(right)) => left == right,
         _ => false,
     }
 }

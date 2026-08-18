@@ -1,8 +1,10 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::hash::{Hash, Hasher};
 
 use wildmatch::WildMatch;
 
@@ -34,8 +36,34 @@ pub enum EnvironmentFilterAction {
 /// The pattern language is deliberately small and portable: `*` matches zero
 /// or more Unicode scalar values and `?` matches one. Matching is
 /// case-insensitive so the same policy is safe on POSIX and Windows hosts.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone)]
 pub struct EnvironmentPattern(String);
+
+impl PartialEq for EnvironmentPattern {
+    fn eq(&self, other: &Self) -> bool {
+        canonical_pattern(&self.0) == canonical_pattern(&other.0)
+    }
+}
+
+impl Eq for EnvironmentPattern {}
+
+impl Hash for EnvironmentPattern {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        canonical_pattern(&self.0).hash(state);
+    }
+}
+
+impl PartialOrd for EnvironmentPattern {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EnvironmentPattern {
+    fn cmp(&self, other: &Self) -> Ordering {
+        canonical_pattern(&self.0).cmp(&canonical_pattern(&other.0))
+    }
+}
 
 impl EnvironmentPattern {
     /// Creates a validated environment-variable pattern.
@@ -53,7 +81,11 @@ impl EnvironmentPattern {
         Ok(Self(pattern))
     }
 
-    /// Returns the pattern text.
+    /// Returns the original pattern text.
+    ///
+    /// Trait identity is based on the same case-insensitive canonical form as
+    /// [`Self::matches`], while this accessor preserves the caller's spelling
+    /// for diagnostics and serialization.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -302,5 +334,9 @@ fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
 }
 
 fn environment_patterns_equal(left: &EnvironmentPattern, right: &EnvironmentPattern) -> bool {
-    left.as_str().to_lowercase() == right.as_str().to_lowercase()
+    left == right
+}
+
+fn canonical_pattern(pattern: &str) -> String {
+    pattern.to_lowercase()
 }

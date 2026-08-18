@@ -68,7 +68,9 @@ the backend selected according to `All`, `Core`, or `None`. A variable removed
 by an exclude is not restored by an include; an explicit set can intentionally
 restore its named variable at the later set stage. Explicit names and filter
 patterns are canonicalized case-insensitively, so case variants cannot create
-two logical variables. Conflicting set/remove requests are rejected by the
+two logical variables. `EnvironmentPattern` uses that same canonical identity
+for equality, hashing, and ordering, while `as_str()` preserves declaration
+spelling for diagnostics and serialization. Conflicting set/remove requests are rejected by the
 config layer. The portable crate does not define the contents of `Core`;
 each native backend supplies that platform's conservative base map before
 calling `apply_to`.

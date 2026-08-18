@@ -111,9 +111,11 @@ may still be rejected by a future policy composer or backend. Call
 `normalized` before handing duplicate rules to a backend when a canonical rule
 list is needed. Concrete path and glob comparisons follow native filesystem
 case rules: POSIX matching is case-sensitive, while Windows matching is
-case-insensitive. The portable crate does not resolve symlinks; that remains a
-native backend decision. Built-in protected metadata follows the same native
-path case rules.
+case-insensitive. `PathPattern` equality, hashing, and ordering use the same
+native matching identity; `as_str()` preserves the declared spelling for
+diagnostics and serialization. The portable crate does not resolve symlinks;
+that remains a native backend decision. Built-in protected metadata follows the
+same native path case rules.
 
 `PathSelector::root()` is a symbolic request for every system root supplied in
 `PathResolutionContext`. POSIX callers normally provide `/`; Windows callers

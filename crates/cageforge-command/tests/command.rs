@@ -10,6 +10,7 @@ use cageforge_command::{
     EnvironmentOverride, EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
 use pretty_assertions::assert_eq;
+use std::collections::{BTreeSet, HashSet};
 
 #[test]
 fn command_spec_preserves_native_argv() {
@@ -193,6 +194,16 @@ fn environment_patterns_are_validated_and_match_wildcards() {
         EnvironmentPattern::new("BAD\0NAME").expect_err("NUL in pattern"),
         CommandError::EnvironmentPatternContainsNul
     );
+}
+
+#[test]
+fn environment_pattern_traits_follow_case_insensitive_matching() {
+    let upper = EnvironmentPattern::new("SECRET_*").expect("upper-case pattern");
+    let lower = EnvironmentPattern::new("secret_*").expect("lower-case pattern");
+
+    assert_eq!(upper, lower);
+    assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 1);
+    assert_eq!(BTreeSet::from([upper, lower]).len(), 1);
 }
 
 #[test]

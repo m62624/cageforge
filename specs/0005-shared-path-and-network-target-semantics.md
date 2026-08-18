@@ -34,6 +34,13 @@ same native component rules. Config profile inheritance applies those rules to
 `workspace_roots`, so a child cannot leave a semantically duplicate inherited
 root active by changing only Windows path case or equivalent lexical spelling.
 
+`PathPattern` follows the same contract for its public `Eq`, `Hash`, and `Ord`
+implementations. Its absolute/workspace root kind, native prefix, and path
+components form the collection identity; the original pattern text remains
+available through `as_str()` for diagnostics and serialization. This prevents a
+Windows case variant from becoming a second policy key while preserving the
+declared spelling at the API boundary.
+
 ## Resolved network target contract
 
 Domain rules alone cannot prevent a hostname from resolving to loopback,
