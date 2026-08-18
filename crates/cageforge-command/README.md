@@ -8,23 +8,16 @@
 
 `cageforge-command` is a small, platform-independent command request model for
 Cageforge. It describes argv, the working directory, environment construction,
-standard stream routing, and timeout intent. A backend or harness adapter
-consumes the request and decides how to execute it.
-
-The crate does not spawn processes, parse TOML, apply a sandbox, allocate a
-PTY, manage process sessions, configure a network proxy, or depend on an agent
-protocol.
+standard stream routing, and timeout intent. Other crates can use the same
+validated request model when they need to prepare a command for a sandboxed or
+ordinary process launch.
 
 ## Workspace role
 
-| Crate | Role | Runtime dependencies | Used by |
-|---|---|---|---|
-| `cageforge-command` | Portable command and process-launch intent | None beyond Rust's standard library | Current black-box tests; planned `cageforge-config`, `cageforge-backend-api`, and harness adapters |
-
-`cageforge-command` intentionally does not depend on `cageforge-policy`. A
-future `cageforge-backend-api` will compose both values so callers can choose a
-policy and a command without putting enforcement or process-launch code into
-either portable model.
+`cageforge-command` is the command-intent layer. `cageforge-config` can build a
+`CommandRequest` from TOML, while a backend API can consume it together with a
+`cageforge-policy` value. The crate is also useful on its own in projects that
+need validated command inputs without using Cageforge's configuration format.
 
 ## Library API and ownership
 
@@ -122,16 +115,18 @@ methods support independent routing with `Inherit`, `Null`, or `Pipe`.
 - `Disabled` removes the automatic timeout.
 
 Cancellation is a separate lifecycle signal and can still terminate a request
-in any timeout state. PTY allocation, output caps, streaming, and process
-handles belong to a backend or harness adapter.
+in any timeout state. A process adapter can add PTY allocation, output caps,
+streaming, and process handles around this request model.
 
-## Tests and API documentation
+## Using it with a sandbox project
 
-The black-box integration suite lives in
-`crates/cageforge-command/tests/command.rs`. It covers native argv values,
-validation, environment bases and overrides, stdio routing, cwd handling
-(including parent traversal rejection), environment filters, timeout states,
-and error display.
+Build the command request in the layer that owns configuration, then pass it to
+the layer that owns process execution. Pair it with `cageforge-policy` when the
+same execution needs filesystem and network restrictions; use
+`cageforge-policy-compose` when an outer policy must narrow those restrictions.
+
+The command crate remains the shared data model between these layers, so a
+different project can reuse it with its own configuration format and backend.
 
 API reference: [`cageforge-command` on docs.rs](https://docs.rs/cageforge-command/latest/cageforge_command/).
 

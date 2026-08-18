@@ -11,19 +11,21 @@ describes filesystem and network boundaries, validates them, resolves symbolic
 path scopes against a caller-provided runtime context, and evaluates access for
 concrete paths and network destinations.
 
-The crate does not read the filesystem, launch processes, parse TOML, allocate
-PTYs, configure a network proxy, or call a native sandbox API. A future backend
-uses its values to prepare Linux, macOS, or Windows enforcement.
+Use it directly in a Rust project when permissions need to travel from a
+configuration or orchestration layer to an execution backend. The same policy
+values can be read from TOML through `cageforge-config`, narrowed with
+`cageforge-policy-compose`, and then passed to a Linux, macOS, or Windows
+backend.
 
 ## Workspace role
 
 | Crate | Role | Runtime dependencies | Used by |
 |---|---|---|---|
-| `cageforge-policy` | Portable filesystem and network policy semantics | None beyond Rust's standard library | Current black-box tests; planned `cageforge-config`, `cageforge-backend-api`, and native backend crates |
+| `cageforge-policy` | Portable filesystem and network policy semantics | None beyond Rust's standard library | `cageforge-config`, `cageforge-policy-compose`, and backend integrations |
 
-Use this crate when a harness needs a policy value that can cross an operating
-system backend boundary. Use `cageforge-config` to parse TOML and resolve
-named profiles. Use a native backend crate to enforce the resolved policy.
+The crate is the shared policy value between those layers. A project can pair
+it with its own configuration format and backend while keeping the same
+validated policy semantics.
 
 ## Library API and ownership
 
@@ -154,19 +156,20 @@ the complete result. They return `NetworkDecision::Allow`,
 queries and return `true` only for `Allow`; they intentionally do not collapse
 external ownership into permission.
 
-Network policy is independent from filesystem policy. Disabled mode always
-denies, even if rules are retained for inspection; external mode delegates the
-boundary and rejects local rules. A future backend may enforce domains through
-a proxy, firewall, or another native mechanism; this crate does not select or
-configure that mechanism.
+Network policy is independent from filesystem policy. Disabled mode denies
+destinations, while external mode records that another trusted boundary owns
+network enforcement. A project can connect these values to a proxy, firewall,
+or native network mechanism in the backend it uses.
 
-## Tests and API documentation
+## Using it with other crates
 
-The black-box integration suite lives in
-`crates/cageforge-policy/tests/policy.rs`. It covers validation, path
-resolution, matching precedence, normalization, filesystem modes, network
-rules, and built-in policies. Unit tests are reserved for private logic that
-cannot be exercised through the public API.
+`cageforge-config` is one way to create a `SandboxPolicy` from named TOML
+profiles. `cageforge-policy-compose` is the optional narrowing layer when an
+application needs to apply an outer safety limit. A backend then consumes the
+validated decisions for its platform.
+
+The policy crate is also suitable on its own: callers can construct the model
+with Rust builders and provide their own runtime path context.
 
 API reference: [`cageforge-policy` on docs.rs](https://docs.rs/cageforge-policy/latest/cageforge_policy/).
 
