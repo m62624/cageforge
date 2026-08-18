@@ -1,6 +1,6 @@
 use cageforge_command::{
-    CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentOverride,
-    EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
+    CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentFilterAction,
+    EnvironmentOverride, EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
 use cageforge_config::{Config, ConfigError, DiagnosticSeverity};
 use cageforge_policy::{
@@ -124,8 +124,7 @@ args = ["base"]
 
 [profiles.base.command.environment]
 inherit = "none"
-include = ["BASE_*"]
-exclude = ["*SECRET*"]
+filters = { "BASE_*" = "include", "*SECRET*" = "exclude" }
 set = { BASE = "one", SHARED = "base" }
 
 [profiles.base.command.timeout]
@@ -142,21 +141,26 @@ domains = [{ pattern = "blocked.example.com", access = "deny" }]
 working_directory = "child"
 
 [profiles.override.command.environment]
-include = ["OVERRIDE_*"]
-exclude = ["*TOKEN*"]
+filters = { "OVERRIDE_*" = "include", "*TOKEN*" = "exclude" }
 set = { OVERRIDE = "yes", SHARED = "override" }
 
 [profiles.final]
 inherits = ["base", "override"]
 
 [profiles.final.filesystem]
-rules = [{ target = "slash-tmp", access = "write" }]
+rules = [
+  { target = "workspace-root", access = "write" },
+  { target = "slash-tmp", access = "write" },
+]
+
+[profiles.final.network]
+domains = [{ pattern = "blocked.example.com", access = "allow" }]
 
 [profiles.final.command]
 args = ["final"]
 
 [profiles.final.command.environment]
-include = ["FINAL_*"]
+filters = { "FINAL_*" = "include" }
 remove = ["BASE"]
 
 [profiles.final.command.timeout]
@@ -169,7 +173,7 @@ mode = "disabled"
     assert_eq!(resolved.policy().filesystem().entries().len(), 3);
     assert_eq!(
         resolved.policy().filesystem().entries()[0].access(),
-        AccessMode::Read
+        AccessMode::Write
     );
     assert_eq!(
         resolved.policy().filesystem().entries()[1].access(),
@@ -187,7 +191,7 @@ mode = "disabled"
     assert_eq!(resolved.policy().network().domains().len(), 2);
     assert_eq!(
         resolved.policy().network().domains()[1].access(),
-        DomainAccess::Deny
+        DomainAccess::Allow
     );
 
     let command = resolved.command().expect("command inherited");
@@ -198,20 +202,18 @@ mode = "disabled"
     assert_eq!(
         command
             .environment()
-            .include_patterns()
-            .iter()
-            .map(|pattern| pattern.as_str())
+            .filters()
+            .keys()
+            .map(EnvironmentPattern::as_str)
             .collect::<Vec<_>>(),
-        ["BASE_*", "OVERRIDE_*", "FINAL_*"]
+        ["*SECRET*", "*TOKEN*", "BASE_*", "FINAL_*", "OVERRIDE_*"]
     );
     assert_eq!(
         command
             .environment()
-            .exclude_patterns()
-            .iter()
-            .map(|pattern| pattern.as_str())
-            .collect::<Vec<_>>(),
-        ["*SECRET*", "*TOKEN*"]
+            .filters()
+            .get(&EnvironmentPattern::new("*SECRET*").expect("secret filter")),
+        Some(&EnvironmentFilterAction::Exclude)
     );
     assert_eq!(
         command.environment().override_for(OsStr::new("BASE")),
@@ -330,6 +332,28 @@ fn policy_only_profile_uses_safe_defaults() {
 }
 
 #[test]
+fn protected_metadata_defaults_and_explicit_opt_out_are_visible() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "profile"
+
+[profiles.profile.filesystem]
+additional_protected_paths = [".cargo"]
+rules = [{ target = "workspace-root", access = "write" }]
+
+[profiles.profile.filesystem.security]
+dangerously_allow_git_write = true
+"#,
+    )
+    .expect("protected metadata config should parse");
+    let resolved = config
+        .resolve_default()
+        .expect("protected metadata config should resolve");
+    let policy = resolved.policy().filesystem();
+    assert_eq!(policy.protected_relative_paths(), [PathBuf::from(".cargo")]);
+}
+
+#[test]
 fn resolves_profile_metadata_and_workspace_roots() {
     let config = Config::from_toml(
         r#"
@@ -387,8 +411,7 @@ program = "runner"
 
 [profiles.profile.command.environment]
 inherit = "{inherit}"
-include = ["CARGO_*", "PATH"]
-exclude = ["*TOKEN*"]
+filters = {{ "CARGO_*" = "include", "PATH" = "include", "*TOKEN*" = "exclude" }}
 "#
         );
         let resolved = Config::from_toml(&source)
@@ -397,21 +420,18 @@ exclude = ["*TOKEN*"]
             .expect("environment should resolve");
         let environment = resolved.command().expect("command").environment();
         assert_eq!(environment.base(), expected_base);
+        assert_eq!(environment.filters().len(), 3);
         assert_eq!(
             environment
-                .include_patterns()
-                .iter()
-                .map(|pattern| pattern.as_str())
-                .collect::<Vec<_>>(),
-            ["CARGO_*", "PATH"]
+                .filters()
+                .get(&EnvironmentPattern::new("CARGO_*").expect("cargo filter")),
+            Some(&EnvironmentFilterAction::Include)
         );
         assert_eq!(
             environment
-                .exclude_patterns()
-                .iter()
-                .map(|pattern| pattern.as_str())
-                .collect::<Vec<_>>(),
-            ["*TOKEN*"]
+                .filters()
+                .get(&EnvironmentPattern::new("*TOKEN*").expect("token filter")),
+            Some(&EnvironmentFilterAction::Exclude)
         );
     }
 }
@@ -439,6 +459,22 @@ fn rejects_unknown_fields_and_invalid_profile_names() {
 
     let error = Config::from_toml("[profiles.\"bad.name\"]\n").expect_err("invalid profile name");
     assert!(matches!(error, ConfigError::InvalidProfileName { name } if name == "bad.name"));
+
+    let error = Config::from_toml(
+        r#"
+[profiles.safe.command]
+program = "runner"
+
+[profiles.safe.command.environment.filters]
+PATH = "include"
+path = "exclude"
+"#,
+    )
+    .expect_err("case-insensitive duplicate filter");
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue { field, .. } if field == "command.environment.filters"
+    ));
 }
 
 #[test]
@@ -526,9 +562,13 @@ fn rejects_invalid_policy_values_and_unused_fields() {
         ),
     ];
     for (source, label) in cases {
-        let config = Config::from_toml(&format!("default_profile = \"p\"\n{source}"))
-            .unwrap_or_else(|error| panic!("{label} should parse: {error}"));
-        assert!(config.resolve_default().is_err(), "{label} should fail");
+        match Config::from_toml(&format!("default_profile = \"p\"\n{source}")) {
+            Ok(config) => assert!(config.resolve_default().is_err(), "{label} should fail"),
+            Err(error) => assert!(
+                matches!(error, ConfigError::InvalidToml { .. }),
+                "{label} should fail with a typed TOML value error: {error}"
+            ),
+        }
     }
 
     let error = Config::from_toml(
@@ -552,12 +592,13 @@ fn rejects_invalid_command_values() {
         "[profiles.p.command]\nprogram = \"runner\"\n[profiles.p.command.timeout]\nmode = \"disabled\"\nmilliseconds = 1\n",
     ];
     for source in sources {
-        let config = Config::from_toml(&format!("default_profile = \"p\"\n{source}"))
-            .expect("command source parses");
-        assert!(
-            config.resolve_default().is_err(),
-            "invalid command must fail"
-        );
+        match Config::from_toml(&format!("default_profile = \"p\"\n{source}")) {
+            Ok(config) => assert!(
+                config.resolve_default().is_err(),
+                "invalid command must fail"
+            ),
+            Err(error) => assert!(matches!(error, ConfigError::InvalidToml { .. })),
+        }
     }
 
     let error = Config::from_toml(
@@ -580,12 +621,8 @@ remove = ["SAME"]
     let error = Config::from_toml(
         "default_profile = \"p\"\n[profiles.p.command]\nprogram = \"runner\"\n[profiles.p.command.timeout]\nmode = \"unknown\"\n",
     )
-    .expect("timeout source parses")
-    .resolve_default()
     .expect_err("unknown timeout");
-    assert!(
-        matches!(error, ConfigError::InvalidValue { field, .. } if field == "command.timeout.mode")
-    );
+    assert!(matches!(error, ConfigError::InvalidToml { .. }));
 }
 
 #[test]
@@ -667,11 +704,11 @@ fn rejects_remaining_policy_and_command_builder_errors() {
             "empty environment name",
         ),
         (
-            "[profiles.p.command.environment]\ninclude = [\"\"]\n",
+            "[profiles.p.command.environment]\nfilters = { \"\" = \"include\" }\n",
             "empty environment include pattern",
         ),
         (
-            "[profiles.p.command.environment]\nexclude = [\"BAD=NAME\"]\n",
+            "[profiles.p.command.environment]\nfilters = { \"BAD=NAME\" = \"exclude\" }\n",
             "invalid environment exclude pattern",
         ),
         (
@@ -686,9 +723,13 @@ fn rejects_remaining_policy_and_command_builder_errors() {
 
     for (source, label) in sources {
         let source = source.replace("PLACEHOLDER", absolute.as_ref());
-        let config = Config::from_toml(&format!("default_profile = \"p\"\n{source}"))
-            .unwrap_or_else(|error| panic!("{label} should parse: {error}"));
-        assert!(config.resolve_default().is_err(), "{label} should fail");
+        match Config::from_toml(&format!("default_profile = \"p\"\n{source}")) {
+            Ok(config) => assert!(config.resolve_default().is_err(), "{label} should fail"),
+            Err(error) => assert!(
+                matches!(error, ConfigError::InvalidToml { .. }),
+                "{label} should fail with a typed TOML value error: {error}"
+            ),
+        }
     }
 
     let error =
@@ -784,8 +825,7 @@ fn exposes_json_schema_and_structured_diagnostics() {
     let schema_text = schema_json.to_string();
     assert!(schema_text.contains("workspace_roots"));
     assert!(schema_text.contains("description"));
-    assert!(schema_text.contains("include"));
-    assert!(schema_text.contains("exclude"));
+    assert!(schema_text.contains("filters"));
 
     let error = Config::from_toml("default_profile = [").expect_err("invalid TOML");
     let diagnostic = error.diagnostic();
@@ -799,7 +839,7 @@ fn exposes_json_schema_and_structured_diagnostics() {
     assert_eq!(diagnostic_json["severity"], "error");
 
     let error = Config::from_toml(
-        "default_profile = \"profile\"\n[profiles.profile.command]\nprogram = \"runner\"\n[profiles.profile.command.environment]\ninclude = [\"\"]\n",
+        "default_profile = \"profile\"\n[profiles.profile.command]\nprogram = \"runner\"\n[profiles.profile.command.environment]\nfilters = { \"\" = \"include\" }\n",
     )
     .expect("invalid pattern source should parse")
     .resolve_default()

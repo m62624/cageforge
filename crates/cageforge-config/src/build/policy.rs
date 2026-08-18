@@ -3,7 +3,9 @@
 
 use super::super::error::{ConfigError, invalid_value};
 use super::super::model::{
-    RawDomainRule, RawFilesystem, RawFilesystemRule, RawNetwork, RawSelector, RawUnixSocketRule,
+    RawAccessMode, RawDomainAccess, RawDomainMode, RawDomainRule, RawFilesystem, RawFilesystemMode,
+    RawFilesystemRule, RawFilesystemTarget, RawMissingPathBehavior, RawNetwork, RawNetworkMode,
+    RawSelector, RawUnixSocketMode, RawUnixSocketRule,
 };
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemPolicy, FilesystemRule,
@@ -33,7 +35,7 @@ fn build_filesystem(
     profile: &str,
 ) -> Result<FilesystemPolicy, ConfigError> {
     let raw = raw.cloned().unwrap_or_default();
-    let mode = parse_filesystem_mode(raw.mode.as_deref(), profile)?;
+    let mode = filesystem_mode(raw.mode);
     let mut policy = match mode {
         FilesystemMode::Restricted => FilesystemPolicy::restricted([]),
         FilesystemMode::Unrestricted => FilesystemPolicy::unrestricted(),
@@ -47,6 +49,22 @@ fn build_filesystem(
                 profile: profile.to_owned(),
                 source,
             })?;
+    }
+    for path in &raw.additional_protected_paths {
+        policy = policy
+            .with_additional_protected_relative_path(path)
+            .map_err(|source| ConfigError::Policy {
+                profile: profile.to_owned(),
+                source,
+            })?;
+    }
+    if raw
+        .security
+        .as_ref()
+        .and_then(|security| security.dangerously_allow_git_write)
+        .unwrap_or(false)
+    {
+        policy = policy.dangerously_allow_git_write();
     }
     if let Some(depth) = raw.glob_scan_max_depth {
         let depth = NonZeroUsize::new(depth).ok_or_else(|| {
@@ -74,9 +92,9 @@ fn build_filesystem_rule(
     raw: &RawFilesystemRule,
     profile: &str,
 ) -> Result<FilesystemRule, ConfigError> {
-    let access = parse_access(&raw.access, profile, "filesystem.rules.access")?;
-    let target = match raw.target.as_str() {
-        "absolute" => {
+    let access = access_mode(raw.access);
+    let target = match raw.target {
+        RawFilesystemTarget::Absolute => {
             if raw.pattern.is_some() {
                 return Err(invalid_value(
                     profile,
@@ -86,14 +104,18 @@ fn build_filesystem_rule(
             }
             FilesystemTarget::Scope(build_selector(
                 &RawSelector {
-                    target: "absolute".to_owned(),
+                    target: RawFilesystemTarget::Absolute,
                     path: raw.path.clone(),
                 },
                 profile,
                 "filesystem.rules.path",
             )?)
         }
-        "workspace" | "workspace-root" | "minimal" | "tmpdir" | "slash-tmp" => {
+        RawFilesystemTarget::Workspace
+        | RawFilesystemTarget::WorkspaceRoot
+        | RawFilesystemTarget::Minimal
+        | RawFilesystemTarget::Tmpdir
+        | RawFilesystemTarget::SlashTmp => {
             if raw.pattern.is_some() {
                 return Err(invalid_value(
                     profile,
@@ -103,14 +125,14 @@ fn build_filesystem_rule(
             }
             FilesystemTarget::Scope(build_selector(
                 &RawSelector {
-                    target: raw.target.clone(),
+                    target: raw.target,
                     path: raw.path.clone(),
                 },
                 profile,
                 "filesystem.rules.path",
             )?)
         }
-        "absolute-glob" => {
+        RawFilesystemTarget::AbsoluteGlob => {
             if raw.path.is_some() {
                 return Err(invalid_value(
                     profile,
@@ -130,7 +152,7 @@ fn build_filesystem_rule(
                 })?,
             )
         }
-        "workspace-glob" => {
+        RawFilesystemTarget::WorkspaceGlob => {
             if raw.path.is_some() {
                 return Err(invalid_value(
                     profile,
@@ -150,13 +172,6 @@ fn build_filesystem_rule(
                 })?,
             )
         }
-        value => {
-            return Err(invalid_value(
-                profile,
-                "filesystem.rules.target",
-                format!("unsupported target {value:?}"),
-            ));
-        }
     };
     if matches!(&target, FilesystemTarget::Glob(_)) && raw.missing_path.is_some() {
         return Err(invalid_value(
@@ -167,16 +182,9 @@ fn build_filesystem_rule(
     }
     let mut rule = FilesystemRule::from_target(target, access);
     if let Some(missing_path) = &raw.missing_path {
-        let behavior = match missing_path.as_str() {
-            "error" => MissingPathBehavior::Error,
-            "skip" => MissingPathBehavior::Skip,
-            value => {
-                return Err(invalid_value(
-                    profile,
-                    "filesystem.rules.missing_path",
-                    format!("unsupported behavior {value:?}"),
-                ));
-            }
+        let behavior = match missing_path {
+            RawMissingPathBehavior::Error => MissingPathBehavior::Error,
+            RawMissingPathBehavior::Skip => MissingPathBehavior::Skip,
         };
         rule = rule.with_missing_path_behavior(behavior);
     }
@@ -213,22 +221,22 @@ fn build_selector(
             Ok(())
         }
     };
-    let result = match raw.target.as_str() {
-        "absolute" => PathSelector::absolute(require_path()?),
-        "workspace" => PathSelector::workspace(require_path()?),
-        "workspace-root" => {
+    let result = match raw.target {
+        RawFilesystemTarget::Absolute => PathSelector::absolute(require_path()?),
+        RawFilesystemTarget::Workspace => PathSelector::workspace(require_path()?),
+        RawFilesystemTarget::WorkspaceRoot => {
             reject_path()?;
             Ok(PathSelector::workspace_root())
         }
-        "minimal" => {
+        RawFilesystemTarget::Minimal => {
             reject_path()?;
             Ok(PathSelector::minimal())
         }
-        "tmpdir" => {
+        RawFilesystemTarget::Tmpdir => {
             reject_path()?;
             Ok(PathSelector::tmpdir())
         }
-        "slash-tmp" => {
+        RawFilesystemTarget::SlashTmp => {
             reject_path()?;
             Ok(PathSelector::slash_tmp())
         }
@@ -248,24 +256,21 @@ fn build_selector(
 
 fn build_network(raw: Option<&RawNetwork>, profile: &str) -> Result<NetworkPolicy, ConfigError> {
     let raw = raw.cloned().unwrap_or_default();
-    let mode = parse_network_mode(raw.mode.as_deref(), profile)?;
+    let mode = network_mode(raw.mode);
     let mut policy = match mode {
         NetworkMode::Disabled => NetworkPolicy::disabled(),
         NetworkMode::Enabled => NetworkPolicy::enabled(),
         NetworkMode::External => NetworkPolicy::external(),
     };
-    if let Some(mode) = raw.domain_mode.as_deref() {
-        policy = policy.with_domain_mode(parse_domain_mode(mode, profile)?);
+    if let Some(mode) = raw.domain_mode {
+        policy = policy.with_domain_mode(domain_mode(mode));
     }
-    if let Some(mode) = raw.unix_socket_mode.as_deref() {
-        policy = policy.with_unix_socket_mode(parse_unix_socket_mode(mode, profile)?);
+    if let Some(mode) = raw.unix_socket_mode {
+        policy = policy.with_unix_socket_mode(unix_socket_mode(mode));
     }
     for RawDomainRule { pattern, access } in &raw.domains {
         policy = policy
-            .with_domain(
-                pattern,
-                parse_domain_access(access, profile, "network.domains.access")?,
-            )
+            .with_domain(pattern, domain_access(*access))
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
@@ -273,10 +278,7 @@ fn build_network(raw: Option<&RawNetwork>, profile: &str) -> Result<NetworkPolic
     }
     for RawUnixSocketRule { path, access } in &raw.unix_sockets {
         policy = policy
-            .with_unix_socket(
-                path,
-                parse_domain_access(access, profile, "network.unix_sockets.access")?,
-            )
+            .with_unix_socket(path, domain_access(*access))
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
@@ -289,87 +291,50 @@ fn build_network(raw: Option<&RawNetwork>, profile: &str) -> Result<NetworkPolic
     Ok(policy)
 }
 
-fn parse_filesystem_mode(
-    value: Option<&str>,
-    profile: &str,
-) -> Result<FilesystemMode, ConfigError> {
-    match value.unwrap_or("restricted") {
-        "restricted" => Ok(FilesystemMode::Restricted),
-        "unrestricted" => Ok(FilesystemMode::Unrestricted),
-        "external" => Ok(FilesystemMode::External),
-        value => Err(invalid_value(
-            profile,
-            "filesystem.mode",
-            format!("unsupported mode {value:?}"),
-        )),
+fn filesystem_mode(value: Option<RawFilesystemMode>) -> FilesystemMode {
+    match value.unwrap_or(RawFilesystemMode::Restricted) {
+        RawFilesystemMode::Restricted => FilesystemMode::Restricted,
+        RawFilesystemMode::Unrestricted => FilesystemMode::Unrestricted,
+        RawFilesystemMode::External => FilesystemMode::External,
     }
 }
 
-fn parse_network_mode(value: Option<&str>, profile: &str) -> Result<NetworkMode, ConfigError> {
-    match value.unwrap_or("disabled") {
-        "disabled" => Ok(NetworkMode::Disabled),
-        "enabled" => Ok(NetworkMode::Enabled),
-        "external" => Ok(NetworkMode::External),
-        value => Err(invalid_value(
-            profile,
-            "network.mode",
-            format!("unsupported mode {value:?}"),
-        )),
+fn network_mode(value: Option<RawNetworkMode>) -> NetworkMode {
+    match value.unwrap_or(RawNetworkMode::Disabled) {
+        RawNetworkMode::Disabled => NetworkMode::Disabled,
+        RawNetworkMode::Enabled => NetworkMode::Enabled,
+        RawNetworkMode::External => NetworkMode::External,
     }
 }
 
-fn parse_domain_mode(value: &str, profile: &str) -> Result<DomainMode, ConfigError> {
+fn domain_mode(value: RawDomainMode) -> DomainMode {
     match value {
-        "disabled" => Ok(DomainMode::Disabled),
-        "enabled" => Ok(DomainMode::Enabled),
-        "restricted" => Ok(DomainMode::Restricted),
-        value => Err(invalid_value(
-            profile,
-            "network.domain_mode",
-            format!("unsupported mode {value:?}"),
-        )),
+        RawDomainMode::Disabled => DomainMode::Disabled,
+        RawDomainMode::Enabled => DomainMode::Enabled,
+        RawDomainMode::Restricted => DomainMode::Restricted,
     }
 }
 
-fn parse_unix_socket_mode(value: &str, profile: &str) -> Result<UnixSocketMode, ConfigError> {
+fn unix_socket_mode(value: RawUnixSocketMode) -> UnixSocketMode {
     match value {
-        "disabled" => Ok(UnixSocketMode::Disabled),
-        "enabled" => Ok(UnixSocketMode::Enabled),
-        "restricted" => Ok(UnixSocketMode::Restricted),
-        value => Err(invalid_value(
-            profile,
-            "network.unix_socket_mode",
-            format!("unsupported mode {value:?}"),
-        )),
+        RawUnixSocketMode::Disabled => UnixSocketMode::Disabled,
+        RawUnixSocketMode::Enabled => UnixSocketMode::Enabled,
+        RawUnixSocketMode::Restricted => UnixSocketMode::Restricted,
     }
 }
 
-fn parse_access(value: &str, profile: &str, field: &str) -> Result<AccessMode, ConfigError> {
+fn access_mode(value: RawAccessMode) -> AccessMode {
     match value {
-        "read" => Ok(AccessMode::Read),
-        "write" => Ok(AccessMode::Write),
-        "deny" => Ok(AccessMode::Deny),
-        value => Err(invalid_value(
-            profile,
-            field,
-            format!("unsupported access {value:?}"),
-        )),
+        RawAccessMode::Read => AccessMode::Read,
+        RawAccessMode::Write => AccessMode::Write,
+        RawAccessMode::Deny => AccessMode::Deny,
     }
 }
 
-fn parse_domain_access(
-    value: &str,
-    profile: &str,
-    field: &str,
-) -> Result<DomainAccess, ConfigError> {
+fn domain_access(value: RawDomainAccess) -> DomainAccess {
     match value {
-        "allow" => Ok(DomainAccess::Allow),
-        "deny" => Ok(DomainAccess::Deny),
-        value => Err(invalid_value(
-            profile,
-            field,
-            format!("unsupported access {value:?}"),
-        )),
+        RawDomainAccess::Allow => DomainAccess::Allow,
+        RawDomainAccess::Deny => DomainAccess::Deny,
     }
 }
 

@@ -57,8 +57,7 @@ args = ["test", "--workspace"]
 
 [profiles.workspace.command.environment]
 inherit = "core"
-include = ["CARGO_*", "RUST_*"]
-exclude = ["*TOKEN*"]
+filters = { "CARGO_*" = "include", "RUST_*" = "include", "*TOKEN*" = "exclude" }
 
 [profiles.workspace.command.timeout]
 mode = "limit"
@@ -82,10 +81,13 @@ and `false` disables an inherited root. The resolved paths are declarations;
 the backend resolves relative paths against its execution context before
 registering absolute roots in its path context.
 
-Command environments support `all`, `core`, and `none` inheritance bases.
-Include and exclude patterns use portable `*` and `?` matching and are exposed
-as validated values in `cageforge-command`. The backend decides which
-platform variables belong to the `core` set.
+Command environments support `all`, `core`, and `none` inheritance bases;
+omitting `inherit` selects `core`. The `filters` table maps portable `*` and
+`?` patterns to `include` or `exclude`. Matching is case-insensitive and
+excludes take precedence. The backend decides which platform variables belong
+to the `core` set. Restricted filesystem profiles protect `.git` below writable
+scopes by default; trusted callers can request the explicit TOML opt-out
+`[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`.
 
 ## Library API
 

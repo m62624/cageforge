@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::super::error::{ConfigError, invalid_value};
-use super::super::model::{RawCommand, RawEnvironment, RawStdio, RawTimeout};
+use super::super::model::{
+    RawCommand, RawEnvironment, RawEnvironmentBase, RawEnvironmentFilterAction, RawStdio,
+    RawStdioMode, RawTimeout, RawTimeoutMode,
+};
 use cageforge_command::{
-    CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
+    CommandRequest, CommandSpec, EnvironmentFilterAction, EnvironmentSpec, StdioMode, StdioSpec,
+    TimeoutPolicy,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -48,7 +52,7 @@ pub(crate) fn build_command(
         request = request.with_environment(build_environment(environment, profile)?);
     }
     if let Some(stdio) = &raw.stdio {
-        request = request.with_stdio(build_stdio(stdio, profile)?);
+        request = request.with_stdio(build_stdio(stdio));
     }
     if let Some(timeout) = &raw.timeout {
         request = request.with_timeout_policy(build_timeout(timeout, profile)?);
@@ -57,33 +61,23 @@ pub(crate) fn build_command(
 }
 
 fn build_environment(raw: &RawEnvironment, profile: &str) -> Result<EnvironmentSpec, ConfigError> {
-    let mut environment = match raw.inherit.as_deref().unwrap_or("all") {
-        "all" => EnvironmentSpec::inherit_all(),
-        "core" => EnvironmentSpec::inherit_core(),
-        "none" => EnvironmentSpec::empty(),
-        value => {
-            return Err(invalid_value(
-                profile,
-                "command.environment.inherit",
-                format!("unsupported base {value:?}"),
-            ));
-        }
+    let mut environment = match raw.inherit.unwrap_or(RawEnvironmentBase::Core) {
+        RawEnvironmentBase::All => EnvironmentSpec::inherit_all(),
+        RawEnvironmentBase::Core => EnvironmentSpec::inherit_core(),
+        RawEnvironmentBase::None => EnvironmentSpec::empty(),
     };
-    for pattern in &raw.exclude {
-        environment = environment
-            .with_exclude_pattern(pattern)
-            .map_err(|source| ConfigError::Command {
-                profile: profile.to_owned(),
-                source,
-            })?;
-    }
-    for pattern in &raw.include {
-        environment = environment
-            .with_include_pattern(pattern)
-            .map_err(|source| ConfigError::Command {
-                profile: profile.to_owned(),
-                source,
-            })?;
+    for (pattern, action) in &raw.filters {
+        let action = match action {
+            RawEnvironmentFilterAction::Include => EnvironmentFilterAction::Include,
+            RawEnvironmentFilterAction::Exclude => EnvironmentFilterAction::Exclude,
+        };
+        environment =
+            environment
+                .with_filter(pattern, action)
+                .map_err(|source| ConfigError::Command {
+                    profile: profile.to_owned(),
+                    source,
+                })?;
     }
     for (name, value) in &raw.set {
         environment = environment
@@ -104,48 +98,42 @@ fn build_environment(raw: &RawEnvironment, profile: &str) -> Result<EnvironmentS
     Ok(environment)
 }
 
-fn build_stdio(raw: &RawStdio, profile: &str) -> Result<StdioSpec, ConfigError> {
+fn build_stdio(raw: &RawStdio) -> StdioSpec {
     let mut stdio = StdioSpec::default();
     if let Some(mode) = &raw.stdin {
-        stdio = stdio.with_stdin(parse_stdio_mode(mode, profile, "command.stdio.stdin")?);
+        stdio = stdio.with_stdin(stdio_mode(*mode));
     }
     if let Some(mode) = &raw.stdout {
-        stdio = stdio.with_stdout(parse_stdio_mode(mode, profile, "command.stdio.stdout")?);
+        stdio = stdio.with_stdout(stdio_mode(*mode));
     }
     if let Some(mode) = &raw.stderr {
-        stdio = stdio.with_stderr(parse_stdio_mode(mode, profile, "command.stdio.stderr")?);
+        stdio = stdio.with_stderr(stdio_mode(*mode));
     }
-    Ok(stdio)
+    stdio
 }
 
-fn parse_stdio_mode(value: &str, profile: &str, field: &str) -> Result<StdioMode, ConfigError> {
+fn stdio_mode(value: RawStdioMode) -> StdioMode {
     match value {
-        "inherit" => Ok(StdioMode::Inherit),
-        "null" => Ok(StdioMode::Null),
-        "pipe" => Ok(StdioMode::Pipe),
-        value => Err(invalid_value(
-            profile,
-            field,
-            format!("unsupported mode {value:?}"),
-        )),
+        RawStdioMode::Inherit => StdioMode::Inherit,
+        RawStdioMode::Null => StdioMode::Null,
+        RawStdioMode::Pipe => StdioMode::Pipe,
     }
 }
 
 fn build_timeout(raw: &RawTimeout, profile: &str) -> Result<TimeoutPolicy, ConfigError> {
     let mode = raw
         .mode
-        .as_deref()
         .ok_or_else(|| invalid_value(profile, "command.timeout.mode", "value is required"))?;
     match mode {
-        "backend-default" => {
+        RawTimeoutMode::BackendDefault => {
             reject_timeout_milliseconds(raw, profile)?;
             Ok(TimeoutPolicy::BackendDefault)
         }
-        "disabled" => {
+        RawTimeoutMode::Disabled => {
             reject_timeout_milliseconds(raw, profile)?;
             Ok(TimeoutPolicy::Disabled)
         }
-        "limit" => Ok(TimeoutPolicy::Limit(Duration::from_millis(
+        RawTimeoutMode::Limit => Ok(TimeoutPolicy::Limit(Duration::from_millis(
             raw.milliseconds.ok_or_else(|| {
                 invalid_value(
                     profile,
@@ -154,11 +142,6 @@ fn build_timeout(raw: &RawTimeout, profile: &str) -> Result<TimeoutPolicy, Confi
                 )
             })?,
         ))),
-        value => Err(invalid_value(
-            profile,
-            "command.timeout.mode",
-            format!("unsupported mode {value:?}"),
-        )),
     }
 }
 

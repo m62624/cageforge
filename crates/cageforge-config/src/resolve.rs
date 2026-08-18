@@ -5,8 +5,8 @@ use crate::build;
 use crate::error::{ConfigError, invalid_value};
 
 use crate::model::{
-    RawCommand, RawConfig, RawEnvironment, RawFilesystem, RawNetwork, RawProfile, RawStdio,
-    RawTimeout,
+    RawCommand, RawConfig, RawEnvironment, RawFilesystem, RawFilesystemRule, RawNetwork,
+    RawProfile, RawStdio, RawTimeout,
 };
 use cageforge_command::CommandRequest;
 use cageforge_policy::SandboxPolicy;
@@ -178,6 +178,16 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
         }
         if let Some(command) = &profile.command {
             if let Some(environment) = &command.environment {
+                let mut filter_patterns = BTreeSet::new();
+                for pattern in environment.filters.keys() {
+                    if !filter_patterns.insert(pattern.to_lowercase()) {
+                        return Err(invalid_value(
+                            name,
+                            "command.environment.filters",
+                            format!("duplicate pattern ignoring case {pattern:?}"),
+                        ));
+                    }
+                }
                 for variable in &environment.remove {
                     if environment.set.contains_key(variable) {
                         return Err(invalid_value(
@@ -278,28 +288,69 @@ fn merge_profiles(mut left: MergedProfile, right: MergedProfile) -> MergedProfil
 fn merge_filesystem(parent: Option<RawFilesystem>, child: &RawFilesystem) -> RawFilesystem {
     let mut merged = parent.unwrap_or_default();
     if child.mode.is_some() {
-        merged.mode = child.mode.clone();
+        merged.mode = child.mode;
     }
     if child.glob_scan_max_depth.is_some() {
         merged.glob_scan_max_depth = child.glob_scan_max_depth;
     }
-    merged.rules.extend(child.rules.clone());
+    append_unique_case_insensitive(
+        &mut merged.additional_protected_paths,
+        &child.additional_protected_paths,
+    );
+    if let Some(security) = &child.security {
+        let merged_security = merged.security.get_or_insert_with(Default::default);
+        if security.dangerously_allow_git_write.is_some() {
+            merged_security.dangerously_allow_git_write = security.dangerously_allow_git_write;
+        }
+    }
+    for child_rule in &child.rules {
+        if let Some(parent_rule) = merged
+            .rules
+            .iter_mut()
+            .find(|parent_rule| same_filesystem_rule_target(parent_rule, child_rule))
+        {
+            *parent_rule = child_rule.clone();
+        } else {
+            merged.rules.push(child_rule.clone());
+        }
+    }
     merged
 }
 
 fn merge_network(parent: Option<RawNetwork>, child: &RawNetwork) -> RawNetwork {
     let mut merged = parent.unwrap_or_default();
     if child.mode.is_some() {
-        merged.mode = child.mode.clone();
+        merged.mode = child.mode;
     }
     if child.domain_mode.is_some() {
-        merged.domain_mode = child.domain_mode.clone();
+        merged.domain_mode = child.domain_mode;
     }
     if child.unix_socket_mode.is_some() {
-        merged.unix_socket_mode = child.unix_socket_mode.clone();
+        merged.unix_socket_mode = child.unix_socket_mode;
     }
-    merged.domains.extend(child.domains.clone());
-    merged.unix_sockets.extend(child.unix_sockets.clone());
+    for child_rule in &child.domains {
+        if let Some(parent_rule) = merged.domains.iter_mut().find(|parent_rule| {
+            parent_rule
+                .pattern
+                .trim_end_matches('.')
+                .eq_ignore_ascii_case(child_rule.pattern.trim_end_matches('.'))
+        }) {
+            *parent_rule = child_rule.clone();
+        } else {
+            merged.domains.push(child_rule.clone());
+        }
+    }
+    for child_rule in &child.unix_sockets {
+        if let Some(parent_rule) = merged
+            .unix_sockets
+            .iter_mut()
+            .find(|parent_rule| parent_rule.path == child_rule.path)
+        {
+            *parent_rule = child_rule.clone();
+        } else {
+            merged.unix_sockets.push(child_rule.clone());
+        }
+    }
     merged
 }
 
@@ -329,10 +380,19 @@ fn merge_command(parent: Option<RawCommand>, child: &RawCommand) -> RawCommand {
 fn merge_environment(parent: Option<RawEnvironment>, child: &RawEnvironment) -> RawEnvironment {
     let mut merged = parent.unwrap_or_default();
     if child.inherit.is_some() {
-        merged.inherit = child.inherit.clone();
+        merged.inherit = child.inherit;
     }
-    append_unique(&mut merged.include, &child.include);
-    append_unique(&mut merged.exclude, &child.exclude);
+    for (child_pattern, child_action) in &child.filters {
+        if let Some(parent_pattern) = merged
+            .filters
+            .keys()
+            .find(|parent_pattern| parent_pattern.eq_ignore_ascii_case(child_pattern))
+            .cloned()
+        {
+            merged.filters.remove(&parent_pattern);
+        }
+        merged.filters.insert(child_pattern.clone(), *child_action);
+    }
     for (name, value) in &child.set {
         merged.remove.retain(|removed| removed != name);
         merged.set.insert(name.clone(), value.clone());
@@ -346,24 +406,31 @@ fn merge_environment(parent: Option<RawEnvironment>, child: &RawEnvironment) -> 
     merged
 }
 
-fn append_unique<T: PartialEq + Clone>(target: &mut Vec<T>, values: &[T]) {
+fn append_unique_case_insensitive(target: &mut Vec<String>, values: &[String]) {
     for value in values {
-        if !target.contains(value) {
+        if !target
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(value))
+        {
             target.push(value.clone());
         }
     }
 }
 
+fn same_filesystem_rule_target(left: &RawFilesystemRule, right: &RawFilesystemRule) -> bool {
+    left.target == right.target && left.path == right.path && left.pattern == right.pattern
+}
+
 fn merge_stdio(parent: Option<RawStdio>, child: &RawStdio) -> RawStdio {
     let mut merged = parent.unwrap_or_default();
     if child.stdin.is_some() {
-        merged.stdin = child.stdin.clone();
+        merged.stdin = child.stdin;
     }
     if child.stdout.is_some() {
-        merged.stdout = child.stdout.clone();
+        merged.stdout = child.stdout;
     }
     if child.stderr.is_some() {
-        merged.stderr = child.stderr.clone();
+        merged.stderr = child.stderr;
     }
     merged
 }
@@ -371,9 +438,15 @@ fn merge_stdio(parent: Option<RawStdio>, child: &RawStdio) -> RawStdio {
 fn merge_timeout(parent: Option<RawTimeout>, child: &RawTimeout) -> RawTimeout {
     let mut merged = parent.unwrap_or_default();
     if child.mode.is_some() {
-        merged.mode = child.mode.clone();
+        merged.mode = child.mode;
         if child.milliseconds.is_none()
-            && matches!(child.mode.as_deref(), Some("backend-default" | "disabled"))
+            && matches!(
+                child.mode,
+                Some(
+                    crate::model::RawTimeoutMode::BackendDefault
+                        | crate::model::RawTimeoutMode::Disabled
+                )
+            )
         {
             merged.milliseconds = None;
         }

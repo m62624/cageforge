@@ -46,6 +46,9 @@ rules = [
   { target = "workspace-root", access = "write" },
 ]
 
+[profiles.workspace.filesystem.security]
+dangerously_allow_git_write = false
+
 [profiles.workspace.network]
 mode = "disabled"
 
@@ -55,12 +58,13 @@ args = ["test", "--workspace"]
 
 [profiles.workspace.command.environment]
 inherit = "core"
+set = { RUST_BACKTRACE = "1" }
+remove = ["CARGO_TERM_COLOR"]
+
 [profiles.workspace.command.environment.filters]
 "CARGO_*" = "include"
 "RUST_*" = "include"
 "TOKEN_*" = "exclude"
-set = { RUST_BACKTRACE = "1" }
-remove = ["CARGO_TERM_COLOR"]
 
 [profiles.workspace.command.stdio]
 stdin = "null"
@@ -106,8 +110,11 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
   `exclude`, rejects case-insensitive duplicate patterns, and merges exact
   patterns by child override. Excludes have precedence over includes. The
   backend defines the platform-specific `core` set.
-- `additional_protected_paths` is additive. Restricted profiles always protect
-  `.git` below writable scopes; configuration cannot remove that default.
+- `additional_protected_paths` is additive. Restricted profiles protect `.git`
+  below writable scopes by default. The explicit
+  `[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`
+  opt-out is available for trusted callers that really need repository
+  metadata writes; a later composer or backend may reject the request.
 - Unknown TOML fields are errors. A typo must not silently produce a weaker
   policy.
 - Unknown profiles, invalid profile names, missing command programs, inheritance

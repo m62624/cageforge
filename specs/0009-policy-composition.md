@@ -31,9 +31,10 @@ it or treating an unavailable restriction as successful enforcement.
   context, deduplicated, and intersected with roots granted by the harness.
 - Environment policy is narrowed by combining base-environment limits and
   filters. Excludes have precedence; includes cannot restore excluded values.
-- Mandatory protected metadata paths, initially `.git`, are always retained in
-  the effective policy. User configuration may add protections but may not
-  remove them.
+- Protected metadata paths, initially `.git`, are retained in the effective
+  policy by default. A requested dangerous `.git` opt-out must be explicitly
+  granted by the harness/backend; otherwise the composer rejects or removes
+  that request.
 - `unrestricted` and `external` modes are explicit ownership transfers. They
   require a matching grant from the harness/backend and are not inferred from
   missing rules.
@@ -57,6 +58,7 @@ Before a composer is implemented, its public integration tests must cover:
 - network allowlists narrowed by a grant;
 - requested roots outside granted roots rejected or removed with a typed result;
 - excluded environment variables never restored by includes or overrides;
-- `.git` protection surviving every requested profile;
+- default `.git` protection surviving every ordinary requested profile;
+- explicit acceptance or rejection of the dangerous `.git` opt-out;
 - explicit rejection of unsupported `unrestricted` and `external` transfers;
 - Linux, macOS, and Windows path comparison behavior in native backend tests.
