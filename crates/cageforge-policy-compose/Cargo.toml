@@ -1,0 +1,15 @@
+[package]
+name = "cageforge-policy-compose"
+description = "Pure intersection of requested Cageforge sandbox policy and a portable ceiling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cageforge-command.workspace = true
+cageforge-policy.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

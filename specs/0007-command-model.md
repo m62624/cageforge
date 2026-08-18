@@ -5,8 +5,8 @@ Status: accepted; portable implementation complete
 ## Purpose
 
 `cageforge-command` describes portable command-execution intent. It is a small
-request crate that can be reused by harnesses and later composed with
-`cageforge-policy` by `cageforge-backend-api`.
+request crate that can be reused by applications and later passed through the
+policy-composition and backend layers.
 
 The crate does not launch processes, parse TOML, apply sandbox restrictions,
 allocate PTYs, manage process sessions, or expose a harness protocol.
@@ -110,13 +110,17 @@ crate. The future graph is:
 ```text
 cageforge-policy       cageforge-command
          \               /
-          cageforge-backend-api
+       cageforge-policy-compose
+                |
+       cageforge-backend-api
 ```
 
 This avoids putting enforcement or process-launch assumptions into the
 portable request type. `cageforge-config` parses user profiles and produces
-both a `CommandRequest` and a `SandboxPolicy`; a future backend API composes
-those values for launch.
+both a `CommandRequest` and a `SandboxPolicy`; `cageforge-policy-compose`
+narrows the policy and environment against a `PolicyCeiling`, while the future
+backend API combines the resulting constraints with command execution and
+native capability checks.
 
 ## Required tests
 

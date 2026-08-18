@@ -22,6 +22,9 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/protocol/src/models.rs` | `crates/cageforge-policy`, `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/protocol/src/protocol.rs` | `crates/cageforge-policy` | Behavior-tracked; independently implemented |
 | `codex-rs/sandboxing/src/policy_transforms.rs` | `crates/cageforge-policy` | Behavior-tracked; independently implemented |
+| `codex-rs/sandboxing/src/policy_transforms.rs` | `crates/cageforge-policy-compose` | Portable intersection behavior audited; independently implemented |
+| `codex-rs/protocol/src/permissions.rs` | `crates/cageforge-policy-compose` | Decision and ownership concepts audited; independently implemented |
+| `codex-rs/protocol/src/models.rs` | `crates/cageforge-policy-compose` | Portable policy request usage audited; product types excluded |
 | `codex-rs/app-server-protocol/src/protocol/v2/command_exec.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/app-server-protocol/src/protocol/v2/process.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/protocol/src/config_types.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |

@@ -60,10 +60,10 @@ The remaining OS-specific behavior stays below the policy boundary. Codex's
 product-specific `.agents` and `.codex` names are not copied into the public
 API; callers can add generic protected relative paths when they need them.
 
-These are design inputs for the current `cageforge-config` and
-`cageforge-command` crates, and for the future `cageforge-backend-api` and
-native backend crates. The portable command intent boundary is now implemented
-in `cageforge-command`; it remains free of
+These are design inputs for the current `cageforge-config`,
+`cageforge-command`, and `cageforge-policy-compose` crates, and for the future
+`cageforge-backend-api` and native backend crates. The portable command intent
+boundary is now implemented in `cageforge-command`; it remains free of
 operating-system and process-launch dependencies. None of these details
 justify adding operating-system or process-launch dependencies to
 `cageforge-policy`.
@@ -83,7 +83,7 @@ names or legacy serialization.
 
 The requested profile and the effective backend policy are separate stages.
 Profile inheritance may express an explicit requested override, but capability
-intersection in the future backend composer is monotonic and may only narrow
+intersection in `cageforge-policy-compose` is monotonic and may only narrow
 filesystem, network, roots, and environment access. Mandatory `.git` protection
 survives both stages.
 
@@ -101,10 +101,10 @@ The following Codex-specific concerns remain outside the policy crate:
    integration coverage when the portable policy API changes. Their current
    profile, environment, host-normalization, and cwd-validation behavior is
    implemented and tested; it is not a deferred feature.
-2. Define capability negotiation and effective policy composition in
-   `cageforge-backend-api` (or a dedicated composer crate). The current
-   policy/config crates deliberately do not pretend to produce an effective
-   policy from a harness grant.
+2. Use `cageforge-policy-compose` for pure intersection against a neutral
+   `PolicyCeiling`. Define native capability negotiation and typed unsupported
+   policy errors in `cageforge-backend-api`; the composer deliberately does not
+   know which OS backend will consume the result.
 3. Implement and integration-test Linux, macOS, and Windows backends on their
    native CI runners.
 

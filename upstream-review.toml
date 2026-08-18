@@ -55,3 +55,12 @@ upstream_paths = [
     "codex-rs/core/src/exec_env.rs",
 ]
 local_paths = ["crates/cageforge-config/"]
+
+[[scope]]
+name = "cageforge-policy-compose"
+upstream_paths = [
+    "codex-rs/sandboxing/src/policy_transforms.rs",
+    "codex-rs/protocol/src/permissions.rs",
+    "codex-rs/protocol/src/models.rs",
+]
+local_paths = ["crates/cageforge-policy-compose/"]

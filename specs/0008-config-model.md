@@ -23,7 +23,7 @@ cageforge-config
 
 The workspace declares these local crates in `[workspace.dependencies]`. The
 config crate consumes their public APIs and never reaches into their private
-modules.
+modules. It produces requested values; it does not apply a `PolicyCeiling`.
 
 ## TOML shape
 
@@ -148,6 +148,9 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
 - A profile without a filesystem section resolves to an empty restricted policy;
   a profile without a network section resolves to disabled networking.
 - A profile may omit `command`; this is useful for policy-only consumers.
+- Composition with an outer safety limit is performed after resolution by
+  `cageforge-policy-compose`; config never assumes that the requested profile
+  is the effective policy.
 - The JSON Schema uses typed enum values for modes, access, targets, filters,
   stdio, and timeouts, and describes unknown-field rejection. It does not
   replace semantic resolution checks such as inheritance cycles or policy

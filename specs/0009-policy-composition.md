@@ -1,78 +1,100 @@
 # Specification 0009: Effective Policy Composition
 
-Status: accepted design; implementation deferred until the backend API
+Status: accepted; `cageforge-policy-compose` implemented
 
 ## Purpose
 
-`cageforge-config` resolves a user-requested profile. It is not the final
-security authority. A future `cageforge-policy-compose` or
-`cageforge-backend-api` layer must combine that request with the capabilities
-granted by the harness and the selected native backend.
+`cageforge-config` resolves a requested profile. It is not the final security
+authority. `cageforge-policy-compose` narrows that request against a neutral
+portable `PolicyCeiling`. A future `cageforge-backend-api` then checks native
+capabilities and lowers the effective constraints for a selected backend.
 
 ```text
-requested profile + harness grant + backend capabilities
-                         |
-                         v
-                   effective policy
+requested profile ──┐
+                    ├─ cageforge-policy-compose ── effective constraints
+policy ceiling ─────┘                                      │
+                                                           v
+                                             cageforge-backend-api
+                                                           │
+                                                           v
+                                                native OS backend
 ```
 
-The effective policy may only be narrower than the requested policy. A backend
-must reject an unsupported or disallowed request rather than silently widening
-it or treating an unavailable restriction as successful enforcement. This
-contract is intentionally not implemented by `cageforge-config`: config
-produces a request, while a composer must also know the harness grant and
-backend capabilities.
+The ceiling is deliberately not named after a harness. It can be supplied by
+an application, an embedding library, a remote executor, or another policy
+layer without making this crate depend on any of them.
 
-## Composition rules
+## Composition contract
 
-- Filesystem capabilities are intersected. `Deny` is stronger than `Read`, and
-  `Read` is stronger than `Write`.
-- Network access is intersected independently from filesystem access. Domain
-  and Unix-socket allowlists are narrowed, and a deny rule cannot be removed by
-  a requested profile.
-- Profile workspace roots are requests. They are resolved against the runtime
-  context, deduplicated, and intersected with roots granted by the harness.
-- Environment policy is narrowed by combining base-environment limits and
-  filters. The composer preserves the portable order `inherit → exclude →
-  set/remove → include`: includes cannot restore excluded values, while an
-  explicit set remains an intentional later override. Variable names and
-  filter patterns retain case-insensitive identity.
-- Protected metadata paths, initially `.git`, are retained in the effective
-  policy by default. A requested dangerous `.git` opt-out must be explicitly
-  granted by the harness/backend; otherwise the composer rejects or removes
-  that request.
-- `unrestricted` and `external` modes are explicit ownership transfers. They
-  require a matching grant from the harness/backend and are not inferred from
-  missing rules.
-- `FilesystemDecision::ExternallyEnforced` is an ownership result, not a deny
-  result. A composer must accept it only when the external owner is the
-  granted enforcement boundary.
-- `NetworkDecision::ExternallyEnforced` has the same ownership meaning for
-  domain and Unix-socket checks. A composer must preserve it until it verifies
-  that the harness/backend grant names the external network owner; it must not
-  collapse the value into local deny or allow.
+`compose(CompositionRequest)` validates both policies and returns an
+`EffectiveSandbox`. The result retains the requested and ceiling policies as
+private components with read-only accessors. It does not concatenate policy
+rules into a new allowlist: that would be unsafe because a restricted policy
+with no entries means deny-all, and concatenating it with another policy could
+accidentally grant access.
+
+- Filesystem decisions are evaluated against both policies. `Deny` is stronger
+  than `Read`, and `Read` is stronger than `Write`.
+- Network decisions are evaluated independently. A domain or Unix socket is
+  allowed only when both policies allow it.
+- `External` ownership is accepted only when both sides use external
+  enforcement. A local/external mismatch is a typed composition error rather
+  than a silent allow or deny conversion.
+- Workspace roots are deduplicated and retained only when each requested root
+  is inside one of the optional ceiling roots. The composer performs lexical
+  declaration checks; runtime path resolution and symlink behavior remain at
+  the backend/context boundary.
+- Environment composition chooses the least permissive base (`None`,
+  `Core`, or `All`), applies the requested transformation, then applies the
+  ceiling transformation. The ceiling cannot introduce a variable absent from
+  the requested result. The command crate's portable order remains
+  `inherit → exclude → set/remove → include`.
+- `.git` protection is preserved because every filesystem decision is checked
+  against both complete policies. If either side retains the default protected
+  path, a write request below it cannot become writable through composition.
+  A dangerous opt-out is effective only if both input policies opt out.
+
+The effective types expose the two component policies to a future backend
+lowering layer. They do not claim that a particular OS can implement every
+rule. This is the pure-intersection option: backend capability checks and
+typed unsupported-capability errors belong to `cageforge-backend-api`.
 
 ## Ownership boundary
 
-The composer owns capability intersection, runtime root materialization,
-backend capability checks, and typed unsupported-policy errors. It does not
-parse TOML, discover a user's project trust state, launch a process, or expose
-Codex protocol types.
+`cageforge-policy-compose` owns:
 
-Native backends remain responsible for enforcing the effective result,
-including symlink behavior, platform path comparison, process restrictions,
-network syscall restrictions, and platform-specific process creation.
+- monotonic filesystem, network, environment, and workspace-root narrowing;
+- external-enforcement ownership checks;
+- typed composition and policy-evaluation errors;
+- keeping the inputs available for later backend lowering.
+
+It does not own:
+
+- TOML parsing, profile inheritance, or schema generation;
+- backend capability matrices or OS-specific support checks;
+- runtime filesystem discovery, symlink resolution, or path case rules;
+- process spawning, PTYs, stdio, timeouts, or network proxying;
+- trust, approvals, telemetry, managed configuration, or Codex protocol types.
+
+Those responsibilities remain in `cageforge-config`,
+`cageforge-command`, the future `cageforge-backend-api`, or native backend
+crates as appropriate.
 
 ## Required tests
 
-Before a composer is implemented, its public integration tests must cover:
+The crate's black-box integration suite covers:
 
-- requested write reduced to read or deny by a grant;
-- network allowlists narrowed by a grant;
-- requested roots outside granted roots rejected or removed with a typed result;
-- excluded environment variables never restored by includes, while explicit
-  set semantics remain available as an intentional later override;
-- default `.git` protection surviving every ordinary requested profile;
-- explicit acceptance or rejection of the dangerous `.git` opt-out;
-- explicit rejection of unsupported `unrestricted` and `external` transfers;
-- Linux, macOS, and Windows path comparison behavior in native backend tests.
+- requested filesystem write narrowed to read and deny;
+- independent network narrowing for domains and external ownership;
+- requested roots outside a configured ceiling rejected with a typed error;
+- nested roots retained and duplicate declarations removed;
+- parent-traversal root declarations rejected;
+- environment base narrowing, exclusion precedence, and prevention of
+  ceiling-only variable additions;
+- default `.git` protection surviving an ordinary writable request;
+- explicit external/local ownership mismatch errors;
+- matching external ownership remaining externally enforced.
+
+Portable composition logic must retain at least 90% line coverage. Native
+capability and enforcement tests are added to each backend crate on its native
+CI runner; they are not simulated in this crate.
