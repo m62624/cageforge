@@ -159,6 +159,33 @@ fn environment_patterns_are_validated_and_match_wildcards() {
 }
 
 #[test]
+fn environment_application_has_explicit_codex_compatible_stage_order() {
+    let environment = EnvironmentSpec::inherit_all()
+        .with_filter("*TOKEN*", EnvironmentFilterAction::Exclude)
+        .expect("exclude filter")
+        .with_filter("PATH", EnvironmentFilterAction::Include)
+        .expect("include filter")
+        .with_var("PATH", "/custom/bin")
+        .expect("path override")
+        .with_var("REMOVED", "set then removed")
+        .expect("set override")
+        .without_var("REMOVED")
+        .expect("remove override");
+
+    let result = environment.apply_to([
+        (OsString::from("PATH"), OsString::from("/usr/bin")),
+        (OsString::from("ACCESS_TOKEN"), OsString::from("secret")),
+        (OsString::from("HOME"), OsString::from("/home/user")),
+    ]);
+    assert_eq!(
+        result,
+        [(OsString::from("PATH"), OsString::from("/custom/bin"))]
+            .into_iter()
+            .collect()
+    );
+}
+
+#[test]
 fn environment_rejects_invalid_names_and_values() {
     assert_eq!(
         EnvironmentSpec::default()

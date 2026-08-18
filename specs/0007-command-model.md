@@ -50,11 +50,13 @@ values and filter patterns reject NUL. `*` matches zero or more characters and
 The command crate stores the portable request only. `Core` is intentionally a
 backend-defined conservative environment set because safe variables are
 platform-specific. Environment variable matching is case-insensitive so the
-same request has safe behavior on Windows and POSIX systems. Exclude filters
-have deny precedence over include filters and an include never re-adds a
-variable removed by an exclude. Explicit overrides are subject to the same
-filter result; conflicting set/remove requests are rejected by the config
-layer.
+same request has safe behavior on Windows and POSIX systems. The portable
+application order is `inherit → exclude → set/remove → include`.
+`EnvironmentSpec::apply_to` applies the latter three stages to a base map that
+the backend selected according to `All`, `Core`, or `None`. A variable removed
+by an exclude is not restored by an include; explicit set/remove entries are
+applied at their own stage. Conflicting set/remove requests are rejected by
+the config layer.
 
 The type intentionally does not reproduce Codex's product-specific secret
 patterns, environment discovery, shell profiles, or configuration compatibility
@@ -113,8 +115,8 @@ The public integration suite covers:
 - empty and NUL-containing program rejection;
 - native arguments, including empty arguments and NUL rejection;
 - all/core/none environments, deterministic overrides, set/remove distinction,
-  case-insensitive canonical include/exclude filtering, exclude precedence, and
-  invalid names/values/patterns;
+  case-insensitive canonical include/exclude filtering, ordered environment
+  application, and invalid names/values/patterns;
 - explicit and default stdio modes;
 - optional native cwd, NUL rejection, and timeout replacement/removal;
 - complete object equality and error display.

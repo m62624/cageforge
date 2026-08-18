@@ -64,6 +64,11 @@ mode = "limit"
 milliseconds = 60000
 ```
 
+More complete, copyable scenarios are in the tested
+[configuration examples](examples/README.md). They explain the TOML syntax,
+profile inheritance, environment stage order, protected metadata, and the
+native Unix/macOS versus Windows path forms.
+
 Filesystem targets are `absolute`, `workspace`, `workspace-root`, `minimal`,
 `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`. Network modes are
 `disabled`, `enabled`, and `external`; domain and Unix-socket defaults are
@@ -84,9 +89,12 @@ registering absolute roots in its path context.
 Command environments support `all`, `core`, and `none` inheritance bases;
 omitting `inherit` selects `core`. The `filters` table maps portable `*` and
 `?` patterns to `include` or `exclude`. Matching is case-insensitive and
-excludes take precedence. The backend decides which platform variables belong
-to the `core` set. Restricted filesystem profiles protect `.git` below writable
-scopes by default; trusted callers can request the explicit TOML opt-out
+excludes take precedence. The command environment stages are
+`inherit → exclude → set/remove → include`; an include cannot restore an
+inherited variable already removed by an exclude. The backend decides which
+platform variables belong to the `core` set. Restricted filesystem profiles
+protect `.git` below writable scopes by default; trusted callers can request
+the explicit TOML opt-out
 `[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`.
 
 ## Library API

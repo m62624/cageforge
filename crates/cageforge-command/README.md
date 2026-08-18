@@ -92,9 +92,12 @@ Names reject empty strings, `=`, and NUL; values and filter patterns reject NUL.
 and `?` wildcards. The convenience methods `with_include_pattern` and
 `with_exclude_pattern` remain available for readable Rust call sites. Matching
 is case-insensitive, and excludes have precedence when a variable matches both
-actions. The model stores the validated filters; the backend applies them to
-the environment it constructs. This keeps process-environment discovery out
-of the platform-independent crate.
+actions. `apply_to` applies the portable stages in this order:
+`inherit → exclude → set/remove → include`. A variable removed by an exclude is
+not restored by an include; explicit set/remove entries are applied at their
+own stage. The backend still selects the platform-specific `Core` variables
+and supplies the selected base map. This keeps process-environment discovery
+out of the platform-independent crate.
 
 ## Standard streams and timeout
 

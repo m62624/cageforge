@@ -1,0 +1,46 @@
+# A conventional development profile.
+#
+# The profile can write in all declared workspace roots, but the policy crate
+# protects .git by default. The extra protected paths make generated metadata
+# read-only as well. `core` is intentionally selected instead of inheriting
+# every variable from the launcher.
+default_profile = "workspace-dev"
+
+[profiles.workspace-dev]
+description = "Writable workspace for local development"
+
+[profiles.workspace-dev.workspace_roots]
+"/work/shared" = true
+"/work/generated" = true
+"/work/disabled" = false
+
+[profiles.workspace-dev.filesystem]
+mode = "restricted"
+glob_scan_max_depth = 8
+additional_protected_paths = [".cargo", ".env"]
+rules = [
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.workspace-dev.network]
+mode = "disabled"
+
+[profiles.workspace-dev.command]
+program = "cargo"
+args = ["test", "--workspace"]
+working_directory = "project"
+
+[profiles.workspace-dev.command.environment]
+inherit = "core"
+filters = { "CARGO_*" = "include", "RUST_*" = "include", "*TOKEN*" = "exclude" }
+set = { RUST_BACKTRACE = "1" }
+remove = ["CARGO_TERM_COLOR"]
+
+[profiles.workspace-dev.command.stdio]
+stdin = "null"
+stdout = "pipe"
+stderr = "pipe"
+
+[profiles.workspace-dev.command.timeout]
+mode = "limit"
+milliseconds = 60000

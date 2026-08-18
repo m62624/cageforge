@@ -10,6 +10,7 @@ use cageforge_policy::{
 use pretty_assertions::assert_eq;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -32,6 +33,166 @@ default_profile = "safe"
 "#,
     )
     .expect("valid empty profile")
+}
+
+const COMMON_EXAMPLES: [(&str, &str); 5] = [
+    (
+        "minimal-policy.toml",
+        include_str!("../examples/minimal-policy.toml"),
+    ),
+    (
+        "workspace-development.toml",
+        include_str!("../examples/workspace-development.toml"),
+    ),
+    (
+        "profile-inheritance.toml",
+        include_str!("../examples/profile-inheritance.toml"),
+    ),
+    (
+        "environment-order.toml",
+        include_str!("../examples/environment-order.toml"),
+    ),
+    (
+        "trusted-metadata-write.toml",
+        include_str!("../examples/trusted-metadata-write.toml"),
+    ),
+];
+
+#[cfg(unix)]
+fn platform_example() -> (&'static str, &'static str) {
+    (
+        "platform-targets-unix.toml",
+        include_str!("../examples/platform-targets-unix.toml"),
+    )
+}
+
+#[cfg(windows)]
+fn platform_example() -> (&'static str, &'static str) {
+    (
+        "platform-targets-windows.toml",
+        include_str!("../examples/platform-targets-windows.toml"),
+    )
+}
+
+#[test]
+fn documented_examples_are_live_parse_and_resolution_fixtures() {
+    for (name, source) in COMMON_EXAMPLES {
+        let config = Config::from_toml(source)
+            .unwrap_or_else(|error| panic!("{name} should remain valid TOML: {error}"));
+        config
+            .resolve_default()
+            .unwrap_or_else(|error| panic!("{name} should resolve: {error}"));
+    }
+
+    let (name, source) = platform_example();
+    let config = Config::from_toml(source)
+        .unwrap_or_else(|error| panic!("{name} should remain valid TOML: {error}"));
+    config
+        .resolve_default()
+        .unwrap_or_else(|error| panic!("{name} should resolve: {error}"));
+}
+
+#[test]
+fn documented_examples_cover_their_declared_behavior() {
+    let inherited = Config::from_toml(include_str!("../examples/profile-inheritance.toml"))
+        .expect("inheritance example parses")
+        .resolve_default()
+        .expect("inheritance example resolves");
+    assert_eq!(
+        inherited.workspace_roots(),
+        &[
+            PathBuf::from("/work/artifacts"),
+            PathBuf::from("/work/project")
+        ]
+    );
+    assert_eq!(inherited.policy().filesystem().entries().len(), 2);
+    assert_eq!(
+        inherited.policy().filesystem().entries()[0].access(),
+        AccessMode::Write
+    );
+    assert_eq!(
+        inherited.policy().network().domains()[1].access(),
+        DomainAccess::Allow
+    );
+    let inherited_environment = inherited
+        .command()
+        .expect("inherited command")
+        .environment();
+    assert_eq!(
+        inherited_environment.filter_action_for("PATH"),
+        Some(EnvironmentFilterAction::Exclude)
+    );
+
+    let ordered = Config::from_toml(include_str!("../examples/environment-order.toml"))
+        .expect("environment-order example parses")
+        .resolve_default()
+        .expect("environment-order example resolves");
+    let result = ordered
+        .command()
+        .expect("ordered command")
+        .environment()
+        .apply_to([
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+            (OsString::from("ACCESS_TOKEN"), OsString::from("secret")),
+            (OsString::from("REMOVE_ME"), OsString::from("old")),
+        ]);
+    assert_eq!(
+        result,
+        [
+            (OsString::from("PATH"), OsString::from("/custom/bin")),
+            (OsString::from("OVERRIDE"), OsString::from("explicit"))
+        ]
+        .into_iter()
+        .collect()
+    );
+
+    let trusted = Config::from_toml(include_str!("../examples/trusted-metadata-write.toml"))
+        .expect("trusted metadata example parses")
+        .resolve_default()
+        .expect("trusted metadata example resolves");
+    assert_eq!(
+        trusted.policy().filesystem().protected_relative_paths(),
+        &[PathBuf::from(".cargo"), PathBuf::from(".env")]
+    );
+}
+
+#[test]
+fn platform_example_exercises_every_config_field() {
+    let (name, source) = platform_example();
+    let resolved = Config::from_toml(source)
+        .unwrap_or_else(|error| panic!("{name} should parse: {error}"))
+        .resolve_default()
+        .unwrap_or_else(|error| panic!("{name} should resolve: {error}"));
+
+    let filesystem = resolved.policy().filesystem();
+    assert_eq!(filesystem.entries().len(), 8);
+    assert_eq!(filesystem.glob_scan_max_depth(), NonZeroUsize::new(6));
+    assert_eq!(filesystem.protected_relative_paths().len(), 3);
+
+    let network = resolved.policy().network();
+    assert_eq!(network.mode(), NetworkMode::Enabled);
+    assert_eq!(network.domain_mode(), DomainMode::Restricted);
+    assert_eq!(network.unix_socket_mode(), UnixSocketMode::Restricted);
+    assert_eq!(network.domains().len(), 2);
+    assert_eq!(network.unix_sockets().len(), 1);
+
+    let command = resolved.command().expect("platform command");
+    assert_eq!(
+        command.command().args(),
+        [OsString::from("--profile"), OsString::from("all-targets")]
+    );
+    assert_eq!(command.working_directory(), Some(Path::new("src")));
+    assert_eq!(command.environment().base(), EnvironmentBase::All);
+    assert_eq!(command.environment().filters().len(), 3);
+    assert_eq!(command.environment().overrides().len(), 2);
+    assert_eq!(
+        command.stdio(),
+        StdioSpec::new(StdioMode::Inherit, StdioMode::Null, StdioMode::Pipe)
+    );
+    assert_eq!(
+        command.timeout_policy(),
+        TimeoutPolicy::Limit(Duration::from_millis(30000))
+    );
 }
 
 #[test]

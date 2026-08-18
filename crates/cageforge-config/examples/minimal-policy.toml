@@ -1,0 +1,17 @@
+# A smallest useful policy-only profile.
+#
+# No command is declared: a harness can use the resolved SandboxPolicy without
+# asking cageforge-config to describe a process launch.
+default_profile = "read-only"
+
+[profiles.read-only]
+description = "Read project files and deny outbound networking"
+
+[profiles.read-only.filesystem]
+mode = "restricted"
+rules = [
+  { target = "workspace-root", access = "read" },
+]
+
+[profiles.read-only.network]
+mode = "disabled"

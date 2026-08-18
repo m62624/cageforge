@@ -153,6 +153,54 @@ impl EnvironmentSpec {
         include_matches.then_some(EnvironmentFilterAction::Include)
     }
 
+    /// Applies filters and explicit overrides to an already selected base
+    /// environment.
+    ///
+    /// The caller selects the `All`, `Core`, or `None` base at the backend
+    /// boundary. This method then applies the portable sequence
+    /// `exclude -> set/remove -> include`. A variable removed by an exclude is
+    /// not restored by an include; an explicit set is applied at its named
+    /// stage and is therefore intentional.
+    pub fn apply_to<I>(&self, variables: I) -> BTreeMap<OsString, OsString>
+    where
+        I: IntoIterator<Item = (OsString, OsString)>,
+    {
+        let mut environment: BTreeMap<OsString, OsString> = variables.into_iter().collect();
+        let has_include_filter = self
+            .filters
+            .values()
+            .any(|action| *action == EnvironmentFilterAction::Include);
+
+        environment.retain(|name, _| {
+            !self.filters.iter().any(|(pattern, action)| {
+                *action == EnvironmentFilterAction::Exclude
+                    && pattern.matches(&name.to_string_lossy())
+            })
+        });
+
+        for (name, value) in &self.overrides {
+            match value {
+                EnvironmentOverride::Set(value) => {
+                    environment.insert(name.clone(), value.clone());
+                }
+                EnvironmentOverride::Remove => {
+                    environment.remove(name);
+                }
+            }
+        }
+
+        if has_include_filter {
+            environment.retain(|name, _| {
+                self.filters.iter().any(|(pattern, action)| {
+                    *action == EnvironmentFilterAction::Include
+                        && pattern.matches(&name.to_string_lossy())
+                })
+            });
+        }
+
+        environment
+    }
+
     /// Adds a variable assignment and returns the updated environment.
     pub fn with_var(
         mut self,

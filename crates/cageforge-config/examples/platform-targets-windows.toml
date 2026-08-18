@@ -1,0 +1,57 @@
+# Windows version of the all-fields example. It keeps the same policy intent
+# while using drive-qualified native absolute paths.
+default_profile = "all-targets"
+
+[profiles.all-targets]
+description = "Exercise every portable filesystem, network, and command field"
+
+[profiles.all-targets.workspace_roots]
+"C:/work/project" = true
+"relative/workspace" = true
+
+[profiles.all-targets.filesystem]
+mode = "restricted"
+glob_scan_max_depth = 6
+additional_protected_paths = [".cargo", "workspace/.metadata"]
+rules = [
+  { target = "absolute", path = "C:/cageforge-example", access = "read", missing_path = "skip" },
+  { target = "workspace", path = ".", access = "write", read_only_subpaths = [{ target = "workspace", path = "src/secrets" }] },
+  { target = "workspace-root", access = "read" },
+  { target = "minimal", access = "read" },
+  { target = "tmpdir", access = "write" },
+  { target = "slash-tmp", access = "write" },
+  { target = "absolute-glob", pattern = "C:/cageforge-example/**/*.json", access = "deny" },
+  { target = "workspace-glob", pattern = "target/**/*.rlib", access = "read" },
+]
+
+[profiles.all-targets.network]
+mode = "enabled"
+domain_mode = "restricted"
+unix_socket_mode = "restricted"
+domains = [
+  { pattern = "**.example.com", access = "allow" },
+  { pattern = "blocked.example.com", access = "deny" },
+]
+unix_sockets = [
+  { path = "C:/cageforge-example/run/cageforge.sock", access = "allow" },
+]
+
+[profiles.all-targets.command]
+program = "cageforge-runner.exe"
+args = ["--profile", "all-targets"]
+working_directory = "src"
+
+[profiles.all-targets.command.environment]
+inherit = "all"
+filters = { "PATH" = "include", "CARGO_*" = "include", "*TOKEN*" = "exclude" }
+set = { RUST_LOG = "info" }
+remove = ["REMOVE_ME"]
+
+[profiles.all-targets.command.stdio]
+stdin = "inherit"
+stdout = "null"
+stderr = "pipe"
+
+[profiles.all-targets.command.timeout]
+mode = "limit"
+milliseconds = 30000

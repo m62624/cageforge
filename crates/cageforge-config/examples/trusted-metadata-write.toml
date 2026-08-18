@@ -1,0 +1,21 @@
+# A deliberately dangerous exception for a trusted workflow that must update
+# repository metadata. Additional protected paths remain protected.
+default_profile = "metadata-writer"
+
+[profiles.metadata-writer]
+description = "Trusted metadata maintenance workflow"
+
+[profiles.metadata-writer.filesystem]
+mode = "restricted"
+additional_protected_paths = [".cargo", ".env"]
+rules = [
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.metadata-writer.filesystem.security]
+# A future harness/backend may reject this request even though the config
+# model can represent it explicitly.
+dangerously_allow_git_write = true
+
+[profiles.metadata-writer.network]
+mode = "disabled"

@@ -1,0 +1,18 @@
+# This file demonstrates command-environment processing. It is not a
+# filesystem permission order.
+#
+# 1. inherit selects the starting base map.
+# 2. exclude removes inherited matching variables.
+# 3. set/remove apply explicit overrides.
+# 4. include keeps only matching variables when any include filter exists.
+# An include does not restore an inherited variable already removed by exclude.
+default_profile = "ordered-environment"
+
+[profiles.ordered-environment.command]
+program = "env-print"
+
+[profiles.ordered-environment.command.environment]
+inherit = "all"
+filters = { "*TOKEN*" = "exclude", "PATH" = "include", "OVERRIDE" = "include" }
+set = { PATH = "/custom/bin", OVERRIDE = "explicit" }
+remove = ["REMOVE_ME"]

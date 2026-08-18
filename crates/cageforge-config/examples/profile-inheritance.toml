@@ -1,0 +1,65 @@
+# A parent profile supplies a conservative baseline. The child changes only
+# what it needs: the same filesystem target and the same domain target are
+# replaced, while distinct rules remain available.
+default_profile = "ci"
+
+[profiles.base]
+description = "Shared CI baseline"
+
+[profiles.base.workspace_roots]
+"/work/project" = true
+"/work/cache" = true
+
+[profiles.base.filesystem]
+mode = "restricted"
+rules = [
+  { target = "workspace-root", access = "read" },
+]
+
+[profiles.base.network]
+mode = "enabled"
+domain_mode = "restricted"
+domains = [
+  { pattern = "**.example.com", access = "allow" },
+  { pattern = "blocked.example.com", access = "deny" },
+]
+
+[profiles.base.command]
+program = "cargo"
+args = ["check"]
+
+[profiles.base.command.environment]
+inherit = "none"
+filters = { "PATH" = "include", "*TOKEN*" = "exclude" }
+set = { CI = "true" }
+
+[profiles.base.command.timeout]
+mode = "limit"
+milliseconds = 120000
+
+[profiles.ci]
+inherits = ["base"]
+description = "CI profile with a writable workspace"
+
+[profiles.ci.workspace_roots]
+"/work/cache" = false
+"/work/artifacts" = true
+
+[profiles.ci.filesystem]
+rules = [
+  { target = "workspace-root", access = "write" },
+  { target = "tmpdir", access = "write" },
+]
+
+[profiles.ci.network]
+domains = [
+  { pattern = "blocked.example.com", access = "allow" },
+]
+
+[profiles.ci.command.environment]
+# Pattern keys are canonicalized case-insensitively during inheritance.
+filters = { "path" = "exclude", "CI_*" = "include" }
+set = { CI_JOB = "cageforge" }
+
+[profiles.ci.command.timeout]
+mode = "backend-default"
