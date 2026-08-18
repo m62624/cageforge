@@ -10,6 +10,7 @@
 //! sides available so a later backend can compile the same constraint without
 //! accidentally widening it.
 
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 mod compose;

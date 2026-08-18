@@ -7,6 +7,7 @@
 //! not parse configuration files, launch processes, or call an operating-system
 //! sandbox API. Platform backends consume the resolved [`SandboxPolicy`].
 
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 mod access;

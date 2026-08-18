@@ -7,6 +7,7 @@
 //! optional [`CommandRequest`] values. It does not launch a process, discover
 //! paths, or select a native backend.
 
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 mod build;

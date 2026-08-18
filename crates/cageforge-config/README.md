@@ -117,6 +117,11 @@ the explicit TOML opt-out
 ```rust
 use cageforge_config::Config;
 
+let source = r#"
+default_profile = "workspace"
+
+[profiles.workspace]
+"#;
 let config = Config::from_toml(source)?;
 let resolved = config.resolve_default()?;
 

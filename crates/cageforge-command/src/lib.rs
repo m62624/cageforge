@@ -8,6 +8,7 @@
 //! is deliberately separate from sandbox policy, configuration parsing, PTY
 //! handling, and process lifecycle management.
 
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 mod command;
