@@ -27,13 +27,27 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/protocol/src/config_types.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/sandboxing/src/spawn.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
 | `codex-rs/core/src/exec.rs` | `crates/cageforge-command` | Behavior-tracked; independently implemented |
+| `codex-rs/protocol/src/shell_environment.rs` | `crates/cageforge-command` | Environment order and core-set behavior audited; Codex-only variables excluded |
+| `codex-rs/core/src/exec_env.rs` | `crates/cageforge-command` | Runtime environment application audited; Codex session/profile injection excluded |
+| `codex-rs/config/src/permissions_toml.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
+| `codex-rs/protocol/src/config_types.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
+| `codex-rs/core/src/config/permissions.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
+| `codex-rs/core/src/exec_env.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
+| `codex-rs/config/src/config_toml.rs` | `crates/cageforge-config` | Behavior-tracked; product wiring audited, Codex-only fields excluded |
+| `codex-rs/config/src/merge.rs` | `crates/cageforge-config` | Profile inheritance merge behavior audited |
+| `codex-rs/config/src/shell_environment_policy.rs` | `crates/cageforge-config` | Behavior-tracked; independently implemented |
+| `codex-rs/protocol/src/shell_environment.rs` | `crates/cageforge-config`, `crates/cageforge-command` | Behavior-tracked; platform environment semantics audited |
+| `codex-rs/core/src/config/mod.rs` | `crates/cageforge-config` | Behavior-tracked; profile selection audited, product trust excluded |
+| `codex-rs/core/src/environment_selection.rs` | `crates/cageforge-config` | Behavior-tracked; runtime workspace-root consumption audited |
 | `codex-rs/sandboxing`, `codex-rs/linux-sandbox`, `codex-rs/windows-sandbox-rs`, `codex-rs/bwrap` | Future native backend crates | Planned; not imported |
 | `codex-rs/vendor/bubblewrap` | Future Linux third-party component | Planned; not imported |
 
-The two current crates are candidates for future upstream review, not source
-imports. Their APIs and implementations were written independently in
+The current Cageforge crates are candidates for future upstream review, not
+source imports. Their APIs and implementations were written independently in
 Cageforge. The configured paths identify the Codex behavior that should be
-rechecked when the frozen baseline is manually advanced.
+rechecked when the frozen baseline is manually advanced. Native backend paths
+are deliberately listed separately as planned work and are not part of the
+current crate tracking scope.
 
 This mapping must be updated with the exact upstream commit, reviewed date,
 and material changes whenever source-derived code is added or updated.

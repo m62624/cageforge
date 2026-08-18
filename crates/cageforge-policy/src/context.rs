@@ -12,6 +12,7 @@ use std::path::PathBuf;
 /// never reads the filesystem, follows symlinks, or infers a workspace.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PathResolutionContext {
+    root_paths: Vec<PathBuf>,
     workspace_roots: Vec<PathBuf>,
     minimal_paths: Vec<PathBuf>,
     tmpdir: Option<PathBuf>,
@@ -22,11 +23,22 @@ impl PathResolutionContext {
     /// Creates an empty context.
     pub const fn new() -> Self {
         Self {
+            root_paths: Vec::new(),
             workspace_roots: Vec::new(),
             minimal_paths: Vec::new(),
             tmpdir: None,
             slash_tmp: None,
         }
+    }
+
+    /// Adds one absolute system root represented by the runtime environment.
+    ///
+    /// POSIX backends normally provide `/`. Windows backends may provide more
+    /// than one drive or UNC root. The context never discovers these paths on
+    /// its own.
+    pub fn with_root(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
+        self.root_paths.push(validated_absolute(path.into())?);
+        Ok(self)
     }
 
     /// Adds one absolute workspace root.
@@ -56,6 +68,11 @@ impl PathResolutionContext {
     /// Returns the configured workspace roots.
     pub fn workspace_roots(&self) -> &[PathBuf] {
         &self.workspace_roots
+    }
+
+    /// Returns the absolute system roots supplied by the runtime.
+    pub fn root_paths(&self) -> &[PathBuf] {
+        &self.root_paths
     }
 
     /// Returns the configured minimal runtime paths.

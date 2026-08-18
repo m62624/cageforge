@@ -45,3 +45,47 @@ impl AccessMode {
         )
     }
 }
+
+/// The result of evaluating a filesystem request against a policy.
+///
+/// `ExternallyEnforced` is intentionally distinct from [`AccessMode::Deny`].
+/// It tells a backend that Cageforge does not make the local decision because
+/// another trusted sandbox owns the filesystem boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FilesystemDecision {
+    /// Permit reads but not modifications.
+    Read,
+    /// Permit reads and modifications.
+    Write,
+    /// Permit neither reads nor modifications.
+    Deny,
+    /// Defer enforcement to the trusted external sandbox.
+    ExternallyEnforced,
+}
+
+impl FilesystemDecision {
+    /// Returns the local access mode, or `None` when another sandbox enforces it.
+    pub const fn as_access_mode(self) -> Option<AccessMode> {
+        match self {
+            Self::Read => Some(AccessMode::Read),
+            Self::Write => Some(AccessMode::Write),
+            Self::Deny => Some(AccessMode::Deny),
+            Self::ExternallyEnforced => None,
+        }
+    }
+
+    /// Returns whether local filesystem enforcement is delegated elsewhere.
+    pub const fn is_externally_enforced(self) -> bool {
+        matches!(self, Self::ExternallyEnforced)
+    }
+}
+
+impl From<AccessMode> for FilesystemDecision {
+    fn from(access: AccessMode) -> Self {
+        match access {
+            AccessMode::Read => Self::Read,
+            AccessMode::Write => Self::Write,
+            AccessMode::Deny => Self::Deny,
+        }
+    }
+}

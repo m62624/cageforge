@@ -113,6 +113,7 @@ fn build_filesystem_rule(
         }
         RawFilesystemTarget::Workspace
         | RawFilesystemTarget::WorkspaceRoot
+        | RawFilesystemTarget::Root
         | RawFilesystemTarget::Minimal
         | RawFilesystemTarget::Tmpdir
         | RawFilesystemTarget::SlashTmp => {
@@ -180,7 +181,11 @@ fn build_filesystem_rule(
             "not allowed for a glob target",
         ));
     }
-    let mut rule = FilesystemRule::from_target(target, access);
+    let mut rule =
+        FilesystemRule::from_target(target, access).map_err(|source| ConfigError::Policy {
+            profile: profile.to_owned(),
+            source,
+        })?;
     if let Some(missing_path) = &raw.missing_path {
         let behavior = match missing_path {
             RawMissingPathBehavior::Error => MissingPathBehavior::Error,
@@ -227,6 +232,10 @@ fn build_selector(
         RawFilesystemTarget::WorkspaceRoot => {
             reject_path()?;
             Ok(PathSelector::workspace_root())
+        }
+        RawFilesystemTarget::Root => {
+            reject_path()?;
+            Ok(PathSelector::root())
         }
         RawFilesystemTarget::Minimal => {
             reject_path()?;

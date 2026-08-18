@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::AccessMode;
+use crate::FilesystemDecision;
 use crate::PathPattern;
 use crate::PathResolutionContext;
 use crate::PathSelector;
@@ -58,14 +59,17 @@ impl FilesystemRule {
         }
     }
 
-    /// Creates a rule from a validated glob pattern.
-    pub const fn from_target(target: FilesystemTarget, access: AccessMode) -> Self {
-        Self {
+    /// Creates a rule from a validated target.
+    pub fn from_target(target: FilesystemTarget, access: AccessMode) -> Result<Self, PolicyError> {
+        if matches!(target, FilesystemTarget::Glob(_)) && access != AccessMode::Deny {
+            return Err(PolicyError::UnsupportedGlobAccess { access });
+        }
+        Ok(Self {
             target,
             access,
             missing_path_behavior: MissingPathBehavior::Error,
             read_only_subpaths: Vec::new(),
-        }
+        })
     }
 
     /// Creates an absolute-path glob rule.
@@ -73,10 +77,10 @@ impl FilesystemRule {
         pattern: impl Into<String>,
         access: AccessMode,
     ) -> Result<Self, PolicyError> {
-        Ok(Self::from_target(
+        Self::from_target(
             FilesystemTarget::Glob(PathPattern::absolute(pattern)?),
             access,
-        ))
+        )
     }
 
     /// Creates a workspace-relative glob rule.
@@ -84,10 +88,10 @@ impl FilesystemRule {
         pattern: impl Into<String>,
         access: AccessMode,
     ) -> Result<Self, PolicyError> {
-        Ok(Self::from_target(
+        Self::from_target(
             FilesystemTarget::Glob(PathPattern::workspace(pattern)?),
             access,
-        ))
+        )
     }
 
     /// Sets how the backend handles an absent concrete target.
@@ -277,6 +281,7 @@ impl FilesystemPolicy {
                 message: "filesystem rules require a restricted filesystem policy".to_string(),
             });
         }
+        rule.validate()?;
         self.entries.push(rule);
         Ok(self)
     }
@@ -292,6 +297,7 @@ impl FilesystemPolicy {
             });
         }
         for rule in &self.entries {
+            rule.validate()?;
             if rule.access != AccessMode::Write && !rule.read_only_subpaths.is_empty() {
                 return Err(PolicyError::InvalidRule {
                     message: "read-only subpaths require a writable parent rule".to_string(),
@@ -337,10 +343,10 @@ impl FilesystemPolicy {
     }
 
     /// Resolves a rule for an exact selector, defaulting to deny in restricted mode.
-    pub fn access_for(&self, selector: &PathSelector) -> AccessMode {
+    pub fn access_for(&self, selector: &PathSelector) -> FilesystemDecision {
         let access = match self.mode {
             FilesystemMode::Unrestricted => AccessMode::Write,
-            FilesystemMode::External => AccessMode::Deny,
+            FilesystemMode::External => return FilesystemDecision::ExternallyEnforced,
             FilesystemMode::Restricted => self
                 .entries
                 .iter()
@@ -358,9 +364,9 @@ impl FilesystemPolicy {
                 .path()
                 .is_some_and(|path| self.is_protected_path(path))
         {
-            AccessMode::Read
+            FilesystemDecision::Read
         } else {
-            access
+            access.into()
         }
     }
 
@@ -369,7 +375,7 @@ impl FilesystemPolicy {
         &self,
         path: &Path,
         context: &PathResolutionContext,
-    ) -> Result<AccessMode, PolicyError> {
+    ) -> Result<FilesystemDecision, PolicyError> {
         if crate::path::contains_nul(path) {
             return Err(PolicyError::PathContainsNul {
                 path: path.to_path_buf(),
@@ -389,8 +395,8 @@ impl FilesystemPolicy {
             });
         }
         match self.mode {
-            FilesystemMode::Unrestricted => Ok(AccessMode::Write),
-            FilesystemMode::External => Ok(AccessMode::Deny),
+            FilesystemMode::Unrestricted => Ok(FilesystemDecision::Write),
+            FilesystemMode::External => Ok(FilesystemDecision::ExternallyEnforced),
             FilesystemMode::Restricted => {
                 let mut best: Option<RuleMatch> = None;
                 let mut writable_match = false;
@@ -411,9 +417,9 @@ impl FilesystemPolicy {
                 }
                 let access = best.map_or(AccessMode::Deny, |matched| matched.access);
                 if writable_match && access == AccessMode::Write && self.is_protected_path(path) {
-                    Ok(AccessMode::Read)
+                    Ok(FilesystemDecision::Read)
                 } else {
-                    Ok(access)
+                    Ok(access.into())
                 }
             }
         }
@@ -445,6 +451,17 @@ impl FilesystemPolicy {
                 .windows(protected_components.len())
                 .any(|window| paths_equal(window, &protected_components))
         })
+    }
+}
+
+impl FilesystemRule {
+    fn validate(&self) -> Result<(), PolicyError> {
+        if matches!(self.target, FilesystemTarget::Glob(_)) && self.access != AccessMode::Deny {
+            return Err(PolicyError::UnsupportedGlobAccess {
+                access: self.access,
+            });
+        }
+        Ok(())
     }
 }
 

@@ -16,12 +16,13 @@ additional_protected_paths = [".cargo", "workspace/.metadata"]
 rules = [
   { target = "absolute", path = "C:/cageforge-example", access = "read", missing_path = "skip" },
   { target = "workspace", path = ".", access = "write", read_only_subpaths = [{ target = "workspace", path = "src/secrets" }] },
+  { target = "root", access = "read" },
   { target = "workspace-root", access = "read" },
   { target = "minimal", access = "read" },
   { target = "tmpdir", access = "write" },
   { target = "slash-tmp", access = "write" },
   { target = "absolute-glob", pattern = "C:/cageforge-example/**/*.json", access = "deny" },
-  { target = "workspace-glob", pattern = "target/**/*.rlib", access = "read" },
+  { target = "workspace-glob", pattern = "target/**/*.rlib", access = "deny" },
 ]
 
 [profiles.all-targets.network]

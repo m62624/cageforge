@@ -25,3 +25,5 @@ The environment order applies to a command environment, not to filesystem
 permissions or profile inheritance. `cageforge-config` parses and resolves the
 TOML into `EnvironmentSpec`; `cageforge-command` applies the portable stages
 after a backend has selected the `all`, `core`, or `none` base environment.
+The `root` target is symbolic: the backend supplies its concrete POSIX root or
+Windows drive/UNC roots.

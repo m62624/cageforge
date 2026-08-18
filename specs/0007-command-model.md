@@ -56,7 +56,9 @@ application order is `inherit → exclude → set/remove → include`.
 the backend selected according to `All`, `Core`, or `None`. A variable removed
 by an exclude is not restored by an include; explicit set/remove entries are
 applied at their own stage. Conflicting set/remove requests are rejected by
-the config layer.
+the config layer. The portable crate does not define the contents of `Core`;
+each native backend supplies that platform's conservative base map before
+calling `apply_to`.
 
 The type intentionally does not reproduce Codex's product-specific secret
 patterns, environment discovery, shell profiles, or configuration compatibility
@@ -105,8 +107,9 @@ cageforge-policy       cageforge-command
 ```
 
 This avoids putting enforcement or process-launch assumptions into the
-portable request type. `cageforge-config` will later parse user profiles and
-produce both a `CommandRequest` and a `SandboxPolicy`.
+portable request type. `cageforge-config` parses user profiles and produces
+both a `CommandRequest` and a `SandboxPolicy`; a future backend API composes
+those values for launch.
 
 ## Required tests
 

@@ -27,7 +27,25 @@ upstream_paths = [
     "codex-rs/app-server-protocol/src/protocol/v2/process.rs",
     "codex-rs/protocol/src/models.rs",
     "codex-rs/protocol/src/config_types.rs",
+    "codex-rs/protocol/src/shell_environment.rs",
     "codex-rs/sandboxing/src/spawn.rs",
     "codex-rs/core/src/exec.rs",
+    "codex-rs/core/src/exec_env.rs",
 ]
 local_paths = ["crates/cageforge-command/"]
+
+[[scope]]
+name = "cageforge-config"
+upstream_paths = [
+    "codex-rs/config/src/config_toml.rs",
+    "codex-rs/config/src/merge.rs",
+    "codex-rs/config/src/permissions_toml.rs",
+    "codex-rs/config/src/shell_environment_policy.rs",
+    "codex-rs/protocol/src/config_types.rs",
+    "codex-rs/protocol/src/shell_environment.rs",
+    "codex-rs/core/src/config/permissions.rs",
+    "codex-rs/core/src/config/mod.rs",
+    "codex-rs/core/src/environment_selection.rs",
+    "codex-rs/core/src/exec_env.rs",
+]
+local_paths = ["crates/cageforge-config/"]

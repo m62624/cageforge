@@ -1,6 +1,7 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::AccessMode;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -50,6 +51,12 @@ pub enum PolicyError {
         pattern: String,
         /// The reason the pattern is invalid.
         reason: String,
+    },
+    /// A glob requested an access mode that is not portable across backends.
+    #[error("filesystem glob rules support only deny access; requested {access:?}")]
+    UnsupportedGlobAccess {
+        /// The access mode requested for the glob.
+        access: AccessMode,
     },
     /// A protected relative path is empty or unsafe.
     #[error("invalid protected relative path {path:?}: {reason}")]

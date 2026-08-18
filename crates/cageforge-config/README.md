@@ -69,7 +69,7 @@ More complete, copyable scenarios are in the tested
 profile inheritance, environment stage order, protected metadata, and the
 native Unix/macOS versus Windows path forms.
 
-Filesystem targets are `absolute`, `workspace`, `workspace-root`, `minimal`,
+Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minimal`,
 `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`. Network modes are
 `disabled`, `enabled`, and `external`; domain and Unix-socket defaults are
 `disabled`, `enabled`, or `restricted`. Stdio modes are `inherit`, `null`, and
@@ -85,6 +85,12 @@ section denies networking; the command section is optional.
 and `false` disables an inherited root. The resolved paths are declarations;
 the backend resolves relative paths against its execution context before
 registering absolute roots in its path context.
+
+The filesystem target `root` is symbolic as well: the backend supplies POSIX
+`/` or the relevant Windows drive/UNC roots to the policy context. Config
+resolution never discovers system roots. Portable glob rules support
+`access = "deny"`; read/write glob requests are rejected because native
+support is not uniform across Linux, macOS, and Windows.
 
 Command environments support `all`, `core`, and `none` inheritance bases;
 omitting `inherit` selects `core`. The `filters` table maps portable `*` and

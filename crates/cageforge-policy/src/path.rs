@@ -17,6 +17,7 @@ pub struct PathSelector {
 enum PathSelectorKind {
     Absolute(PathBuf),
     WorkspaceRoot(PathBuf),
+    Root,
     Minimal,
     Tmpdir,
     SlashTmp,
@@ -50,6 +51,16 @@ impl PathSelector {
     pub fn workspace_root() -> Self {
         Self {
             kind: PathSelectorKind::WorkspaceRoot(PathBuf::from(".")),
+        }
+    }
+
+    /// Creates a selector for every system root supplied by the runtime.
+    ///
+    /// The selector is symbolic. A backend must populate
+    /// [`PathResolutionContext::with_root`] for the target platform.
+    pub const fn root() -> Self {
+        Self {
+            kind: PathSelectorKind::Root,
         }
     }
 
@@ -92,6 +103,7 @@ impl PathSelector {
                 .iter()
                 .map(|root| root.join(relative))
                 .collect(),
+            PathSelectorKind::Root => context.root_paths().to_vec(),
             PathSelectorKind::Minimal => context.minimal_paths().to_vec(),
             PathSelectorKind::Tmpdir => context
                 .tmpdir()
@@ -110,9 +122,10 @@ impl PathSelector {
     pub fn path(&self) -> Option<&Path> {
         match &self.kind {
             PathSelectorKind::Absolute(path) | PathSelectorKind::WorkspaceRoot(path) => Some(path),
-            PathSelectorKind::Minimal | PathSelectorKind::Tmpdir | PathSelectorKind::SlashTmp => {
-                None
-            }
+            PathSelectorKind::Root
+            | PathSelectorKind::Minimal
+            | PathSelectorKind::Tmpdir
+            | PathSelectorKind::SlashTmp => None,
         }
     }
 
@@ -120,7 +133,10 @@ impl PathSelector {
     pub const fn is_special(&self) -> bool {
         matches!(
             &self.kind,
-            PathSelectorKind::Minimal | PathSelectorKind::Tmpdir | PathSelectorKind::SlashTmp
+            PathSelectorKind::Root
+                | PathSelectorKind::Minimal
+                | PathSelectorKind::Tmpdir
+                | PathSelectorKind::SlashTmp
         )
     }
 
@@ -131,7 +147,10 @@ impl PathSelector {
             PathSelectorKind::Absolute(_) | PathSelectorKind::WorkspaceRoot(_) => {
                 resolved.components().count()
             }
-            PathSelectorKind::Minimal | PathSelectorKind::Tmpdir | PathSelectorKind::SlashTmp => 0,
+            PathSelectorKind::Root
+            | PathSelectorKind::Minimal
+            | PathSelectorKind::Tmpdir
+            | PathSelectorKind::SlashTmp => 0,
         }
     }
 }

@@ -22,7 +22,7 @@ uses its values to prepare Linux, macOS, or Windows enforcement.
 | `cageforge-policy` | Portable filesystem and network policy semantics | None beyond Rust's standard library | Current black-box tests; planned `cageforge-config`, `cageforge-backend-api`, and native backend crates |
 
 Use this crate when a harness needs a policy value that can cross an operating
-system backend boundary. Use a future config crate to parse TOML and resolve
+system backend boundary. Use `cageforge-config` to parse TOML and resolve
 named profiles. Use a native backend crate to enforce the resolved policy.
 
 ## Library API and ownership
@@ -36,7 +36,7 @@ mutable collections or public fields that could bypass policy invariants. This
 keeps both direct library use and backend compilation on the same validated API.
 
 `PathSelector` is opaque. Create it with `absolute`, `workspace`,
-`workspace_root`, `minimal`, `tmpdir`, or `slash_tmp`; callers cannot construct
+`workspace_root`, `root`, `minimal`, `tmpdir`, or `slash_tmp`; callers cannot construct
 an unchecked path selector by writing a public enum payload.
 
 ## Public API
@@ -45,7 +45,8 @@ an unchecked path selector by writing a public enum payload.
 |---|---|
 | `SandboxPolicy` | Combines filesystem and network policy. |
 | `FilesystemPolicy` and `FilesystemRule` | Describes restricted, unrestricted, or externally enforced filesystem access. |
-| `PathSelector` and `PathResolutionContext` | Represents absolute, workspace, minimal-runtime, and temporary-directory scopes. |
+| `FilesystemDecision` | Distinguishes local read/write/deny results from an externally enforced boundary. |
+| `PathSelector` and `PathResolutionContext` | Represents absolute, system-root, workspace, minimal-runtime, and temporary-directory scopes. |
 | `PathPattern` | Represents validated absolute or workspace-relative globs. |
 | `AccessMode` | Expresses `Read`, `Write`, or `Deny`. |
 | `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults. |
@@ -66,8 +67,8 @@ provides the paths that special selectors should resolve to:
 
 ```rust
 use cageforge_policy::{
-    AccessMode, FilesystemPolicy, FilesystemRule, NetworkPolicy, PathResolutionContext,
-    PathSelector, SandboxPolicy,
+    AccessMode, FilesystemDecision, FilesystemPolicy, FilesystemRule, NetworkPolicy,
+    PathResolutionContext, PathSelector, SandboxPolicy,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -85,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let access = policy
         .filesystem()
         .access_for_path(&workspace.join("src/lib.rs"), &context)?;
-    assert_eq!(access, AccessMode::Write);
+    assert_eq!(access, FilesystemDecision::Write);
     Ok(())
 }
 ```
@@ -101,19 +102,28 @@ may still be rejected by a future policy composer or backend. Call
 `normalized` before handing duplicate rules to a backend when a canonical rule
 list is needed.
 
+`PathSelector::root()` is a symbolic request for every system root supplied in
+`PathResolutionContext`. POSIX callers normally provide `/`; Windows callers
+may provide multiple drive or UNC roots. The policy crate never discovers
+these roots itself. Glob rules are portable deny rules only. Read/write globs
+are rejected with `PolicyError::UnsupportedGlobAccess` until a backend
+capability contract can prove support on every target platform.
+
 ## Filesystem model
 
-`PathSelector` supports native absolute paths, paths relative to every
-workspace root, a minimal runtime scope, the platform temporary directory, and
-the conventional `/tmp` scope. Special selectors are resolved only from
+`PathSelector` supports native absolute paths, system roots, paths relative to
+every workspace root, a minimal runtime scope, the platform temporary directory,
+and the conventional `/tmp` scope. Special selectors are resolved only from
 `PathResolutionContext`; the crate never guesses a workspace or touches a
 symlink.
 
-`FilesystemRule` can target a selector or a validated glob. A writable rule can
+`FilesystemRule` can target a selector or a validated deny glob. A writable rule can
 carry read-only subpaths. A concrete target can use
 `MissingPathBehavior::Skip` when a backend should ignore an absent path rather
 than create it or fail preparation. `FilesystemPolicy::external` records that
-another trusted sandbox owns the filesystem boundary.
+another trusted sandbox owns the filesystem boundary. Its queries return
+`FilesystemDecision::ExternallyEnforced`, never local `Deny`, so a backend
+cannot silently apply the wrong interpretation.
 
 ## Network model
 

@@ -99,6 +99,11 @@ own stage. The backend still selects the platform-specific `Core` variables
 and supplies the selected base map. This keeps process-environment discovery
 out of the platform-independent crate.
 
+The `Core` set is not a hidden global constant. A backend explicitly selects
+the platform-specific core variables, passes that map to `apply_to`, and then
+enforces the resulting environment. This keeps Linux, macOS, and Windows
+differences in the backend that owns them.
+
 ## Standard streams and timeout
 
 `StdioSpec::captured()` is the default: stdin is connected to the null device,

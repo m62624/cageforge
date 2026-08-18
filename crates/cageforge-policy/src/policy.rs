@@ -28,6 +28,7 @@ impl SandboxPolicy {
     pub fn read_only() -> Self {
         Self::new(
             FilesystemPolicy::restricted([
+                FilesystemRule::new(PathSelector::root(), AccessMode::Read),
                 FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
                 FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Read),
                 FilesystemRule::new(PathSelector::tmpdir(), AccessMode::Read),
@@ -41,6 +42,7 @@ impl SandboxPolicy {
     pub fn workspace() -> Self {
         Self::new(
             FilesystemPolicy::restricted([
+                FilesystemRule::new(PathSelector::root(), AccessMode::Read),
                 FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
                 FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
                 FilesystemRule::new(PathSelector::tmpdir(), AccessMode::Write),

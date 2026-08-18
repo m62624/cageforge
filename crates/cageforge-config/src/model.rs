@@ -19,6 +19,7 @@ pub(crate) enum RawFilesystemTarget {
     Absolute,
     Workspace,
     WorkspaceRoot,
+    Root,
     Minimal,
     Tmpdir,
     SlashTmp,

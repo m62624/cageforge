@@ -165,7 +165,7 @@ fn platform_example_exercises_every_config_field() {
         .unwrap_or_else(|error| panic!("{name} should resolve: {error}"));
 
     let filesystem = resolved.policy().filesystem();
-    assert_eq!(filesystem.entries().len(), 8);
+    assert_eq!(filesystem.entries().len(), 9);
     assert_eq!(filesystem.glob_scan_max_depth(), NonZeroUsize::new(6));
     assert_eq!(filesystem.protected_relative_paths().len(), 3);
 
@@ -400,12 +400,13 @@ glob_scan_max_depth = 8
 rules = [
   {{ target = "absolute", path = '{root}', access = "read", missing_path = "skip" }},
   {{ target = "workspace", path = "src", access = "write", read_only_subpaths = [{{ target = "workspace", path = ".git" }}] }},
+  {{ target = "root", access = "read" }},
   {{ target = "workspace-root", access = "read" }},
   {{ target = "minimal", access = "read" }},
   {{ target = "tmpdir", access = "write" }},
   {{ target = "slash-tmp", access = "write" }},
   {{ target = "absolute-glob", pattern = '{root}/**/*.json', access = "deny" }},
-  {{ target = "workspace-glob", pattern = 'target/**/*.rlib', access = "read" }},
+  {{ target = "workspace-glob", pattern = 'target/**/*.rlib', access = "deny" }},
 ]
 
 [profiles.all.network]
@@ -439,7 +440,7 @@ mode = "backend-default"
 
     let filesystem = resolved.policy().filesystem();
     assert_eq!(filesystem.mode(), FilesystemMode::Restricted);
-    assert_eq!(filesystem.entries().len(), 8);
+    assert_eq!(filesystem.entries().len(), 9);
     assert_eq!(
         filesystem.glob_scan_max_depth().map(|depth| depth.get()),
         Some(8)
@@ -449,12 +450,16 @@ mode = "backend-default"
         MissingPathBehavior::Skip
     );
     assert_eq!(filesystem.entries()[1].read_only_subpaths().len(), 1);
+    assert_eq!(
+        filesystem.entries()[2].target(),
+        &FilesystemTarget::Scope(PathSelector::root())
+    );
     assert!(matches!(
-        filesystem.entries()[6].target(),
+        filesystem.entries()[7].target(),
         FilesystemTarget::Glob(pattern) if pattern.is_absolute()
     ));
     assert!(matches!(
-        filesystem.entries()[7].target(),
+        filesystem.entries()[8].target(),
         FilesystemTarget::Glob(pattern) if !pattern.is_absolute()
     ));
 
@@ -710,6 +715,10 @@ fn rejects_invalid_policy_values_and_unused_fields() {
             "glob missing-path behavior",
         ),
         (
+            "[profiles.p.filesystem]\nrules = [{ target = \"workspace-glob\", pattern = \"src/**\", access = \"read\" }]\n",
+            "portable read glob",
+        ),
+        (
             "[profiles.p.filesystem]\nrules = [{ target = \"workspace\", path = \"../escape\", access = \"read\" }]\n",
             "parent traversal",
         ),
@@ -739,6 +748,22 @@ fn rejects_invalid_policy_values_and_unused_fields() {
     assert!(
         matches!(error, ConfigError::InvalidValue { field, .. } if field == "filesystem.rules.pattern")
     );
+
+    let error = Config::from_toml(
+        "default_profile = \"p\"\n[profiles.p.filesystem]\nrules = [{ target = \"workspace-glob\", pattern = \"src/**\", access = \"write\" }]\n",
+    )
+    .expect("glob source should parse")
+    .resolve_default()
+    .expect_err("portable write glob should fail");
+    assert!(matches!(
+        error,
+        ConfigError::Policy {
+            source: cageforge_policy::PolicyError::UnsupportedGlobAccess {
+                access: AccessMode::Write
+            },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -985,6 +1010,7 @@ fn exposes_json_schema_and_structured_diagnostics() {
     assert_eq!(schema_json["type"], "object");
     let schema_text = schema_json.to_string();
     assert!(schema_text.contains("workspace_roots"));
+    assert!(schema_text.contains("root"));
     assert!(schema_text.contains("description"));
     assert!(schema_text.contains("filters"));
 

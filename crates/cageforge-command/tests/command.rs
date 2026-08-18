@@ -186,6 +186,26 @@ fn environment_application_has_explicit_codex_compatible_stage_order() {
 }
 
 #[test]
+fn environment_application_uses_the_backend_selected_core_base() {
+    let environment = EnvironmentSpec::inherit_core()
+        .with_include_pattern("PATH")
+        .expect("include pattern")
+        .with_var("PATH", "/sandbox/bin")
+        .expect("path override");
+    let core_base = [
+        (OsString::from("PATH"), OsString::from("/usr/bin")),
+        (OsString::from("HOME"), OsString::from("/home/user")),
+    ];
+
+    assert_eq!(
+        environment.apply_to(core_base),
+        [(OsString::from("PATH"), OsString::from("/sandbox/bin"))]
+            .into_iter()
+            .collect()
+    );
+}
+
+#[test]
 fn environment_rejects_invalid_names_and_values() {
     assert_eq!(
         EnvironmentSpec::default()

@@ -76,7 +76,7 @@ mode = "limit"
 milliseconds = 60000
 ```
 
-Filesystem rule targets are `absolute`, `workspace`, `workspace-root`,
+Filesystem rule targets are `absolute`, `workspace`, `workspace-root`, `root`,
 `minimal`, `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`.
 Absolute and workspace paths are still validated by `cageforge-policy`.
 
@@ -105,6 +105,9 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
   an inherited declaration with `false`. Resolution returns enabled path
   declarations in deterministic lexical order; the backend resolves relative
   paths and registers absolute roots in its execution context.
+- `root` is a symbolic filesystem target. The selected backend must populate
+  `PathResolutionContext` with POSIX `/` or the relevant Windows drive/UNC
+  roots; config resolution never discovers system roots.
 - Environment inheritance is `all`, `core`, or `none`; omitted inheritance
   means `core`. The canonical `filters` table maps patterns to `include` or
   `exclude`, rejects case-insensitive duplicate patterns, and merges exact
@@ -115,6 +118,8 @@ modes are `inherit`, `null`, and `pipe`; timeout modes are
   `[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`
   opt-out is available for trusted callers that really need repository
   metadata writes; a later composer or backend may reject the request.
+- Glob rules are portable deny rules. `read` and `write` glob access is rejected
+  as a typed unsupported policy because native backend support is not uniform.
 - Unknown TOML fields are errors. A typo must not silently produce a weaker
   policy.
 - Unknown profiles, invalid profile names, missing command programs, inheritance

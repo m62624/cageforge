@@ -18,6 +18,7 @@ mod path;
 mod policy;
 
 pub use access::AccessMode;
+pub use access::FilesystemDecision;
 pub use context::PathResolutionContext;
 pub use error::PolicyError;
 pub use filesystem::FilesystemMode;

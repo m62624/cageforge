@@ -4,6 +4,7 @@
 use cageforge_policy::AccessMode;
 use cageforge_policy::DomainAccess;
 use cageforge_policy::DomainMode;
+use cageforge_policy::FilesystemDecision;
 use cageforge_policy::FilesystemMode;
 use cageforge_policy::FilesystemPolicy;
 use cageforge_policy::FilesystemRule;
@@ -74,6 +75,7 @@ fn workspace_paths_normalize_current_directory_and_reject_escape() {
 #[test]
 fn special_path_selectors_are_distinct() {
     let selectors = [
+        PathSelector::root(),
         PathSelector::minimal(),
         PathSelector::tmpdir(),
         PathSelector::slash_tmp(),
@@ -121,6 +123,23 @@ fn access_modes_follow_security_precedence() {
     assert!(AccessMode::Read.permits(AccessMode::Read));
     assert!(AccessMode::Deny.permits(AccessMode::Deny));
     assert!(!AccessMode::Read.permits(AccessMode::Write));
+}
+
+#[test]
+fn filesystem_decisions_keep_external_ownership_distinct_from_deny() {
+    assert_eq!(
+        FilesystemDecision::Read.as_access_mode(),
+        Some(AccessMode::Read)
+    );
+    assert_eq!(
+        FilesystemDecision::Deny.as_access_mode(),
+        Some(AccessMode::Deny)
+    );
+    assert!(FilesystemDecision::ExternallyEnforced.is_externally_enforced());
+    assert_eq!(
+        FilesystemDecision::ExternallyEnforced.as_access_mode(),
+        None
+    );
 }
 
 #[test]
@@ -173,6 +192,8 @@ fn policy_errors_have_actionable_display_messages() {
 #[test]
 fn resolution_context_expands_all_runtime_scopes() {
     let context = PathResolutionContext::new()
+        .with_root(native_path("/"))
+        .expect("system root")
         .with_workspace_root(native_path("/workspace"))
         .expect("workspace root")
         .with_minimal_path(native_path("/usr/bin"))
@@ -181,6 +202,10 @@ fn resolution_context_expands_all_runtime_scopes() {
         .expect("tmpdir")
         .with_slash_tmp(native_path("/tmp"))
         .expect("slash tmp");
+    assert_eq!(
+        PathSelector::root().resolve(&context),
+        vec![native_path("/")]
+    );
     assert_eq!(
         PathSelector::workspace("src")
             .expect("workspace selector")
@@ -206,6 +231,7 @@ fn resolution_context_expands_all_runtime_scopes() {
         vec![native_path("/workspace")]
     );
     assert_eq!(context.workspace_roots(), &[native_path("/workspace")]);
+    assert_eq!(context.root_paths(), &[native_path("/")]);
     assert_eq!(context.minimal_paths(), &[native_path("/usr/bin")]);
     assert_eq!(
         context.tmpdir(),
@@ -217,6 +243,7 @@ fn resolution_context_expands_all_runtime_scopes() {
             .with_workspace_root("relative")
             .is_err()
     );
+    assert!(PathResolutionContext::new().with_root("relative").is_err());
 }
 
 #[test]
@@ -231,8 +258,10 @@ fn path_patterns_validate_and_match_absolute_and_workspace_paths() {
         PathPattern::absolute(native_path("/workspace/**/config.?oml")).expect("absolute glob");
     assert!(absolute.is_absolute());
     let policy = FilesystemPolicy::restricted([
-        FilesystemRule::from_target(FilesystemTarget::Glob(workspace), AccessMode::Deny),
-        FilesystemRule::from_target(FilesystemTarget::Glob(absolute), AccessMode::Read),
+        FilesystemRule::from_target(FilesystemTarget::Glob(workspace), AccessMode::Deny)
+            .expect("deny glob rule"),
+        FilesystemRule::from_target(FilesystemTarget::Glob(absolute), AccessMode::Deny)
+            .expect("deny glob rule"),
     ]);
     assert_eq!(
         policy
@@ -241,13 +270,13 @@ fn path_patterns_validate_and_match_absolute_and_workspace_paths() {
                 &context,
             )
             .expect("secret lookup"),
-        AccessMode::Deny
+        FilesystemDecision::Deny
     );
     assert_eq!(
         policy
             .access_for_path(Path::new(&native_path("/workspace/config.toml")), &context)
             .expect("config lookup"),
-        AccessMode::Read
+        FilesystemDecision::Deny
     );
     for (pattern, expected) in [
         ("", "pattern cannot be empty"),
@@ -292,7 +321,7 @@ fn filesystem_resolution_is_recursive_and_most_specific() {
         policy
             .access_for_path(Path::new(&native_path("/workspace/src/lib.rs")), &context)
             .expect("source lookup"),
-        AccessMode::Read
+        FilesystemDecision::Read
     );
     assert_eq!(
         policy
@@ -301,19 +330,19 @@ fn filesystem_resolution_is_recursive_and_most_specific() {
                 &context,
             )
             .expect("secret lookup"),
-        AccessMode::Deny
+        FilesystemDecision::Deny
     );
     assert_eq!(
         policy
             .access_for_path(Path::new(&native_path("/workspace/README.md")), &context)
             .expect("workspace lookup"),
-        AccessMode::Write
+        FilesystemDecision::Write
     );
     assert_eq!(
         policy
             .access_for_path(Path::new(&native_path("/outside/file")), &context)
             .expect("outside lookup"),
-        AccessMode::Deny
+        FilesystemDecision::Deny
     );
     assert!(matches!(
         policy.access_for_path(Path::new("relative"), &context),
@@ -352,19 +381,19 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         policy
             .access_for_path(Path::new(&native_path("/workspace/src/main.rs")), &context)
             .expect("writable lookup"),
-        AccessMode::Write
+        FilesystemDecision::Write
     );
     assert_eq!(
         policy
             .access_for_path(Path::new(&native_path("/workspace/.git/config")), &context)
             .expect("protected lookup"),
-        AccessMode::Read
+        FilesystemDecision::Read
     );
     assert_eq!(
         policy
             .access_for_path(Path::new(&native_path("/workspace/.GIT/config")), &context)
             .expect("case-insensitive protected lookup"),
-        AccessMode::Read
+        FilesystemDecision::Read
     );
     let exact_mixed_case = FilesystemPolicy::restricted([FilesystemRule::new(
         PathSelector::workspace(".GIT").expect("protected selector"),
@@ -372,7 +401,7 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
     )]);
     assert_eq!(
         exact_mixed_case.access_for(&PathSelector::workspace(".GIT").expect("protected selector")),
-        AccessMode::Read
+        FilesystemDecision::Read
     );
     let explicit_write = policy
         .clone()
@@ -385,7 +414,7 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         explicit_write
             .access_for_path(Path::new(&native_path("/workspace/.git/config")), &context)
             .expect("explicit write lookup"),
-        AccessMode::Read
+        FilesystemDecision::Read
     );
     let default_only = FilesystemPolicy::restricted([FilesystemRule::new(
         PathSelector::workspace_root(),
@@ -396,7 +425,7 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
             .dangerously_allow_git_write()
             .access_for_path(Path::new(&native_path("/workspace/.git/config")), &context)
             .expect("explicitly unprotected lookup"),
-        AccessMode::Write
+        FilesystemDecision::Write
     );
     let protected_metadata = policy
         .clone()
@@ -453,6 +482,12 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
             .with_read_only_subpath(PathSelector::minimal()),
         Err(PolicyError::InvalidRule { .. })
     ));
+    assert!(matches!(
+        FilesystemRule::absolute_glob(native_path("/workspace/**/*.lock"), AccessMode::Read),
+        Err(PolicyError::UnsupportedGlobAccess {
+            access: AccessMode::Read
+        })
+    ));
 }
 
 #[test]
@@ -464,7 +499,7 @@ fn filesystem_policy_normalizes_duplicate_rules_conservatively() {
     ]);
     let normalized = policy.normalized().expect("valid policy");
     assert_eq!(normalized.entries().len(), 1);
-    assert_eq!(normalized.access_for(&selector), AccessMode::Deny);
+    assert_eq!(normalized.access_for(&selector), FilesystemDecision::Deny);
 }
 
 #[test]
@@ -473,18 +508,27 @@ fn filesystem_modes_have_explicit_access_behavior() {
     let restricted =
         FilesystemPolicy::restricted([FilesystemRule::new(selector.clone(), AccessMode::Read)]);
     assert_eq!(restricted.mode(), FilesystemMode::Restricted);
-    assert_eq!(restricted.access_for(&selector), AccessMode::Read);
+    assert_eq!(restricted.access_for(&selector), FilesystemDecision::Read);
     assert_eq!(
         restricted.access_for(&PathSelector::minimal()),
-        AccessMode::Deny
+        FilesystemDecision::Deny
     );
     assert_eq!(
         FilesystemPolicy::unrestricted().access_for(&selector),
-        AccessMode::Write
+        FilesystemDecision::Write
     );
     assert_eq!(
         FilesystemPolicy::external().access_for(&selector),
-        AccessMode::Deny
+        FilesystemDecision::ExternallyEnforced
+    );
+    let context = PathResolutionContext::new()
+        .with_workspace_root(native_path("/workspace"))
+        .expect("workspace root");
+    assert_eq!(
+        FilesystemPolicy::external()
+            .access_for_path(Path::new(&native_path("/workspace/file")), &context)
+            .expect("external decision"),
+        FilesystemDecision::ExternallyEnforced
     );
     assert_eq!(
         FilesystemPolicy::unrestricted()
@@ -796,13 +840,25 @@ fn built_in_policies_are_documented_and_distinct() {
         workspace
             .filesystem()
             .access_for(&PathSelector::workspace_root()),
-        AccessMode::Write
+        FilesystemDecision::Write
     );
     assert_eq!(
         read_only
             .filesystem()
             .access_for(&PathSelector::workspace_root()),
-        AccessMode::Read
+        FilesystemDecision::Read
+    );
+    let context = PathResolutionContext::new()
+        .with_root(native_path("/"))
+        .expect("system root")
+        .with_workspace_root(native_path("/workspace"))
+        .expect("workspace root");
+    assert_eq!(
+        read_only
+            .filesystem()
+            .access_for_path(Path::new(&native_path("/outside/file")), &context)
+            .expect("root read decision"),
+        FilesystemDecision::Read
     );
     assert_eq!(
         full_access.filesystem().mode(),

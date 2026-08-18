@@ -18,7 +18,10 @@ requested profile + harness grant + backend capabilities
 
 The effective policy may only be narrower than the requested policy. A backend
 must reject an unsupported or disallowed request rather than silently widening
-it or treating an unavailable restriction as successful enforcement.
+it or treating an unavailable restriction as successful enforcement. This
+contract is intentionally not implemented by `cageforge-config`: config
+produces a request, while a composer must also know the harness grant and
+backend capabilities.
 
 ## Composition rules
 
@@ -38,6 +41,9 @@ it or treating an unavailable restriction as successful enforcement.
 - `unrestricted` and `external` modes are explicit ownership transfers. They
   require a matching grant from the harness/backend and are not inferred from
   missing rules.
+- `FilesystemDecision::ExternallyEnforced` is an ownership result, not a deny
+  result. A composer must accept it only when the external owner is the
+  granted enforcement boundary.
 
 ## Ownership boundary
 

@@ -27,7 +27,8 @@ The policy and backend design must account for these upstream behaviors:
 - a policy can distinguish managed enforcement, no outer sandbox, and an
   externally owned sandbox;
 - filesystem entries can target absolute paths, workspace/project roots,
-  platform-minimal paths, the platform temporary directory, and `/tmp`;
+  system roots, platform-minimal paths, the platform temporary directory, and
+  `/tmp`;
 - writable roots may carry read-only subpaths and protected metadata roots;
 - deny-read entries may be exact subtree roots or validated glob patterns;
 - glob expansion has an explicit maximum depth and malformed patterns must
@@ -47,14 +48,17 @@ The final `cageforge-policy` implementation now owns the portable parts of
 these semantics: runtime path context, recursive most-specific filesystem
 resolution, validated path globs, scan depth, missing-path behavior,
 read-only carve-outs, mandatory `.git` metadata protection, additive custom
-protected relative paths, domain defaults, and Unix-socket defaults. The
-remaining OS-specific behavior stays below the policy boundary. Codex's
+protected relative paths, explicit external-enforcement decisions, domain
+defaults, and Unix-socket defaults. Portable glob rules are deny-only; a
+read/write glob is rejected as unsupported rather than silently delegated.
+The remaining OS-specific behavior stays below the policy boundary. Codex's
 product-specific `.agents` and `.codex` names are not copied into the public
 API; callers can add generic protected relative paths when they need them.
 
-These are design inputs for the future `cageforge-config`,
-`cageforge-backend-api`, and native backend crates. The portable command
-intent boundary is now implemented in `cageforge-command`; it remains free of
+These are design inputs for the current `cageforge-config` and
+`cageforge-command` crates, and for the future `cageforge-backend-api` and
+native backend crates. The portable command intent boundary is now implemented
+in `cageforge-command`; it remains free of
 operating-system and process-launch dependencies. None of these details
 justify adding operating-system or process-launch dependencies to
 `cageforge-policy`.
@@ -90,8 +94,10 @@ The following Codex-specific concerns remain outside the policy crate:
 
 1. Add TOML profile resolution with inheritance and cycle/unknown-profile
    errors in `cageforge-config`.
-2. Define capability negotiation and explicit unsupported-policy errors in
-   `cageforge-backend-api`.
+2. Define capability negotiation and effective policy composition in
+   `cageforge-backend-api` (or a dedicated composer crate). The current
+   policy/config crates deliberately do not pretend to produce an effective
+   policy from a harness grant.
 3. Implement and integration-test Linux, macOS, and Windows backends on their
    native CI runners.
 
