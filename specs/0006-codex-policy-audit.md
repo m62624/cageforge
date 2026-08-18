@@ -1,12 +1,11 @@
-# Specification 0006: Codex Policy Audit
+# Specification 0006: Portable Sandbox Policy Boundary
 
-Status: accepted audit baseline
+Status: accepted
 
-## Reviewed upstream baseline
+## Upstream reference
 
-The audit was performed against the local Codex checkout at commit
-`c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` on 2026-08-18. The reviewed
-areas are:
+The policy boundary is compared with the Codex commit recorded in
+`upstream-review.toml`. The relevant areas are:
 
 - `codex-rs/protocol/src/permissions.rs`;
 - `codex-rs/protocol/src/models.rs`;
@@ -16,8 +15,8 @@ areas are:
 - `codex-rs/bwrap`.
 - `codex-rs/network-proxy/src/policy.rs` for host and domain normalization.
 
-This is an audit record, not a source import. No Codex implementation code is
-included in Cageforge by this specification.
+This is a design boundary, not a source import. No Codex implementation code
+is included in Cageforge by this specification.
 
 ## Details that must not be lost
 
@@ -96,7 +95,7 @@ The following Codex-specific concerns remain outside the policy crate:
 - telemetry, rollout formats, and agent protocol types;
 - Codex metadata names such as `.codex`.
 
-## Remaining follow-up order
+## Future boundaries
 
 1. Maintain the completed `cageforge-config` and `cageforge-command`
    integration coverage when the portable policy API changes. Their current

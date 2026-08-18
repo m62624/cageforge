@@ -1,18 +1,16 @@
-# Specification 0003: Policy and Command API Audit
+# Specification 0003: Policy and Command API
 
-Status: completed audit baseline
+Status: accepted
 
 ## Scope
 
-This audit covers the two implementation crates in this workspace that were
-audited together:
+This specification covers the two implementation crates in this workspace:
 
 - `cageforge-policy`;
 - `cageforge-command`.
 
-The comparison was performed on 2026-08-17 against the local Codex checkout at
-commit `c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc`. The relevant Codex areas
-were:
+The comparison uses the Codex commit recorded in `upstream-review.toml`. The
+relevant Codex areas are:
 
 - `codex-rs/protocol/src/permissions.rs`;
 - `codex-rs/protocol/src/models.rs`;
@@ -28,16 +26,12 @@ were:
 - `codex-rs/protocol/src/shell_environment.rs`.
 - `codex-rs/network-proxy/src/policy.rs` for host normalization behavior.
 
-This is a behavioral and boundary audit. Neither current Cageforge crate
-contains copied or source-derived Codex implementation.
+This is a behavioral and boundary specification. Neither current Cageforge
+crate contains copied or source-derived Codex implementation. The commit is
+frozen in `upstream-review.toml`; future upstream changes are review candidates
+for these two crates and are not pulled or merged automatically.
 
-The audit was rechecked against the same local Codex `main` commit on
-2026-08-18. The portable policy and command boundaries remain aligned with the
-reviewed protocol, sandboxing, app-server, and execution inputs. The commit is
-now frozen in `upstream-review.toml`; future changes are review candidates for
-these two crates and are not pulled or merged automatically.
-
-## Findings
+## API decisions
 
 Every public item has one of three jobs:
 
@@ -71,7 +65,7 @@ The methods most likely to look unused in a local grep are intentional:
 `access_for` supports symbolic policy inspection, `entries`/`domains`/
 `unix_sockets` support backend compilation, and the getters support config
 round-tripping without exposing mutable internals. No policy method is removed
-by this audit.
+by this specification.
 
 ### Ownership and mutability
 
@@ -109,7 +103,7 @@ backend handoff. There are
 no public mutable collections that could bypass command or environment-name
 validation. `into_parts` is the deliberate owned handoff for a process backend.
 
-## Follow-up rule
+## Maintenance rule
 
 Before removing a public item, first check the downstream crate that consumes
 the boundary and the matching Codex behavior. If the item is only redundant

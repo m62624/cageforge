@@ -11,7 +11,7 @@ request crate that can be reused by harnesses and later composed with
 The crate does not launch processes, parse TOML, apply sandbox restrictions,
 allocate PTYs, manage process sessions, or expose a harness protocol.
 
-## Upstream audit inputs
+## Upstream design inputs
 
 The design was checked against the current Codex checkout at
 `c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc`, especially:
@@ -29,10 +29,10 @@ The design was checked against the current Codex checkout at
   `codex-rs/core/src/exec_env.rs` for the final environment application
   boundary, excluding Codex-only context-variable scrubbing.
 
-This is a behavioral audit, not a source import. The Cageforge implementation
-uses new types and a new API; it does not expose Codex protocol types, legacy
-configuration names, approval state, proxy state, telemetry, PTY handles, or
-Codex process/session identifiers.
+This is a behavioral boundary specification, not a source import. The
+Cageforge implementation uses new types and a new API; it does not expose
+Codex protocol types, legacy configuration names, approval state, proxy state,
+telemetry, PTY handles, or Codex process/session identifiers.
 
 ## Canonical model
 
