@@ -60,6 +60,9 @@ backend-defined conservative environment set because safe variables are
 platform-specific. Environment variable matching is case-insensitive so the
 same request has safe behavior on Windows and POSIX systems. The portable
 application order is `inherit → exclude → set/remove → include`.
+The `*`/`?` matcher is provided by the `wildmatch` crate, which is also the
+matcher used by the corresponding Codex environment model; Cageforge keeps
+validation and policy precedence in its own API.
 `EnvironmentSpec::apply_to` applies the latter three stages to a base map that
 the backend selected according to `All`, `Core`, or `None`. A variable removed
 by an exclude is not restored by an include; an explicit set can intentionally

@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 
+use wildmatch::WildMatch;
+
 use crate::CommandError;
 use crate::command::contains_nul;
 
@@ -58,7 +60,7 @@ impl EnvironmentPattern {
 
     /// Returns whether this pattern matches an environment variable name.
     pub fn matches(&self, name: &str) -> bool {
-        wildcard_matches(&self.as_str().to_lowercase(), &name.to_lowercase())
+        WildMatch::new_case_insensitive(self.as_str()).matches(name)
     }
 }
 
@@ -301,34 +303,4 @@ fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
 
 fn environment_patterns_equal(left: &EnvironmentPattern, right: &EnvironmentPattern) -> bool {
     left.as_str().to_lowercase() == right.as_str().to_lowercase()
-}
-
-fn wildcard_matches(pattern: &str, value: &str) -> bool {
-    let pattern: Vec<_> = pattern.chars().collect();
-    let value: Vec<_> = value.chars().collect();
-    let mut matches = vec![false; value.len() + 1];
-    matches[0] = true;
-
-    for token in pattern {
-        let mut next = vec![false; value.len() + 1];
-        match token {
-            '*' => {
-                next[0] = matches[0];
-                for index in 1..=value.len() {
-                    next[index] = next[index - 1] || matches[index];
-                }
-            }
-            '?' => {
-                next[1..].copy_from_slice(&matches[..value.len()]);
-            }
-            literal => {
-                for index in 1..=value.len() {
-                    next[index] = matches[index - 1] && value[index - 1] == literal;
-                }
-            }
-        }
-        matches = next;
-    }
-
-    matches[value.len()]
 }

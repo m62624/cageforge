@@ -16,24 +16,26 @@ Codex-specific telemetry, or a particular process orchestration framework.
 
 ## 2. Relationship to OpenAI Codex
 
-The initial implementation is derived from relevant open-source sandboxing
-code in the OpenAI Codex repository:
+The current implementation is independently authored in Cageforge. Its
+portable sandbox design and security boundaries are reviewed against relevant
+open-source code in the OpenAI Codex repository:
 
 <https://github.com/openai/codex>
 
-The source material currently includes the following areas:
+The behavioral reference areas include:
 
 - `codex-rs/sandboxing`
 - `codex-rs/linux-sandbox`
 - `codex-rs/windows-sandbox-rs`
 - `codex-rs/bwrap`
-- `codex-rs/vendor/bubblewrap`, where bundled bubblewrap code is used
+- `codex-rs/vendor/bubblewrap` for a possible future bundled Linux component
 
 **Cageforge is not a fork of the Codex product and must not expose Codex as a
-runtime dependency or as part of its public API. The code will be reorganized,
-renamed, and adapted into independent crates. This is a source-derived
-implementation, not a clean-room implementation, so provenance must remain
-explicit even when files are moved or rewritten.
+runtime dependency or as part of its public API. The current crates are
+independent reimplementations with their own APIs and boundaries; they do not
+contain copied Codex source. If a future crate copies or substantially adapts
+an upstream file, the provenance and license rules in `specs/0002` become
+mandatory for that file.
 
 Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.**
 
@@ -112,7 +114,8 @@ files that have been changed. Cageforge may add its own copyright notices and
 may license its original additions under additional compatible terms, but it
 must not remove or rewrite the applicable terms for derived portions.
 
-The root `NOTICE` must include an attribution similar to:
+If a release contains source-derived files, the root `NOTICE` must include an
+attribution similar to:
 
 ```text
 This project contains code derived from OpenAI Codex:

@@ -4,7 +4,8 @@ Status: accepted
 
 ## Scope
 
-This specification covers the two implementation crates in this workspace:
+This specification covers the two implementation crates that define the
+policy and command boundaries:
 
 - `cageforge-policy`;
 - `cageforge-command`.
@@ -41,9 +42,14 @@ Every public item has one of three jobs:
 
 The current repository uses the public API from black-box integration tests.
 The current `cageforge-config`, future `cageforge-backend-api`, and native
-backend crates are the intended production consumers. An item not referenced by the
-current repository is not automatically dead code: these crates are libraries,
-and their backend boundary does not exist yet.
+backend crates are the intended production consumers. An item not referenced by
+the current repository is not automatically dead code: these crates are
+libraries, and their backend boundary does not exist yet.
+
+The shared path contract, configuration model, and policy-composition contract
+are specified separately in `0005`, `0009`, and `0010`. They are included in
+the cross-crate reuse decision below, but this document does not duplicate
+their API tables.
 
 ## `cageforge-policy`
 
@@ -82,7 +88,7 @@ validation step.
 | Public surface | Public methods covered by this decision | Current use and Codex comparison | Decision |
 |---|---|---|---|
 | `CommandSpec` | `new`, `with_arg`, `with_args`, `program`, `args`, `into_parts` | Exercised by `tests/command.rs`; corresponds to Codex argv handling in `command_exec`, `process`, and `sandboxing::spawn`. | Keep. Argument builders are fallible and reject NUL before `into_parts`; `into_parts` is the owned handoff a process backend needs. |
-| `EnvironmentSpec` | `inherit_all`, `empty`, `base`, `overrides`, `override_for`, `filters`, `filter_action_for`, `with_var`, `without_var`, `with_filter`, `with_include_pattern`, `with_exclude_pattern`, `apply_to` | Exercised by environment tests; maps to Codex inherited/empty environment construction, filtering, and set/remove overrides without importing Codex filtering or telemetry rules. | Keep. Variable names and filter patterns use one case-insensitive logical namespace, and the backend selects the platform-specific `Core` base map. |
+| `EnvironmentSpec` | `inherit_all`, `empty`, `base`, `overrides`, `override_for`, `filters`, `filter_action_for`, `with_var`, `without_var`, `with_filter`, `with_include_pattern`, `with_exclude_pattern`, `apply_to` | Exercised by environment tests; maps to Codex inherited/empty environment construction, filtering, and set/remove overrides without importing Codex filtering or telemetry rules. Wildcard matching delegates to the same `wildmatch` crate used by Codex. | Keep. Variable names and filter patterns use one case-insensitive logical namespace, and the backend selects the platform-specific `Core` base map. |
 | `CommandRequest` | `new`, `with_working_directory`, `without_working_directory`, `with_environment`, `with_stdio`, `with_timeout`, `with_timeout_policy`, `use_backend_timeout`, `disable_timeout`, `command`, `working_directory`, `environment`, `stdio`, `timeout_policy` | Exercised by request tests; combines the launch inputs split across Codex app-server protocol and execution code. | Keep. The named timeout methods keep call sites explicit, cwd removal is required for reusable builder composition, and cwd parent traversal is rejected before backend resolution. |
 | `StdioSpec` | `new`, `captured`, `inherited`, `with_stdin`, `with_stdout`, `with_stderr`, `stdin`, `stdout`, `stderr` | Exercised by stdio tests; maps to Codex piped, inherited, and null stream setup. PTY allocation remains outside this crate. | Keep. Each stream is independently configurable without introducing PTY or OS handles. |
 | `TimeoutPolicy` | `BackendDefault`, `Limit`, `Disabled` | Exercised by timeout tests; matches Codex's default/custom/disabled timeout intent. Cancellation remains a separate lifecycle signal, as in Codex execution code. | Keep. Three variants are the complete portable timeout model. |
@@ -102,6 +108,37 @@ fallible argv and cwd builders reject NUL and cwd parent traversal before a
 backend handoff. There are
 no public mutable collections that could bypass command or environment-name
 validation. `into_parts` is the deliberate owned handoff for a process backend.
+
+## Cross-crate reuse decisions
+
+The workspace keeps a single owner for each reusable semantic operation:
+
+- `cageforge-path` owns lexical path equality, containment, case handling, and
+  parent-traversal checks. Policy, command, config, composition, and the
+  upstream-review tool reuse it instead of maintaining local path helpers.
+- `cageforge-policy` uses `globset` for filesystem and domain patterns. Its
+  domain normalization and filesystem component handling are intentionally
+  different layers around that matcher, not duplicate glob implementations.
+- `cageforge-command` uses the `wildmatch` crate for the small `*`/`?`
+  environment-pattern language used by Codex. The previous local dynamic
+  matcher is not part of the API anymore.
+- `cageforge-config` retains raw-string merge helpers because it merges TOML
+  declarations before typed model construction. Those helpers do not perform
+  runtime path or environment enforcement and must not become a second policy
+  implementation.
+- `cageforge-policy-compose` owns narrowing between two already validated
+  policies. It must not be folded into `cageforge-policy`, and it must not
+  materialize a third mutable rule list that could widen access.
+- No additional shared `text`, `merge`, or `sandbox-core` crate is justified
+  by the current code. Adding one would spread small boundary-specific rules
+  without removing a real implementation or dependency.
+
+The Codex crates remain design inputs rather than Cageforge dependencies:
+`codex-protocol` and `codex-sandboxing` combine policy models with product
+protocols and native launch behavior; `codex-config` combines TOML with
+runtime discovery; and `codex-network-proxy` owns DNS, proxy, and connection
+enforcement. Reusing those crates would violate the standalone dependency
+boundary rather than remove duplication.
 
 ## Maintenance rule
 

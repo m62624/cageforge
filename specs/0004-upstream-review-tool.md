@@ -5,8 +5,8 @@ Status: accepted
 ## Purpose
 
 The cageforge-upstream-review tool is an internal, read-only tool for tracking
-the exact OpenAI Codex commit represented by Cageforge's adapted
-implementation.
+the exact OpenAI Codex commit used as a behavioral reference by Cageforge's
+independent implementation.
 
 The tool does not vendor the Codex repository, add Codex as a Rust dependency,
 copy source files, create branches, create pull requests, or update the
