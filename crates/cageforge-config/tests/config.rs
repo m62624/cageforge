@@ -173,7 +173,9 @@ fn platform_example_exercises_every_config_field() {
     assert_eq!(network.mode(), NetworkMode::Enabled);
     assert_eq!(network.domain_mode(), DomainMode::Restricted);
     assert_eq!(network.unix_socket_mode(), UnixSocketMode::Restricted);
-    assert_eq!(network.domains().len(), 2);
+    assert_eq!(network.domains().len(), 4);
+    assert_eq!(network.domains()[1].pattern(), "api.example.com");
+    assert_eq!(network.domains()[2].pattern(), "2001:db8::1");
     assert_eq!(network.unix_sockets().len(), 1);
 
     let command = resolved.command().expect("platform command");

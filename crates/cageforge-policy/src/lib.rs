@@ -29,6 +29,7 @@ pub use filesystem::MissingPathBehavior;
 pub use network::DomainAccess;
 pub use network::DomainMode;
 pub use network::DomainRule;
+pub use network::NetworkDecision;
 pub use network::NetworkMode;
 pub use network::NetworkPolicy;
 pub use network::UnixSocketMode;

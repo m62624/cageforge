@@ -17,6 +17,7 @@ upstream_paths = [
     "codex-rs/protocol/src/models.rs",
     "codex-rs/protocol/src/protocol.rs",
     "codex-rs/sandboxing/src/policy_transforms.rs",
+    "codex-rs/network-proxy/src/policy.rs",
 ]
 local_paths = ["crates/cageforge-policy/"]
 

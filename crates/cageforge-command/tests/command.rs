@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use cageforge_command::{
@@ -377,6 +378,15 @@ fn request_rejects_empty_working_directory() {
             .expect_err("NUL cwd should fail"),
         CommandError::WorkingDirectoryContainsNul
     );
+
+    let command = CommandSpec::new("tool").expect("program should be accepted");
+    let path = PathBuf::from("../outside");
+    assert_eq!(
+        CommandRequest::new(command)
+            .with_working_directory(path.clone())
+            .expect_err("parent traversal cwd should fail"),
+        CommandError::WorkingDirectoryParentTraversal { path }
+    );
 }
 
 #[test]
@@ -398,6 +408,12 @@ fn errors_have_actionable_display_messages() {
         (
             CommandError::WorkingDirectoryContainsNul,
             "working directory must not contain a NUL",
+        ),
+        (
+            CommandError::WorkingDirectoryParentTraversal {
+                path: PathBuf::from("../outside"),
+            },
+            "working directory must not contain parent traversal",
         ),
         (
             CommandError::EmptyEnvironmentName,

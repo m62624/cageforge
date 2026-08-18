@@ -1,7 +1,7 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use crate::command::contains_nul;
@@ -37,9 +37,10 @@ impl CommandRequest {
 
     /// Sets the working directory.
     ///
-    /// The path is kept in the caller's native representation. Resolution of
-    /// relative paths and validation against a sandbox policy belong to the
-    /// backend boundary.
+    /// The path is kept in the caller's native representation. Relative paths
+    /// are resolved by the backend, but lexical parent traversal is rejected
+    /// here so a request cannot escape its later execution context by using
+    /// parent components.
     pub fn with_working_directory(
         mut self,
         path: impl Into<PathBuf>,
@@ -50,6 +51,12 @@ impl CommandRequest {
         }
         if contains_nul(path.as_os_str()) {
             return Err(CommandError::WorkingDirectoryContainsNul);
+        }
+        if path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            return Err(CommandError::WorkingDirectoryParentTraversal { path });
         }
         self.working_directory = Some(path);
         Ok(self)

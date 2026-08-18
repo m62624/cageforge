@@ -77,7 +77,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `CommandSpec::with_arg` and `with_args` append argv values without changing
 them and reject NUL-containing arguments. An empty program or a NUL-containing
 program is rejected; empty argv arguments are valid. Working-directory input
-also rejects empty and NUL-containing paths at the request boundary.
+also rejects empty, NUL-containing, and lexically escaping parent-traversal
+paths at the request boundary. Relative paths that do not contain parent
+traversal are still preserved for backend resolution.
 
 ## Environment
 
@@ -127,8 +129,9 @@ handles belong to a backend or harness adapter.
 
 The black-box integration suite lives in
 `crates/cageforge-command/tests/command.rs`. It covers native argv values,
-validation, environment bases and overrides, stdio routing, cwd handling,
-environment filters, timeout states, and error display.
+validation, environment bases and overrides, stdio routing, cwd handling
+(including parent traversal rejection), environment filters, timeout states,
+and error display.
 
 API reference: [`cageforge-command` on docs.rs](https://docs.rs/cageforge-command/latest/cageforge_command/).
 

@@ -1,6 +1,6 @@
 # Specification 0005: Cageforge Policy Model
 
-Status: accepted for the first implementation milestone
+Status: accepted; portable implementation complete
 
 ## Purpose
 
@@ -103,8 +103,10 @@ dangerous request.
 - Unrestricted and externally enforced filesystem policies cannot carry local
   filesystem rules. Restriction-only builders reject those combinations at
   construction time.
-- Domain patterns are normalized to lowercase and reject schemes, paths,
-  whitespace, and unsupported wildcard shapes.
+- Domain inputs use host-boundary normalization: matching is case-insensitive,
+  trailing dots and host ports are ignored, bracketed IPv6 literals are
+  unwrapped, and IPv4/IPv6 literals are canonicalized. Schemes, paths,
+  whitespace, and unsupported wildcard shapes are rejected.
 - `*.example.com` matches subdomains but not the apex; `**.example.com`
   matches the apex and subdomains.
 - Deny wins when multiple matching domain rules apply.
@@ -113,6 +115,10 @@ dangerous request.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
   rules; its rule builders reject the combination at construction time.
+- `NetworkPolicy::decision_for_domain` and
+  `NetworkPolicy::decision_for_unix_socket` return typed `Allow`, `Deny`, or
+  `ExternallyEnforced` results. The boolean `allows_*` helpers intentionally
+  return true only for local `Allow`; they do not hide external ownership.
 - Unrestricted and external enforcement are explicit ownership transfers. A
   backend or policy composer may reject them when its grant does not permit the
   transfer.
@@ -131,7 +137,8 @@ expansion, POSIX and Windows-native path forms, path patterns, recursive
 resolution, access precedence, duplicate normalization, filesystem modes,
 carve-outs, missing-path behavior, domain normalization and wildcard
 semantics, Unix socket validation, external-policy validation, and built-in
-policies.
+policies. Network tests also cover host ports, bracketed IPv6, typed external
+decisions, and malformed paths under an external policy.
 
 Unit tests should be added only when private implementation logic cannot be
 meaningfully exercised through the public API.

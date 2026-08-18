@@ -31,6 +31,8 @@ domain_mode = "restricted"
 unix_socket_mode = "restricted"
 domains = [
   { pattern = "**.example.com", access = "allow" },
+  { pattern = "API.Example.com:443", access = "allow" },
+  { pattern = "[2001:DB8::1]:443", access = "allow" },
   { pattern = "blocked.example.com", access = "deny" },
 ]
 unix_sockets = [

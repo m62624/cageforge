@@ -5,7 +5,7 @@ Status: accepted audit baseline
 ## Reviewed upstream baseline
 
 The audit was performed against the local Codex checkout at commit
-`c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` on 2026-08-17. The reviewed
+`c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` on 2026-08-18. The reviewed
 areas are:
 
 - `codex-rs/protocol/src/permissions.rs`;
@@ -14,6 +14,7 @@ areas are:
 - `codex-rs/linux-sandbox`;
 - `codex-rs/windows-sandbox-rs`;
 - `codex-rs/bwrap`.
+- `codex-rs/network-proxy/src/policy.rs` for host and domain normalization.
 
 This is an audit record, not a source import. No Codex implementation code is
 included in Cageforge by this specification.
@@ -36,6 +37,8 @@ The policy and backend design must account for these upstream behaviors:
 - missing filesystem entries can be skipped instead of materialized;
 - network restriction is a separate capability from filesystem restriction;
   domain and Unix-socket defaults must be explicit rather than inferred;
+  host matching must normalize case, trailing dots, ports, and bracketed IP
+  literals before policy evaluation;
   Linux additionally needs process and socket syscall restrictions, while
   macOS has explicit Unix-socket policy generation;
 - Linux backend selection must account for system bubblewrap capabilities,
@@ -49,8 +52,11 @@ these semantics: runtime path context, recursive most-specific filesystem
 resolution, validated path globs, scan depth, missing-path behavior,
 read-only carve-outs, mandatory `.git` metadata protection, additive custom
 protected relative paths, explicit external-enforcement decisions, domain
-defaults, and Unix-socket defaults. Portable glob rules are deny-only; a
-read/write glob is rejected as unsupported rather than silently delegated.
+defaults, host normalization, and Unix-socket defaults. `NetworkDecision`
+preserves `Allow`, `Deny`, and `ExternallyEnforced` for domain and socket
+queries; the boolean helpers intentionally expose only local `Allow`.
+Portable glob rules are deny-only; a read/write glob is rejected as
+unsupported rather than silently delegated.
 The remaining OS-specific behavior stays below the policy boundary. Codex's
 product-specific `.agents` and `.codex` names are not copied into the public
 API; callers can add generic protected relative paths when they need them.
@@ -92,8 +98,10 @@ The following Codex-specific concerns remain outside the policy crate:
 
 ## Remaining follow-up order
 
-1. Add TOML profile resolution with inheritance and cycle/unknown-profile
-   errors in `cageforge-config`.
+1. Maintain the completed `cageforge-config` and `cageforge-command`
+   integration coverage when the portable policy API changes. Their current
+   profile, environment, host-normalization, and cwd-validation behavior is
+   implemented and tested; it is not a deferred feature.
 2. Define capability negotiation and effective policy composition in
    `cageforge-backend-api` (or a dedicated composer crate). The current
    policy/config crates deliberately do not pretend to produce an effective

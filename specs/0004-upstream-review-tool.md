@@ -23,10 +23,12 @@ The repository root contains upstream-review.toml. It records:
 - explicit upstream scopes and their local Cageforge destinations.
 
 The current configuration records the audited baseline
-`c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` for the first two independent
-Cageforge library crates. This baseline is frozen: the tool never pulls Codex,
-changes the commit, or imports source. Advancing it requires a manual review
-and an explicit configuration change.
+`c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc` for the current portable policy,
+command, and config crates. The policy scope also tracks Codex's
+`network-proxy/src/policy.rs` because host normalization is part of the
+portable network boundary. This baseline is frozen: the tool never pulls
+Codex, changes the commit, or imports source. Advancing it requires a manual
+review and an explicit configuration change.
 
 ## Commands
 

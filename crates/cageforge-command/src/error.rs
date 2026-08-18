@@ -1,6 +1,7 @@
 // Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors raised while constructing a portable command request.
@@ -21,6 +22,15 @@ pub enum CommandError {
     /// The working-directory path contained a NUL character.
     #[error("working directory must not contain a NUL character")]
     WorkingDirectoryContainsNul,
+    /// The working-directory path contained a parent traversal component.
+    #[error(
+        "working directory must not contain parent traversal: {}",
+        path.display()
+    )]
+    WorkingDirectoryParentTraversal {
+        /// The working-directory path that attempted parent traversal.
+        path: PathBuf,
+    },
     /// An environment variable name was empty.
     #[error("environment variable name must not be empty")]
     EmptyEnvironmentName,

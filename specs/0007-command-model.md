@@ -1,6 +1,6 @@
 # Specification 0007: Portable Command Model
 
-Status: accepted design
+Status: accepted; portable implementation complete
 
 ## Purpose
 
@@ -97,10 +97,10 @@ Windows execution inputs.
 ### `CommandRequest`
 
 The request combines a command, optional native working directory, environment,
-stdio routing, and a `TimeoutPolicy`. Empty and NUL-containing working
-directories are rejected; relative working-directory resolution is deliberately
-deferred to the backend boundary, where the execution context and policy are
-available.
+stdio routing, and a `TimeoutPolicy`. Empty, NUL-containing, and
+parent-traversing working directories are rejected; relative working-directory
+resolution is otherwise deliberately deferred to the backend boundary, where
+the execution context and policy are available.
 
 ## Dependency boundary
 
@@ -128,7 +128,8 @@ The public integration suite covers:
   case-insensitive canonical include/exclude filtering, ordered environment
   application, and invalid names/values/patterns;
 - explicit and default stdio modes;
-- optional native cwd, NUL rejection, and timeout replacement/removal;
+- optional native cwd, NUL and parent-traversal rejection, and timeout
+  replacement/removal;
 - complete object equality and error display.
 
 Portable command logic must retain at least 90% Tarpaulin coverage. Native

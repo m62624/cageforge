@@ -10,6 +10,7 @@ use cageforge_policy::FilesystemPolicy;
 use cageforge_policy::FilesystemRule;
 use cageforge_policy::FilesystemTarget;
 use cageforge_policy::MissingPathBehavior;
+use cageforge_policy::NetworkDecision;
 use cageforge_policy::NetworkMode;
 use cageforge_policy::NetworkPolicy;
 use cageforge_policy::PathPattern;
@@ -631,6 +632,34 @@ fn domain_rules_normalize_and_apply_deny_precedence() {
 }
 
 #[test]
+fn domain_rules_normalize_ports_brackets_and_ip_literals() {
+    let policy = NetworkPolicy::enabled()
+        .with_domain("Example.COM:443", DomainAccess::Allow)
+        .expect("host with port")
+        .with_domain("[2001:DB8::1]:443", DomainAccess::Allow)
+        .expect("bracketed IPv6 host with port");
+
+    assert_eq!(
+        policy.domains()[0].pattern(),
+        "example.com",
+        "ports are not part of domain identity"
+    );
+    assert_eq!(policy.domains()[1].pattern(), "2001:db8::1");
+    assert_eq!(
+        policy
+            .access_for_domain("example.com:8443")
+            .expect("host lookup"),
+        Some(DomainAccess::Allow)
+    );
+    assert_eq!(
+        policy
+            .access_for_domain("[2001:DB8::1]:9443")
+            .expect("IPv6 lookup"),
+        Some(DomainAccess::Allow)
+    );
+}
+
+#[test]
 fn domain_wildcards_have_explicit_apex_semantics() {
     let policy = NetworkPolicy::enabled()
         .with_domain("*.example.com", DomainAccess::Allow)
@@ -773,6 +802,38 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
 }
 
 #[test]
+fn network_decisions_preserve_external_enforcement() {
+    let socket_path = native_path("/run/cageforge.sock");
+
+    assert_eq!(
+        NetworkPolicy::disabled()
+            .decision_for_domain("example.com")
+            .expect("disabled domain"),
+        NetworkDecision::Deny
+    );
+    assert_eq!(
+        NetworkPolicy::enabled()
+            .decision_for_domain("example.com")
+            .expect("enabled domain"),
+        NetworkDecision::Allow
+    );
+    assert_eq!(
+        NetworkPolicy::external()
+            .decision_for_domain("example.com")
+            .expect("external domain"),
+        NetworkDecision::ExternallyEnforced
+    );
+    assert_eq!(
+        NetworkPolicy::external()
+            .decision_for_unix_socket(Path::new(&socket_path))
+            .expect("external socket"),
+        NetworkDecision::ExternallyEnforced
+    );
+    assert!(NetworkDecision::ExternallyEnforced.is_externally_enforced());
+    assert!(!NetworkDecision::ExternallyEnforced.is_allowed());
+}
+
+#[test]
 fn path_selector_validates_empty_and_absolute_workspace_paths() {
     assert!(matches!(
         PathSelector::absolute("").expect_err("empty absolute path should fail"),
@@ -827,6 +888,15 @@ fn socket_access_rejects_parent_traversal_and_nul() {
     };
     assert!(!policy.allows_unix_socket(Path::new(parent_path)));
     assert!(!policy.allows_unix_socket(Path::new("/run/bad\0.sock")));
+    assert!(matches!(
+        policy.decision_for_unix_socket(Path::new(parent_path)),
+        Err(PolicyError::ParentTraversal { .. })
+    ));
+    assert!(matches!(
+        NetworkPolicy::external()
+            .decision_for_unix_socket(Path::new(&native_path("/run/bad\0.sock"))),
+        Err(PolicyError::PathContainsNul { .. })
+    ));
 }
 
 #[cfg(unix)]

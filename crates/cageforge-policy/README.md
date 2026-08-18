@@ -50,6 +50,7 @@ an unchecked path selector by writing a public enum payload.
 | `PathPattern` | Represents validated absolute or workspace-relative globs. |
 | `AccessMode` | Expresses `Read`, `Write`, or `Deny`. |
 | `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults. |
+| `NetworkDecision` | Distinguishes local allow/deny from externally owned network enforcement. |
 | `DomainRule` and `UnixSocketRule` | Adds validated network destinations and decisions. |
 | `PolicyError` | Reports invalid paths, patterns, domains, contexts, and policy combinations. |
 
@@ -132,11 +133,18 @@ cannot silently apply the wrong interpretation.
 ## Network model
 
 `NetworkPolicy` separates enforcement ownership from the default behavior for
-domains and Unix socket paths. Domain patterns are normalized to lowercase;
-`*.example.com` matches subdomains but not the apex, while
-`**.example.com` matches the apex and its subdomains. A backend can use
-`allows_domain` and `allows_unix_socket` for complete decisions or inspect the
-normalized rules before compiling native enforcement.
+domains and Unix socket paths. Domain inputs are normalized like the upstream
+host boundary: case is folded, trailing dots are removed, host ports are
+ignored, bracketed IPv6 literals are unwrapped, and IPv4/IPv6 literals are
+canonicalized. `*.example.com` matches subdomains but not the apex, while
+`**.example.com` matches the apex and its subdomains.
+
+Use `decision_for_domain` and `decision_for_unix_socket` when a backend needs
+the complete result. They return `NetworkDecision::Allow`,
+`NetworkDecision::Deny`, or `NetworkDecision::ExternallyEnforced`. The
+`allows_domain` and `allows_unix_socket` helpers remain as local boolean
+queries and return `true` only for `Allow`; they intentionally do not collapse
+external ownership into permission.
 
 Network policy is independent from filesystem policy. Disabled mode always
 denies, even if rules are retained for inspection; external mode delegates the

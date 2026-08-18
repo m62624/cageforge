@@ -3,7 +3,7 @@
 
 use crate::PathSelector;
 use crate::PolicyError;
-use std::path::Component;
+use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -48,6 +48,29 @@ pub enum DomainAccess {
     Allow,
     /// Deny the destination.
     Deny,
+}
+
+/// The result of evaluating a complete network policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NetworkDecision {
+    /// The local policy allows the destination.
+    Allow,
+    /// The local policy denies the destination.
+    Deny,
+    /// A trusted external boundary owns enforcement for the destination.
+    ExternallyEnforced,
+}
+
+impl NetworkDecision {
+    /// Returns whether the local policy explicitly allows the destination.
+    pub const fn is_allowed(self) -> bool {
+        matches!(self, Self::Allow)
+    }
+
+    /// Returns whether another trusted component owns enforcement.
+    pub const fn is_externally_enforced(self) -> bool {
+        matches!(self, Self::ExternallyEnforced)
+    }
 }
 
 /// A normalized domain pattern and its access decision.
@@ -227,80 +250,143 @@ impl NetworkPolicy {
     /// Returns the strictest matching domain decision, if a rule matches.
     pub fn access_for_domain(&self, domain: &str) -> Result<Option<DomainAccess>, PolicyError> {
         let domain = normalize_domain_pattern(domain)?;
+        Ok(self.access_for_normalized_domain(&domain))
+    }
+
+    /// Evaluates a domain against the complete network policy.
+    ///
+    /// Unlike allows_domain, this preserves the distinction between a local
+    /// denial and a policy whose enforcement belongs to another trusted
+    /// boundary.
+    pub fn decision_for_domain(&self, domain: &str) -> Result<NetworkDecision, PolicyError> {
+        let domain = normalize_domain_pattern(domain)?;
+        match self.mode {
+            NetworkMode::Disabled => Ok(NetworkDecision::Deny),
+            NetworkMode::External => Ok(NetworkDecision::ExternallyEnforced),
+            NetworkMode::Enabled => match self.domain_mode {
+                DomainMode::Disabled => Ok(NetworkDecision::Deny),
+                DomainMode::Enabled => Ok(
+                    if matches!(
+                        self.access_for_normalized_domain(&domain),
+                        Some(DomainAccess::Deny)
+                    ) {
+                        NetworkDecision::Deny
+                    } else {
+                        NetworkDecision::Allow
+                    },
+                ),
+                DomainMode::Restricted => Ok(
+                    if matches!(
+                        self.access_for_normalized_domain(&domain),
+                        Some(DomainAccess::Allow)
+                    ) {
+                        NetworkDecision::Allow
+                    } else {
+                        NetworkDecision::Deny
+                    },
+                ),
+            },
+        }
+    }
+
+    /// Evaluates a Unix socket path against the complete network policy.
+    ///
+    /// The path is validated even when enforcement is external so malformed
+    /// input cannot be mistaken for a successful handoff.
+    pub fn decision_for_unix_socket(&self, path: &Path) -> Result<NetworkDecision, PolicyError> {
+        PathSelector::absolute(path.to_path_buf())?;
+        if self.mode == NetworkMode::External {
+            return Ok(NetworkDecision::ExternallyEnforced);
+        }
+        if self.mode == NetworkMode::Disabled || self.unix_socket_mode == UnixSocketMode::Disabled {
+            return Ok(NetworkDecision::Deny);
+        }
         let mut result = None;
-        for rule in &self.domains {
-            if domain_matches(rule.pattern(), &domain) {
+        for rule in &self.unix_sockets {
+            if path.starts_with(rule.path()) {
                 result = Some(match (result, rule.access()) {
                     (Some(DomainAccess::Deny), _) | (_, DomainAccess::Deny) => DomainAccess::Deny,
                     _ => DomainAccess::Allow,
                 });
             }
         }
-        Ok(result)
+        let decision = match self.unix_socket_mode {
+            UnixSocketMode::Disabled => NetworkDecision::Deny,
+            UnixSocketMode::Enabled => {
+                if matches!(result, Some(DomainAccess::Deny)) {
+                    NetworkDecision::Deny
+                } else {
+                    NetworkDecision::Allow
+                }
+            }
+            UnixSocketMode::Restricted => {
+                if matches!(result, Some(DomainAccess::Allow)) {
+                    NetworkDecision::Allow
+                } else {
+                    NetworkDecision::Deny
+                }
+            }
+        };
+        Ok(decision)
     }
 
     /// Returns whether a domain is allowed under the complete network mode.
     pub fn allows_domain(&self, domain: &str) -> Result<bool, PolicyError> {
-        match self.mode {
-            NetworkMode::Disabled | NetworkMode::External => Ok(false),
-            NetworkMode::Enabled => match self.domain_mode {
-                DomainMode::Disabled => Ok(false),
-                DomainMode::Enabled => Ok(!matches!(
-                    self.access_for_domain(domain)?,
-                    Some(DomainAccess::Deny)
-                )),
-                DomainMode::Restricted => Ok(matches!(
-                    self.access_for_domain(domain)?,
-                    Some(DomainAccess::Allow)
-                )),
-            },
-        }
+        Ok(self.decision_for_domain(domain)?.is_allowed())
     }
 
     /// Returns whether a Unix socket path is allowed under the complete network mode.
     pub fn allows_unix_socket(&self, path: &Path) -> bool {
-        if !path.is_absolute()
-            || crate::path::contains_nul(path)
-            || path
-                .components()
-                .any(|component| component == Component::ParentDir)
-            || matches!(self.mode, NetworkMode::Disabled | NetworkMode::External)
-        {
-            return false;
-        }
-        if self.unix_socket_mode == UnixSocketMode::Disabled {
-            return false;
-        }
-        let mut decision = None;
-        for rule in &self.unix_sockets {
-            if path.starts_with(rule.path()) {
-                decision = Some(match (decision, rule.access()) {
+        self.decision_for_unix_socket(path)
+            .is_ok_and(NetworkDecision::is_allowed)
+    }
+
+    fn access_for_normalized_domain(&self, domain: &str) -> Option<DomainAccess> {
+        let mut result = None;
+        for rule in &self.domains {
+            if domain_matches(rule.pattern(), domain) {
+                result = Some(match (result, rule.access()) {
                     (Some(DomainAccess::Deny), _) | (_, DomainAccess::Deny) => DomainAccess::Deny,
                     _ => DomainAccess::Allow,
                 });
             }
         }
-        match self.unix_socket_mode {
-            UnixSocketMode::Disabled => false,
-            UnixSocketMode::Enabled => !matches!(decision, Some(DomainAccess::Deny)),
-            UnixSocketMode::Restricted => matches!(decision, Some(DomainAccess::Allow)),
-        }
+        result
     }
 }
 
 fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
-    let pattern = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    let raw = raw.trim();
+    let invalid_syntax = raw.is_empty()
+        || raw.contains("://")
+        || raw.contains('/')
+        || raw.contains('?')
+        || raw.contains('#')
+        || raw.chars().any(char::is_whitespace)
+        || raw.chars().any(char::is_control);
+    if invalid_syntax {
+        return Err(PolicyError::InvalidDomainPattern {
+            pattern: raw.to_string(),
+        });
+    }
+
+    let (prefix, remainder) = if let Some(remainder) = raw.strip_prefix("**.") {
+        ("**.", remainder)
+    } else if let Some(remainder) = raw.strip_prefix("*.") {
+        ("*.", remainder)
+    } else {
+        ("", raw)
+    };
+    let remainder = normalize_host(remainder);
+    let pattern = if prefix.is_empty() {
+        remainder
+    } else {
+        format!("{prefix}{remainder}")
+    };
     let valid_wildcard = pattern == "*"
         || pattern.strip_prefix("*.").is_some_and(valid_domain_suffix)
         || pattern.strip_prefix("**.").is_some_and(valid_domain_suffix);
-    let valid_literal = !pattern.is_empty()
-        && !pattern.contains("://")
-        && !pattern.contains('/')
-        && !pattern.contains('?')
-        && !pattern.contains('#')
-        && !pattern.contains('*')
-        && !pattern.chars().any(char::is_whitespace)
-        && !pattern.chars().any(char::is_control);
+    let valid_literal = valid_domain_literal(&pattern);
     if (valid_wildcard || valid_literal) && !pattern.is_empty() {
         Ok(pattern)
     } else {
@@ -310,12 +396,56 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     }
 }
 
+fn normalize_host(host: &str) -> String {
+    let host = host.trim();
+    if host.starts_with('[')
+        && let Some(end) = host.find(']')
+    {
+        return normalize_dns_host_or_ip_literal(&host[1..end]);
+    }
+    if host.bytes().filter(|byte| *byte == b':').count() == 1 {
+        let host = host.split(':').next().unwrap_or_default();
+        return normalize_dns_host_or_ip_literal(host);
+    }
+    normalize_dns_host_or_ip_literal(host)
+}
+
+fn normalize_dns_host_or_ip_literal(host: &str) -> String {
+    let host = host.to_ascii_lowercase();
+    let host = host.trim_end_matches('.');
+    if let Some(ip) = normalize_ip_literal(host) {
+        return ip;
+    }
+    host.to_string()
+}
+
+fn normalize_ip_literal(host: &str) -> Option<String> {
+    if host.parse::<IpAddr>().is_ok() {
+        return Some(host.to_string());
+    }
+    for delimiter in ["%25", "%"] {
+        if let Some((ip, scope)) = host.split_once(delimiter)
+            && ip.parse::<IpAddr>().is_ok()
+        {
+            return Some(format!("{ip}%{scope}"));
+        }
+    }
+    None
+}
+
+fn valid_domain_literal(pattern: &str) -> bool {
+    !pattern.is_empty()
+        && !pattern.contains('*')
+        && (!pattern.contains(':') || normalize_ip_literal(pattern).is_some())
+}
+
 fn valid_domain_suffix(suffix: &str) -> bool {
     !suffix.is_empty()
         && !suffix.contains('*')
         && !suffix.contains('?')
         && !suffix.contains('/')
         && !suffix.contains(':')
+        && !suffix.contains('%')
         && !suffix.chars().any(char::is_whitespace)
         && !suffix.chars().any(char::is_control)
 }

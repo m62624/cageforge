@@ -26,12 +26,13 @@ were:
 - `codex-rs/core/src/exec_env.rs`;
 - `codex-rs/protocol/src/config_types.rs`;
 - `codex-rs/protocol/src/shell_environment.rs`.
+- `codex-rs/network-proxy/src/policy.rs` for host normalization behavior.
 
 This is a behavioral and boundary audit. Neither current Cageforge crate
 contains copied or source-derived Codex implementation.
 
 The audit was rechecked against the same local Codex `main` commit on
-2026-08-17. The portable policy and command boundaries remain aligned with the
+2026-08-18. The portable policy and command boundaries remain aligned with the
 reviewed protocol, sandboxing, app-server, and execution inputs. The commit is
 now frozen in `upstream-review.toml`; future changes are review candidates for
 these two crates and are not pulled or merged automatically.
@@ -62,7 +63,8 @@ and their backend boundary does not exist yet.
 | `FilesystemRule` | `new`, fallible `from_target`, `absolute_glob`, `workspace_glob`, `with_missing_path_behavior`, `with_read_only_subpath`, `target`, `access`, `missing_path_behavior`, `read_only_subpaths` | Exercised by rule, carve-out, missing-path, and glob tests; maps to Codex filesystem entries, writable-root carve-outs, and skip-missing behavior. | Keep. Portable glob rules are deny-only; read/write glob access returns a typed unsupported error. `with_read_only_subpath` is fallible and only accepts a writable parent. |
 | `FilesystemPolicy` | `restricted`, `unrestricted`, `external`, `with_glob_scan_max_depth`, `mode`, `entries`, `glob_scan_max_depth`, `with_rule`, `validate`, `normalized`, `access_for`, `access_for_path` | Exercised by filesystem policy tests; covers Codex managed/unrestricted/external ownership, recursive matching, normalization, and backend glob depth. | Keep. Queries return `FilesystemDecision`; external ownership is `ExternallyEnforced`, not local `Deny`. `access_for` is the symbolic-selector inspection path; `access_for_path` is concrete enforcement evaluation. They are not interchangeable. |
 | `DomainRule` and `UnixSocketRule` | `DomainRule::new`, `pattern`, `access`; `UnixSocketRule::new`, `path`, `access` | Exercised by network tests; corresponds to Codex domain and Unix-socket restrictions while keeping proxy and product types outside this crate. | Keep. Backends need normalized rules and read-only access to their targets. |
-| `NetworkPolicy` | `disabled`, `enabled`, `external`, `mode`, `domain_mode`, `unix_socket_mode`, `with_domain_mode`, `with_unix_socket_mode`, `domains`, `unix_sockets`, `with_domain`, `with_unix_socket`, `validate`, `access_for_domain`, `allows_domain`, `allows_unix_socket` | Exercised by network tests; separates network enforcement ownership from domain/socket defaults, as Codex does across protocol and native backends. | Keep. `access_for_domain` reports rule matching; `allows_domain` and `allows_unix_socket` apply the complete policy. Disabled mode may retain inert rules for inspection but always denies; external mode rejects local rules at construction. |
+| `NetworkPolicy` | `disabled`, `enabled`, `external`, `mode`, `domain_mode`, `unix_socket_mode`, `with_domain_mode`, `with_unix_socket_mode`, `domains`, `unix_sockets`, `with_domain`, `with_unix_socket`, `validate`, `access_for_domain`, `decision_for_domain`, `decision_for_unix_socket`, `allows_domain`, `allows_unix_socket` | Exercised by network tests; separates network enforcement ownership from domain/socket defaults, as Codex does across protocol and native backends. | Keep. `access_for_domain` reports rule matching; the `decision_for_*` methods apply the complete policy and preserve `Allow`, `Deny`, and `ExternallyEnforced`. Boolean helpers are compatibility conveniences that return true only for local `Allow`. Domain inputs normalize host case, ports, trailing dots, and bracketed IP literals. |
+| `NetworkDecision` | `is_allowed`, `is_externally_enforced` | Exercised by network decision tests; preserves the same ownership distinction as filesystem decisions without importing Codex types. | Keep. Backends must inspect this value when external enforcement is possible; they must not interpret `ExternallyEnforced` as local deny or local allow. |
 | `SandboxPolicy` | `new`, `read_only`, `workspace`, `full_access`, `filesystem`, `network`, `validate` | Exercised by built-in policy tests; combines the portable filesystem and network boundaries without exposing Codex `PermissionProfile` or legacy mode names. | Keep. This is the composition root for future profile resolution and backend preparation. |
 
 The methods most likely to look unused in a local grep are intentional:
@@ -87,7 +89,7 @@ validation step.
 |---|---|---|---|
 | `CommandSpec` | `new`, `with_arg`, `with_args`, `program`, `args`, `into_parts` | Exercised by `tests/command.rs`; corresponds to Codex argv handling in `command_exec`, `process`, and `sandboxing::spawn`. | Keep. Argument builders are fallible and reject NUL before `into_parts`; `into_parts` is the owned handoff a process backend needs. |
 | `EnvironmentSpec` | `inherit_all`, `empty`, `base`, `overrides`, `override_for`, `filters`, `filter_action_for`, `with_var`, `without_var`, `with_filter`, `with_include_pattern`, `with_exclude_pattern`, `apply_to` | Exercised by environment tests; maps to Codex inherited/empty environment construction, filtering, and set/remove overrides without importing Codex filtering or telemetry rules. | Keep. Variable names and filter patterns use one case-insensitive logical namespace, and the backend selects the platform-specific `Core` base map. |
-| `CommandRequest` | `new`, `with_working_directory`, `without_working_directory`, `with_environment`, `with_stdio`, `with_timeout`, `with_timeout_policy`, `use_backend_timeout`, `disable_timeout`, `command`, `working_directory`, `environment`, `stdio`, `timeout_policy` | Exercised by request tests; combines the launch inputs split across Codex app-server protocol and execution code. | Keep. The named timeout methods keep call sites explicit, and cwd removal is required for reusable builder composition. |
+| `CommandRequest` | `new`, `with_working_directory`, `without_working_directory`, `with_environment`, `with_stdio`, `with_timeout`, `with_timeout_policy`, `use_backend_timeout`, `disable_timeout`, `command`, `working_directory`, `environment`, `stdio`, `timeout_policy` | Exercised by request tests; combines the launch inputs split across Codex app-server protocol and execution code. | Keep. The named timeout methods keep call sites explicit, cwd removal is required for reusable builder composition, and cwd parent traversal is rejected before backend resolution. |
 | `StdioSpec` | `new`, `captured`, `inherited`, `with_stdin`, `with_stdout`, `with_stderr`, `stdin`, `stdout`, `stderr` | Exercised by stdio tests; maps to Codex piped, inherited, and null stream setup. PTY allocation remains outside this crate. | Keep. Each stream is independently configurable without introducing PTY or OS handles. |
 | `TimeoutPolicy` | `BackendDefault`, `Limit`, `Disabled` | Exercised by timeout tests; matches Codex's default/custom/disabled timeout intent. Cancellation remains a separate lifecycle signal, as in Codex execution code. | Keep. Three variants are the complete portable timeout model. |
 | `CommandError` | `Display` and `Error` implementations | Exercised by invalid-input and display tests; provides stable construction errors without importing a process backend. | Keep. Constructors need a public error type. |
@@ -102,7 +104,8 @@ adapter that consumes this request.
 All command fields are private. `program`, `args`, `overrides`, and request
 components are available through shared references or copyable values. The
 `with_*` methods consume and return the request so composition stays explicit;
-fallible argv and cwd builders reject NUL before a backend handoff. There are
+fallible argv and cwd builders reject NUL and cwd parent traversal before a
+backend handoff. There are
 no public mutable collections that could bypass command or environment-name
 validation. `into_parts` is the deliberate owned handoff for a process backend.
 

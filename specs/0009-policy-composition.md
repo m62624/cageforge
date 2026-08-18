@@ -47,6 +47,10 @@ backend capabilities.
 - `FilesystemDecision::ExternallyEnforced` is an ownership result, not a deny
   result. A composer must accept it only when the external owner is the
   granted enforcement boundary.
+- `NetworkDecision::ExternallyEnforced` has the same ownership meaning for
+  domain and Unix-socket checks. A composer must preserve it until it verifies
+  that the harness/backend grant names the external network owner; it must not
+  collapse the value into local deny or allow.
 
 ## Ownership boundary
 

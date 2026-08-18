@@ -27,3 +27,8 @@ TOML into `EnvironmentSpec`; `cageforge-command` applies the portable stages
 after a backend has selected the `all`, `core`, or `none` base environment.
 The `root` target is symbolic: the backend supplies its concrete POSIX root or
 Windows drive/UNC roots.
+
+Domain entries accept host-like inputs such as `Example.com:443` and
+`[2001:db8::1]:443`; the resolved policy stores their normalized host form.
+Working-directory values may be relative, but parent traversal such as
+`../outside` is rejected by `cageforge-command`.

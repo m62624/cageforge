@@ -1,6 +1,6 @@
 # Specification 0008: Cageforge Config Model
 
-Status: accepted for the second implementation milestone
+Status: accepted; portable implementation complete
 
 ## Purpose
 
@@ -50,7 +50,12 @@ rules = [
 dangerously_allow_git_write = false
 
 [profiles.workspace.network]
-mode = "disabled"
+mode = "enabled"
+domain_mode = "restricted"
+domains = [
+  { pattern = "api.example.com:443", access = "allow" },
+  { pattern = "[2001:db8::1]:443", access = "deny" },
+]
 
 [profiles.workspace.command]
 program = "cargo"
@@ -84,6 +89,12 @@ Network modes are `disabled`, `enabled`, and `external`. Domain and Unix
 socket defaults are `disabled`, `enabled`, or `restricted`. Command stdio
 modes are `inherit`, `null`, and `pipe`; timeout modes are
 `backend-default`, `limit`, and `disabled`.
+
+Domain patterns are passed through `cageforge-policy` host normalization:
+matching is case-insensitive, trailing dots and host ports are ignored,
+bracketed IPv6 literals are unwrapped, and IP literals are canonicalized.
+Working-directory values are passed to `cageforge-command`, which rejects
+empty, NUL-containing, and parent-traversing paths before backend resolution.
 
 ## Resolution rules
 

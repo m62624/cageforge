@@ -75,6 +75,11 @@ Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minim
 `disabled`, `enabled`, or `restricted`. Stdio modes are `inherit`, `null`, and
 `pipe`. Timeout modes are `backend-default`, `limit`, and `disabled`.
 
+Domain patterns use the policy crate's host normalization: matching is
+case-insensitive, trailing dots and host ports are ignored, and bracketed
+IPv6 literals are accepted. For example, `Example.com:443` and
+`example.com:8443` address the same canonical host rule.
+
 Unknown TOML fields, unknown profiles, invalid profile names, inheritance
 cycles, missing command programs, invalid paths, NUL values, contradictory
 policy modes, and invalid enum values are rejected. A profile without a
