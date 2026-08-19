@@ -757,6 +757,24 @@ inherits = ["parent"]
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn duplicate_workspace_roots_are_rejected_under_windows_identity() {
+    let error = Config::from_toml(
+        r#"
+[profiles.safe.workspace_roots]
+"C:/Workspace" = true
+"c:/workspace" = false
+"#,
+    )
+    .expect_err("case variants must not create an ambiguous Windows root");
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue { field, .. } if field == "workspace_roots"
+    ));
+}
+
 #[test]
 fn resolves_all_environment_bases_and_filters() {
     for (inherit, expected_base) in [

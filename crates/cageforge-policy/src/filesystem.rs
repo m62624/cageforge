@@ -7,6 +7,7 @@ use crate::PathResolutionContext;
 use crate::PathSelector;
 use crate::PolicyError;
 use cageforge_path::{contains_component_path, contains_parent_traversal, is_within, paths_equal};
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
@@ -30,6 +31,30 @@ pub enum FilesystemTarget {
     Glob(PathPattern),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FilesystemTargetKey {
+    Scope(PathSelector),
+    Glob {
+        absolute: bool,
+        prefix: Option<String>,
+        components: Vec<String>,
+    },
+}
+
+fn target_key(target: &FilesystemTarget) -> FilesystemTargetKey {
+    match target {
+        FilesystemTarget::Scope(selector) => FilesystemTargetKey::Scope(selector.clone()),
+        FilesystemTarget::Glob(pattern) => {
+            let (absolute, prefix, components) = pattern.semantic_key();
+            FilesystemTargetKey::Glob {
+                absolute,
+                prefix,
+                components,
+            }
+        }
+    }
+}
+
 /// What a backend should do when a concrete rule target is absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MissingPathBehavior {
@@ -46,16 +71,6 @@ pub struct FilesystemRule {
     access: AccessMode,
     missing_path_behavior: MissingPathBehavior,
     read_only_subpaths: Vec<PathSelector>,
-}
-
-fn targets_equal(left: &FilesystemTarget, right: &FilesystemTarget) -> bool {
-    match (left, right) {
-        (FilesystemTarget::Scope(left), FilesystemTarget::Scope(right)) => {
-            crate::path::selectors_equal(left, right)
-        }
-        (FilesystemTarget::Glob(left), FilesystemTarget::Glob(right)) => left == right,
-        _ => false,
-    }
 }
 
 impl FilesystemRule {
@@ -334,11 +349,13 @@ impl FilesystemPolicy {
             return Ok(self.clone());
         }
 
-        let mut entries = Vec::new();
+        let mut entries: Vec<FilesystemRule> = Vec::with_capacity(self.entries.len());
+        let mut positions: HashMap<FilesystemTargetKey, usize> =
+            HashMap::with_capacity(self.entries.len());
         for rule in &self.entries {
-            if let Some(existing) = entries.iter_mut().find(|existing: &&mut FilesystemRule| {
-                targets_equal(existing.target(), rule.target())
-            }) {
+            let key = target_key(rule.target());
+            if let Some(&index) = positions.get(&key) {
+                let existing = &mut entries[index];
                 existing.access = existing.access.most_restrictive(rule.access);
                 existing.missing_path_behavior = existing
                     .missing_path_behavior
@@ -356,6 +373,7 @@ impl FilesystemPolicy {
                     existing.read_only_subpaths.clear();
                 }
             } else {
+                positions.insert(key, entries.len());
                 entries.push(rule.clone());
             }
         }

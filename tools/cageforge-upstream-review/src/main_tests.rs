@@ -19,6 +19,24 @@ fn diff_targets_are_resolved_to_commits_before_git_diff() {
 }
 
 #[test]
+fn upstream_review_configuration_rejects_unknown_fields() {
+    let result = toml::from_str::<Config>(
+        r#"
+[upstream]
+repository = "https://example.invalid/repository"
+path = "../upstream"
+branch = "main"
+unexpected = true
+
+[[scope]]
+name = "policy"
+upstream_paths = ["src/policy.rs"]
+"#,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
 fn scope_pathspecs_watch_possible_rust_module_directories() {
     let scope = Scope {
         name: "config".to_owned(),

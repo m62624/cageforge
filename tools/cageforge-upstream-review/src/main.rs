@@ -56,6 +56,7 @@ enum CommandKind {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Config {
     upstream: Upstream,
     #[serde(default)]
@@ -63,6 +64,7 @@ struct Config {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Upstream {
     repository: String,
     path: PathBuf,
@@ -72,6 +74,7 @@ struct Upstream {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Scope {
     name: String,
     upstream_paths: Vec<String>,

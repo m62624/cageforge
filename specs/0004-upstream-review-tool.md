@@ -72,6 +72,7 @@ license, and material adaptation.
   end-of-options marker before they are passed to `git diff`.
 - Diff execution disables external diff and text-conversion hooks and treats
   configured pathspecs literally.
+- Unknown fields in the tracking TOML are rejected instead of being ignored.
 - Baseline upstream files and local Cageforge destinations are checked before
   a review is shown.
 - The tracked commit must be a full commit SHA.

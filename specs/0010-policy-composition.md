@@ -65,7 +65,9 @@ accidentally grant access.
   A dangerous opt-out is effective only if both input policies opt out.
 
 The effective types expose the two component policies to a future backend
-lowering layer. `EffectiveFilesystemPolicy::glob_scan_max_depth` combines the
+lowering layer. Composition first normalizes both `SandboxPolicy` values, so
+the retained filesystem entries have deterministic duplicate-target semantics.
+`EffectiveFilesystemPolicy::glob_scan_max_depth` combines the
 depth requirements conservatively: the larger bounded depth wins, and any
 relevant unbounded deny-glob makes the result unbounded. The backend must still
 preserve both component policies, including their rules and protected paths;

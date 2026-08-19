@@ -111,12 +111,18 @@ dangerous request.
   construction time.
 - Domain inputs use host-boundary normalization: matching is case-insensitive,
   trailing dots and host ports are ignored, bracketed IPv6 literals are
-  unwrapped, and IPv4/IPv6 literals are canonicalized. Schemes, paths,
-  whitespace, empty labels, and unsupported wildcard syntax are rejected.
+  unwrapped, and IPv4/IPv6 literals are canonicalized. Missing, non-numeric,
+  and out-of-range ports are rejected. Schemes, paths, whitespace, empty
+  labels, malformed bracketed hosts, and unsupported wildcard syntax are
+  rejected.
 - Domain patterns support `*`, `?`, character classes, ranges, and negative
   classes within labels, including mid-label patterns such as
   `region*.example.com`; the `*.` and `**.` prefixes retain their explicit
   subdomain-only and apex-plus-subdomains semantics.
+- Domain glob matchers are compiled when `DomainRule` is constructed rather
+  than during each lookup. The stored matcher is an implementation detail;
+  public equality and serialization identity remain the normalized pattern and
+  access decision.
 - `*.example.com` matches subdomains but not the apex; `**.example.com`
   matches the apex and subdomains.
 - Deny wins when multiple matching domain rules apply.

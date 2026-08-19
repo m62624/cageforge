@@ -1,26 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use cageforge_policy::AccessMode;
-use cageforge_policy::ConnectionAuthorization;
-use cageforge_policy::DomainAccess;
-use cageforge_policy::DomainMode;
-use cageforge_policy::FilesystemDecision;
-use cageforge_policy::FilesystemMode;
-use cageforge_policy::FilesystemPolicy;
-use cageforge_policy::FilesystemRule;
-use cageforge_policy::FilesystemTarget;
-use cageforge_policy::LocalNetworkAccess;
-use cageforge_policy::MissingPathBehavior;
-use cageforge_policy::NetworkDecision;
-use cageforge_policy::NetworkMode;
-use cageforge_policy::NetworkPolicy;
-use cageforge_policy::PathPattern;
-use cageforge_policy::PathResolutionContext;
-use cageforge_policy::PathSelector;
-use cageforge_policy::PolicyError;
-use cageforge_policy::ResolvedNetworkTarget;
-use cageforge_policy::SandboxPolicy;
-use cageforge_policy::UnixSocketMode;
+use cageforge_policy::{
+    AccessMode, ConnectionAuthorization, DomainAccess, DomainMode, FilesystemDecision,
+    FilesystemMode, FilesystemPolicy, FilesystemRule, FilesystemTarget, LocalNetworkAccess,
+    MissingPathBehavior, NetworkDecision, NetworkMode, NetworkPolicy, PathPattern,
+    PathResolutionContext, PathSelector, PolicyError, ResolvedNetworkTarget, SandboxPolicy,
+    UnixSocketMode,
+};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeSet, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -956,6 +942,11 @@ fn malformed_domains_and_non_absolute_sockets_are_rejected() {
         "bad..domain",
         "bad\0domain",
         "[abc",
+        "[::1]junk",
+        "[::1]:bad",
+        "example.com:",
+        "example.com:garbage",
+        "example.com:65536",
     ] {
         assert!(matches!(
             NetworkPolicy::enabled().with_domain(pattern, DomainAccess::Allow),

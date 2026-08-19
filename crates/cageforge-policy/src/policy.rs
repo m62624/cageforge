@@ -75,4 +75,17 @@ impl SandboxPolicy {
         self.network.validate()?;
         Ok(())
     }
+
+    /// Returns a backend-ready policy with duplicate filesystem targets
+    /// collapsed conservatively.
+    ///
+    /// A backend should consume this value, or an effective sandbox created by
+    /// the composition crate, instead of compiling raw filesystem entries with
+    /// its own ordering rules.
+    pub fn normalized(&self) -> Result<Self, PolicyError> {
+        Ok(Self::new(
+            self.filesystem.normalized()?,
+            self.network.clone(),
+        ))
+    }
 }

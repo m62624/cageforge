@@ -333,7 +333,7 @@ impl PathPattern {
             .count()
     }
 
-    fn semantic_key(&self) -> (bool, Option<String>, Vec<String>) {
+    pub(crate) fn semantic_key(&self) -> (bool, Option<String>, Vec<String>) {
         (
             self.absolute,
             self.prefix.as_deref().map(case_fold),

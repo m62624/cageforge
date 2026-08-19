@@ -4,6 +4,8 @@ use crate::PathSelector;
 use crate::PolicyError;
 use cageforge_path::is_within;
 use globset::GlobBuilder;
+use globset::GlobMatcher;
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::path::PathBuf;
@@ -162,17 +164,48 @@ impl ResolvedNetworkTarget {
 }
 
 /// A normalized domain pattern and its access decision.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct DomainRule {
     pattern: String,
     access: DomainAccess,
+    matcher: DomainMatcher,
+}
+
+impl PartialEq for DomainRule {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern == other.pattern && self.access == other.access
+    }
+}
+
+impl Eq for DomainRule {}
+
+impl Hash for DomainRule {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.pattern.hash(state);
+        self.access.hash(state);
+    }
+}
+
+#[derive(Debug, Clone)]
+enum DomainMatcher {
+    Any,
+    Full(GlobMatcher),
+    Suffix {
+        labels: Vec<GlobMatcher>,
+        include_apex: bool,
+    },
 }
 
 impl DomainRule {
     /// Creates and validates a domain rule.
     pub fn new(pattern: impl Into<String>, access: DomainAccess) -> Result<Self, PolicyError> {
         let pattern = normalize_domain_pattern(&pattern.into())?;
-        Ok(Self { pattern, access })
+        let matcher = compile_domain_matcher(&pattern)?;
+        Ok(Self {
+            pattern,
+            access,
+            matcher,
+        })
     }
 
     /// Returns the normalized pattern.
@@ -183,6 +216,28 @@ impl DomainRule {
     /// Returns the access decision.
     pub const fn access(&self) -> DomainAccess {
         self.access
+    }
+
+    fn matches(&self, domain: &str) -> bool {
+        match &self.matcher {
+            DomainMatcher::Any => true,
+            DomainMatcher::Full(matcher) => matcher.is_match(domain),
+            DomainMatcher::Suffix {
+                labels,
+                include_apex,
+            } => {
+                let domain_labels = domain.split('.').collect::<Vec<_>>();
+                if domain_labels.len() < labels.len()
+                    || (!include_apex && domain_labels.len() == labels.len())
+                {
+                    return false;
+                }
+                domain_labels[domain_labels.len() - labels.len()..]
+                    .iter()
+                    .zip(labels)
+                    .all(|(domain, matcher)| matcher.is_match(domain))
+            }
+        }
     }
 }
 
@@ -563,7 +618,7 @@ impl NetworkPolicy {
     fn access_for_normalized_domain(&self, domain: &str) -> Option<DomainAccess> {
         let mut result = None;
         for rule in &self.domains {
-            if domain_matches(rule.pattern(), domain) {
+            if rule.matches(domain) {
                 result = Some(match (result, rule.access()) {
                     (Some(DomainAccess::Deny), _) | (_, DomainAccess::Deny) => DomainAccess::Deny,
                     _ => DomainAccess::Allow,
@@ -604,7 +659,9 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     } else {
         ("", raw)
     };
-    let remainder = normalize_host(remainder);
+    let remainder = normalize_host(remainder).ok_or_else(|| PolicyError::InvalidDomainPattern {
+        pattern: raw.to_string(),
+    })?;
     let pattern = if prefix.is_empty() {
         remainder
     } else {
@@ -619,19 +676,42 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     }
 }
 
-fn normalize_host(host: &str) -> String {
+fn normalize_host(host: &str) -> Option<String> {
     let host = host.trim();
-    if host.starts_with('[')
-        && let Some(end) = host.find(']')
-        && (host[1..end].contains(':') || normalize_ip_literal(&host[1..end]).is_some())
-    {
-        return normalize_dns_host_or_ip_literal(&host[1..end]);
+    if host.starts_with('[') && host.contains(':') {
+        let bracketed = host.strip_prefix('[')?;
+        let end = bracketed.find(']')?;
+        let inner = &bracketed[..end];
+        let suffix = &bracketed[end + 1..];
+        if !suffix.is_empty() && !valid_port_suffix(suffix) {
+            return None;
+        }
+        return normalize_ip_literal(inner).map(|ip| normalize_dns_host_or_ip_literal(&ip));
     }
-    if host.bytes().filter(|byte| *byte == b':').count() == 1 {
-        let host = host.split(':').next().unwrap_or_default();
-        return normalize_dns_host_or_ip_literal(host);
+    match host.bytes().filter(|byte| *byte == b':').count() {
+        0 => Some(normalize_dns_host_or_ip_literal(host)),
+        1 => {
+            let (host, port) = host.split_once(':')?;
+            if !valid_port(port) {
+                return None;
+            }
+            Some(normalize_dns_host_or_ip_literal(host))
+        }
+        _ => normalize_ip_literal(host).map(|ip| normalize_dns_host_or_ip_literal(&ip)),
     }
-    normalize_dns_host_or_ip_literal(host)
+}
+
+fn valid_port_suffix(suffix: &str) -> bool {
+    let Some(port) = suffix.strip_prefix(':') else {
+        return false;
+    };
+    valid_port(port)
+}
+
+fn valid_port(port: &str) -> bool {
+    !port.is_empty()
+        && port.bytes().all(|byte| byte.is_ascii_digit())
+        && port.parse::<u16>().is_ok()
 }
 
 fn normalize_dns_host_or_ip_literal(host: &str) -> String {
@@ -725,38 +805,45 @@ fn valid_domain_pattern(pattern: &str) -> bool {
         })
 }
 
-fn domain_matches(pattern: &str, domain: &str) -> bool {
+fn compile_domain_matcher(pattern: &str) -> Result<DomainMatcher, PolicyError> {
     if pattern == "*" {
-        return true;
+        return Ok(DomainMatcher::Any);
     }
     if let Some(suffix) = pattern.strip_prefix("**.") {
-        return domain_suffix_matches(suffix, domain, true);
+        return Ok(DomainMatcher::Suffix {
+            labels: compile_domain_labels(suffix, pattern)?,
+            include_apex: true,
+        });
     }
     if let Some(suffix) = pattern.strip_prefix("*.") {
-        return domain_suffix_matches(suffix, domain, false);
+        return Ok(DomainMatcher::Suffix {
+            labels: compile_domain_labels(suffix, pattern)?,
+            include_apex: false,
+        });
     }
-    glob_matches(pattern, domain)
+    let matcher = GlobBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+        .map_err(|_| PolicyError::InvalidDomainPattern {
+            pattern: pattern.to_owned(),
+        })?
+        .compile_matcher();
+    Ok(DomainMatcher::Full(matcher))
 }
 
-fn domain_suffix_matches(suffix: &str, domain: &str, include_apex: bool) -> bool {
-    let suffix_labels = suffix.split('.').collect::<Vec<_>>();
-    let domain_labels = domain.split('.').collect::<Vec<_>>();
-    if domain_labels.len() < suffix_labels.len()
-        || (!include_apex && domain_labels.len() == suffix_labels.len())
-    {
-        return false;
-    }
-    domain_labels[domain_labels.len() - suffix_labels.len()..]
-        .iter()
-        .zip(suffix_labels)
-        .all(|(domain, suffix)| glob_matches(suffix, domain))
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    let Ok(glob) = GlobBuilder::new(pattern).case_insensitive(true).build() else {
-        return false;
-    };
-    glob.compile_matcher().is_match(value)
+fn compile_domain_labels(suffix: &str, pattern: &str) -> Result<Vec<GlobMatcher>, PolicyError> {
+    suffix
+        .split('.')
+        .map(|label| {
+            GlobBuilder::new(label)
+                .case_insensitive(true)
+                .build()
+                .map(|glob| glob.compile_matcher())
+                .map_err(|_| PolicyError::InvalidDomainPattern {
+                    pattern: pattern.to_owned(),
+                })
+        })
+        .collect()
 }
 
 fn domain_glob_is_valid(pattern: &str) -> bool {

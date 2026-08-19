@@ -68,6 +68,37 @@ fn intersects_filesystem_and_network_decisions() {
 }
 
 #[test]
+fn composition_canonicalizes_duplicate_filesystem_targets_before_backend_handoff() {
+    let target = PathSelector::workspace_root();
+    let requested = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(target.clone(), AccessMode::Write),
+            FilesystemRule::new(target, AccessMode::Deny),
+        ]),
+        NetworkPolicy::enabled(),
+    );
+    let ceiling = PolicyCeiling::new(
+        SandboxPolicy::new(FilesystemPolicy::unrestricted(), NetworkPolicy::enabled()),
+        EnvironmentSpec::empty(),
+    );
+
+    let effective = compose(CompositionRequest::new(
+        &requested,
+        &EnvironmentSpec::empty(),
+        &ceiling,
+    ))
+    .expect("duplicate filesystem targets should normalize safely");
+
+    assert_eq!(effective.filesystem().requested().entries().len(), 1);
+    assert_eq!(
+        effective
+            .filesystem()
+            .access_for(&PathSelector::workspace_root()),
+        cageforge_policy::FilesystemDecision::Deny
+    );
+}
+
+#[test]
 fn denies_workspace_roots_outside_the_ceiling() {
     let ceiling = PolicyCeiling::new(SandboxPolicy::read_only(), EnvironmentSpec::inherit_core())
         .with_workspace_roots([absolute_root("project")])

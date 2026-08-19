@@ -82,6 +82,10 @@ These rules are mandatory:
     graphs through memoization and shared native comparisons. Do not add
     arbitrary resource limits or silently truncate valid configuration without
     a separate specification decision.
+15. When several imports belong to one crate or responsibility domain, prefer
+    one grouped `use` declaration. Split imports only when they represent
+    genuinely different responsibility zones or the split materially improves
+    readability.
 
 ## Specification ordering
 

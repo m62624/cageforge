@@ -110,7 +110,8 @@ writable scope by default. Add more protected relative paths with
 `dangerously_allow_git_write` method is available only for trusted callers and
 may still be rejected by a future policy composer or backend. Call
 `normalized` before handing duplicate rules to a backend when a canonical rule
-list is needed. Concrete path and glob comparisons follow native filesystem
+list is needed; composition canonicalizes both policies before retaining them
+in `EffectiveSandbox`. Concrete path and glob comparisons follow native filesystem
 case rules: POSIX matching is case-sensitive, while Windows matching is
 case-insensitive. `PathPattern` equality, hashing, and ordering use the same
 native matching identity; `as_str()` preserves the declared spelling for
@@ -154,7 +155,10 @@ cannot silently apply the wrong interpretation.
 domains and Unix socket paths. Domain inputs are normalized like the upstream
 host boundary: case is folded, trailing dots are removed, host ports are
 ignored, bracketed IPv6 literals are unwrapped, and IPv4/IPv6 literals are
-canonicalized. `*.example.com` matches subdomains but not the apex, while
+canonicalized. Malformed host/port forms, including missing, non-numeric, or
+out-of-range ports, are rejected. Domain glob matchers are compiled once when
+the rule is created, so repeated policy queries do not recompile patterns.
+`*.example.com` matches subdomains but not the apex, while
 `**.example.com` matches the apex and its subdomains. Domain patterns also
 support `*`, `?`, character classes such as `[a-c]`, negative classes such as
 `[!x]`, and ranges within a host label, such as `region*.example.com`;

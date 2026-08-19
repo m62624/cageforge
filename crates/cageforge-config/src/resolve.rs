@@ -221,8 +221,19 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
     }
     for (name, profile) in &config.profiles {
         validate_profile_name(name)?;
-        for root in profile.workspace_roots.keys() {
+        let roots = profile.workspace_roots.keys().collect::<Vec<_>>();
+        for (index, root) in roots.iter().enumerate() {
             validate_workspace_root(name, root)?;
+            if roots[..index]
+                .iter()
+                .any(|other| paths_equal(Path::new(other), Path::new(root)))
+            {
+                return Err(invalid_value(
+                    name,
+                    "workspace_roots",
+                    format!("duplicate path under native semantics {root:?}"),
+                ));
+            }
         }
         let mut inherited = BTreeSet::new();
         for parent in &profile.inherits {

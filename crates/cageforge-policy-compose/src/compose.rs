@@ -25,40 +25,39 @@ use crate::ownership::ExternalOwner;
 /// another external owner; silently combining external and local ownership
 /// would make the enforcement boundary ambiguous.
 pub fn compose(request: CompositionRequest<'_>) -> Result<EffectiveSandbox, CompositionError> {
-    request
+    let requested_policy = request
         .requested_policy
-        .validate()
+        .normalized()
         .map_err(|source| CompositionError::InvalidRequestedPolicy { source })?;
-    request
+    let ceiling_policy = request
         .ceiling
         .policy()
-        .validate()
+        .normalized()
         .map_err(|source| CompositionError::InvalidCeiling { source })?;
-
     validate_ownership(
-        request.requested_policy.filesystem().mode(),
-        request.ceiling.policy().filesystem().mode(),
+        requested_policy.filesystem().mode(),
+        ceiling_policy.filesystem().mode(),
         CompositionBoundary::Filesystem,
     )?;
     validate_ownership(
-        request.requested_policy.network().mode(),
-        request.ceiling.policy().network().mode(),
+        requested_policy.network().mode(),
+        ceiling_policy.network().mode(),
         CompositionBoundary::Network,
     )?;
     validate_external_owner(
-        request.requested_policy.filesystem().mode() == FilesystemMode::External,
+        requested_policy.filesystem().mode() == FilesystemMode::External,
         request.external_owner.as_ref(),
         request.ceiling.external_owner(),
         CompositionBoundary::Filesystem,
     )?;
     validate_external_owner(
-        request.requested_policy.network().mode() == NetworkMode::External,
+        requested_policy.network().mode() == NetworkMode::External,
         request.external_owner.as_ref(),
         request.ceiling.external_owner(),
         CompositionBoundary::Network,
     )?;
-    if request.requested_policy.filesystem().mode() != FilesystemMode::External
-        && request.requested_policy.network().mode() != NetworkMode::External
+    if requested_policy.filesystem().mode() != FilesystemMode::External
+        && requested_policy.network().mode() != NetworkMode::External
         && (request.external_owner.is_some() || request.ceiling.external_owner().is_some())
     {
         return Err(CompositionError::UnexpectedExternalOwner {
@@ -73,12 +72,12 @@ pub fn compose(request: CompositionRequest<'_>) -> Result<EffectiveSandbox, Comp
 
     Ok(EffectiveSandbox::new(
         EffectiveFilesystemPolicy::new(
-            request.requested_policy.filesystem().clone(),
-            request.ceiling.policy().filesystem().clone(),
+            requested_policy.filesystem().clone(),
+            ceiling_policy.filesystem().clone(),
         ),
         EffectiveNetworkPolicy::new(
-            request.requested_policy.network().clone(),
-            request.ceiling.policy().network().clone(),
+            requested_policy.network().clone(),
+            ceiling_policy.network().clone(),
         ),
         EffectiveEnvironment::new(
             request.requested_environment.clone(),

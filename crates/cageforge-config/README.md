@@ -87,7 +87,8 @@ permits loopback, private, or link-local destinations. Stdio modes are
 
 Domain patterns use the policy crate's host normalization: matching is
 case-insensitive, trailing dots and host ports are ignored, and bracketed
-IPv6 literals are accepted. `*`, `?`, character classes such as `[a-c]`,
+IPv6 literals are accepted. Missing, non-numeric, and out-of-range ports are
+rejected. `*`, `?`, character classes such as `[a-c]`,
 negative classes such as `[!x]`, and ranges can be used for host globs,
 including mid-label patterns such as `region*.example.com`. For example,
 `Example.com:443` and `example.com:8443` address the same canonical host rule,
@@ -108,7 +109,9 @@ the backend resolves relative paths against its execution context before
 registering absolute roots in its path context. When passing these roots to
 `cageforge-policy-compose`, resolve them first: composition accepts only
 absolute runtime roots so its ceiling comparison cannot depend on an unstated
-current directory.
+current directory. A single profile cannot contain two keys that are the same
+under the target platform's native path identity; POSIX keeps case distinct,
+while Windows rejects case-only duplicates as ambiguous.
 
 The TOML value classes use the following case rules:
 

@@ -131,8 +131,10 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   an inherited declaration with `false`. Inheritance compares declarations
   using `cageforge-path` native path identity, including Windows case rules,
   before applying the child value. Resolution returns enabled path declarations
-  in deterministic lexical order; the backend resolves relative paths and
-  registers absolute roots in its execution context.
+  in deterministic lexical order. A single profile rejects duplicate keys under
+  native path identity; this preserves case-sensitive POSIX behavior while
+  refusing ambiguous case-only duplicates on Windows. The backend resolves
+  relative paths and registers absolute roots in its execution context.
 - The upstream runtime state that combines profile roots with harness/runtime
   roots is tracked separately from TOML parsing; Cageforge keeps that merge at
   the future backend/context boundary.
