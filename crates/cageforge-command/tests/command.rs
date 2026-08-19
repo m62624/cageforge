@@ -6,9 +6,12 @@ use std::time::Duration;
 
 use cageforge_command::{
     CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentFilterAction,
-    EnvironmentOverride, EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
+    EnvironmentNameKey, EnvironmentOverride, EnvironmentPattern, EnvironmentSpec, StdioMode,
+    StdioSpec, TimeoutPolicy,
 };
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashSet};
 
 #[test]
@@ -140,6 +143,67 @@ fn environment_override_names_are_case_insensitive() {
         [(OsString::from("PATH"), OsString::from("/sandbox/bin"))]
             .into_iter()
             .collect()
+    );
+}
+
+#[test]
+fn environment_name_keys_follow_case_insensitive_policy_identity() {
+    assert_eq!(
+        EnvironmentNameKey::new("Path".as_ref()),
+        EnvironmentNameKey::new("PATH".as_ref())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn malformed_unix_environment_names_do_not_collapse_lossily() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let left = OsString::from_vec(vec![b'A', 0xff]);
+    let right = OsString::from_vec(vec![b'A', 0xfe]);
+    assert_ne!(
+        EnvironmentNameKey::new(&left),
+        EnvironmentNameKey::new(&right)
+    );
+
+    let environment = EnvironmentSpec::empty()
+        .with_var(left.clone(), "left")
+        .expect("first malformed native name")
+        .with_var(right.clone(), "right")
+        .expect("second malformed native name");
+    assert_eq!(environment.overrides().len(), 2);
+
+    let inherited = [(left.clone(), OsString::from("inherited"))];
+    assert_eq!(
+        EnvironmentSpec::inherit_all().apply_to(inherited.clone()),
+        BTreeMap::from([(left.clone(), OsString::from("inherited"))])
+    );
+    assert!(
+        EnvironmentSpec::inherit_all()
+            .with_exclude_pattern("SECRET_*")
+            .expect("exclude filter")
+            .apply_to(inherited)
+            .is_empty()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn malformed_windows_environment_names_do_not_collapse_lossily() {
+    use std::os::windows::ffi::OsStringExt;
+
+    let left = OsString::from_wide(&[b'A' as u16, 0xD800]);
+    let right = OsString::from_wide(&[b'A' as u16, 0xD801]);
+    assert_ne!(
+        EnvironmentNameKey::new(&left),
+        EnvironmentNameKey::new(&right)
+    );
+    assert!(
+        EnvironmentSpec::inherit_all()
+            .with_include_pattern("PATH")
+            .expect("include filter")
+            .apply_to([(left, OsString::from("value"))])
+            .is_empty()
     );
 }
 

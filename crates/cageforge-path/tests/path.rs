@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#[cfg(windows)]
+use cageforge_path::NativePathKey;
 use cageforge_path::{contains_component_path, contains_parent_traversal, is_within, paths_equal};
 use proptest::prelude::*;
 use std::path::Path;
@@ -16,6 +18,8 @@ fn containment_is_component_aware() {
         Path::new("/workspace-other/src"),
         Path::new("/workspace")
     ));
+    assert!(is_within(Path::new(".git/config"), Path::new(".")));
+    assert!(paths_equal(Path::new("./src"), Path::new("src")));
 }
 
 #[test]
@@ -138,6 +142,40 @@ fn windows_path_comparison_is_case_insensitive() {
         Path::new(r"C:\Workspace"),
         Path::new(r"c:\workspace")
     ));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_device_and_verbatim_aliases_share_one_identity() {
+    for alias in [r"\\?\C:\Workspace\src", r"\\.\C:\Workspace\src"] {
+        assert!(paths_equal(
+            Path::new(alias),
+            Path::new(r"c:\workspace\src")
+        ));
+        assert_eq!(
+            NativePathKey::new(Path::new(alias)),
+            NativePathKey::new(Path::new(r"C:\WORKSPACE\SRC"))
+        );
+    }
+    for alias in [r"\\?\UNC\server\share\src", r"\\.\UNC\server\share\src"] {
+        assert!(paths_equal(
+            Path::new(alias),
+            Path::new(r"\\SERVER\SHARE\SRC")
+        ));
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn malformed_utf16_paths_remain_distinct() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    let left = PathBuf::from(OsString::from_wide(&[0xD800]));
+    let right = PathBuf::from(OsString::from_wide(&[0xD801]));
+
+    assert!(!paths_equal(&left, &right));
+    assert_ne!(NativePathKey::new(&left), NativePathKey::new(&right));
 }
 
 #[cfg(not(windows))]

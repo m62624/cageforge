@@ -40,6 +40,7 @@ owned handoff for a process backend.
 | `CommandRequest` | Complete portable request passed to a future execution backend. |
 | `CommandSpec` | Native argv vector with a non-empty executable. |
 | `EnvironmentSpec` | All/core/none base environment plus validated filters and explicit set/remove overrides. |
+| `EnvironmentNameKey` | Case-insensitive map/set identity for native environment names without lossy collisions. |
 | `StdioSpec` and `StdioMode` | Independent routing for stdin, stdout, and stderr. |
 | `TimeoutPolicy` | Backend default, explicit duration limit, or disabled automatic timeout. |
 | `CommandError` | Construction errors for invalid programs, paths, and environment values. |
@@ -108,6 +109,11 @@ set can intentionally restore it at the later set stage. The backend still
 selects the platform-specific `Core` variables
 and supplies the selected base map. This keeps process-environment discovery
 out of the platform-independent crate.
+
+Native environment names that are not valid Unicode remain distinct for
+explicit storage and lookup. When any wildcard filter is active they are
+removed conservatively, because a Unicode pattern cannot identify such a name
+without a lossy conversion.
 
 The `Core` set is not a hidden global constant. A backend explicitly selects
 the platform-specific core variables, passes that map to `apply_to`, and then

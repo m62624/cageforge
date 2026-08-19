@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::hash::{Hash, Hasher};
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 
 use wildmatch::WildMatch;
 
@@ -36,11 +41,15 @@ pub enum EnvironmentFilterAction {
 /// or more Unicode scalar values and `?` matches one. Matching is
 /// case-insensitive so the same policy is safe on POSIX and Windows hosts.
 #[derive(Debug, Clone)]
-pub struct EnvironmentPattern(String);
+pub struct EnvironmentPattern {
+    original: String,
+    canonical: String,
+    matcher: WildMatch,
+}
 
 impl PartialEq for EnvironmentPattern {
     fn eq(&self, other: &Self) -> bool {
-        canonical_pattern(&self.0) == canonical_pattern(&other.0)
+        self.canonical == other.canonical
     }
 }
 
@@ -48,7 +57,7 @@ impl Eq for EnvironmentPattern {}
 
 impl Hash for EnvironmentPattern {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        canonical_pattern(&self.0).hash(state);
+        self.canonical.hash(state);
     }
 }
 
@@ -60,7 +69,7 @@ impl PartialOrd for EnvironmentPattern {
 
 impl Ord for EnvironmentPattern {
     fn cmp(&self, other: &Self) -> Ordering {
-        canonical_pattern(&self.0).cmp(&canonical_pattern(&other.0))
+        self.canonical.cmp(&other.canonical)
     }
 }
 
@@ -77,7 +86,11 @@ impl EnvironmentPattern {
         if pattern.contains('=') {
             return Err(CommandError::EnvironmentPatternContainsEquals);
         }
-        Ok(Self(pattern))
+        Ok(Self {
+            canonical: pattern.to_lowercase(),
+            matcher: WildMatch::new_case_insensitive(&pattern),
+            original: pattern,
+        })
     }
 
     /// Returns the original pattern text.
@@ -86,13 +99,39 @@ impl EnvironmentPattern {
     /// [`Self::matches`], while this accessor preserves the caller's spelling
     /// for diagnostics and serialization.
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.original
     }
 
     /// Returns whether this pattern matches an environment variable name.
     pub fn matches(&self, name: &str) -> bool {
-        WildMatch::new_case_insensitive(self.as_str()).matches(name)
+        self.matcher.matches(name)
     }
+}
+
+/// A case-insensitive identity key for an operating-system environment name.
+///
+/// Valid Unicode names use the portable case-insensitive Cageforge policy.
+/// Malformed native strings retain their exact code units or bytes so distinct
+/// names can never collide through lossy conversion. Backends and composition
+/// layers can use this key to deduplicate names consistently with
+/// [`EnvironmentSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EnvironmentNameKey(EnvironmentNameIdentity);
+
+impl EnvironmentNameKey {
+    /// Creates the policy identity for one native environment-variable name.
+    pub fn new(name: &OsStr) -> Self {
+        Self(environment_name_identity(name))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum EnvironmentNameIdentity {
+    Folded(String),
+    #[cfg(unix)]
+    NativeBytes(Vec<u8>),
+    #[cfg(windows)]
+    NativeWide(Vec<u16>),
 }
 
 /// An explicit change to one environment variable.
@@ -115,6 +154,7 @@ pub enum EnvironmentOverride {
 pub struct EnvironmentSpec {
     base: EnvironmentBase,
     overrides: BTreeMap<OsString, EnvironmentOverride>,
+    override_names: HashMap<EnvironmentNameKey, OsString>,
     filters: BTreeMap<EnvironmentPattern, EnvironmentFilterAction>,
 }
 
@@ -124,6 +164,7 @@ impl EnvironmentSpec {
         Self {
             base: EnvironmentBase::All,
             overrides: BTreeMap::new(),
+            override_names: HashMap::new(),
             filters: BTreeMap::new(),
         }
     }
@@ -133,6 +174,7 @@ impl EnvironmentSpec {
         Self {
             base: EnvironmentBase::None,
             overrides: BTreeMap::new(),
+            override_names: HashMap::new(),
             filters: BTreeMap::new(),
         }
     }
@@ -142,6 +184,7 @@ impl EnvironmentSpec {
         Self {
             base: EnvironmentBase::Core,
             overrides: BTreeMap::new(),
+            override_names: HashMap::new(),
             filters: BTreeMap::new(),
         }
     }
@@ -163,10 +206,9 @@ impl EnvironmentSpec {
 
     /// Returns the override for one variable, if present.
     pub fn override_for(&self, name: &OsStr) -> Option<&EnvironmentOverride> {
-        self.overrides
-            .iter()
-            .find(|(existing, _)| environment_names_equal(existing, name))
-            .map(|(_, override_value)| override_value)
+        self.override_names
+            .get(&EnvironmentNameKey::new(name))
+            .and_then(|name| self.overrides.get(name))
     }
 
     /// Returns the filter action for a variable name, if a filter matches.
@@ -203,8 +245,10 @@ impl EnvironmentSpec {
         I: IntoIterator<Item = (OsString, OsString)>,
     {
         let mut environment = BTreeMap::new();
+        let mut environment_names = HashMap::new();
         for (name, value) in variables {
-            remove_environment_name(&mut environment, &name);
+            remove_environment_name(&mut environment, &mut environment_names, &name);
+            environment_names.insert(EnvironmentNameKey::new(&name), name.clone());
             environment.insert(name, value);
         }
         let has_include_filter = self
@@ -213,31 +257,37 @@ impl EnvironmentSpec {
             .any(|action| *action == EnvironmentFilterAction::Include);
 
         environment.retain(|name, _| {
-            !self.filters.iter().any(|(pattern, action)| {
-                *action == EnvironmentFilterAction::Exclude
-                    && pattern.matches(&name.to_string_lossy())
-            })
+            self.filters.is_empty()
+                || name.to_str().is_some_and(|name| {
+                    !self.filters.iter().any(|(pattern, action)| {
+                        *action == EnvironmentFilterAction::Exclude && pattern.matches(name)
+                    })
+                })
         });
 
         for (name, value) in &self.overrides {
             match value {
                 EnvironmentOverride::Set(value) => {
-                    remove_environment_name(&mut environment, name);
+                    remove_environment_name(&mut environment, &mut environment_names, name);
+                    environment_names.insert(EnvironmentNameKey::new(name), name.clone());
                     environment.insert(name.clone(), value.clone());
                 }
                 EnvironmentOverride::Remove => {
-                    remove_environment_name(&mut environment, name);
+                    remove_environment_name(&mut environment, &mut environment_names, name);
                 }
             }
         }
 
         if has_include_filter {
             environment.retain(|name, _| {
-                self.filters.iter().any(|(pattern, action)| {
-                    *action == EnvironmentFilterAction::Include
-                        && pattern.matches(&name.to_string_lossy())
+                name.to_str().is_some_and(|name| {
+                    self.filters.iter().any(|(pattern, action)| {
+                        *action == EnvironmentFilterAction::Include && pattern.matches(name)
+                    })
                 })
             });
+        } else if !self.filters.is_empty() {
+            environment.retain(|name, _| name.to_str().is_some());
         }
 
         environment
@@ -255,7 +305,9 @@ impl EnvironmentSpec {
         if contains_nul(&value) {
             return Err(CommandError::EnvironmentValueContainsNul);
         }
-        remove_environment_name(&mut self.overrides, &name);
+        remove_environment_name(&mut self.overrides, &mut self.override_names, &name);
+        self.override_names
+            .insert(EnvironmentNameKey::new(&name), name.clone());
         self.overrides.insert(name, EnvironmentOverride::Set(value));
         Ok(self)
     }
@@ -264,7 +316,9 @@ impl EnvironmentSpec {
     pub fn without_var(mut self, name: impl Into<OsString>) -> Result<Self, CommandError> {
         let name = name.into();
         validate_name(&name)?;
-        remove_environment_name(&mut self.overrides, &name);
+        remove_environment_name(&mut self.overrides, &mut self.override_names, &name);
+        self.override_names
+            .insert(EnvironmentNameKey::new(&name), name.clone());
         self.overrides.insert(name, EnvironmentOverride::Remove);
         Ok(self)
     }
@@ -276,14 +330,7 @@ impl EnvironmentSpec {
         action: EnvironmentFilterAction,
     ) -> Result<Self, CommandError> {
         let pattern = EnvironmentPattern::new(pattern)?;
-        if let Some(existing) = self
-            .filters
-            .keys()
-            .find(|existing| environment_patterns_equal(existing, &pattern))
-            .cloned()
-        {
-            self.filters.remove(&existing);
-        }
+        self.filters.remove(&pattern);
         self.filters.insert(pattern, action);
         Ok(self)
     }
@@ -318,24 +365,26 @@ fn validate_name(name: &OsStr) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn remove_environment_name<V>(values: &mut BTreeMap<OsString, V>, name: &OsStr) {
-    if let Some(existing) = values
-        .keys()
-        .find(|existing| environment_names_equal(existing, name))
-        .cloned()
-    {
+fn remove_environment_name<V>(
+    values: &mut BTreeMap<OsString, V>,
+    names: &mut HashMap<EnvironmentNameKey, OsString>,
+    name: &OsStr,
+) {
+    if let Some(existing) = names.remove(&EnvironmentNameKey::new(name)) {
         values.remove(&existing);
     }
 }
 
-fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
-    left.to_string_lossy().to_lowercase() == right.to_string_lossy().to_lowercase()
-}
-
-fn environment_patterns_equal(left: &EnvironmentPattern, right: &EnvironmentPattern) -> bool {
-    left == right
-}
-
-fn canonical_pattern(pattern: &str) -> String {
-    pattern.to_lowercase()
+fn environment_name_identity(name: &OsStr) -> EnvironmentNameIdentity {
+    if let Some(name) = name.to_str() {
+        return EnvironmentNameIdentity::Folded(name.to_lowercase());
+    }
+    #[cfg(unix)]
+    {
+        EnvironmentNameIdentity::NativeBytes(name.as_bytes().to_vec())
+    }
+    #[cfg(windows)]
+    {
+        EnvironmentNameIdentity::NativeWide(name.encode_wide().collect())
+    }
 }

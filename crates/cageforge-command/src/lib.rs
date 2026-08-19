@@ -19,8 +19,8 @@ mod timeout;
 
 pub use command::CommandSpec;
 pub use environment::{
-    EnvironmentBase, EnvironmentFilterAction, EnvironmentOverride, EnvironmentPattern,
-    EnvironmentSpec,
+    EnvironmentBase, EnvironmentFilterAction, EnvironmentNameKey, EnvironmentOverride,
+    EnvironmentPattern, EnvironmentSpec,
 };
 pub use error::CommandError;
 pub use request::CommandRequest;

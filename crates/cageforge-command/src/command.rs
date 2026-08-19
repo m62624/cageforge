@@ -83,8 +83,18 @@ fn validate_argument(argument: &OsStr) -> Result<(), CommandError> {
 }
 
 pub(crate) fn contains_nul(value: &OsStr) -> bool {
-    value
-        .to_string_lossy()
-        .chars()
-        .any(|character| character == '\0')
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        value.as_bytes().contains(&0)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        value.encode_wide().any(|unit| unit == 0)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        value.to_string_lossy().contains('\0')
+    }
 }

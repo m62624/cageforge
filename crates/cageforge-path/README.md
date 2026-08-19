@@ -8,8 +8,9 @@
 
 `cageforge-path` centralizes the small set of path comparisons that must agree
 across Cageforge crates. It treats path components case-sensitively on POSIX
-systems and case-insensitively on Windows, while keeping parent traversal
-checks lexical and platform-neutral.
+systems and case-insensitively on Windows. Windows drive, UNC, verbatim, and
+supported device aliases share one lexical identity; malformed native strings
+remain distinct instead of passing through lossy Unicode conversion.
 
 The crate does not access the filesystem, resolve symlinks, or canonicalize
 paths. Native backends remain responsible for those operations.
@@ -55,6 +56,10 @@ environment and domain rows intentionally have their own portable semantics.
 - `contains_component_path(path, needle)` finds a complete relative component
   path such as `.git` without matching a partial component such as `.github`.
 - `paths_equal(left, right)` compares complete native path components.
+- `NativePathKey` supplies the same equality, hashing, and ordering identity
+  for maps and sets.
+- `normalize_lexical_path(path)` exposes supported native alias normalization
+  without filesystem access.
 - `strings_equal(left, right)` and `case_fold(value)` expose the same native
   comparison rule for path-derived glob matching.
 - `contains_parent_traversal(path)` detects lexical `..` components.
