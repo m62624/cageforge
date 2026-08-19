@@ -68,6 +68,10 @@ license, and material adaptation.
 - Only configured repository-relative upstream paths are passed to Git.
 - Possible Rust module-directory splits next to a tracked `.rs` file are also
   passed as narrow pathspecs.
+- User-supplied diff targets are resolved to full commit IDs with Git's
+  end-of-options marker before they are passed to `git diff`.
+- Diff execution disables external diff and text-conversion hooks and treats
+  configured pathspecs literally.
 - Baseline upstream files and local Cageforge destinations are checked before
   a review is shown.
 - The tracked commit must be a full commit SHA.

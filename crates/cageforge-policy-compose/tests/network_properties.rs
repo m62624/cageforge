@@ -2,8 +2,8 @@
 
 use cageforge_command::EnvironmentSpec;
 use cageforge_policy::{
-    DomainAccess, LocalNetworkAccess, NetworkDecision, NetworkPolicy, ResolvedNetworkTarget,
-    SandboxPolicy,
+    ConnectionAuthorization, DomainAccess, LocalNetworkAccess, NetworkDecision, NetworkPolicy,
+    ResolvedNetworkTarget, SandboxPolicy,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use proptest::prelude::*;
@@ -114,6 +114,20 @@ proptest! {
                 .decision_for_connected_address(&target, changed)
                 .expect("changed address"),
             NetworkDecision::Deny,
+        );
+        prop_assert!(matches!(
+            effective
+                .network()
+                .authorize_connection(&target, checked)
+                .expect("checked address authorization"),
+            ConnectionAuthorization::Allowed(address) if address.socket_addr() == checked
+        ));
+        prop_assert_eq!(
+            effective
+                .network()
+                .authorize_connection(&target, changed)
+                .expect("changed address authorization"),
+            ConnectionAuthorization::Denied,
         );
     }
 }

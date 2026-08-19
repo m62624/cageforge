@@ -11,6 +11,14 @@ fn repository_relative_paths_reject_empty_absolute_and_parent_paths() {
 }
 
 #[test]
+fn diff_targets_are_resolved_to_commits_before_git_diff() {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commit = resolve_commit(repository_root, "HEAD").expect("HEAD is a commit");
+    assert_eq!(commit.len(), 40);
+    assert!(resolve_commit(repository_root, "--output=/tmp/cageforge-review").is_err());
+}
+
+#[test]
 fn scope_pathspecs_watch_possible_rust_module_directories() {
     let scope = Scope {
         name: "config".to_owned(),

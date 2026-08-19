@@ -348,8 +348,9 @@ fn diff(
             .filter(|scope| selected_scopes.iter().any(|name| name == &scope.name))
             .collect::<Vec<_>>()
     };
-    let target = target.unwrap_or_else(|| repository.upstream_ref());
     let upstream_root = repository.upstream_root()?;
+    let target_ref = target.unwrap_or_else(|| repository.upstream_ref());
+    let target = resolve_commit(&upstream_root, &target_ref)?;
     validate_upstream_paths(&upstream_root, baseline, &scopes)?;
     let pathspecs = scope_pathspecs(&scopes);
 
@@ -383,6 +384,19 @@ fn validate_commit(commit: &str, label: &str) -> Result<(), String> {
         return Err(format!("{label} must be a full 40-character commit SHA"));
     }
     Ok(())
+}
+
+fn resolve_commit(root: &Path, target: &str) -> Result<String, String> {
+    if target.is_empty() {
+        return Err("diff target must not be empty".to_owned());
+    }
+    let object = format!("{target}^{{commit}}");
+    let commit = git_output(
+        root,
+        ["rev-parse", "--verify", "--end-of-options", object.as_str()],
+    )?;
+    validate_commit(&commit, "diff target")?;
+    Ok(commit)
 }
 
 fn validate_upstream_paths(
@@ -428,7 +442,14 @@ fn run_git_diff(
     pathspecs: &[String],
     options: &[&str],
 ) -> Result<(), String> {
-    let mut arguments = vec!["diff".to_owned(), baseline.to_owned(), target.to_owned()];
+    let mut arguments = vec![
+        "diff".to_owned(),
+        "--no-ext-diff".to_owned(),
+        "--no-textconv".to_owned(),
+        "--literal-pathspecs".to_owned(),
+        baseline.to_owned(),
+        target.to_owned(),
+    ];
     arguments.extend(options.iter().map(ToString::to_string));
     arguments.push("--".to_owned());
     arguments.extend(pathspecs.iter().map(ToString::to_string));

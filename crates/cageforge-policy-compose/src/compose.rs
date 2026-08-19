@@ -4,8 +4,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use cageforge_policy::{
-    AccessMode, FilesystemDecision, FilesystemMode, NetworkDecision, NetworkMode, PathSelector,
-    ResolvedNetworkTarget,
+    AccessMode, ConnectionAuthorization, FilesystemDecision, FilesystemMode, NetworkDecision,
+    NetworkMode, PathSelector, ResolvedNetworkTarget,
 };
 
 use crate::context::EffectivePathContext;
@@ -215,6 +215,33 @@ impl EffectiveNetworkPolicy {
         Ok(combine_network_decisions(requested, ceiling))
     }
 
+    /// Authorizes the exact socket address a backend is about to connect to.
+    ///
+    /// The returned allowed value contains the address that passed both
+    /// policies and belongs to the target's resolution snapshot. Backends
+    /// must connect using that value and must not resolve the hostname again.
+    pub fn authorize_connection(
+        &self,
+        target: &ResolvedNetworkTarget,
+        connected: SocketAddr,
+    ) -> Result<ConnectionAuthorization, CompositionError> {
+        let requested = self
+            .requested()
+            .authorize_connection(target, connected)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        let ceiling = self
+            .ceiling()
+            .authorize_connection(target, connected)
+            .map_err(|source| CompositionError::PolicyEvaluation {
+                boundary: CompositionBoundary::Network,
+                source,
+            })?;
+        Ok(combine_connection_authorizations(requested, ceiling))
+    }
+
     /// Evaluates a Unix socket against both policies.
     pub fn decision_for_unix_socket(
         &self,
@@ -307,6 +334,22 @@ fn combine_network_decisions(
         }
         (NetworkDecision::Allow, NetworkDecision::Allow) => NetworkDecision::Allow,
         _ => NetworkDecision::Deny,
+    }
+}
+
+fn combine_connection_authorizations(
+    requested: ConnectionAuthorization,
+    ceiling: ConnectionAuthorization,
+) -> ConnectionAuthorization {
+    match (requested, ceiling) {
+        (ConnectionAuthorization::Allowed(requested), ConnectionAuthorization::Allowed(_)) => {
+            ConnectionAuthorization::Allowed(requested)
+        }
+        (
+            ConnectionAuthorization::ExternallyEnforced,
+            ConnectionAuthorization::ExternallyEnforced,
+        ) => ConnectionAuthorization::ExternallyEnforced,
+        _ => ConnectionAuthorization::Denied,
     }
 }
 

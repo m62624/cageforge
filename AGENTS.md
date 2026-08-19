@@ -71,9 +71,8 @@ These rules are mandatory:
     TOCTOU-safe enforcement.
 12. `ExternalOwner` is an identity token supplied by a trusted caller. It is
     not evidence that an external sandbox exists or is enforcing anything.
-    `EnvironmentInput::core` likewise requires a backend-selected core
-    environment; the label must never be applied to the complete process
-    environment.
+    `CoreEnvironment` likewise requires a backend-selected core environment;
+    the label must never be applied to the complete process environment.
 13. Keep the Codex baseline in `upstream-review.toml` frozen until a deliberate
     review approves an advance. Never pull or fetch Codex automatically; the
     upstream-review tool is read-only and only compares an externally updated

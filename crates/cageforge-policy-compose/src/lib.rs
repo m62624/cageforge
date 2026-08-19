@@ -23,7 +23,7 @@ mod ownership;
 
 pub use compose::compose;
 pub use context::EffectivePathContext;
-pub use environment::{EffectiveEnvironment, EnvironmentInput};
+pub use environment::{CoreEnvironment, EffectiveEnvironment, EnvironmentInput};
 pub use error::{CompositionBoundary, CompositionError};
 pub use filesystem::EffectiveFilesystemPolicy;
 pub use model::{CompositionRequest, EffectiveNetworkPolicy, EffectiveSandbox, PolicyCeiling};

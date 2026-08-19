@@ -12,7 +12,8 @@ use cageforge_policy::{
     PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{
-    CompositionError, CompositionRequest, EnvironmentInput, ExternalOwner, PolicyCeiling, compose,
+    CompositionError, CompositionRequest, CoreEnvironment, EnvironmentInput, ExternalOwner,
+    PolicyCeiling, compose,
 };
 
 fn absolute_root(name: &str) -> PathBuf {
@@ -313,7 +314,9 @@ fn environment_is_narrowed_in_sequence_without_ceiling_additions() {
 
     let result = effective
         .environment()
-        .apply_to(EnvironmentInput::core(variables))
+        .apply_to(EnvironmentInput::core(CoreEnvironment::from_selected(
+            variables,
+        )))
         .expect("core input is not broader than effective base");
 
     assert_eq!(

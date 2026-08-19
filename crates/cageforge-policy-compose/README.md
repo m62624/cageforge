@@ -98,8 +98,11 @@ assert_ne!(ExternalOwner::new(), owner);
   effective deny-glob rules. `EffectiveNetworkPolicy::decision_for_resolved_target`
   and `decision_for_connected_address` apply the same DNS-rebinding-safe
   narrowing to one resolved target and the exact socket address supplied by a
-  backend; they perform no DNS lookup themselves. The backend must not resolve
-  the host again between these calls.
+  backend; they perform no DNS lookup themselves. `authorize_connection`
+  returns the checked address as a typed value for the backend to connect to.
+- `CoreEnvironment` wraps the map selected by a platform backend's core
+  environment allowlist. `EnvironmentInput::core` accepts this type instead of
+  an arbitrary map, making the selection boundary explicit.
 - `EffectiveEnvironment` exposes the least-permissive base and applies both
   environment transformations only to an `EnvironmentInput` whose selected
   base is no broader than the effective base.

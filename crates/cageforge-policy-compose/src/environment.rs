@@ -68,6 +68,34 @@ pub struct EnvironmentInput {
     variables: BTreeMap<OsString, OsString>,
 }
 
+/// A platform-selected snapshot of the variables allowed in a core
+/// environment.
+///
+/// The portable crate cannot know which variables are safe on a particular
+/// operating system. A native backend must construct this value only after it
+/// applies its platform-specific core allowlist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreEnvironment {
+    variables: BTreeMap<OsString, OsString>,
+}
+
+impl CoreEnvironment {
+    /// Creates a core snapshot from variables selected by a backend.
+    pub fn from_selected<I>(variables: I) -> Self
+    where
+        I: IntoIterator<Item = (OsString, OsString)>,
+    {
+        Self {
+            variables: variables.into_iter().collect(),
+        }
+    }
+
+    /// Returns the variables selected for this core snapshot.
+    pub fn variables(&self) -> &BTreeMap<OsString, OsString> {
+        &self.variables
+    }
+}
+
 impl EnvironmentInput {
     /// Creates an input containing all inherited variables.
     pub fn all<I>(variables: I) -> Self
@@ -80,18 +108,11 @@ impl EnvironmentInput {
         }
     }
 
-    /// Creates an input containing the backend's selected core variables.
-    ///
-    /// This constructor does not verify the contents. The caller must build
-    /// the map from the platform-specific core allowlist, not from the full
-    /// parent environment, before handing it to composition.
-    pub fn core<I>(variables: I) -> Self
-    where
-        I: IntoIterator<Item = (OsString, OsString)>,
-    {
+    /// Creates an input containing a backend-selected core environment.
+    pub fn core(environment: CoreEnvironment) -> Self {
         Self {
             base: EnvironmentBase::Core,
-            variables: variables.into_iter().collect(),
+            variables: environment.variables,
         }
     }
 

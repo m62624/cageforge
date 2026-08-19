@@ -83,6 +83,32 @@ impl NetworkDecision {
     }
 }
 
+/// A socket address that has passed the exact resolved-target check.
+///
+/// The value can only be created by [`NetworkPolicy::authorize_connection`].
+/// A backend should use [`Self::socket_addr`] instead of reconnecting by
+/// hostname or resolving the host again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuthorizedSocketAddr(SocketAddr);
+
+impl AuthorizedSocketAddr {
+    /// Returns the exact address that passed policy evaluation.
+    pub const fn socket_addr(self) -> SocketAddr {
+        self.0
+    }
+}
+
+/// The result of checking the exact address a backend is about to connect to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionAuthorization {
+    /// The address passed local policy and belongs to the resolution snapshot.
+    Allowed(AuthorizedSocketAddr),
+    /// The local policy rejects the connection.
+    Denied,
+    /// Another trusted boundary owns connection enforcement.
+    ExternallyEnforced,
+}
+
 /// A normalized hostname or literal together with the exact addresses a
 /// backend resolved for one connection attempt.
 ///
@@ -344,9 +370,9 @@ impl NetworkPolicy {
 
     /// Evaluates a domain against the complete network policy.
     ///
-    /// Unlike a boolean authorization helper, this preserves the distinction
-    /// between a local denial and a policy whose enforcement belongs to another
-    /// trusted boundary.
+    /// Returns the policy result for a hostname without authorizing a socket
+    /// connection. Use a [`ResolvedNetworkTarget`] and the exact connected
+    /// address methods for connection checks.
     pub fn decision_for_domain(&self, domain: &str) -> Result<NetworkDecision, PolicyError> {
         let domain = normalize_domain_pattern(domain)?;
         match self.mode {
@@ -410,6 +436,27 @@ impl NetworkPolicy {
         } else {
             NetworkDecision::Deny
         })
+    }
+
+    /// Authorizes the exact socket address a backend is about to connect to.
+    ///
+    /// The returned [`ConnectionAuthorization::Allowed`] value contains the
+    /// only address that passed the policy check. A backend must connect using
+    /// that address and must not resolve the hostname again.
+    pub fn authorize_connection(
+        &self,
+        target: &ResolvedNetworkTarget,
+        connected: SocketAddr,
+    ) -> Result<ConnectionAuthorization, PolicyError> {
+        Ok(
+            match self.decision_for_connected_address(target, connected)? {
+                NetworkDecision::Allow => {
+                    ConnectionAuthorization::Allowed(AuthorizedSocketAddr(connected))
+                }
+                NetworkDecision::Deny => ConnectionAuthorization::Denied,
+                NetworkDecision::ExternallyEnforced => ConnectionAuthorization::ExternallyEnforced,
+            },
+        )
     }
 
     /// Evaluates a domain together with addresses resolved by a future

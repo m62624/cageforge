@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use cageforge_policy::AccessMode;
+use cageforge_policy::ConnectionAuthorization;
 use cageforge_policy::DomainAccess;
 use cageforge_policy::DomainMode;
 use cageforge_policy::FilesystemDecision;
@@ -74,6 +75,13 @@ fn resolved_network_target_rejects_address_changes() {
             .expect("changed connection decision"),
         NetworkDecision::Deny
     );
+    match policy
+        .authorize_connection(&target, checked)
+        .expect("authorized connection")
+    {
+        ConnectionAuthorization::Allowed(address) => assert_eq!(address.socket_addr(), checked),
+        other => panic!("expected an authorized address, got {other:?}"),
+    }
 }
 
 #[test]
