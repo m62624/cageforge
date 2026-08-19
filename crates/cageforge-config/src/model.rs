@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum RawFilesystemMode {
     Restricted,
@@ -12,7 +12,7 @@ pub(crate) enum RawFilesystemMode {
     External,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum RawFilesystemTarget {
     Absolute,

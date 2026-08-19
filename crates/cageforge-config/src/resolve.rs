@@ -3,14 +3,13 @@
 use crate::build;
 use crate::error::{ConfigError, invalid_value};
 
-use crate::model::{
-    RawCommand, RawConfig, RawEnvironment, RawFilesystem, RawFilesystemRule, RawNetwork,
-    RawProfile, RawStdio, RawTimeout,
-};
-use cageforge_command::CommandRequest;
-use cageforge_path::{contains_parent_traversal, paths_equal, strings_equal};
-use cageforge_policy::{DomainAccess, DomainRule, SandboxPolicy};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use crate::merge::{MergedProfile, ProfileMerger, domain_rule_key, filesystem_rule_key};
+use crate::model::{RawConfig, RawProfile};
+use cageforge_command::{CommandRequest, EnvironmentNameKey};
+use cageforge_path::{NativePathKey, contains_parent_traversal};
+use cageforge_policy::SandboxPolicy;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// A parsed Cageforge TOML document.
@@ -61,8 +60,7 @@ impl Config {
 
     /// Resolves one named profile through its inheritance graph.
     pub fn resolve(&self, name: &str) -> Result<ResolvedProfile, ConfigError> {
-        let mut cache = HashMap::new();
-        let merged = self.resolve_raw(name, &mut cache)?;
+        let merged = self.resolve_raw(name)?;
         let policy =
             build::build_policy(merged.filesystem.as_ref(), merged.network.as_ref(), name)?;
         let command = build::build_command(merged.command.as_ref(), name)?;
@@ -87,14 +85,7 @@ impl Config {
         self.resolve(name)
     }
 
-    fn resolve_raw(
-        &self,
-        name: &str,
-        cache: &mut HashMap<String, MergedProfile>,
-    ) -> Result<MergedProfile, ConfigError> {
-        if let Some(merged) = cache.get(name) {
-            return Ok(merged.clone());
-        }
+    fn resolve_raw(&self, name: &str) -> Result<MergedProfile, ConfigError> {
         if !self.raw.profiles.contains_key(name) {
             return Err(ConfigError::UnknownProfile {
                 name: name.to_owned(),
@@ -104,6 +95,8 @@ impl Config {
         let mut frames = vec![ResolveFrame::new(name.to_owned())];
         let mut active = HashMap::new();
         let mut active_names = Vec::new();
+        let mut completed = HashSet::new();
+        let mut order = Vec::new();
         active.insert(name.to_owned(), 0);
         active_names.push(name.to_owned());
 
@@ -124,9 +117,7 @@ impl Config {
                 .cloned()
             {
                 frames[frame_index].next_parent += 1;
-                if let Some(parent) = cache.get(&parent_name).cloned() {
-                    let merged = std::mem::take(&mut frames[frame_index].merged);
-                    frames[frame_index].merged = merge_profiles(merged, parent);
+                if completed.contains(&parent_name) {
                     continue;
                 }
                 if let Some(start) = active.get(&parent_name) {
@@ -144,18 +135,25 @@ impl Config {
             }
 
             let frame = frames.pop().expect("resolution frame exists");
-            let merged = apply_profile(frame.merged, profile);
             active.remove(&frame.name);
             active_names.pop();
-            cache.insert(frame.name, merged.clone());
-
-            if let Some(parent) = frames.last_mut() {
-                let parent_merged = std::mem::take(&mut parent.merged);
-                parent.merged = merge_profiles(parent_merged, merged);
-            } else {
-                return Ok(merged);
+            completed.insert(frame.name.clone());
+            order.push(frame.name);
+            if frames.is_empty() {
+                break;
             }
         }
+
+        let mut merger = ProfileMerger::default();
+        for profile_name in order {
+            let profile = self
+                .raw
+                .profiles
+                .get(&profile_name)
+                .expect("ordered profile exists");
+            merger.apply(profile);
+        }
+        Ok(merger.finish())
     }
 }
 
@@ -185,19 +183,9 @@ impl ResolvedProfile {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct MergedProfile {
-    description: Option<String>,
-    workspace_roots: BTreeMap<String, bool>,
-    filesystem: Option<RawFilesystem>,
-    network: Option<RawNetwork>,
-    command: Option<RawCommand>,
-}
-
 struct ResolveFrame {
     name: String,
     next_parent: usize,
-    merged: MergedProfile,
 }
 
 impl ResolveFrame {
@@ -205,7 +193,6 @@ impl ResolveFrame {
         Self {
             name,
             next_parent: 0,
-            merged: MergedProfile::default(),
         }
     }
 }
@@ -221,13 +208,11 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
     }
     for (name, profile) in &config.profiles {
         validate_profile_name(name)?;
-        let roots = profile.workspace_roots.keys().collect::<Vec<_>>();
-        for (index, root) in roots.iter().enumerate() {
+        validate_profile_policy_duplicates(name, profile)?;
+        let mut roots = HashSet::with_capacity(profile.workspace_roots.len());
+        for root in profile.workspace_roots.keys() {
             validate_workspace_root(name, root)?;
-            if roots[..index]
-                .iter()
-                .any(|other| paths_equal(Path::new(other), Path::new(root)))
-            {
+            if !roots.insert(NativePathKey::new(Path::new(root))) {
                 return Err(invalid_value(
                     name,
                     "workspace_roots",
@@ -258,10 +243,9 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
                         ));
                     }
                 }
-                let mut set_names = BTreeSet::new();
+                let mut set_names = HashSet::new();
                 for variable in environment.set.keys() {
-                    let normalized = variable.to_lowercase();
-                    if !set_names.insert(normalized) {
+                    if !set_names.insert(EnvironmentNameKey::new(OsStr::new(variable))) {
                         return Err(invalid_value(
                             name,
                             "command.environment",
@@ -269,17 +253,17 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
                         ));
                     }
                 }
-                let mut remove_names = BTreeSet::new();
+                let mut remove_names = HashSet::new();
                 for variable in &environment.remove {
-                    let normalized = variable.to_lowercase();
-                    if !remove_names.insert(normalized.clone()) {
+                    let key = EnvironmentNameKey::new(OsStr::new(variable));
+                    if !remove_names.insert(key.clone()) {
                         return Err(invalid_value(
                             name,
                             "command.environment.remove",
                             format!("duplicate removed variable ignoring case {variable:?}"),
                         ));
                     }
-                    if set_names.contains(&normalized) {
+                    if set_names.contains(&key) {
                         return Err(invalid_value(
                             name,
                             "command.environment",
@@ -287,6 +271,55 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
                         ));
                     }
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_profile_policy_duplicates(name: &str, profile: &RawProfile) -> Result<(), ConfigError> {
+    if let Some(filesystem) = &profile.filesystem {
+        let mut rules = HashSet::with_capacity(filesystem.rules.len());
+        for rule in &filesystem.rules {
+            if !rules.insert(filesystem_rule_key(rule)) {
+                return Err(invalid_value(
+                    name,
+                    "filesystem.rules",
+                    "duplicate target under native path semantics",
+                ));
+            }
+        }
+        let mut protected_paths =
+            HashSet::with_capacity(filesystem.additional_protected_paths.len());
+        for path in &filesystem.additional_protected_paths {
+            if !protected_paths.insert(NativePathKey::new(Path::new(path))) {
+                return Err(invalid_value(
+                    name,
+                    "filesystem.additional_protected_paths",
+                    "duplicate path under native semantics",
+                ));
+            }
+        }
+    }
+    if let Some(network) = &profile.network {
+        let mut domains = HashSet::with_capacity(network.domains.len());
+        for rule in &network.domains {
+            if !domains.insert(domain_rule_key(&rule.pattern)) {
+                return Err(invalid_value(
+                    name,
+                    "network.domains",
+                    "duplicate normalized domain pattern",
+                ));
+            }
+        }
+        let mut sockets = HashSet::with_capacity(network.unix_sockets.len());
+        for rule in &network.unix_sockets {
+            if !sockets.insert(NativePathKey::new(Path::new(&rule.path))) {
+                return Err(invalid_value(
+                    name,
+                    "network.unix_sockets",
+                    "duplicate path under native semantics",
+                ));
             }
         }
     }
@@ -349,272 +382,4 @@ fn source_location(source: &str, span: std::ops::Range<usize>) -> crate::SourceL
         offset,
         length: span.end.saturating_sub(span.start),
     }
-}
-
-fn apply_profile(mut merged: MergedProfile, profile: &RawProfile) -> MergedProfile {
-    merged.description = profile.description.clone();
-    merge_workspace_roots(&mut merged.workspace_roots, profile.workspace_roots.clone());
-    if let Some(filesystem) = &profile.filesystem {
-        merged.filesystem = Some(merge_filesystem(merged.filesystem.take(), filesystem));
-    }
-    if let Some(network) = &profile.network {
-        merged.network = Some(merge_network(merged.network.take(), network));
-    }
-    if let Some(command) = &profile.command {
-        merged.command = Some(merge_command(merged.command.take(), command));
-    }
-    merged
-}
-
-fn merge_profiles(mut left: MergedProfile, right: MergedProfile) -> MergedProfile {
-    merge_workspace_roots(&mut left.workspace_roots, right.workspace_roots);
-    if let Some(filesystem) = right.filesystem {
-        left.filesystem = Some(merge_filesystem(left.filesystem.take(), &filesystem));
-    }
-    if let Some(network) = right.network {
-        left.network = Some(merge_network(left.network.take(), &network));
-    }
-    if let Some(command) = right.command {
-        left.command = Some(merge_command(left.command.take(), &command));
-    }
-    left
-}
-
-fn merge_workspace_roots(
-    target: &mut BTreeMap<String, bool>,
-    values: impl IntoIterator<Item = (String, bool)>,
-) {
-    for (path, enabled) in values {
-        if let Some(existing) = target
-            .keys()
-            .find(|existing| paths_equal(Path::new(existing), Path::new(&path)))
-            .cloned()
-        {
-            target.remove(&existing);
-        }
-        target.insert(path, enabled);
-    }
-}
-
-fn merge_filesystem(parent: Option<RawFilesystem>, child: &RawFilesystem) -> RawFilesystem {
-    let mut merged = parent.unwrap_or_default();
-    if child.mode.is_some() {
-        merged.mode = child.mode;
-    }
-    if child.glob_scan_max_depth.is_some() {
-        merged.glob_scan_max_depth = child.glob_scan_max_depth;
-    }
-    append_unique_native_path(
-        &mut merged.additional_protected_paths,
-        &child.additional_protected_paths,
-    );
-    if let Some(security) = &child.security {
-        let merged_security = merged.security.get_or_insert_with(Default::default);
-        if security.dangerously_allow_git_write.is_some() {
-            merged_security.dangerously_allow_git_write = security.dangerously_allow_git_write;
-        }
-    }
-    for child_rule in &child.rules {
-        if let Some(parent_rule) = merged
-            .rules
-            .iter_mut()
-            .find(|parent_rule| same_filesystem_rule_target(parent_rule, child_rule))
-        {
-            *parent_rule = child_rule.clone();
-        } else {
-            merged.rules.push(child_rule.clone());
-        }
-    }
-    merged
-}
-
-fn merge_network(parent: Option<RawNetwork>, child: &RawNetwork) -> RawNetwork {
-    let mut merged = parent.unwrap_or_default();
-    if child.mode.is_some() {
-        merged.mode = child.mode;
-    }
-    if child.domain_mode.is_some() {
-        merged.domain_mode = child.domain_mode;
-    }
-    if child.unix_socket_mode.is_some() {
-        merged.unix_socket_mode = child.unix_socket_mode;
-    }
-    if child.local_network_access.is_some() {
-        merged.local_network_access = child.local_network_access;
-    }
-    for child_rule in &child.domains {
-        if let Some(parent_rule) = merged
-            .domains
-            .iter_mut()
-            .find(|parent_rule| same_domain_rule(parent_rule, child_rule))
-        {
-            *parent_rule = child_rule.clone();
-        } else {
-            merged.domains.push(child_rule.clone());
-        }
-    }
-    for child_rule in &child.unix_sockets {
-        if let Some(parent_rule) = merged.unix_sockets.iter_mut().find(|parent_rule| {
-            paths_equal(Path::new(&parent_rule.path), Path::new(&child_rule.path))
-        }) {
-            *parent_rule = child_rule.clone();
-        } else {
-            merged.unix_sockets.push(child_rule.clone());
-        }
-    }
-    merged
-}
-
-fn same_domain_rule(
-    left: &crate::model::RawDomainRule,
-    right: &crate::model::RawDomainRule,
-) -> bool {
-    match (
-        DomainRule::new(left.pattern.clone(), DomainAccess::Allow),
-        DomainRule::new(right.pattern.clone(), DomainAccess::Allow),
-    ) {
-        (Ok(left), Ok(right)) => left.pattern() == right.pattern(),
-        _ => left
-            .pattern
-            .trim_end_matches('.')
-            .eq_ignore_ascii_case(right.pattern.trim_end_matches('.')),
-    }
-}
-
-fn merge_command(parent: Option<RawCommand>, child: &RawCommand) -> RawCommand {
-    let mut merged = parent.unwrap_or_default();
-    if child.program.is_some() {
-        merged.program = child.program.clone();
-    }
-    if child.args.is_some() {
-        merged.args = child.args.clone();
-    }
-    if child.working_directory.is_some() {
-        merged.working_directory = child.working_directory.clone();
-    }
-    if let Some(environment) = &child.environment {
-        merged.environment = Some(merge_environment(merged.environment.take(), environment));
-    }
-    if let Some(stdio) = &child.stdio {
-        merged.stdio = Some(merge_stdio(merged.stdio.take(), stdio));
-    }
-    if let Some(timeout) = &child.timeout {
-        merged.timeout = Some(merge_timeout(merged.timeout.take(), timeout));
-    }
-    merged
-}
-
-fn merge_environment(parent: Option<RawEnvironment>, child: &RawEnvironment) -> RawEnvironment {
-    let mut merged = parent.unwrap_or_default();
-    if child.inherit.is_some() {
-        merged.inherit = child.inherit;
-    }
-    for (child_pattern, child_action) in &child.filters {
-        if let Some(parent_pattern) = merged
-            .filters
-            .keys()
-            .find(|parent_pattern| parent_pattern.eq_ignore_ascii_case(child_pattern))
-            .cloned()
-        {
-            merged.filters.remove(&parent_pattern);
-        }
-        merged.filters.insert(child_pattern.clone(), *child_action);
-    }
-    for (name, value) in &child.set {
-        merged
-            .remove
-            .retain(|removed| !environment_names_equal(removed, name));
-        if let Some(existing) = merged
-            .set
-            .keys()
-            .find(|existing| environment_names_equal(existing, name))
-            .cloned()
-        {
-            merged.set.remove(&existing);
-        }
-        merged.set.insert(name.clone(), value.clone());
-    }
-    for name in &child.remove {
-        if let Some(existing) = merged
-            .set
-            .keys()
-            .find(|existing| environment_names_equal(existing, name))
-            .cloned()
-        {
-            merged.set.remove(&existing);
-        }
-        if !merged
-            .remove
-            .iter()
-            .any(|removed| environment_names_equal(removed, name))
-        {
-            merged.remove.push(name.clone());
-        }
-    }
-    merged
-}
-
-fn environment_names_equal(left: &str, right: &str) -> bool {
-    left.to_lowercase() == right.to_lowercase()
-}
-
-fn append_unique_native_path(target: &mut Vec<String>, values: &[String]) {
-    for value in values {
-        if !target
-            .iter()
-            .any(|existing| paths_equal(Path::new(existing), Path::new(value)))
-        {
-            target.push(value.clone());
-        }
-    }
-}
-
-fn same_filesystem_rule_target(left: &RawFilesystemRule, right: &RawFilesystemRule) -> bool {
-    left.target == right.target
-        && optional_path_strings_equal(left.path.as_deref(), right.path.as_deref())
-        && optional_path_strings_equal(left.pattern.as_deref(), right.pattern.as_deref())
-}
-
-fn optional_path_strings_equal(left: Option<&str>, right: Option<&str>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => strings_equal(left, right),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn merge_stdio(parent: Option<RawStdio>, child: &RawStdio) -> RawStdio {
-    let mut merged = parent.unwrap_or_default();
-    if child.stdin.is_some() {
-        merged.stdin = child.stdin;
-    }
-    if child.stdout.is_some() {
-        merged.stdout = child.stdout;
-    }
-    if child.stderr.is_some() {
-        merged.stderr = child.stderr;
-    }
-    merged
-}
-
-fn merge_timeout(parent: Option<RawTimeout>, child: &RawTimeout) -> RawTimeout {
-    let mut merged = parent.unwrap_or_default();
-    if child.mode.is_some() {
-        merged.mode = child.mode;
-        if child.milliseconds.is_none()
-            && matches!(
-                child.mode,
-                Some(
-                    crate::model::RawTimeoutMode::BackendDefault
-                        | crate::model::RawTimeoutMode::Disabled
-                )
-            )
-        {
-            merged.milliseconds = None;
-        }
-    }
-    if child.milliseconds.is_some() {
-        merged.milliseconds = child.milliseconds;
-    }
-    merged
 }

@@ -10,7 +10,6 @@ readme = "README.md"
 [lib]
 name = "cageforge_config"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies]
 cageforge-command = { workspace = true }

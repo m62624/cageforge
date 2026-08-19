@@ -10,11 +10,10 @@
 named profiles into validated `SandboxPolicy` and optional `CommandRequest`
 values that other crates or applications can consume.
 
-Configuration is treated as trusted input. Resolution memoizes completed
-profiles and tracks the active inheritance stack by name, so shared ancestors
-are not repeatedly recomputed and legal diamond-shaped inheritance remains
-efficient for large configuration files. Native path identity is still used
-when merging roots.
+Configuration is treated as trusted input. Resolution iteratively linearizes
+the reachable inheritance graph once and merges canonical entries through
+indexed maps, so shared ancestors are applied once and legal diamond-shaped
+inheritance remains efficient for large configuration files.
 
 The schema is Cageforge's own schema. Profile values can be passed directly to
 an execution layer, or narrowed first with `cageforge-policy-compose` and a
@@ -101,6 +100,11 @@ policy modes, and invalid enum values are rejected. A profile without a
 filesystem section is an empty restricted policy; a profile without a network
 section denies networking; the command section is optional.
 
+One profile may not declare the same canonical filesystem target, domain,
+protected path, or Unix-socket path twice. This prevents declaration order or
+alternate spelling from silently weakening a rule. An ordered child profile
+may still override the matching inherited entry explicitly.
+
 `workspace_roots` is an inheritable path-to-enabled map. `true` enables a root
 and `false` disables an inherited root. Inheritance compares roots with the
 native path identity from `cageforge-path`, so a Windows case variant can
@@ -147,6 +151,8 @@ platform variables belong to the `core` set. Restricted filesystem profiles
 protect `.git` below writable scopes by default; trusted callers can request
 the explicit TOML opt-out
 `[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`.
+When filters are active, non-Unicode native environment names are removed
+conservatively rather than matched through lossy conversion.
 
 ## Library API
 

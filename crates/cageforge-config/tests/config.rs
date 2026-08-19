@@ -12,6 +12,7 @@ use cageforge_policy::{
 use pretty_assertions::assert_eq;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -904,6 +905,57 @@ remove = ["path"]
 }
 
 #[test]
+fn rejects_semantic_policy_duplicates_within_one_profile() {
+    for source in [
+        r#"
+default_profile = "safe"
+[profiles.safe.filesystem]
+rules = [
+  { target = "workspace", path = "./src", access = "deny" },
+  { target = "workspace", path = "src", access = "write" },
+]
+"#,
+        r#"
+default_profile = "safe"
+[profiles.safe.network]
+mode = "enabled"
+domains = [
+  { pattern = "EXAMPLE.COM.", access = "deny" },
+  { pattern = "example.com:443", access = "allow" },
+]
+"#,
+        r#"
+default_profile = "safe"
+[profiles.safe.filesystem]
+additional_protected_paths = [".git", "./.git"]
+"#,
+    ] {
+        let error = Config::from_toml(source)
+            .expect_err("semantic duplicates in one profile must be rejected");
+        assert!(matches!(error, ConfigError::InvalidValue { .. }));
+    }
+
+    let socket = absolute_socket();
+    let source = format!(
+        r#"
+default_profile = "safe"
+[profiles.safe.network]
+mode = "enabled"
+unix_sockets = [
+  {{ path = '{}', access = "deny" }},
+  {{ path = '{}', access = "allow" }},
+]
+"#,
+        socket.display(),
+        socket.display()
+    );
+    assert!(matches!(
+        Config::from_toml(&source),
+        Err(ConfigError::InvalidValue { .. })
+    ));
+}
+
+#[test]
 fn rejects_inheritance_and_default_errors() {
     let error = Config::from_toml("default_profile = \"missing\"\n[profiles.safe]\n")
         .expect_err("unknown default profile");
@@ -986,6 +1038,107 @@ inherits = ["left", "right"]
             .expect("domain lookup"),
         Some(DomainAccess::Deny)
     );
+}
+
+#[test]
+fn shared_ancestors_are_applied_once_before_sibling_overrides() {
+    let config = Config::from_toml(
+        r#"
+[profiles.base.filesystem]
+rules = [{ target = "workspace-root", access = "read" }]
+
+[profiles.left]
+inherits = ["base"]
+
+[profiles.left.filesystem]
+rules = [{ target = "workspace-root", access = "write" }]
+
+[profiles.right]
+inherits = ["base"]
+
+[profiles.child]
+inherits = ["left", "right"]
+"#,
+    )
+    .expect("diamond inheritance should parse");
+
+    let resolved = config.resolve("child").expect("diamond should resolve");
+    assert_eq!(
+        resolved
+            .policy()
+            .filesystem()
+            .access_for(&cageforge_policy::PathSelector::workspace_root()),
+        cageforge_policy::FilesystemDecision::Write
+    );
+}
+
+#[test]
+fn inherited_scope_overrides_use_semantic_path_identity() {
+    let config = Config::from_toml(
+        r#"
+[profiles.parent.filesystem]
+rules = [{ target = "workspace", path = "./src", access = "deny" }]
+
+[profiles.child]
+inherits = ["parent"]
+
+[profiles.child.filesystem]
+rules = [{ target = "workspace", path = "src", access = "write" }]
+"#,
+    )
+    .expect("semantic path variants should parse");
+
+    let resolved = config.resolve("child").expect("profile should resolve");
+    assert_eq!(resolved.policy().filesystem().entries().len(), 1);
+    assert_eq!(
+        resolved.policy().filesystem().entries()[0].access(),
+        cageforge_policy::AccessMode::Write
+    );
+}
+
+#[test]
+fn ownership_mode_overrides_clear_incompatible_inherited_rules() {
+    let config = Config::from_toml(
+        r#"
+[profiles.parent.filesystem]
+rules = [{ target = "workspace-root", access = "write" }]
+
+[profiles.parent.network]
+mode = "enabled"
+domains = [{ pattern = "example.com", access = "allow" }]
+
+[profiles.unrestricted]
+inherits = ["parent"]
+
+[profiles.unrestricted.filesystem]
+mode = "unrestricted"
+
+[profiles.external]
+inherits = ["parent"]
+
+[profiles.external.network]
+mode = "external"
+"#,
+    )
+    .expect("mode transitions should parse");
+
+    let unrestricted = config
+        .resolve("unrestricted")
+        .expect("unrestricted mode should clear inherited local rules");
+    assert_eq!(
+        unrestricted.policy().filesystem().mode(),
+        cageforge_policy::FilesystemMode::Unrestricted
+    );
+    assert!(unrestricted.policy().filesystem().entries().is_empty());
+
+    let external = config
+        .resolve("external")
+        .expect("external mode should clear inherited local rules");
+    assert_eq!(
+        external.policy().network().mode(),
+        cageforge_policy::NetworkMode::External
+    );
+    assert!(external.policy().network().domains().is_empty());
 }
 
 #[test]
@@ -1351,4 +1504,74 @@ fn exposes_json_schema_and_structured_diagnostics() {
     let diagnostic = error.diagnostic();
     assert_eq!(diagnostic.code(), "invalid_command");
     assert_eq!(diagnostic.profile(), Some("profile"));
+}
+
+#[test]
+fn large_inherited_profiles_merge_canonical_entries_once() {
+    const ENTRY_COUNT: usize = 256;
+    let mut source =
+        String::from("default_profile = \"child\"\n\n[profiles.base.workspace_roots]\n");
+    for index in 0..ENTRY_COUNT {
+        writeln!(source, "\"root-{index}\" = true").expect("write root");
+    }
+    source.push_str("\n[profiles.base.filesystem]\nmode = \"restricted\"\nrules = [\n");
+    for index in 0..ENTRY_COUNT {
+        writeln!(
+            source,
+            "  {{ target = \"workspace\", path = \"dir-{index}\", access = \"read\" }},"
+        )
+        .expect("write filesystem rule");
+    }
+    source.push_str(
+        "]\n\n[profiles.base.network]\nmode = \"enabled\"\ndomain_mode = \"restricted\"\ndomains = [\n",
+    );
+    for index in 0..ENTRY_COUNT {
+        writeln!(
+            source,
+            "  {{ pattern = \"service-{index}.example\", access = \"allow\" }},"
+        )
+        .expect("write domain rule");
+    }
+    source.push_str(
+        "]\n\n[profiles.base.command]\nprogram = \"runner\"\n\n[profiles.base.command.environment.set]\n",
+    );
+    for index in 0..ENTRY_COUNT {
+        writeln!(source, "VAR_{index} = \"base-{index}\"").expect("write environment value");
+    }
+    source.push_str(
+        r#"
+[profiles.child]
+inherits = ["base"]
+
+[profiles.child.workspace_roots]
+"root-0" = false
+
+[profiles.child.filesystem]
+rules = [
+  { target = "workspace", path = "./dir-0", access = "deny" },
+]
+
+[profiles.child.network]
+domains = [
+  { pattern = "SERVICE-0.EXAMPLE.", access = "deny" },
+]
+
+[profiles.child.command.environment.set]
+var_0 = "child"
+"#,
+    );
+
+    let resolved = Config::from_toml(&source)
+        .expect("large config parses")
+        .resolve_default()
+        .expect("large config resolves");
+    assert_eq!(resolved.workspace_roots().len(), ENTRY_COUNT - 1);
+    assert_eq!(resolved.policy().filesystem().entries().len(), ENTRY_COUNT);
+    assert_eq!(resolved.policy().network().domains().len(), ENTRY_COUNT);
+    let command = resolved.command().expect("inherited command");
+    assert_eq!(command.environment().overrides().len(), ENTRY_COUNT);
+    assert_eq!(
+        command.environment().override_for(OsStr::new("VAR_0")),
+        Some(&EnvironmentOverride::Set(OsString::from("child")))
+    );
 }

@@ -112,11 +112,11 @@ mode = "{mode}"
 }
 
 fn render_network_config(mode: &str, domain: &str, socket: &str) -> String {
-    let local_rules = if mode == "external" {
+    let local_policy = if mode == "external" {
         String::new()
     } else {
         format!(
-            "domains = [\n  {{ pattern = \"EXAMPLE.COM:443\", access = \"allow\" }},\n  {{ pattern = \"blocked.example.com\", access = \"deny\" }},\n]\nunix_sockets = [{{ path = \"{}\", access = \"allow\" }}]\n",
+            "domain_mode = \"{domain}\"\nunix_socket_mode = \"{socket}\"\ndomains = [\n  {{ pattern = \"EXAMPLE.COM:443\", access = \"allow\" }},\n  {{ pattern = \"blocked.example.com\", access = \"deny\" }},\n]\nunix_sockets = [{{ path = \"{}\", access = \"allow\" }}]\n",
             socket_path("allowed")
         )
     };
@@ -126,9 +126,7 @@ default_profile = "network"
 
 [profiles.network.network]
 mode = "{mode}"
-domain_mode = "{domain}"
-unix_socket_mode = "{socket}"
-{local_rules}"#
+{local_policy}"#
     )
 }
 

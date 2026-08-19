@@ -25,11 +25,12 @@ The workspace declares these local crates in `[workspace.dependencies]`. The
 config crate consumes their public APIs and never reaches into their private
 modules. It produces requested values; it does not apply a `PolicyCeiling`.
 
-Configuration is trusted application input. Resolution memoizes completed
-profiles and tracks the active inheritance stack by name, so shared ancestors
-are not recomputed for every branch of a large legal inheritance graph. No
-arbitrary size or depth limit is imposed by this crate; callers handling an
-untrusted wire format must apply an input-size boundary before parsing.
+Configuration is trusted application input. Resolution uses an iterative
+depth-first traversal to produce one parent-before-child order, applies shared
+ancestors once, and keeps indexed canonical merge state instead of cloning a
+materialized profile at every level. No arbitrary size or depth limit is
+imposed by this crate; callers handling an untrusted wire format must apply an
+input-size boundary before parsing.
 
 ## TOML shape
 
@@ -121,6 +122,9 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   child target replaces an inherited target; overlapping but distinct targets
   are evaluated by specificity, and equal-specificity capability conflicts are
   resolved conservatively.
+- Semantically duplicate filesystem targets, domains, protected paths, and
+  Unix-socket paths are rejected inside one profile. Parent-to-child canonical
+  replacement remains the explicit inheritance override mechanism.
 - Command argv replaces as a complete list when specified by the child.
 - Environment assignments/removals and stdio fields merge by key; a child
   value overrides the inherited value.
@@ -152,6 +156,8 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   `decision_for_domain_with_resolved_ips` supplies every resolved address and
   supplies an empty list after a failed or timed-out lookup. The config crate
   only stores the typed local-network choice; it never performs DNS.
+  Native names that cannot be represented as Unicode remain distinct, but are
+  removed conservatively whenever wildcard filtering is active.
 - `additional_protected_paths` is additive. Restricted profiles protect `.git`
   below writable scopes by default. The explicit
   `[profiles.<name>.filesystem.security] dangerously_allow_git_write = true`

@@ -12,6 +12,7 @@
 mod build;
 mod diagnostics;
 mod error;
+mod merge;
 mod model;
 mod resolve;
 mod schema;
