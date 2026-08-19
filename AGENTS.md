@@ -79,7 +79,8 @@ These rules are mandatory:
     checkout.
 14. Configuration files are trusted application input, not an untrusted wire
     format. Keep resolution efficient for large files and shared inheritance
-    graphs through memoization and shared native comparisons. Do not add
+    graphs through one iterative inheritance linearization and indexed
+    canonical merges. Do not add
     arbitrary resource limits or silently truncate valid configuration without
     a separate specification decision.
 15. When several imports belong to one crate or responsibility domain, prefer

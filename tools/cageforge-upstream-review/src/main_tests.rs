@@ -69,3 +69,16 @@ fn scope_pathspecs_watch_the_parent_of_mod_rs() {
         ]
     );
 }
+
+#[test]
+fn git_diff_uses_literal_pathspecs_as_a_global_option() {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    run_git_diff(
+        repository_root,
+        "HEAD",
+        "HEAD",
+        &["Cargo.toml".to_owned()],
+        &["--stat"],
+    )
+    .expect("literal pathspec diff should execute");
+}

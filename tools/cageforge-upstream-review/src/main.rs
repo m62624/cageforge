@@ -449,7 +449,6 @@ fn run_git_diff(
         "diff".to_owned(),
         "--no-ext-diff".to_owned(),
         "--no-textconv".to_owned(),
-        "--literal-pathspecs".to_owned(),
         baseline.to_owned(),
         target.to_owned(),
     ];
@@ -459,6 +458,7 @@ fn run_git_diff(
 
     let output = Command::new("git")
         .current_dir(root)
+        .arg("--literal-pathspecs")
         .args(&arguments)
         .output()
         .map_err(|error| format!("failed to run git diff: {error}"))?;

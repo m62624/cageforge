@@ -11,6 +11,15 @@ branch = "main"
 last_adapted_commit = "c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc"
 
 [[scope]]
+name = "cageforge-path"
+upstream_paths = [
+    "codex-rs/utils/absolute-path/src/lib.rs",
+    "codex-rs/protocol/src/permissions.rs",
+    "codex-rs/core/src/config/permissions.rs",
+]
+local_paths = ["crates/cageforge-path/"]
+
+[[scope]]
 name = "cageforge-policy"
 upstream_paths = [
     "codex-rs/protocol/src/permissions.rs",
