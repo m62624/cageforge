@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Stable diagnostic values for presenting [`crate::ConfigError`] to tools.
+//!
+//! The diagnostic shape is intended for editors, CLIs, and JSON-producing
+//! integrations; typed [`crate::ConfigError`] remains the primary Rust error.
+
 use crate::{ConfigError, SourceLocation};
 use serde::Serialize;
 

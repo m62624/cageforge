@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Converts the TOML command section into [`cageforge_command::CommandRequest`].
+
 use super::super::error::{ConfigError, invalid_value};
 use super::super::model::{
     RawCommand, RawEnvironment, RawEnvironmentBase, RawEnvironmentFilterAction, RawStdio,

@@ -19,6 +19,36 @@ The schema is Cageforge's own schema. Profile values can be passed directly to
 an execution layer, or narrowed first with `cageforge-policy-compose` and a
 `PolicyCeiling`.
 
+## When to use it
+
+Use this crate when users or operators need named TOML profiles, inheritance,
+editor schema, and structured configuration diagnostics. Do not use it when
+your application already has a typed configuration model; in that case build
+`cageforge-policy` and `cageforge-command` values directly.
+
+The configuration flow is intentionally one-way:
+
+```text
+TOML text/file
+     │
+     ▼
+Config::from_toml / Config::from_file
+     │
+     ▼
+Config::resolve / resolve_default
+     │
+     ▼
+ResolvedProfile
+     ├── policy()  -> SandboxPolicy
+     ├── command() -> CommandRequest
+     └── workspace_roots() -> backend declarations
+```
+
+`ResolvedProfile` is an owned, validated result. It does not discover paths or
+launch anything. A backend or harness resolves declared workspace roots in its
+runtime context, and an optional policy-composition layer can narrow the
+result before execution.
+
 ## Workspace role
 
 `cageforge-config` is the strict configuration adapter.

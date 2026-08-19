@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Typed construction errors shared by [`crate::CommandSpec`],
+//! [`crate::EnvironmentSpec`], and [`crate::CommandRequest`].
+
 use std::path::PathBuf;
 use thiserror::Error;
 

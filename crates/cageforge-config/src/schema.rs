@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! JSON Schema generation for the private TOML model.
+//!
+//! [`crate::config_schema_json`] describes document structure for tooling; it
+//! does not replace semantic validation performed by [`crate::Config`].
+
 use crate::model::RawConfig;
 
 /// Generates the JSON Schema for the Cageforge TOML data model.

@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Monotonic environment composition and backend-selected core variables.
+//!
+//! [`crate::EffectiveEnvironment`] applies requested and ceiling transforms,
+//! while [`crate::CoreEnvironment`] marks a variable set selected by the
+//! backend. The module never invents a platform's core-variable list.
+
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 

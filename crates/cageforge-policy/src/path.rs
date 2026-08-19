@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Validated filesystem selectors and policy globs.
+//!
+//! [`crate::PathSelector`] represents a concrete or symbolic filesystem scope;
+//! [`crate::PathPattern`] represents a validated deny-glob. Shared lexical
+//! identity comes from [`cageforge_path`], while policy-specific glob access
+//! remains in this module.
+
 use crate::PathResolutionContext;
 use crate::PolicyError;
 use cageforge_path::{

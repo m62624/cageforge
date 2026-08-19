@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Filesystem ownership, rules, selectors, and access evaluation.
+//!
+//! [`crate::FilesystemPolicy`] combines [`crate::FilesystemRule`] values and
+//! returns [`crate::FilesystemDecision`] for selectors or concrete paths. The
+//! lexical result must still be paired with native filesystem enforcement by
+//! the backend.
+
 use crate::AccessMode;
 use crate::FilesystemDecision;
 use crate::PathPattern;

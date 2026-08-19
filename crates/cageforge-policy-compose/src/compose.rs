@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! The pure [`crate::compose`] operation and effective decision queries.
+//!
+//! This module joins the public request and ceiling models. It does not own
+//! configuration parsing or native capability detection; those remain in the
+//! `cageforge-config` crate and the backend integration respectively.
+
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 

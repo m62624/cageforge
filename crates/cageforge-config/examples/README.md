@@ -1,10 +1,10 @@
 # `cageforge-config` examples
 
-These TOML files are executable documentation. The integration tests load them
-with `include_str!`, parse them through `Config::from_toml`, resolve their
-default profile, and check the important resulting values. If the schema or
-resolution rules change, the examples fail with the tests instead of silently
-becoming stale.
+These TOML files are copyable documentation for the configuration boundary.
+Each one can be loaded with `Config::from_file` or embedded with
+`Config::from_toml`, then resolved through `resolve_default` or `resolve`.
+They are kept alongside the crate's integration coverage so the documented
+syntax remains a real configuration surface.
 
 | File | Scenario | Main concepts |
 |---|---|---|
@@ -27,6 +27,16 @@ TOML into `EnvironmentSpec`; `cageforge-command` applies the portable stages
 after a backend has selected the `all`, `core`, or `none` base environment.
 The `root` target is symbolic: the backend supplies its concrete POSIX root or
 Windows drive/UNC roots.
+
+Suggested reading order:
+
+1. `minimal-policy.toml` for safe defaults and the smallest profile.
+2. `workspace-development.toml` for a command plus filesystem and network
+   declarations.
+3. `profile-inheritance.toml` for parent/child overrides.
+4. `environment-order.toml` for environment filtering stages.
+5. The platform examples for native path spelling and all supported target
+   forms.
 
 Domain entries accept host-like inputs such as `Example.com:443` and
 `[2001:db8::1]:443`; the resolved policy stores their normalized host form.

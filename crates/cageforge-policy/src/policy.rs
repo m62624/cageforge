@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! The combined [`crate::SandboxPolicy`] value built from filesystem and
+//! network boundaries.
+//!
+//! This module provides convenient presets and validation; detailed decisions
+//! remain in [`crate::FilesystemPolicy`] and [`crate::NetworkPolicy`].
+
 use crate::AccessMode;
 use crate::FilesystemPolicy;
 use crate::FilesystemRule;

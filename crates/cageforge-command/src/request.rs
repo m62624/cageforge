@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! The final command-intent value passed from builders to an execution
+//! adapter.
+//!
+//! [`crate::CommandRequest`] intentionally contains no sandbox policy value or
+//! process handle. Policy composition and native process ownership happen in
+//! adjacent layers.
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

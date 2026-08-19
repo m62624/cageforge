@@ -15,6 +15,18 @@ remain distinct instead of passing through lossy Unicode conversion.
 The crate does not access the filesystem, resolve symlinks, or canonicalize
 paths. Native backends remain responsible for those operations.
 
+## When to use it
+
+Use this crate when your own code stores, compares, or validates paths and must
+agree with Cageforge's policy and configuration layers. It is especially
+useful for workspace-root maps, protected metadata paths, and component-aware
+containment checks.
+
+Do not use it as a filesystem sandbox by itself. It answers lexical questions
+such as “is this path below that path?”; it does not prove that a file can be
+opened safely. A native executor must add symlink, junction/reparse-point,
+mount, and TOCTOU-safe enforcement.
+
 ## Workspace role
 
 `cageforge-path` is the shared lexical path-semantics layer.
@@ -67,6 +79,25 @@ environment and domain rows intentionally have their own portable semantics.
 The helpers are used by policy evaluation, command working-directory
 validation, policy composition, and the upstream-review tool so those layers
 cannot silently develop different Windows behavior.
+
+## Smallest useful example
+
+```rust
+use cageforge_path::{is_within, paths_equal, NativePathKey};
+use std::path::Path;
+
+let workspace = Path::new("/work/project");
+assert!(is_within(Path::new("/work/project/src/lib.rs"), workspace));
+assert!(!is_within(Path::new("/work/project-old"), workspace));
+assert!(paths_equal(workspace, Path::new("/work/project")));
+
+let _map_key = NativePathKey::new(workspace);
+```
+
+Most applications do not need a direct dependency on this crate: the policy,
+command, config, and composition crates already use it internally. Depend on
+it directly when an integration layer has to build its own native path maps or
+make a comparison before handing values to those crates.
 
 API reference: [`cageforge-path` on docs.rs](https://docs.rs/cageforge-path/latest/cageforge_path/).
 

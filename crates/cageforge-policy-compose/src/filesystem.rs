@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Effective filesystem constraints retained for backend lowering.
+//!
+//! [`crate::EffectiveFilesystemPolicy`] keeps both the requested and ceiling
+//! policies so a backend can inspect the complete narrowed contract.
+
 use std::num::NonZeroUsize;
 
 use cageforge_policy::{AccessMode, FilesystemPolicy};

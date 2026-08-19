@@ -9,6 +9,17 @@
 //! sides available so a later backend can compile the same constraint without
 //! accidentally widening it. Network backends should use the resolved-target
 //! methods and verify the exact address immediately before connecting.
+//!
+//! # Reading this crate
+//!
+//! Start with [`CompositionRequest`] and [`PolicyCeiling`], call [`compose`],
+//! and pass the resulting [`EffectiveSandbox`] to the execution integration.
+//! Use [`EffectiveSandbox::path_context`] for filesystem selectors,
+//! [`EffectiveFilesystemPolicy`] for filesystem decisions,
+//! [`EffectiveNetworkPolicy`] for exact-address network authorization, and
+//! [`EffectiveEnvironment`] for the narrowed environment transformation.
+//! [`ExternalOwner`] is only an identity token for matching external-boundary
+//! declarations; it is not proof of native enforcement.
 
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]

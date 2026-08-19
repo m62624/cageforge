@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Shared access results for the filesystem and network policy modules.
+//!
+//! [`crate::AccessMode`] expresses a filesystem rule, while
+//! [`crate::FilesystemDecision`] preserves whether a result is local or
+//! externally enforced. The network module has its own [`crate::NetworkDecision`]
+//! because connection authorization also carries an exact socket address.
+
 /// Filesystem access requested or granted for a policy entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AccessMode {

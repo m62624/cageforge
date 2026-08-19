@@ -17,6 +17,25 @@ values can be read from TOML through `cageforge-config`, narrowed with
 `cageforge-policy-compose`, and then passed to a Linux, macOS, or Windows
 backend.
 
+## When to use it
+
+Use this crate when your application needs a typed description of what a
+process may access. It is the portable policy layer, so it can be used with
+TOML, JSON, Rust builders, or an application-specific configuration system.
+
+The normal sequence is:
+
+1. Build a `SandboxPolicy` with validated filesystem and network rules.
+2. Give symbolic filesystem selectors a runtime `PathResolutionContext`.
+3. Query policy values for preparation and capability checks.
+4. If an outer limit exists, pass the policy through
+   `cageforge-policy-compose`.
+5. Give the resulting constraints to a native backend.
+
+The last step is essential. This crate performs portable lexical and policy
+decisions; it does not make `std::fs` operations safe, resolve DNS, or create
+an operating-system sandbox.
+
 ## Workspace role
 
 `cageforge-policy` is the portable filesystem and network policy layer.
@@ -197,6 +216,27 @@ destinations require `LocalNetworkAccess::Allow`.
 The policy crate performs no DNS or network I/O. It also cannot prove that a
 caller actually connected to the checked address; the native backend must use
 the target snapshot instead of resolving the hostname again.
+
+For network code, the safe handoff is deliberately explicit:
+
+```text
+DNS results + exact SocketAddr
+            │
+            ▼
+ResolvedNetworkTarget
+            │
+            ▼
+authorize_connection
+            │
+            ▼
+AuthorizedSocketAddr::into_socket_addr()
+            │
+            ▼
+connect to that exact address
+```
+
+`decision_for_domain` is useful for inspecting a host rule, but it is not a
+connection authorization because it does not bind the decision to an address.
 
 ## Using it with other crates
 

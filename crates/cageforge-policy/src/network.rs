@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Domain, resolved-address, and Unix-socket network policy.
+//!
+//! [`crate::NetworkPolicy`] provides declarative queries and the safe
+//! [`crate::NetworkPolicy::authorize_connection`] handoff. The latter consumes
+//! a [`crate::ResolvedNetworkTarget`] and returns a non-copyable
+//! [`crate::AuthorizedSocketAddr`] so the backend can connect only to the
+//! checked address.
+
 use crate::PathSelector;
 use crate::PolicyError;
 use cageforge_path::{NativePathKey, is_within};

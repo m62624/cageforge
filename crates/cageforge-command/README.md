@@ -12,6 +12,28 @@ standard stream routing, and timeout intent. Other crates can use the same
 validated request model when they need to prepare a command for a sandboxed or
 ordinary process launch.
 
+## When to use it
+
+Use this crate when one part of an application describes a process and another
+part launches it. It is also suitable for ordinary process execution: the
+request model does not require a sandbox backend or a particular harness.
+
+The usual handoff is:
+
+```text
+CommandSpec + EnvironmentSpec + StdioSpec + TimeoutPolicy
+                              │
+                              ▼
+                       CommandRequest
+                              │
+                              ▼
+                 application-owned process adapter
+```
+
+The adapter chooses how to map stdio and timeout intent to its process API.
+The command crate validates the request but does not spawn a process, allocate
+a PTY, stream output, or terminate a process.
+
 ## Workspace role
 
 `cageforge-command` is the command-intent layer.
@@ -146,6 +168,12 @@ same execution needs filesystem and network restrictions; use
 
 The command crate remains the shared data model between these layers, so a
 different project can reuse it with its own configuration format and backend.
+
+For a TOML-driven application, resolve the command through
+`cageforge-config`. For a typed application, construct `CommandSpec` and
+`EnvironmentSpec` directly and pass the resulting `CommandRequest` to the
+same adapter. This keeps the process boundary independent from the choice of
+configuration format.
 
 API reference: [`cageforge-command` on docs.rs](https://docs.rs/cageforge-command/latest/cageforge_command/).
 

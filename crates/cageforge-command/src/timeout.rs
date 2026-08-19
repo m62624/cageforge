@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Timeout intent for [`crate::CommandRequest`].
+//!
+//! This module does not own cancellation or process lifecycle. It only keeps
+//! the requested timeout state available to the adapter.
+
 use std::time::Duration;
 
 /// Timeout intent for one command request.

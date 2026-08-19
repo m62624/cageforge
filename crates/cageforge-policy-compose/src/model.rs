@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Public request, ceiling, and effective-result models for composition.
+//!
+//! [`crate::PolicyCeiling`] describes the outer limit,
+//! [`crate::CompositionRequest`] supplies the requested values, and
+//! [`crate::EffectiveSandbox`] is the only result that should cross into a
+//! native execution layer.
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Typed failures raised while composing portable policy boundaries.
+
 use std::path::PathBuf;
 
 use cageforge_command::EnvironmentBase;

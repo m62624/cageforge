@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Runtime inputs for resolving symbolic [`crate::PathSelector`] values.
+//!
+//! [`crate::PathResolutionContext`] is supplied by the harness or backend. It
+//! stores declarations only and never discovers a workspace or follows links;
+//! [`crate::FilesystemPolicy`] consumes it when evaluating a concrete path.
+
 use crate::PathSelector;
 use crate::PolicyError;
 use cageforge_path::NativePathKey;

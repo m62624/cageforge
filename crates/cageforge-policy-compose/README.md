@@ -21,6 +21,16 @@ The composition crate works with the public types from `cageforge-policy` and
 `cageforge-command`, so an integrating project declares those crates directly
 alongside `cageforge-policy-compose`.
 
+## When to use it
+
+Use this crate when the requested permissions must be narrowed by another
+independent limit: for example, an application-wide default, a workspace
+boundary, a tenant restriction, or a caller-provided safety policy.
+
+Do not use it merely to construct a policy. If there is no outer limit,
+`cageforge-policy` is enough. Do not treat it as a backend abstraction: it
+does not know how Linux, macOS, or Windows will enforce the result.
+
 ## Workspace role
 
 `cageforge-policy-compose` is the optional policy-narrowing layer.
@@ -67,6 +77,12 @@ assert_eq!(
 After composition, a backend API can inspect the effective constraints, check
 native capabilities, and lower them for Linux, macOS, or Windows execution.
 
+The backend handoff must use `EffectiveSandbox`, not the original requested
+policy. Its filesystem context, network authorization methods, environment
+base, and workspace-root limit are the narrowed contract. A backend may reject
+an unsupported capability, but it must not silently replace the effective
+constraints with a broader request.
+
 `External` is accepted only when both policy sides use the same opaque
 `ExternalOwner` proof. The proof is not evidence that an external sandbox
 exists, is trusted, or is enforcing anything; it is only a caller-supplied
@@ -106,8 +122,8 @@ assert_ne!(ExternalOwner::new(), owner);
   environment transformations only to an `EnvironmentInput` whose selected
   base is no broader than the effective base.
 
-The complete API is documented on [docs.rs](https://docs.rs/) when the crate is
-published.
+The complete API is documented on
+[docs.rs](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/).
 
 ## Using it in another project
 

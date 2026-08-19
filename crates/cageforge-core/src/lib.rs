@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Platform-neutral policy and request types for Cageforge.
+//! Future ergonomic facade for Cageforge execution integrations.
 //!
-//! This crate intentionally has no dependency on an agent product, model
-//! protocol, telemetry system, or platform-specific process launcher.
+//! The facade is intentionally not implemented yet. Use the portable model
+//! crates directly until a stable API can join configuration, policy
+//! composition, and a selected native backend without weakening their
+//! boundaries.
+
+#![doc = include_str!("../README.md")]

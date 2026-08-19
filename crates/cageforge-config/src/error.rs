@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Typed parse, profile, policy, and command errors for [`crate::Config`].
+//!
+//! [`crate::ConfigError`] keeps source locations and nested model errors
+//! available without requiring callers to parse display strings.
+
 use cageforge_command::CommandError;
 use cageforge_policy::PolicyError;
 use serde::Serialize;

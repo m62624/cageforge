@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Private serde and schemars representation of the Cageforge TOML document.
+//!
+//! Applications use [`crate::Config`] and [`crate::ResolvedProfile`] rather
+//! than depending on raw deserialization details. Keeping this model private
+//! lets the TOML syntax evolve without exposing unvalidated fields as library
+//! state.
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::BTreeMap;

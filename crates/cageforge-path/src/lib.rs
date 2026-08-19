@@ -5,6 +5,15 @@
 //! These helpers are lexical only. They do not inspect the filesystem or
 //! resolve symlinks; a native backend must perform those operations when its
 //! enforcement model requires them.
+//!
+//! # Reading this crate
+//!
+//! Use [`paths_equal`] and [`is_within`] for direct decisions, and
+//! [`NativePathKey`] when the same identity must be stored in a map or set.
+//! [`contains_parent_traversal`] validates a lexical input boundary, while
+//! [`normalize_lexical_path`] exposes supported Windows aliases. The policy,
+//! command, and configuration crates build their higher-level rules on these
+//! primitives.
 
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]

@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Canonical parent-to-child profile merging used by [`crate::Config`].
+//!
+//! This is an implementation module rather than an additional public model.
+//! The public entry points remain [`crate::Config::resolve`] and
+//! [`crate::ResolvedProfile`]; the merger keeps inheritance deterministic,
+//! iterative, and consistent with native path and environment identity rules.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};

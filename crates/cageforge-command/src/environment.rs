@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Environment bases, filters, and overrides for [`crate::EnvironmentSpec`].
+//!
+//! This module describes transformations but does not discover the operating
+//! system's core variables. A backend supplies that base when it applies the
+//! [`crate::EnvironmentBase::Core`] request.
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};

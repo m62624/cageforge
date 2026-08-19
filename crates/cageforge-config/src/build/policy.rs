@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Converts TOML filesystem and network sections into
+//! [`cageforge_policy::SandboxPolicy`] values.
+
 use super::super::error::{ConfigError, invalid_value};
 use super::super::model::{
     RawAccessMode, RawDomainAccess, RawDomainMode, RawDomainRule, RawFilesystem, RawFilesystemMode,

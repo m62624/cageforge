@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Caller-supplied identity for matching external enforcement boundaries.
+//!
+//! [`crate::ExternalOwner`] prevents unrelated declarations from being merged;
+//! it is not a proof that an operating-system sandbox exists.
+
 use std::sync::Arc;
 
 /// An opaque proof that two external-enforcement declarations share one owner.

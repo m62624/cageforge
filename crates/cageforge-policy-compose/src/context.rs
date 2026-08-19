@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Narrowed runtime path context produced by [`crate::EffectiveSandbox`].
+//!
+//! The private constructor is intentional: callers should obtain this context
+//! from the effective result rather than rebuilding a broader context by hand.
+
 use std::path::PathBuf;
 
 use cageforge_policy::PathResolutionContext;

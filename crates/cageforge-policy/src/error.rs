@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Typed failures raised by policy construction, normalization, and queries.
+//!
+//! [`crate::PolicyError`] is the boundary between invalid portable policy data
+//! and the valid values consumed by composition or a native backend.
+
 use crate::AccessMode;
 use std::net::SocketAddr;
 use std::path::PathBuf;

@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Public configuration loading and profile resolution.
+//!
+//! [`crate::Config`] owns the parsed document and [`crate::ResolvedProfile`]
+//! is the validated handoff to policy, command, composition, and backend
+//! layers. Runtime path discovery remains outside this module.
+
 use crate::build;
 use crate::error::{ConfigError, invalid_value};
 

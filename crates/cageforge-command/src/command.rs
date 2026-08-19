@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Command-line values for [`crate::CommandRequest`].
+//!
+//! [`crate::CommandSpec`] preserves the program and argv as native
+//! `OsString` values. Validation is local to construction, while process
+//! launching remains the responsibility of the adapter that consumes the
+//! request.
+
 use std::ffi::{OsStr, OsString};
 
 use crate::CommandError;

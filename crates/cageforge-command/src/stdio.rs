@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Portable standard-stream routing for [`crate::CommandRequest`].
+//!
+//! The values describe intent; the process adapter maps them to pipes, null
+//! devices, or inherited handles on its target platform.
+
 /// Routing for one standard process stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StdioMode {
