@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use cageforge_command::{EnvironmentBase, StdioMode, StdioSpec, TimeoutPolicy};
 use cageforge_config::Config;
 use cageforge_policy::{

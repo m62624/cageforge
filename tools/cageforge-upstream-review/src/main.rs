@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Read-only upstream commit and scope review for Cageforge.
 //!
 //! The tool compares the last adapted Codex commit with another commit or the

@@ -82,7 +82,6 @@ form is:
 
 ```text
 Copyright 2025 OpenAI
-Copyright 2026 Mansur Azatbek
 SPDX-License-Identifier: Apache-2.0
 
 Originally derived from OpenAI Codex.

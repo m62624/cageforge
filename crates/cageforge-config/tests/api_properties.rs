@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use cageforge_config::{Config, ConfigError, DiagnosticSeverity, config_schema_json};
 use proptest::prelude::*;
 use serde_json::Value;

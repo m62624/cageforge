@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Platform-neutral policy and request types for Cageforge.
 //!
 //! This crate intentionally has no dependency on an agent product, model

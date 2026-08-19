@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use cageforge_command::{EnvironmentFilterAction, EnvironmentSpec};
 use cageforge_config::{Config, ConfigError};
 use cageforge_policy::AccessMode;

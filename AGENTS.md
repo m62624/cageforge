@@ -22,6 +22,8 @@ These rules are mandatory:
    `specs/0002-source-provenance-and-file-headers.md`. Do not mark
    independently authored files as Codex-derived merely because they implement
    similar behavior.
+   Cageforge-authored Rust files use the SPDX-only header defined in that
+   specification; do not add a personal or collective copyright line to them.
 4. Cageforge-authored code is Apache-2.0. Third-party code keeps its own
    license: bundled bubblewrap is LGPL-2.0-or-later; do not relabel it as
    Apache-2.0.

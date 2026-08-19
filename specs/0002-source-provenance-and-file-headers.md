@@ -7,9 +7,13 @@ Status: accepted
 License attribution follows actual code lineage, not architectural similarity.
 The fact that Cageforge implements the same sandbox concepts as Codex does not
 make every Cageforge file source-derived. New Cageforge implementations keep
-the Cageforge copyright and SPDX header only. Codex is referenced in project
-provenance documents and audit records, not artificially attached to unrelated
-files.
+the Cageforge SPDX header only. Codex is referenced in project provenance
+documents and audit records, not artificially attached to unrelated files.
+
+The SPDX-only convention is intentional: a per-file copyright holder is not
+required for Cageforge-authored files, and the repository's `LICENSE` is the
+authoritative copy of the full Apache-2.0 terms. Do not use a personal name or
+an ambiguous collective name in every source header.
 
 This policy is an engineering provenance rule, not a substitute for a legal
 review of a release.
@@ -20,12 +24,10 @@ Use this for code designed and implemented in Cageforge without copying or
 substantially adapting a specific upstream file:
 
 ```text
-// Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 ```
 
-The year and copyright holder must be updated when appropriate. No OpenAI or
-Codex reference belongs in this header.
+No OpenAI or Codex reference belongs in this header.
 
 ## Header for adapted Apache-2.0 Codex files
 
@@ -35,7 +37,6 @@ Cageforge modification and provenance record:
 
 ```text
 // Copyright 2025 OpenAI
-// Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 //
 // Originally derived from OpenAI Codex.

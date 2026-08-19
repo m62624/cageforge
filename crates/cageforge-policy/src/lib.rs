@@ -1,4 +1,3 @@
-// Copyright 2026 Mansur Azatbek
 // SPDX-License-Identifier: Apache-2.0
 
 //! Platform-independent policy types for Cageforge.

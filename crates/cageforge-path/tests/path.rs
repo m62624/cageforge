@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use cageforge_path::{contains_component_path, contains_parent_traversal, is_within, paths_equal};
 use proptest::prelude::*;
 use std::path::Path;

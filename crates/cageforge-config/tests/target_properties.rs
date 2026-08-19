@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use cageforge_config::Config;
 use cageforge_policy::{
     FilesystemDecision, FilesystemTarget, MissingPathBehavior, PathPattern, PathResolutionContext,
