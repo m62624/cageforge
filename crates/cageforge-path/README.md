@@ -29,6 +29,25 @@ paths. Native backends remain responsible for those operations.
 The helpers define lexical relationships only. A backend still owns filesystem
 I/O, symlink resolution, canonicalization, and platform capability checks.
 
+## Case semantics
+
+The following table is the single path-identity rule shared by the workspace.
+It is not configurable through TOML or the Rust API.
+
+| Value or operation | POSIX (Linux/macOS) | Windows |
+|---|---|---|
+| Absolute and workspace paths | Case-sensitive | Case-insensitive |
+| `workspace_roots` | Case-sensitive | Case-insensitive |
+| Protected paths such as `.git` | Case-sensitive | Case-insensitive |
+| Unix socket paths | Case-sensitive | Case-insensitive path comparison |
+| Filesystem glob components | Case-sensitive | Case-insensitive |
+| Environment variable names and filters | Case-insensitive by policy | Case-insensitive by policy |
+| Domain names and domain globs | Case-insensitive by protocol | Case-insensitive by protocol |
+| Profile names and ordinary strings | Exact comparison | Exact comparison |
+
+Only the filesystem-related rows use this crate's native path helpers. The
+environment and domain rows intentionally have their own portable semantics.
+
 ## API
 
 - `is_within(path, root)` checks component-aware containment and does not treat

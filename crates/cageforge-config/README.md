@@ -110,6 +110,21 @@ registering absolute roots in its path context. When passing these roots to
 absolute runtime roots so its ceiling comparison cannot depend on an unstated
 current directory.
 
+The TOML value classes use the following case rules:
+
+| TOML value or field | POSIX (Linux/macOS) | Windows |
+|---|---|---|
+| `workspace_roots` keys | Case-sensitive paths | Case-insensitive paths |
+| Filesystem `path` values | Case-sensitive paths | Case-insensitive paths |
+| Filesystem `pattern` values | Case-sensitive path components | Case-insensitive path components |
+| `additional_protected_paths` | Case-sensitive paths | Case-insensitive paths |
+| Domain patterns | Case-insensitive hosts | Case-insensitive hosts |
+| Environment names and filters | Case-insensitive logical names | Case-insensitive logical names |
+| Profile names and ordinary strings | Exact comparison | Exact comparison |
+
+These rules are fixed by the value's domain; TOML cannot override them with a
+per-field case flag.
+
 The filesystem target `root` is symbolic as well: the backend supplies POSIX
 `/` or the relevant Windows drive/UNC roots to the policy context. Config
 resolution never discovers system roots. Portable glob rules support
