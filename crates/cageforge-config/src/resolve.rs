@@ -393,7 +393,7 @@ fn merge_filesystem(parent: Option<RawFilesystem>, child: &RawFilesystem) -> Raw
     if child.glob_scan_max_depth.is_some() {
         merged.glob_scan_max_depth = child.glob_scan_max_depth;
     }
-    append_unique_case_insensitive(
+    append_unique_native_path(
         &mut merged.additional_protected_paths,
         &child.additional_protected_paths,
     );
@@ -547,11 +547,11 @@ fn environment_names_equal(left: &str, right: &str) -> bool {
     left.to_lowercase() == right.to_lowercase()
 }
 
-fn append_unique_case_insensitive(target: &mut Vec<String>, values: &[String]) {
+fn append_unique_native_path(target: &mut Vec<String>, values: &[String]) {
     for value in values {
         if !target
             .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(value))
+            .any(|existing| paths_equal(Path::new(existing), Path::new(value)))
         {
             target.push(value.clone());
         }

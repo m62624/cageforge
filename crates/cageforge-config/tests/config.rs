@@ -651,6 +651,34 @@ dangerously_allow_git_write = true
 }
 
 #[test]
+fn inherited_protected_paths_use_native_case_semantics() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "child"
+
+[profiles.parent.filesystem]
+additional_protected_paths = [".git"]
+
+[profiles.child]
+inherits = ["parent"]
+
+[profiles.child.filesystem]
+additional_protected_paths = [".GIT"]
+"#,
+    )
+    .expect("protected path inheritance should parse");
+    let resolved = config
+        .resolve_default()
+        .expect("protected path inheritance should resolve");
+    let protected = resolved.policy().filesystem().protected_relative_paths();
+
+    #[cfg(windows)]
+    assert_eq!(protected, [PathBuf::from(".git")]);
+    #[cfg(not(windows))]
+    assert_eq!(protected, [PathBuf::from(".git"), PathBuf::from(".GIT")]);
+}
+
+#[test]
 fn resolves_profile_metadata_and_workspace_roots() {
     let config = Config::from_toml(
         r#"
