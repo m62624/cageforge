@@ -2,9 +2,10 @@
 
 use crate::PathSelector;
 use crate::PolicyError;
-use cageforge_path::is_within;
+use cageforge_path::{NativePathKey, is_within};
 use globset::GlobBuilder;
 use globset::GlobMatcher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
@@ -88,20 +89,31 @@ impl NetworkDecision {
 /// A socket address that has passed the exact resolved-target check.
 ///
 /// The value can only be created by [`NetworkPolicy::authorize_connection`].
-/// A backend should use [`Self::socket_addr`] instead of reconnecting by
+/// A backend should use [`Self::into_socket_addr`] instead of reconnecting by
 /// hostname or resolving the host again.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AuthorizedSocketAddr(SocketAddr);
 
 impl AuthorizedSocketAddr {
-    /// Returns the exact address that passed policy evaluation.
-    pub const fn socket_addr(self) -> SocketAddr {
+    /// Consumes the authorization and returns the exact checked address.
+    ///
+    /// The value is intentionally neither `Copy` nor `Clone`: an adapter
+    /// should hand it directly to its connection operation instead of keeping
+    /// a reusable authorization token.
+    ///
+    /// ```compile_fail
+    /// use cageforge_policy::AuthorizedSocketAddr;
+    ///
+    /// fn require_clone<T: Clone>() {}
+    /// require_clone::<AuthorizedSocketAddr>();
+    /// ```
+    pub const fn into_socket_addr(self) -> SocketAddr {
         self.0
     }
 }
 
 /// The result of checking the exact address a backend is about to connect to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ConnectionAuthorization {
     /// The address passed local policy and belongs to the resolution snapshot.
     Allowed(AuthorizedSocketAddr),
@@ -116,9 +128,9 @@ pub enum ConnectionAuthorization {
 ///
 /// The address list is a snapshot. A backend must connect to one of these
 /// exact `SocketAddr` values and must call
-/// [`NetworkPolicy::decision_for_connected_address`] immediately before the
-/// connection is established. This prevents a second DNS lookup or a changed
-/// address list from bypassing the policy decision.
+/// [`NetworkPolicy::authorize_connection`] immediately before the connection
+/// is established. This prevents a second DNS lookup or a changed address
+/// list from bypassing the policy decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedNetworkTarget {
     domain: String,
@@ -134,10 +146,18 @@ impl ResolvedNetworkTarget {
         domain: impl Into<String>,
         addresses: impl IntoIterator<Item = SocketAddr>,
     ) -> Result<Self, PolicyError> {
-        let domain = normalize_domain_pattern(&domain.into())?;
+        let domain = normalize_domain(&domain.into())?;
+        let literal = parse_ip_literal(&domain);
+        let mut seen = HashSet::new();
         let mut unique_addresses = Vec::new();
         for address in addresses {
-            if !unique_addresses.contains(&address) {
+            if literal.is_some_and(|literal| literal != address.ip()) {
+                return Err(PolicyError::ResolvedAddressMismatch {
+                    literal: domain,
+                    address,
+                });
+            }
+            if seen.insert(address) {
                 unique_addresses.push(address);
             }
         }
@@ -226,15 +246,15 @@ impl DomainRule {
                 labels,
                 include_apex,
             } => {
-                let domain_labels = domain.split('.').collect::<Vec<_>>();
-                if domain_labels.len() < labels.len()
-                    || (!include_apex && domain_labels.len() == labels.len())
+                let domain_label_count = domain.split('.').count();
+                if domain_label_count < labels.len()
+                    || (!include_apex && domain_label_count == labels.len())
                 {
                     return false;
                 }
-                domain_labels[domain_labels.len() - labels.len()..]
-                    .iter()
-                    .zip(labels)
+                domain
+                    .rsplit('.')
+                    .zip(labels.iter().rev())
                     .all(|(domain, matcher)| matcher.is_match(domain))
             }
         }
@@ -408,18 +428,65 @@ impl NetworkPolicy {
     /// Validates that an externally enforced mode has no local rules.
     pub fn validate(&self) -> Result<(), PolicyError> {
         if self.mode == NetworkMode::External
-            && (!self.domains.is_empty() || !self.unix_sockets.is_empty())
+            && (self.domain_mode != DomainMode::Disabled
+                || self.unix_socket_mode != UnixSocketMode::Disabled
+                || self.local_network_access != LocalNetworkAccess::Deny
+                || !self.domains.is_empty()
+                || !self.unix_sockets.is_empty())
         {
             return Err(PolicyError::InvalidRule {
-                message: "external network policies cannot contain local rules".to_string(),
+                message: "external network policies cannot contain local settings".to_string(),
             });
         }
         Ok(())
     }
 
+    /// Returns a policy with semantically duplicate rules collapsed using
+    /// deny precedence.
+    pub fn normalized(&self) -> Result<Self, PolicyError> {
+        self.validate()?;
+        let mut domains: Vec<DomainRule> = Vec::with_capacity(self.domains.len());
+        let mut domain_positions: HashMap<String, usize> =
+            HashMap::with_capacity(self.domains.len());
+        for rule in &self.domains {
+            if let Some(&index) = domain_positions.get(rule.pattern()) {
+                if rule.access() == DomainAccess::Deny {
+                    domains[index].access = DomainAccess::Deny;
+                }
+            } else {
+                domain_positions.insert(rule.pattern().to_owned(), domains.len());
+                domains.push(rule.clone());
+            }
+        }
+
+        let mut unix_sockets: Vec<UnixSocketRule> = Vec::with_capacity(self.unix_sockets.len());
+        let mut socket_positions: HashMap<NativePathKey, usize> =
+            HashMap::with_capacity(self.unix_sockets.len());
+        for rule in &self.unix_sockets {
+            let key = NativePathKey::new(rule.path());
+            if let Some(&index) = socket_positions.get(&key) {
+                if rule.access() == DomainAccess::Deny {
+                    unix_sockets[index].access = DomainAccess::Deny;
+                }
+            } else {
+                socket_positions.insert(key, unix_sockets.len());
+                unix_sockets.push(rule.clone());
+            }
+        }
+
+        Ok(Self {
+            mode: self.mode,
+            domain_mode: self.domain_mode,
+            unix_socket_mode: self.unix_socket_mode,
+            local_network_access: self.local_network_access,
+            domains,
+            unix_sockets,
+        })
+    }
+
     /// Returns the strictest matching domain decision, if a rule matches.
     pub fn access_for_domain(&self, domain: &str) -> Result<Option<DomainAccess>, PolicyError> {
-        let domain = normalize_domain_pattern(domain)?;
+        let domain = normalize_domain(domain)?;
         Ok(self.access_for_normalized_domain(&domain))
     }
 
@@ -429,7 +496,7 @@ impl NetworkPolicy {
     /// connection. Use a [`ResolvedNetworkTarget`] and the exact connected
     /// address methods for connection checks.
     pub fn decision_for_domain(&self, domain: &str) -> Result<NetworkDecision, PolicyError> {
-        let domain = normalize_domain_pattern(domain)?;
+        let domain = normalize_domain(domain)?;
         match self.mode {
             NetworkMode::Disabled => Ok(NetworkDecision::Deny),
             NetworkMode::External => Ok(NetworkDecision::ExternallyEnforced),
@@ -464,7 +531,7 @@ impl NetworkPolicy {
     /// This is the safe policy-level entry point for a backend that has
     /// already resolved a host. It checks every captured address and fails
     /// closed for an empty address list.
-    pub fn decision_for_resolved_target(
+    fn decision_for_resolved_target(
         &self,
         target: &ResolvedNetworkTarget,
     ) -> Result<NetworkDecision, PolicyError> {
@@ -477,7 +544,7 @@ impl NetworkPolicy {
     /// A locally allowed target is denied when the actual address was not in
     /// the original resolution snapshot. External ownership remains external
     /// because the other enforcement boundary owns the connection check.
-    pub fn decision_for_connected_address(
+    fn decision_for_connected_address(
         &self,
         target: &ResolvedNetworkTarget,
         connected: SocketAddr,
@@ -523,15 +590,15 @@ impl NetworkPolicy {
     /// address are denied by default to prevent DNS rebinding from bypassing
     /// the domain policy. A literal IP may be allowed by an exact literal
     /// domain rule or by [`LocalNetworkAccess::Allow`]. Prefer
-    /// [`Self::decision_for_resolved_target`] in new backend code so the
-    /// checked addresses remain attached to the host through the connection
-    /// step.
+    /// [`ResolvedNetworkTarget`] and [`Self::authorize_connection`] in backend
+    /// code so the checked addresses remain attached to the host through the
+    /// connection step.
     pub fn decision_for_domain_with_resolved_ips(
         &self,
         domain: &str,
         resolved_ips: &[IpAddr],
     ) -> Result<NetworkDecision, PolicyError> {
-        let normalized_domain = normalize_domain_pattern(domain)?;
+        let normalized_domain = normalize_domain(domain)?;
         let decision = self.decision_for_domain(&normalized_domain)?;
         if !decision.is_allowed() {
             return Ok(decision);
@@ -558,10 +625,14 @@ impl NetworkPolicy {
         {
             return Ok(NetworkDecision::Deny);
         }
-        if resolved_ips.is_empty()
-            || (self.local_network_access == LocalNetworkAccess::Deny
-                && !explicit_localhost_allow
-                && resolved_ips.iter().copied().any(is_non_public_ip))
+        if resolved_ips.is_empty() {
+            return Ok(NetworkDecision::Deny);
+        }
+        if self.local_network_access == LocalNetworkAccess::Deny
+            && resolved_ips
+                .iter()
+                .copied()
+                .any(|ip| is_non_public_ip(ip) && !(explicit_localhost_allow && ip.is_loopback()))
         {
             return Ok(NetworkDecision::Deny);
         }
@@ -667,7 +738,7 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     } else {
         format!("{prefix}{remainder}")
     };
-    if valid_domain_pattern(&pattern) && domain_glob_is_valid(&pattern) {
+    if valid_domain_pattern(&pattern) {
         Ok(pattern)
     } else {
         Err(PolicyError::InvalidDomainPattern {
@@ -676,17 +747,29 @@ fn normalize_domain_pattern(raw: &str) -> Result<String, PolicyError> {
     }
 }
 
+fn normalize_domain(raw: &str) -> Result<String, PolicyError> {
+    let normalized = normalize_domain_pattern(raw)?;
+    if !valid_concrete_host(&normalized) {
+        return Err(PolicyError::InvalidDomainPattern {
+            pattern: raw.to_string(),
+        });
+    }
+    Ok(normalized)
+}
+
 fn normalize_host(host: &str) -> Option<String> {
     let host = host.trim();
-    if host.starts_with('[') && host.contains(':') {
+    if host.starts_with('[') {
         let bracketed = host.strip_prefix('[')?;
         let end = bracketed.find(']')?;
         let inner = &bracketed[..end];
         let suffix = &bracketed[end + 1..];
-        if !suffix.is_empty() && !valid_port_suffix(suffix) {
-            return None;
+        if normalize_ip_literal(inner).is_some() {
+            if !suffix.is_empty() && !valid_port_suffix(suffix) {
+                return None;
+            }
+            return normalize_ip_literal(inner).map(|ip| normalize_dns_host_or_ip_literal(&ip));
         }
-        return normalize_ip_literal(inner).map(|ip| normalize_dns_host_or_ip_literal(&ip));
     }
     match host.bytes().filter(|byte| *byte == b':').count() {
         0 => Some(normalize_dns_host_or_ip_literal(host)),
@@ -800,8 +883,24 @@ fn valid_domain_pattern(pattern: &str) -> bool {
                 && label.chars().all(|character| {
                     !character.is_whitespace()
                         && !character.is_control()
-                        && !matches!(character, ':' | '%')
+                        && !matches!(character, ':' | '%' | '@')
                 })
+        })
+}
+
+fn valid_concrete_host(host: &str) -> bool {
+    if parse_ip_literal(host).is_some() {
+        return true;
+    }
+    host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_'))
         })
 }
 
@@ -844,11 +943,4 @@ fn compile_domain_labels(suffix: &str, pattern: &str) -> Result<Vec<GlobMatcher>
                 })
         })
         .collect()
-}
-
-fn domain_glob_is_valid(pattern: &str) -> bool {
-    GlobBuilder::new(pattern)
-        .case_insensitive(true)
-        .build()
-        .is_ok()
 }

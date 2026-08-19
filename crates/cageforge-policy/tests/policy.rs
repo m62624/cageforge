@@ -43,30 +43,41 @@ fn resolved_network_target_rejects_address_changes() {
         .with_domain("service.example", DomainAccess::Allow)
         .expect("valid domain rule");
 
-    assert_eq!(
-        policy
-            .decision_for_resolved_target(&target)
-            .expect("resolved target decision"),
-        NetworkDecision::Allow
-    );
-    assert_eq!(
-        policy
-            .decision_for_connected_address(&target, checked)
-            .expect("checked connection decision"),
-        NetworkDecision::Allow
-    );
-    assert_eq!(
-        policy
-            .decision_for_connected_address(&target, changed)
-            .expect("changed connection decision"),
-        NetworkDecision::Deny
-    );
     match policy
         .authorize_connection(&target, checked)
         .expect("authorized connection")
     {
-        ConnectionAuthorization::Allowed(address) => assert_eq!(address.socket_addr(), checked),
+        ConnectionAuthorization::Allowed(address) => {
+            assert_eq!(address.into_socket_addr(), checked);
+        }
         other => panic!("expected an authorized address, got {other:?}"),
+    }
+    assert_eq!(
+        policy
+            .authorize_connection(&target, changed)
+            .expect("changed connection authorization"),
+        ConnectionAuthorization::Denied
+    );
+}
+
+#[test]
+fn resolved_ip_literal_cannot_claim_a_different_address() {
+    let claimed = "8.8.8.8";
+    let private = SocketAddr::new("127.0.0.1".parse().expect("loopback address"), 443);
+    let error = ResolvedNetworkTarget::new(claimed, [private])
+        .expect_err("an IP literal must agree with every resolved address");
+
+    assert!(matches!(error, PolicyError::ResolvedAddressMismatch { .. }));
+}
+
+#[test]
+fn resolved_target_rejects_policy_patterns_and_non_host_syntax() {
+    let public = SocketAddr::new("93.184.216.34".parse().expect("public address"), 443);
+    for host in ["*.example.com", "[a-c].example.com", "user@example.com"] {
+        assert!(matches!(
+            ResolvedNetworkTarget::new(host, [public]),
+            Err(PolicyError::InvalidDomainPattern { .. })
+        ));
     }
 }
 
@@ -146,6 +157,31 @@ fn path_pattern_collections_use_windows_matching_identity() {
     assert_eq!(upper, lower);
     assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 1);
     assert_eq!(BTreeSet::from([upper, lower]).len(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn absolute_globs_match_windows_verbatim_path_aliases() {
+    let context = PathResolutionContext::new();
+    let policy = FilesystemPolicy::restricted([])
+        .with_rule(
+            FilesystemRule::from_target(
+                FilesystemTarget::Glob(
+                    PathPattern::absolute(r"\\?\C:\Workspace\Secrets\**")
+                        .expect("valid verbatim absolute glob"),
+                ),
+                AccessMode::Deny,
+            )
+            .expect("valid deny rule"),
+        )
+        .expect("restricted policy accepts a deny glob");
+
+    assert_eq!(
+        policy
+            .access_for_path(Path::new(r"c:\workspace\secrets\token.txt"), &context)
+            .expect("filesystem decision"),
+        FilesystemDecision::Deny
+    );
 }
 
 #[cfg(not(windows))]
@@ -320,6 +356,23 @@ fn resolution_context_expands_all_runtime_scopes() {
 }
 
 #[test]
+fn resolution_context_deduplicates_native_path_aliases() {
+    let root = native_path("/workspace");
+    let context = PathResolutionContext::new()
+        .with_root(root.clone())
+        .expect("first root")
+        .with_root(root.clone())
+        .expect("duplicate root")
+        .with_workspace_root(root.clone())
+        .expect("first workspace root")
+        .with_workspace_root(root)
+        .expect("duplicate workspace root");
+
+    assert_eq!(context.root_paths().len(), 1);
+    assert_eq!(context.workspace_roots().len(), 1);
+}
+
+#[test]
 fn path_patterns_validate_and_match_absolute_and_workspace_paths() {
     let context = PathResolutionContext::new()
         .with_workspace_root(native_path("/workspace"))
@@ -465,6 +518,68 @@ fn filesystem_resolution_is_recursive_and_most_specific() {
         policy.access_for_path(Path::new(&native_path("/workspace/../outside")), &context,),
         Err(PolicyError::ParentTraversal { .. })
     ));
+}
+
+#[test]
+fn resolved_scope_depth_controls_filesystem_precedence() {
+    let context = PathResolutionContext::new()
+        .with_root(native_path("/"))
+        .expect("system root")
+        .with_workspace_root(native_path("/workspace"))
+        .expect("workspace root");
+    let workspace = SandboxPolicy::workspace();
+
+    assert_eq!(
+        workspace
+            .filesystem()
+            .access_for_path(Path::new(&native_path("/workspace/src/lib.rs")), &context)
+            .expect("workspace lookup"),
+        FilesystemDecision::Write
+    );
+
+    let policy = FilesystemPolicy::restricted([
+        FilesystemRule::new(
+            PathSelector::absolute(native_path("/workspace")).expect("absolute workspace selector"),
+            AccessMode::Write,
+        ),
+        FilesystemRule::new(
+            PathSelector::workspace("secrets").expect("workspace deny selector"),
+            AccessMode::Deny,
+        ),
+    ]);
+    assert_eq!(
+        policy
+            .access_for_path(
+                Path::new(&native_path("/workspace/secrets/token")),
+                &context,
+            )
+            .expect("nested deny lookup"),
+        FilesystemDecision::Deny
+    );
+}
+
+#[test]
+fn matching_deny_glob_cannot_be_reopened_by_a_deeper_write_scope() {
+    let context = PathResolutionContext::new()
+        .with_workspace_root(native_path("/workspace"))
+        .expect("workspace root");
+    let policy = FilesystemPolicy::restricted([
+        FilesystemRule::workspace_glob("secrets/**", AccessMode::Deny).expect("deny glob"),
+        FilesystemRule::new(
+            PathSelector::workspace("secrets/nested").expect("nested write selector"),
+            AccessMode::Write,
+        ),
+    ]);
+
+    assert_eq!(
+        policy
+            .access_for_path(
+                Path::new(&native_path("/workspace/secrets/nested/token")),
+                &context,
+            )
+            .expect("deny lookup"),
+        FilesystemDecision::Deny
+    );
 }
 
 #[test]
@@ -636,6 +751,26 @@ fn filesystem_policy_normalizes_duplicate_rules_conservatively() {
     let normalized = policy.normalized().expect("valid policy");
     assert_eq!(normalized.entries().len(), 1);
     assert_eq!(normalized.access_for(&selector), FilesystemDecision::Deny);
+}
+
+#[test]
+fn network_policy_normalizes_duplicate_rules_conservatively() {
+    let socket = native_path("/run/cageforge.sock");
+    let policy = NetworkPolicy::enabled()
+        .with_domain("EXAMPLE.COM:443", DomainAccess::Allow)
+        .expect("allow domain")
+        .with_domain("example.com", DomainAccess::Deny)
+        .expect("deny domain")
+        .with_unix_socket(socket.clone(), DomainAccess::Allow)
+        .expect("allow socket")
+        .with_unix_socket(socket, DomainAccess::Deny)
+        .expect("deny socket");
+
+    let normalized = policy.normalized().expect("valid policy");
+    assert_eq!(normalized.domains().len(), 1);
+    assert_eq!(normalized.domains()[0].access(), DomainAccess::Deny);
+    assert_eq!(normalized.unix_sockets().len(), 1);
+    assert_eq!(normalized.unix_sockets()[0].access(), DomainAccess::Deny);
 }
 
 #[cfg(windows)]
@@ -921,6 +1056,16 @@ fn domain_rules_support_character_classes() {
             .expect("domain lookup"),
         None
     );
+
+    let with_port = NetworkPolicy::enabled()
+        .with_domain("[a-c].example.com:443", DomainAccess::Allow)
+        .expect("character class with a port");
+    assert_eq!(
+        with_port
+            .access_for_domain("b.example.com:443")
+            .expect("domain lookup"),
+        Some(DomainAccess::Allow)
+    );
 }
 
 #[test]
@@ -1182,6 +1327,17 @@ fn resolved_domains_support_explicit_literal_and_policy_opt_ins() {
                 )
                 .expect("explicit localhost loopback access"),
             NetworkDecision::Allow
+        );
+    }
+    for address in ["10.0.0.1", "169.254.169.254", "fc00::1"] {
+        assert_eq!(
+            localhost
+                .decision_for_domain_with_resolved_ips(
+                    "localhost",
+                    &[address.parse().expect("non-loopback local address")],
+                )
+                .expect("explicit localhost non-loopback access"),
+            NetworkDecision::Deny
         );
     }
 

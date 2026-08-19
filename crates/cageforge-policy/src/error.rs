@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::AccessMode;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -42,6 +43,14 @@ pub enum PolicyError {
     InvalidDomainPattern {
         /// The domain pattern that failed validation.
         pattern: String,
+    },
+    /// An IP-literal target claimed a resolved address for a different IP.
+    #[error("resolved address {address} does not match IP literal {literal}")]
+    ResolvedAddressMismatch {
+        /// The normalized literal supplied as the target host.
+        literal: String,
+        /// The inconsistent address in the resolution snapshot.
+        address: SocketAddr,
     },
     /// A filesystem glob is empty or malformed.
     #[error("invalid glob pattern {pattern:?}: {reason}")]

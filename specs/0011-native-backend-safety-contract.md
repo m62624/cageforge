@@ -39,8 +39,10 @@ A domain decision is declarative policy inspection. It is not permission to
 open a socket. The backend must resolve the host once, construct one
 `ResolvedNetworkTarget` containing every result, and use only an address from
 that snapshot. Immediately before connecting it must check the exact
-`SocketAddr` with the resolved-target API. A second DNS lookup, an unverified
-address, or a changed target is denied.
+`SocketAddr` with `authorize_connection` and connect only through the returned
+`AuthorizedSocketAddr`. A second DNS lookup, an unverified address, or a
+changed target is denied. Hostname-only decision methods are inspection APIs,
+not connection authorization.
 
 External enforcement values and `ExternalOwner` identify a caller-declared
 boundary only. They do not prove that an OS sandbox, firewall, proxy, or DNS

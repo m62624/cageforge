@@ -75,9 +75,10 @@ dangerous request.
   parent traversal. They are validated lexically without filesystem access or
   symlink resolution; native backends must enforce the same boundary when
   resolving filesystem objects.
-- Filesystem access is recursive and the most-specific matching target wins.
-  Exact profile overrides and capability intersection are separate operations;
-  an inherited policy must not accidentally widen a granted capability.
+- Filesystem access is recursive. Any matching deny rule wins; among read/write
+  rules the most-specific resolved target wins. Exact profile overrides and
+  capability intersection are separate operations; an inherited policy must
+  not accidentally widen a granted capability.
 - Specificity counts logical path components, excluding the native root or
   drive prefix. This lets a workspace-relative deny glob such as
   `Secrets/**` override the writable workspace-root rule it narrows.
@@ -104,7 +105,9 @@ dangerous request.
 - Concrete path matching follows host filesystem conventions: POSIX path
   components and glob segments are case-sensitive, while Windows components,
   drive prefixes, and glob segments are case-insensitive. Protected metadata
-  uses the same native comparison rules. Symlink resolution remains a native
+  uses the same native comparison rules. Supported Windows drive and UNC
+  verbatim/device aliases share one identity, and malformed UTF-16 does not
+  collapse through lossy conversion. Symlink resolution remains a native
   backend responsibility.
 - Unrestricted and externally enforced filesystem policies cannot carry local
   filesystem rules. Restriction-only builders reject those combinations at
@@ -130,10 +133,11 @@ dangerous request.
   restricted allowlist; backends never infer a default from rule presence.
 - Resolved domain targets use `LocalNetworkAccess::Deny` by default. Backends
   pass all DNS results to the typed resolved-target query; empty resolution and
-  any non-public result are denied for hostnames even when the hostname is
-  explicitly allowlisted, preventing DNS rebinding. Local literals such as an
-  exact IP or `localhost` may opt in through an exact literal allow rule or
-  `LocalNetworkAccess::Allow`. The policy crate never performs DNS or
+  any non-public result are denied for ordinary hostnames even when the
+  hostname is explicitly allowlisted, preventing DNS rebinding. An exact IP
+  rule opts into that literal, while an exact `localhost` rule permits only
+  loopback among non-public addresses. Broader private/link-local access
+  requires `LocalNetworkAccess::Allow`. The policy crate never performs DNS or
   connection I/O.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
@@ -142,6 +146,9 @@ dangerous request.
   `NetworkPolicy::decision_for_unix_socket` return typed `Allow`, `Deny`, or
   `ExternallyEnforced` results. The boolean `allows_*` helpers intentionally
   return true only for local `Allow`; they do not hide external ownership.
+- A network backend must use `authorize_connection`; it is the only network
+  API that can return an `AuthorizedSocketAddr` bound to the resolution
+  snapshot and exact connected address.
 - Unrestricted and external enforcement are explicit ownership transfers. A
   backend or policy composer may reject them when its grant does not permit the
   transfer.

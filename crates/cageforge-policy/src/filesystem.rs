@@ -6,6 +6,7 @@ use crate::PathPattern;
 use crate::PathResolutionContext;
 use crate::PathSelector;
 use crate::PolicyError;
+use crate::path::normal_component_count;
 use cageforge_path::{contains_component_path, contains_parent_traversal, is_within, paths_equal};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -169,7 +170,7 @@ impl FilesystemRule {
                 .resolve(context)
                 .into_iter()
                 .filter(|root| is_within(path, root))
-                .map(|_| (selector.specificity(), true))
+                .map(|root| (normal_component_count(&root), true))
                 .max_by_key(|(specificity, _)| *specificity)
                 .unwrap_or((0, false)),
             FilesystemTarget::Glob(pattern) => {
@@ -188,7 +189,7 @@ impl FilesystemRule {
                     .resolve(context)
                     .into_iter()
                     .filter(|root| is_within(path, root))
-                    .map(|_| subpath.specificity())
+                    .map(|root| normal_component_count(&root))
                     .max();
                 if let Some(subpath_specificity) = matches {
                     access = AccessMode::Read;
@@ -321,11 +322,14 @@ impl FilesystemPolicy {
     /// Validates the policy and rejects rules that are meaningless for its mode.
     pub fn validate(&self) -> Result<(), PolicyError> {
         if self.mode != FilesystemMode::Restricted
-            && (!self.entries.is_empty() || self.glob_scan_max_depth.is_some())
+            && (!self.entries.is_empty()
+                || self.glob_scan_max_depth.is_some()
+                || !self.protected_relative_paths.is_empty())
         {
             return Err(PolicyError::InvalidRule {
-                message: "unrestricted and external filesystem policies cannot contain local rules"
-                    .to_string(),
+                message:
+                    "unrestricted and external filesystem policies cannot contain local settings"
+                        .to_string(),
             });
         }
         for rule in &self.entries {
@@ -446,6 +450,9 @@ impl FilesystemPolicy {
                 let mut writable_match = false;
                 for rule in &self.entries {
                     if let Some(candidate) = rule.matches_path(path, context) {
+                        if candidate.access == AccessMode::Deny {
+                            return Ok(FilesystemDecision::Deny);
+                        }
                         writable_match |= candidate.access == AccessMode::Write;
                         best = Some(match best {
                             Some(current) if current.specificity > candidate.specificity => current,

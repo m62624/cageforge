@@ -26,8 +26,8 @@ is included in Cageforge by this specification.
 
 The policy and backend design must account for these upstream behaviors:
 
-- filesystem access is recursive and resolves the most-specific matching
-  entry, with deny/write/read precedence for equal targets;
+- filesystem access is recursive, any matching deny remains constraining, and
+  the most-specific resolved read/write entry wins;
 - a policy can distinguish managed enforcement, no outer sandbox, and an
   externally owned sandbox;
 - filesystem entries can target absolute paths, workspace/project roots,
@@ -53,18 +53,20 @@ The policy and backend design must account for these upstream behaviors:
 - Windows enforcement has separate ACL, token, deny-read, firewall, and
   process-launch concerns and cannot be represented as a Unix-only path list.
 
-The final `cageforge-policy` implementation now owns the portable parts of
-these semantics: runtime path context, recursive most-specific filesystem
+The current `cageforge-policy` contract owns the portable parts of
+these semantics: runtime path context, recursive constraining-deny filesystem
 resolution, validated path globs, scan depth, missing-path behavior,
 read-only carve-outs, mandatory `.git` metadata protection, additive custom
 protected relative paths, explicit external-enforcement decisions, domain
 defaults, host normalization, and Unix-socket defaults. `NetworkDecision`
 preserves `Allow`, `Deny`, and `ExternallyEnforced` for domain and socket
-queries; the boolean helpers intentionally expose only local `Allow`.
+queries; the Unix-socket boolean helper intentionally exposes only local
+`Allow`.
 `LocalNetworkAccess` and the resolved-address query provide the portable
 decision boundary for loopback/private/DNS-rebinding protection without adding
 DNS or proxy dependencies; a native backend supplies the resolver results and
-must use `ResolvedNetworkTarget` to bind them to the actual connection.
+must use `ResolvedNetworkTarget` and `authorize_connection` to bind them to the
+actual connection.
 Portable glob rules are deny-only; a read/write glob is rejected as
 unsupported rather than silently delegated. Filesystem and domain matching use
 the same `globset`-compatible character classes, ranges, and negative classes

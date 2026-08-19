@@ -19,8 +19,10 @@ process launching, DNS, and native enforcement.
 - lexical `contains_parent_traversal` validation.
 
 On POSIX targets comparisons are case-sensitive. On Windows they are
-case-insensitive, including drive-prefix and component comparisons. The helpers
-never use filesystem I/O, canonicalization, or symlink resolution. A backend
+case-insensitive, including drive-prefix and component comparisons. Supported
+drive and UNC verbatim/device aliases share one lexical key, while malformed
+UTF-16 remains distinct. The helpers never use filesystem I/O,
+canonicalization, or symlink resolution. A backend
 must perform those operations when it prepares a native enforcement boundary.
 
 The shared helpers are used by policy filesystem matching, Unix-socket rules,
@@ -46,7 +48,7 @@ declared spelling at the API boundary.
 Domain rules alone cannot prevent a hostname from resolving to loopback,
 private, link-local, multicast, or other non-public addresses. The portable
 network model therefore exposes `LocalNetworkAccess` and the resolved-target
-API (`ResolvedNetworkTarget` plus `decision_for_resolved_target`). The older
+API (`ResolvedNetworkTarget` plus `authorize_connection`). The older
 slice-based query remains available for inspection, but it does not bind the
 result to a future socket connection.
 
@@ -58,12 +60,12 @@ address snapshot when resolution fails or times out. With the default
 - a hostname resolving to any non-public address is denied, even when its
   hostname rule is explicitly allowlisted;
 - a hostname with no resolved addresses is denied;
-- the `localhost` hostname is denied before trusting a public DNS result;
+- the `localhost` hostname requires an exact rule before a loopback address is
+  accepted;
 - a literal IP is denied when it is non-public unless an exact literal allow
   rule exists;
-- public results remain subject to the ordinary domain rules, and an exact
-  `localhost` allow rule is an explicit local-literal opt-in that may also
-  accept its loopback resolution;
+- public results remain subject to ordinary domain rules, and an exact
+  `localhost` allow applies only to loopback among non-public addresses;
 - `LocalNetworkAccess::Allow` is an explicit opt-in after the ordinary domain
   policy has allowed the destination.
 
@@ -102,7 +104,7 @@ native path identity and containment, so it remains reusable by projects that
 do not use policy globs.
 
 `cageforge-policy` exposes `ResolvedNetworkTarget` for a normalized host and
-one exact resolution snapshot. A native backend must evaluate that target,
-connect only to one of its `SocketAddr` values, and call
-`decision_for_connected_address` immediately before connecting. A second DNS
-lookup or an address outside the snapshot is denied.
+one exact resolution snapshot. A native backend must call
+`authorize_connection` immediately before connecting and connect only to the
+returned `AuthorizedSocketAddr`. A second DNS lookup or an address outside the
+snapshot is denied.

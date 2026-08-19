@@ -10,7 +10,6 @@ readme = "README.md"
 [lib]
 name = "cageforge_policy"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies]
 cageforge-path = { workspace = true }

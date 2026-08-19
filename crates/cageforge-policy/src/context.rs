@@ -2,6 +2,8 @@
 
 use crate::PathSelector;
 use crate::PolicyError;
+use cageforge_path::NativePathKey;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -12,19 +14,25 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PathResolutionContext {
     root_paths: Vec<PathBuf>,
+    root_keys: HashSet<NativePathKey>,
     workspace_roots: Vec<PathBuf>,
+    workspace_root_keys: HashSet<NativePathKey>,
     minimal_paths: Vec<PathBuf>,
+    minimal_path_keys: HashSet<NativePathKey>,
     tmpdir: Option<PathBuf>,
     slash_tmp: Option<PathBuf>,
 }
 
 impl PathResolutionContext {
     /// Creates an empty context.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             root_paths: Vec::new(),
+            root_keys: HashSet::new(),
             workspace_roots: Vec::new(),
+            workspace_root_keys: HashSet::new(),
             minimal_paths: Vec::new(),
+            minimal_path_keys: HashSet::new(),
             tmpdir: None,
             slash_tmp: None,
         }
@@ -36,19 +44,28 @@ impl PathResolutionContext {
     /// than one drive or UNC root. The context never discovers these paths on
     /// its own.
     pub fn with_root(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
-        self.root_paths.push(validated_absolute(path.into())?);
+        let path = validated_absolute(path.into())?;
+        if self.root_keys.insert(NativePathKey::new(&path)) {
+            self.root_paths.push(path);
+        }
         Ok(self)
     }
 
     /// Adds one absolute workspace root.
     pub fn with_workspace_root(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
-        self.workspace_roots.push(validated_absolute(path.into())?);
+        let path = validated_absolute(path.into())?;
+        if self.workspace_root_keys.insert(NativePathKey::new(&path)) {
+            self.workspace_roots.push(path);
+        }
         Ok(self)
     }
 
     /// Adds one absolute path required by ordinary process execution.
     pub fn with_minimal_path(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
-        self.minimal_paths.push(validated_absolute(path.into())?);
+        let path = validated_absolute(path.into())?;
+        if self.minimal_path_keys.insert(NativePathKey::new(&path)) {
+            self.minimal_paths.push(path);
+        }
         Ok(self)
     }
 

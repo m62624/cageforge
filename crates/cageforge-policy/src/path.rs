@@ -2,11 +2,12 @@
 
 use crate::PathResolutionContext;
 use crate::PolicyError;
-use cageforge_path::{case_fold, contains_parent_traversal, paths_equal, strings_equal};
+use cageforge_path::{
+    NativePathKey, case_fold, contains_parent_traversal, is_within, normalize_lexical_path,
+    paths_equal, strings_equal,
+};
 use globset::{GlobBuilder, GlobMatcher};
 use std::cmp::Ordering;
-#[cfg(not(windows))]
-use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::Component;
 use std::path::Path;
@@ -40,7 +41,7 @@ impl Hash for PathSelector {
     fn hash<H: Hasher>(&self, state: &mut H) {
         selector_kind_rank(&self.kind).hash(state);
         if let Some(path) = self.path() {
-            semantic_path_parts(path).hash(state);
+            NativePathKey::new(path).hash(state);
         }
     }
 }
@@ -58,7 +59,7 @@ impl Ord for PathSelector {
             return kind_order;
         }
         match (self.path(), other.path()) {
-            (Some(left), Some(right)) => semantic_path_parts(left).cmp(&semantic_path_parts(right)),
+            (Some(left), Some(right)) => NativePathKey::new(left).cmp(&NativePathKey::new(right)),
             (None, None) => Ordering::Equal,
             _ => Ordering::Equal,
         }
@@ -181,22 +182,11 @@ impl PathSelector {
 
     /// Returns the number of concrete path components represented by this
     /// selector after resolution.
-    pub(crate) fn specificity(&self) -> usize {
-        match &self.kind {
-            PathSelectorKind::Absolute(path) => normal_component_count(path),
-            PathSelectorKind::WorkspaceRoot(relative) => normal_component_count(relative),
-            PathSelectorKind::Root
-            | PathSelectorKind::Minimal
-            | PathSelectorKind::Tmpdir
-            | PathSelectorKind::SlashTmp => 0,
-        }
-    }
-
     pub(crate) fn is_definitely_outside(&self, parent: &Self) -> bool {
         match (&self.kind, &parent.kind) {
             (PathSelectorKind::Absolute(child), PathSelectorKind::Absolute(parent))
             | (PathSelectorKind::WorkspaceRoot(child), PathSelectorKind::WorkspaceRoot(parent)) => {
-                relative_path_components(child, parent).is_none()
+                !is_within(child, parent)
             }
             _ => false,
         }
@@ -226,32 +216,6 @@ fn selector_kind_rank(kind: &PathSelectorKind) -> u8 {
         PathSelectorKind::Tmpdir => 4,
         PathSelectorKind::SlashTmp => 5,
     }
-}
-
-#[cfg(windows)]
-fn semantic_path_parts(path: &Path) -> Vec<(u8, String)> {
-    path.components()
-        .map(|component| match component {
-            Component::Prefix(prefix) => (0, case_fold(&prefix.as_os_str().to_string_lossy())),
-            Component::RootDir => (1, String::new()),
-            Component::CurDir => (2, String::new()),
-            Component::ParentDir => (3, String::new()),
-            Component::Normal(value) => (4, case_fold(&value.to_string_lossy())),
-        })
-        .collect()
-}
-
-#[cfg(not(windows))]
-fn semantic_path_parts(path: &Path) -> Vec<(u8, OsString)> {
-    path.components()
-        .map(|component| match component {
-            Component::Prefix(prefix) => (0, prefix.as_os_str().to_os_string()),
-            Component::RootDir => (1, OsString::new()),
-            Component::CurDir => (2, OsString::new()),
-            Component::ParentDir => (3, OsString::new()),
-            Component::Normal(value) => (4, value.to_os_string()),
-        })
-        .collect()
 }
 
 /// A validated path glob used by a filesystem rule.
@@ -357,7 +321,8 @@ impl PathPattern {
                 reason: "pattern cannot contain a NUL character".to_string(),
             });
         }
-        let path = Path::new(&raw);
+        let normalized_path = normalize_lexical_path(Path::new(&raw));
+        let path = normalized_path.as_ref();
         if absolute && !path.is_absolute() {
             return Err(PolicyError::InvalidGlobPattern {
                 pattern: raw,
@@ -444,6 +409,8 @@ pub(crate) fn contains_nul(path: &Path) -> bool {
 }
 
 fn path_components(path: &Path) -> (Option<String>, Vec<String>) {
+    let normalized_path = normalize_lexical_path(path);
+    let path = normalized_path.as_ref();
     let mut prefix = None;
     let mut components = Vec::new();
     for component in path.components() {
@@ -462,7 +429,7 @@ fn path_components(path: &Path) -> (Option<String>, Vec<String>) {
     (prefix, components)
 }
 
-fn normal_component_count(path: &Path) -> usize {
+pub(crate) fn normal_component_count(path: &Path) -> usize {
     path.components()
         .filter(|component| matches!(component, Component::Normal(_)))
         .count()
@@ -485,9 +452,10 @@ fn relative_path_components(path: &Path, root: &Path) -> Option<Vec<String>> {
 
 fn glob_components_match(pattern: &[String], matchers: &[GlobMatcher], path: &[String]) -> bool {
     let mut current = vec![false; path.len() + 1];
+    let mut next = vec![false; path.len() + 1];
     current[0] = true;
     for (pattern_index, pattern_component) in pattern.iter().enumerate() {
-        let mut next = vec![false; path.len() + 1];
+        next.fill(false);
         if pattern_component == "**" {
             next[0] = current[0];
             for index in 1..=path.len() {
@@ -499,7 +467,7 @@ fn glob_components_match(pattern: &[String], matchers: &[GlobMatcher], path: &[S
                 next[index] = current[index - 1] && matcher.is_match(&path[index - 1]);
             }
         }
-        current = next;
+        std::mem::swap(&mut current, &mut next);
     }
     current[path.len()]
 }

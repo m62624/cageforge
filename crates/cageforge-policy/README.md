@@ -60,6 +60,7 @@ an unchecked path selector by writing a public enum payload.
 | `LocalNetworkAccess` | Controls whether resolved loopback/private/link-local addresses are allowed. |
 | `NetworkDecision` | Distinguishes local allow/deny from externally owned network enforcement. |
 | `ResolvedNetworkTarget` | Keeps one normalized host and its exact resolved socket addresses together for a safe connection check. |
+| `ConnectionAuthorization` and `AuthorizedSocketAddr` | Returns the exact checked address that a network backend may use. |
 | `DomainRule` and `UnixSocketRule` | Adds validated network destinations and decisions. |
 | `PolicyError` | Reports invalid paths, patterns, domains, contexts, and policy combinations. |
 
@@ -102,22 +103,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `access_for_path` requires an absolute path and rejects NUL characters and
-parent traversal. Rules are recursive. The most-specific matching rule wins;
-ties use deterministic precedence, with `Deny` stronger than `Read`, and
-`Read` stronger than `Write`. Restricted policies protect `.git` below every
+parent traversal. Rules are recursive. Any matching deny rule wins. Among
+read/write rules, the most-specific resolved path wins and equal specificity
+uses `Read` over `Write`. Restricted policies protect `.git` below every
 writable scope by default. Add more protected relative paths with
 `with_additional_protected_relative_path`; the explicit
 `dangerously_allow_git_write` method is available only for trusted callers and
-may still be rejected by a future policy composer or backend. Call
+may still be narrowed by a policy composer or rejected by a backend. Call
 `normalized` before handing duplicate rules to a backend when a canonical rule
 list is needed; composition canonicalizes both policies before retaining them
-in `EffectiveSandbox`. Concrete path and glob comparisons follow native filesystem
-case rules: POSIX matching is case-sensitive, while Windows matching is
+in `EffectiveSandbox`. Concrete path and glob comparisons follow native
+filesystem case rules: POSIX matching is case-sensitive, while Windows matching is
 case-insensitive. `PathPattern` equality, hashing, and ordering use the same
 native matching identity; `as_str()` preserves the declared spelling for
 diagnostics and serialization. The portable crate does not resolve symlinks;
 that remains a native backend decision. Built-in protected metadata follows the
-same native path case rules.
+same native path case rules. Windows drive/UNC device and verbatim aliases are
+normalized by `cageforge-path` before identity and containment comparisons.
 
 `PathSelector::root()` is a symbolic request for every system root supplied in
 `PathResolutionContext`. POSIX callers normally provide `/`; Windows callers
@@ -167,10 +169,12 @@ semantics of the prefixed forms.
 
 Use `decision_for_domain` only for declarative host-policy inspection; it is not
 an authorization to connect because it does not contain a resolved address.
-For a connection, construct `ResolvedNetworkTarget`, call
-`decision_for_resolved_target`, and immediately call
-`decision_for_connected_address` with the exact `SocketAddr` that the backend
-will connect to. A changed or freshly resolved address is denied. Use
+For a connection, construct `ResolvedNetworkTarget` and immediately call
+`authorize_connection` with the exact `SocketAddr` that the backend will use.
+Only `ConnectionAuthorization::Allowed` contains an `AuthorizedSocketAddr`; a
+backend consumes it with `into_socket_addr` when handing the exact address to
+its connection operation. The authorization token is intentionally not
+`Copy` or `Clone`; a changed or freshly resolved address is denied. Use
 `decision_for_unix_socket` when a backend needs the complete result. These
 methods return `NetworkDecision::Allow`,
 `NetworkDecision::Deny`, or `NetworkDecision::ExternallyEnforced`. The
@@ -186,9 +190,10 @@ or native network mechanism in the backend it uses. The default
 recognizes `localhost` as a local hostname before trusting DNS results. A
 backend passes every resolved address to
 `decision_for_domain_with_resolved_ips`, and an empty list represents failed or
-timed-out resolution. Any non-public result for a hostname is denied. An exact literal IP
-allow rule, an exact `localhost` allow rule, or the explicit
-`LocalNetworkAccess::Allow` builder is required to opt into local destinations.
+timed-out resolution. Any non-public result for an ordinary hostname is denied.
+An exact IP-literal allow opts into that literal; an exact `localhost` allow
+opts into loopback addresses only. Other private, metadata, and link-local
+destinations require `LocalNetworkAccess::Allow`.
 The policy crate performs no DNS or network I/O. It also cannot prove that a
 caller actually connected to the checked address; the native backend must use
 the target snapshot instead of resolving the hostname again.
