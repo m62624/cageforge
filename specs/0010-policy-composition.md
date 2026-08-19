@@ -38,8 +38,8 @@ accidentally grant access.
 - Network decisions are evaluated independently. A domain or Unix socket is
   allowed only when both policies allow it.
 - Resolved domain decisions are evaluated independently with the same complete
-  address set on both sides through
-  `EffectiveNetworkPolicy::decision_for_resolved_target`. The composer
+  address set on both sides through the typed
+  `EffectiveNetworkPolicy::authorize_connection` flow. The composer
   performs no DNS lookup; an empty target snapshot represents failed
   resolution and the default local-network denial remains monotonic.
 - `External` ownership is accepted only when both sides use external
@@ -48,8 +48,10 @@ accidentally grant access.
   unrelated owner is a typed composition error rather than a silent allow or
   deny conversion.
 - Workspace roots are deduplicated and retained only when each requested root
-  is inside one of the optional ceiling roots. Composition accepts only
-  runtime-resolved absolute roots. `EffectiveSandbox::path_context` creates an
+  is inside one of the optional ceiling roots. A ceiling filters explicit and
+  runtime roots but never creates a root absent from the request or context.
+  Composition accepts only runtime-resolved absolute roots.
+  `EffectiveSandbox::path_context` creates an
   opaque context whose workspace roots cannot be replaced by a broader caller
   context; symlink behavior remains at the backend boundary.
 - Environment composition chooses the least permissive base (`None`,

@@ -101,27 +101,16 @@ proptest! {
         let changed = SocketAddr::new(Ipv4Addr::new(1, 1, 1, 1).into(), 443);
         let target = ResolvedNetworkTarget::new("service.example", [checked])
             .expect("valid resolved target");
-        prop_assert_eq!(
-            effective
-                .network()
-                .decision_for_connected_address(&target, checked)
-                .expect("checked address"),
-            NetworkDecision::Allow,
-        );
-        prop_assert_eq!(
-            effective
-                .network()
-                .decision_for_connected_address(&target, changed)
-                .expect("changed address"),
-            NetworkDecision::Deny,
-        );
-        prop_assert!(matches!(
-            effective
-                .network()
-                .authorize_connection(&target, checked)
-                .expect("checked address authorization"),
-            ConnectionAuthorization::Allowed(address) if address.socket_addr() == checked
-        ));
+        let authorization = effective
+            .network()
+            .authorize_connection(&target, checked)
+            .expect("checked address authorization");
+        match authorization {
+            ConnectionAuthorization::Allowed(address) => {
+                prop_assert_eq!(address.into_socket_addr(), checked);
+            }
+            other => prop_assert!(false, "expected allowed authorization, got {other:?}"),
+        }
         prop_assert_eq!(
             effective
                 .network()

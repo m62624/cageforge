@@ -65,7 +65,7 @@ pub fn compose(request: CompositionRequest<'_>) -> Result<EffectiveSandbox, Comp
         });
     }
 
-    let workspace_roots = intersect_workspace_roots(
+    let workspace_roots = compose_workspace_roots(
         request.requested_workspace_roots.as_deref(),
         request.ceiling.workspace_roots(),
     )?;
@@ -83,7 +83,8 @@ pub fn compose(request: CompositionRequest<'_>) -> Result<EffectiveSandbox, Comp
             request.requested_environment.clone(),
             request.ceiling.environment().clone(),
         ),
-        workspace_roots,
+        workspace_roots.selected,
+        workspace_roots.limit,
     ))
 }
 
@@ -141,11 +142,7 @@ impl EffectiveNetworkPolicy {
     }
 
     /// Evaluates a domain and all addresses resolved for it against both
-    /// policies.
-    ///
-    /// The resolver belongs to the consuming backend. Passing every resolved
-    /// address, or an empty slice after a failed lookup, keeps DNS and network
-    /// I/O outside this pure composition crate while preserving narrowing.
+    /// policies without authorizing a later connection.
     pub fn decision_for_domain_with_resolved_ips(
         &self,
         domain: &str,
@@ -161,52 +158,6 @@ impl EffectiveNetworkPolicy {
         let ceiling = self
             .ceiling()
             .decision_for_domain_with_resolved_ips(domain, resolved_ips)
-            .map_err(|source| CompositionError::PolicyEvaluation {
-                boundary: CompositionBoundary::Network,
-                source,
-            })?;
-        Ok(combine_network_decisions(requested, ceiling))
-    }
-
-    /// Evaluates one resolved network target against both component policies.
-    pub fn decision_for_resolved_target(
-        &self,
-        target: &ResolvedNetworkTarget,
-    ) -> Result<NetworkDecision, CompositionError> {
-        let requested = self
-            .requested()
-            .decision_for_resolved_target(target)
-            .map_err(|source| CompositionError::PolicyEvaluation {
-                boundary: CompositionBoundary::Network,
-                source,
-            })?;
-        let ceiling = self
-            .ceiling()
-            .decision_for_resolved_target(target)
-            .map_err(|source| CompositionError::PolicyEvaluation {
-                boundary: CompositionBoundary::Network,
-                source,
-            })?;
-        Ok(combine_network_decisions(requested, ceiling))
-    }
-
-    /// Evaluates the exact address a backend is about to connect to against
-    /// both component policies.
-    pub fn decision_for_connected_address(
-        &self,
-        target: &ResolvedNetworkTarget,
-        connected: SocketAddr,
-    ) -> Result<NetworkDecision, CompositionError> {
-        let requested = self
-            .requested()
-            .decision_for_connected_address(target, connected)
-            .map_err(|source| CompositionError::PolicyEvaluation {
-                boundary: CompositionBoundary::Network,
-                source,
-            })?;
-        let ceiling = self
-            .ceiling()
-            .decision_for_connected_address(target, connected)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
                 source,
@@ -352,10 +303,10 @@ fn combine_connection_authorizations(
     }
 }
 
-fn intersect_workspace_roots(
+fn compose_workspace_roots(
     requested_roots: Option<&[PathBuf]>,
     ceiling_roots: Option<&[PathBuf]>,
-) -> Result<Option<Vec<PathBuf>>, CompositionError> {
+) -> Result<ComposedWorkspaceRoots, CompositionError> {
     let requested_roots = requested_roots
         .map(|roots| normalize_roots(roots.iter().cloned()))
         .transpose()?;
@@ -370,10 +321,27 @@ fn intersect_workspace_roots(
                     return Err(CompositionError::WorkspaceRootNotGranted { path: root.clone() });
                 }
             }
-            Ok(Some(requested))
+            Ok(ComposedWorkspaceRoots {
+                selected: Some(requested),
+                limit: Some(ceiling),
+            })
         }
-        (Some(requested), None) => Ok(Some(requested)),
-        (None, Some(ceiling)) => Ok(Some(ceiling)),
-        (None, None) => Ok(None),
+        (Some(requested), None) => Ok(ComposedWorkspaceRoots {
+            selected: Some(requested),
+            limit: None,
+        }),
+        (None, Some(ceiling)) => Ok(ComposedWorkspaceRoots {
+            selected: None,
+            limit: Some(ceiling),
+        }),
+        (None, None) => Ok(ComposedWorkspaceRoots {
+            selected: None,
+            limit: None,
+        }),
     }
+}
+
+struct ComposedWorkspaceRoots {
+    selected: Option<Vec<PathBuf>>,
+    limit: Option<Vec<PathBuf>>,
 }

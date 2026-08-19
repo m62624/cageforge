@@ -95,11 +95,10 @@ assert_ne!(ExternalOwner::new(), owner);
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
   that are constrained by both policies and retain both inputs for backend
   lowering. `glob_scan_max_depth` returns the widest depth required by all
-  effective deny-glob rules. `EffectiveNetworkPolicy::decision_for_resolved_target`
-  and `decision_for_connected_address` apply the same DNS-rebinding-safe
-  narrowing to one resolved target and the exact socket address supplied by a
-  backend; they perform no DNS lookup themselves. `authorize_connection`
-  returns the checked address as a typed value for the backend to connect to.
+  effective deny-glob rules. `EffectiveNetworkPolicy::authorize_connection`
+  applies both policies to one `ResolvedNetworkTarget` and the exact socket
+  address supplied by a backend, then returns that address as a typed value.
+  It performs no DNS lookup itself.
 - `CoreEnvironment` wraps the map selected by a platform backend's core
   environment allowlist. `EnvironmentInput::core` accepts this type instead of
   an arbitrary map, making the selection boundary explicit.

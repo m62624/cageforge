@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use cageforge_command::EnvironmentSpec;
-use cageforge_path::{contains_parent_traversal, is_within, paths_equal};
+use cageforge_path::{NativePathKey, contains_parent_traversal, is_within};
 use cageforge_policy::{NetworkPolicy, PathResolutionContext, SandboxPolicy};
 
 use crate::CompositionError;
@@ -130,6 +131,7 @@ pub struct EffectiveSandbox {
     network: EffectiveNetworkPolicy,
     environment: EffectiveEnvironment,
     workspace_roots: Option<Vec<PathBuf>>,
+    workspace_root_limit: Option<Vec<PathBuf>>,
 }
 
 impl EffectiveSandbox {
@@ -138,12 +140,14 @@ impl EffectiveSandbox {
         network: EffectiveNetworkPolicy,
         environment: EffectiveEnvironment,
         workspace_roots: Option<Vec<PathBuf>>,
+        workspace_root_limit: Option<Vec<PathBuf>>,
     ) -> Self {
         Self {
             filesystem,
             network,
             environment,
             workspace_roots,
+            workspace_root_limit,
         }
     }
 
@@ -172,6 +176,14 @@ impl EffectiveSandbox {
         self.workspace_roots.as_deref()
     }
 
+    /// Returns the outer workspace-root ceiling, if one was configured.
+    ///
+    /// A ceiling limits explicit request roots and runtime roots but never
+    /// creates a workspace root by itself.
+    pub fn workspace_root_limit(&self) -> Option<&[PathBuf]> {
+        self.workspace_root_limit.as_deref()
+    }
+
     /// Creates a runtime path context constrained by the effective roots.
     ///
     /// Non-workspace runtime paths are copied from `base`. When the effective
@@ -190,7 +202,10 @@ impl EffectiveSandbox {
         let workspace_roots = self
             .workspace_roots()
             .unwrap_or_else(|| base.workspace_roots());
-        for path in workspace_roots {
+        for path in workspace_roots.iter().filter(|path| {
+            self.workspace_root_limit()
+                .is_none_or(|limit| root_is_within(path, limit))
+        }) {
             context = context
                 .with_workspace_root(path.clone())
                 .map_err(|source| CompositionError::InvalidPathContext { source })?;
@@ -243,13 +258,11 @@ where
     P: Into<PathBuf>,
 {
     let mut normalized: Vec<PathBuf> = Vec::new();
+    let mut seen = HashSet::new();
     for root in roots {
         let root = root.into();
         validate_root(&root)?;
-        if !normalized
-            .iter()
-            .any(|existing| paths_equal(existing, &root))
-        {
+        if seen.insert(NativePathKey::new(&root)) {
             normalized.push(root);
         }
     }

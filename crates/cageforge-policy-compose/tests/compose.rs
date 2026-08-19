@@ -168,6 +168,31 @@ fn keeps_nested_workspace_roots_and_deduplicates_them() {
 }
 
 #[test]
+fn ceiling_roots_filter_runtime_roots_without_becoming_requested_roots() {
+    let allowed = absolute_root("allowed");
+    let outside = absolute_root("outside");
+    let ceiling = PolicyCeiling::new(SandboxPolicy::workspace(), EnvironmentSpec::empty())
+        .with_workspace_roots([allowed.clone()])
+        .expect("valid ceiling root");
+    let requested = SandboxPolicy::workspace();
+    let effective = compose(CompositionRequest::new(
+        &requested,
+        &EnvironmentSpec::empty(),
+        &ceiling,
+    ))
+    .expect("valid policies compose");
+    let base = PathResolutionContext::new()
+        .with_workspace_root(allowed.clone())
+        .expect("allowed runtime root")
+        .with_workspace_root(outside)
+        .expect("outside runtime root");
+    let context = effective.path_context(&base).expect("effective context");
+
+    assert_eq!(effective.workspace_roots(), None);
+    assert_eq!(context.workspace_roots(), std::slice::from_ref(&allowed));
+}
+
+#[test]
 fn external_ownership_must_match_on_each_boundary() {
     let requested = SandboxPolicy::new(FilesystemPolicy::external(), NetworkPolicy::enabled());
     let ceiling = PolicyCeiling::new(SandboxPolicy::read_only(), EnvironmentSpec::inherit_core());

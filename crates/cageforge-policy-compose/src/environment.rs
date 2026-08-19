@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
+use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsString;
 
-use cageforge_command::{EnvironmentBase, EnvironmentSpec};
+use cageforge_command::{EnvironmentBase, EnvironmentNameKey, EnvironmentSpec};
 
 use crate::CompositionError;
 
@@ -50,13 +50,12 @@ impl EffectiveEnvironment {
             });
         }
         let requested = self.requested.apply_to(input.variables);
-        let requested_names: Vec<OsString> = requested.keys().cloned().collect();
+        let requested_names: HashSet<_> = requested
+            .keys()
+            .map(|name| EnvironmentNameKey::new(name))
+            .collect();
         let mut effective = self.ceiling.apply_to(requested);
-        effective.retain(|name, _| {
-            requested_names
-                .iter()
-                .any(|requested_name| environment_names_equal(requested_name, name))
-        });
+        effective.retain(|name, _| requested_names.contains(&EnvironmentNameKey::new(name)));
         Ok(effective)
     }
 }
@@ -144,9 +143,4 @@ fn base_is_at_most(supplied: EnvironmentBase, required: EnvironmentBase) -> bool
         EnvironmentBase::Core => supplied != EnvironmentBase::All,
         EnvironmentBase::All => true,
     }
-}
-
-fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
-    left.to_string_lossy()
-        .eq_ignore_ascii_case(&right.to_string_lossy())
 }
