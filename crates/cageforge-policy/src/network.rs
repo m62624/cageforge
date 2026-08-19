@@ -73,8 +73,7 @@ pub enum NetworkDecision {
 }
 
 impl NetworkDecision {
-    /// Returns whether the local policy explicitly allows the destination.
-    pub const fn is_allowed(self) -> bool {
+    pub(crate) const fn is_allowed(self) -> bool {
         matches!(self, Self::Allow)
     }
 
@@ -345,9 +344,9 @@ impl NetworkPolicy {
 
     /// Evaluates a domain against the complete network policy.
     ///
-    /// Unlike allows_domain, this preserves the distinction between a local
-    /// denial and a policy whose enforcement belongs to another trusted
-    /// boundary.
+    /// Unlike a boolean authorization helper, this preserves the distinction
+    /// between a local denial and a policy whose enforcement belongs to another
+    /// trusted boundary.
     pub fn decision_for_domain(&self, domain: &str) -> Result<NetworkDecision, PolicyError> {
         let domain = normalize_domain_pattern(domain)?;
         match self.mode {
@@ -506,11 +505,6 @@ impl NetworkPolicy {
             }
         };
         Ok(decision)
-    }
-
-    /// Returns whether a domain is allowed under the complete network mode.
-    pub fn allows_domain(&self, domain: &str) -> Result<bool, PolicyError> {
-        Ok(self.decision_for_domain(domain)?.is_allowed())
     }
 
     /// Returns whether a Unix socket path is allowed under the complete network mode.

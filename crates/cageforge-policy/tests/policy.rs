@@ -774,15 +774,17 @@ fn domain_rules_normalize_and_apply_deny_precedence() {
     );
     assert_eq!(policy.domains()[0].access(), DomainAccess::Allow);
     assert!(policy.unix_sockets().is_empty());
-    assert!(
+    assert_eq!(
         policy
-            .allows_domain("api.example.com")
-            .expect("allowed domain")
+            .decision_for_domain("api.example.com")
+            .expect("allowed domain"),
+        NetworkDecision::Allow
     );
-    assert!(
-        !policy
-            .allows_domain("blocked.example.com")
-            .expect("denied domain")
+    assert_eq!(
+        policy
+            .decision_for_domain("blocked.example.com")
+            .expect("denied domain"),
+        NetworkDecision::Deny
     );
 }
 
@@ -985,10 +987,11 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
             .expect("lookup"),
         Some(DomainAccess::Deny)
     );
-    assert!(
-        !policy
-            .allows_domain("anything.example")
-            .expect("disabled network")
+    assert_eq!(
+        policy
+            .decision_for_domain("anything.example")
+            .expect("disabled network"),
+        NetworkDecision::Deny
     );
     assert!(!policy.allows_unix_socket(Path::new(socket_path)));
     let enabled = NetworkPolicy::enabled()
@@ -1001,19 +1004,21 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
         .expect("parent socket rule");
     assert!(!enabled.allows_unix_socket(Path::new(socket_path)));
     assert!(enabled.allows_unix_socket(Path::new(&native_path("/other.sock"))));
-    assert!(
+    assert_eq!(
         enabled
-            .allows_domain("unmatched.example")
-            .expect("enabled network")
+            .decision_for_domain("unmatched.example")
+            .expect("enabled network"),
+        NetworkDecision::Allow
     );
     let allow_only = NetworkPolicy::enabled()
         .with_unix_socket(socket_path, DomainAccess::Allow)
         .expect("allow socket rule");
     assert!(allow_only.allows_unix_socket(Path::new(socket_path)));
-    assert!(
-        !NetworkPolicy::external()
-            .allows_domain("example.com")
-            .expect("external network")
+    assert_eq!(
+        NetworkPolicy::external()
+            .decision_for_domain("example.com")
+            .expect("external network"),
+        NetworkDecision::ExternallyEnforced
     );
     let allowlisted = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
@@ -1022,15 +1027,17 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
         .with_unix_socket_mode(UnixSocketMode::Restricted)
         .with_unix_socket(socket_path, DomainAccess::Allow)
         .expect("allow socket");
-    assert!(
+    assert_eq!(
         allowlisted
-            .allows_domain("allowed.example")
-            .expect("allowlisted domain")
+            .decision_for_domain("allowed.example")
+            .expect("allowlisted domain"),
+        NetworkDecision::Allow
     );
-    assert!(
-        !allowlisted
-            .allows_domain("other.example")
-            .expect("unlisted domain")
+    assert_eq!(
+        allowlisted
+            .decision_for_domain("other.example")
+            .expect("unlisted domain"),
+        NetworkDecision::Deny
     );
     assert!(allowlisted.allows_unix_socket(Path::new(socket_path)));
     assert!(!allowlisted.allows_unix_socket(Path::new(&native_path("/other.sock"))));
@@ -1065,7 +1072,6 @@ fn network_decisions_preserve_external_enforcement() {
         NetworkDecision::ExternallyEnforced
     );
     assert!(NetworkDecision::ExternallyEnforced.is_externally_enforced());
-    assert!(!NetworkDecision::ExternallyEnforced.is_allowed());
 }
 
 #[test]

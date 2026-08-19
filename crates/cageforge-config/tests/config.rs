@@ -415,10 +415,11 @@ domains = [{ pattern = "EXAMPLE.COM:8443", access = "allow" }]
     assert_eq!(network.domains().len(), 1);
     assert_eq!(network.domains()[0].pattern(), "example.com");
     assert_eq!(network.domains()[0].access(), DomainAccess::Allow);
-    assert!(
+    assert_eq!(
         network
-            .allows_domain("example.com:443")
-            .expect("domain should be evaluated")
+            .decision_for_domain("example.com:443")
+            .expect("domain should be evaluated"),
+        cageforge_policy::NetworkDecision::Allow
     );
 }
 
@@ -600,11 +601,17 @@ mode = "backend-default"
     assert_eq!(network.local_network_access(), LocalNetworkAccess::Deny);
     assert_eq!(network.domains().len(), 2);
     assert_eq!(network.unix_sockets().len(), 1);
-    assert!(network.allows_domain("good.example.com").expect("domain"));
-    assert!(
-        !network
-            .allows_domain("blocked.example.com")
-            .expect("domain")
+    assert_eq!(
+        network
+            .decision_for_domain("good.example.com")
+            .expect("domain"),
+        cageforge_policy::NetworkDecision::Allow
+    );
+    assert_eq!(
+        network
+            .decision_for_domain("blocked.example.com")
+            .expect("domain"),
+        cageforge_policy::NetworkDecision::Deny
     );
     assert!(network.allows_unix_socket(&socket));
 

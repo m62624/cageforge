@@ -170,9 +170,9 @@ will connect to. A changed or freshly resolved address is denied. Use
 `decision_for_unix_socket` when a backend needs the complete result. These
 methods return `NetworkDecision::Allow`,
 `NetworkDecision::Deny`, or `NetworkDecision::ExternallyEnforced`. The
-`allows_domain` and `allows_unix_socket` helpers remain as local boolean
-queries and return `true` only for `Allow`; they intentionally do not collapse
-external ownership into permission.
+The hostname-only boolean helper is intentionally absent: a caller must use
+the resolved-target flow for a connection. `allows_unix_socket` remains a
+local boolean query because Unix socket paths do not involve DNS resolution.
 
 Network policy is independent from filesystem policy. Disabled mode denies
 destinations, while external mode records that another trusted boundary owns

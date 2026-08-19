@@ -122,10 +122,11 @@ CI runner; they are not simulated in this crate.
 
 ## Backend safety contracts
 
-Backends should use `ResolvedNetworkTarget` and
-`EffectiveNetworkPolicy::decision_for_connected_address`. A hostname is not
-authorized merely because its rule matched; the exact connected `SocketAddr`
-must belong to the checked resolution snapshot.
+Backends must use `ResolvedNetworkTarget` and the resolved connection flow from
+`EffectiveNetworkPolicy`. A hostname is not authorized merely because its rule
+matched; the exact connected `SocketAddr` must belong to the checked resolution
+snapshot. Hostname-only decisions are inspection results and are not boolean
+connection permissions.
 
 `ExternalOwner` is only an opaque caller identity token. It does not prove
 that an external sandbox exists or that it is enforcing anything.
@@ -133,3 +134,6 @@ that an external sandbox exists or that it is enforcing anything.
 `EnvironmentInput::core` is also a backend contract: its map must already be
 selected from the platform's core environment. The type label does not
 authorize arbitrary inherited variables.
+
+Filesystem native enforcement is specified separately in
+`specs/0011-native-backend-safety-contract.md`.
