@@ -592,15 +592,18 @@ impl NetworkPolicy {
     /// Evaluates a domain together with addresses resolved by a future
     /// network backend.
     ///
-    /// This method deliberately performs no DNS lookup. The backend must
-    /// resolve the name, pass every result here, and pass an empty slice when
-    /// resolution fails or times out. Hostnames resolving to any non-public
-    /// address are denied by default to prevent DNS rebinding from bypassing
-    /// the domain policy. A literal IP may be allowed by an exact literal
-    /// domain rule or by [`LocalNetworkAccess::Allow`]. Prefer
+    /// This method deliberately performs no DNS lookup. For a hostname, the
+    /// backend must resolve the name, pass every result here, and pass an
+    /// empty slice when resolution fails or times out. Such an empty hostname
+    /// result is denied. Hostnames resolving to any non-public address are
+    /// denied by default to prevent DNS rebinding from bypassing the domain
+    /// policy. An IP literal does not require DNS results: an empty slice is
+    /// valid for the literal itself, while non-public literals still require
+    /// an exact literal allow or [`LocalNetworkAccess::Allow`]. Prefer
     /// [`ResolvedNetworkTarget`] and [`Self::authorize_connection`] in backend
-    /// code so the checked addresses remain attached to the host through the
-    /// connection step.
+    /// code for actual connections. The target must contain the exact socket
+    /// address that will be used, so a target with no addresses cannot be
+    /// connected through the authorization API.
     pub fn decision_for_domain_with_resolved_ips(
         &self,
         domain: &str,

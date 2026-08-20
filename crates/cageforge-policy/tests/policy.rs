@@ -1389,6 +1389,16 @@ fn resolved_domains_support_explicit_literal_and_policy_opt_ins() {
 }
 
 #[test]
+fn public_ip_literals_do_not_require_dns_results() {
+    assert_eq!(
+        NetworkPolicy::enabled()
+            .decision_for_domain_with_resolved_ips("8.8.8.8", &[])
+            .expect("public IP literal"),
+        NetworkDecision::Allow
+    );
+}
+
+#[test]
 fn path_selector_validates_empty_and_absolute_workspace_paths() {
     assert!(matches!(
         PathSelector::absolute("").expect_err("empty absolute path should fail"),

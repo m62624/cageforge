@@ -27,6 +27,7 @@ upstream_paths = [
     "codex-rs/protocol/src/protocol.rs",
     "codex-rs/sandboxing/src/policy_transforms.rs",
     "codex-rs/network-proxy/src/policy.rs",
+    "codex-rs/network-proxy/src/config.rs",
     "codex-rs/network-proxy/src/runtime.rs",
     "codex-rs/network-proxy/src/connect_policy.rs",
 ]

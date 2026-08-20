@@ -208,11 +208,13 @@ or native network mechanism in the backend it uses. The default
 `LocalNetworkAccess::Deny` also protects domain rules from DNS rebinding and
 recognizes `localhost` as a local hostname before trusting DNS results. A
 backend passes every resolved address to
-`decision_for_domain_with_resolved_ips`, and an empty list represents failed or
-timed-out resolution. Any non-public result for an ordinary hostname is denied.
-An exact IP-literal allow opts into that literal; an exact `localhost` allow
-opts into loopback addresses only. Other private, metadata, and link-local
-destinations require `LocalNetworkAccess::Allow`.
+`decision_for_domain_with_resolved_ips`. For an ordinary hostname, an empty
+list means that resolution failed or timed out and is denied. An IP literal
+does not need DNS resolution, so an empty list is valid for the literal itself;
+non-public literals still require an exact IP-literal allow or
+`LocalNetworkAccess::Allow`. An exact `localhost` allow opts into loopback
+addresses only. Other private, metadata, and link-local destinations require
+`LocalNetworkAccess::Allow`.
 The policy crate performs no DNS or network I/O. It also cannot prove that a
 caller actually connected to the checked address; the native backend must use
 the target snapshot instead of resolving the hostname again.

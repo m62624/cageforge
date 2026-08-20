@@ -134,10 +134,12 @@ dangerous request.
 - Resolved domain targets use `LocalNetworkAccess::Deny` by default. Backends
   pass all DNS results to the typed resolved-target query; empty resolution and
   any non-public result are denied for ordinary hostnames even when the
-  hostname is explicitly allowlisted, preventing DNS rebinding. An exact IP
-  rule opts into that literal, while an exact `localhost` rule permits only
-  loopback among non-public addresses. Broader private/link-local access
-  requires `LocalNetworkAccess::Allow`. The policy crate never performs DNS or
+  hostname is explicitly allowlisted, preventing DNS rebinding. An IP literal
+  does not require DNS results, so an empty result is valid for the literal
+  itself; non-public literals still require an exact IP rule or
+  `LocalNetworkAccess::Allow`. An exact `localhost` rule permits only loopback
+  among non-public addresses. Broader private/link-local access requires
+  `LocalNetworkAccess::Allow`. The policy crate never performs DNS or
   connection I/O.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
