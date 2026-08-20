@@ -9,18 +9,24 @@
 //!
 //! Start with [`BackendRequest`] and [`BackendCapabilities`]. A native backend
 //! implements [`SandboxBackend`], advertises the capabilities it can enforce,
-//! and calls [`BackendRequest::validate`] before lowering the prepared request
-//! to its operating-system API. The backend owns process launch and lifecycle
-//! after this preflight boundary.
+//! and calls [`BackendRequest::prepare_for`] before lowering the prepared
+//! request to its operating-system API. The backend owns process launch and
+//! lifecycle after this preflight boundary.
 
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 
 use cageforge_command::{CommandRequest, EnvironmentBase, StdioMode, TimeoutPolicy};
-use cageforge_policy::{DomainMode, FilesystemMode, FilesystemTarget, NetworkMode, UnixSocketMode};
-use cageforge_policy_compose::EffectiveSandbox;
+use cageforge_policy::{
+    DomainMode, FilesystemMode, FilesystemTarget, LocalNetworkAccess, NetworkMode,
+    PathResolutionContext, UnixSocketMode,
+};
+use cageforge_policy_compose::{
+    CompositionError, EffectivePathContext, EffectiveSandbox, EnvironmentInput,
+};
 use thiserror::Error;
 
 /// One capability that a native backend may advertise.
@@ -54,7 +60,7 @@ pub enum BackendCapability {
     /// Delegate filesystem enforcement to an external owner.
     FilesystemExternal,
     /// Enforce concrete and symbolic filesystem scopes, including workspace
-    /// root restrictions.
+    /// roots required by workspace-relative selectors and globs.
     FilesystemScopes,
     /// Enforce filesystem deny globs.
     FilesystemGlobs,
@@ -62,6 +68,9 @@ pub enum BackendCapability {
     FilesystemGlobScanDepth,
     /// Enforce read-only subpaths below writable scopes.
     FilesystemReadOnlySubpaths,
+    /// Enforce the error-or-skip behavior for missing concrete filesystem
+    /// scopes.
+    FilesystemMissingPathBehavior,
     /// Enforce protected relative paths such as the default `.git` path.
     FilesystemProtectedPaths,
     /// Disable outbound networking.
@@ -72,6 +81,8 @@ pub enum BackendCapability {
     NetworkExternal,
     /// Enforce domain rules and domain defaults.
     NetworkDomainRules,
+    /// Enforce the policy for private, loopback, and link-local addresses.
+    NetworkLocalAddressRestrictions,
     /// Resolve once and authorize the exact address used for a connection.
     NetworkResolvedTargets,
     /// Enforce Unix socket rules.
@@ -166,6 +177,19 @@ impl<'a> BackendRequest<'a> {
         self.sandbox
     }
 
+    /// Performs common preflight using exactly the capabilities advertised by
+    /// `backend`.
+    ///
+    /// This is the safe handoff entry point for native integrations. The
+    /// capability check is defined by Cageforge and cannot be overridden by a
+    /// backend implementation.
+    pub fn prepare_for<B: SandboxBackend>(
+        self,
+        backend: &B,
+    ) -> Result<PreparedBackendRequest<'a>, BackendContractError> {
+        self.validate(&backend.capabilities())
+    }
+
     /// Computes the capabilities required by this request.
     pub fn required_capabilities(&self) -> BackendCapabilities {
         let mut required = BackendCapabilities::new().with(BackendCapability::CommandExecution);
@@ -182,7 +206,7 @@ impl<'a> BackendRequest<'a> {
     /// returned value only proves that the request's portable requirements are
     /// represented by the advertised capability set; native enforcement still
     /// belongs to the backend.
-    pub fn validate(
+    fn validate(
         self,
         capabilities: &BackendCapabilities,
     ) -> Result<PreparedBackendRequest<'a>, BackendContractError> {
@@ -218,6 +242,31 @@ impl<'a> PreparedBackendRequest<'a> {
     pub const fn sandbox(&self) -> &'a EffectiveSandbox {
         self.request.sandbox()
     }
+
+    /// Narrows a backend-owned runtime path context to the effective
+    /// workspace-root ceiling.
+    pub fn path_context(
+        &self,
+        base: &PathResolutionContext,
+    ) -> Result<EffectivePathContext, BackendContractError> {
+        self.sandbox()
+            .path_context(base)
+            .map_err(|source| BackendContractError::InvalidRuntimeContext { source })
+    }
+
+    /// Applies the effective environment to a backend-selected input base.
+    ///
+    /// A backend must construct [`EnvironmentInput::core`] only after it has
+    /// selected the platform's conservative core environment.
+    pub fn apply_environment(
+        &self,
+        input: EnvironmentInput,
+    ) -> Result<BTreeMap<OsString, OsString>, BackendContractError> {
+        self.sandbox()
+            .environment()
+            .apply_to(input)
+            .map_err(|source| BackendContractError::EnvironmentPreparation { source })
+    }
 }
 
 /// Common failures at the portable backend contract boundary.
@@ -234,36 +283,31 @@ pub enum BackendContractError {
     #[error("command environment does not match the composed requested environment")]
     CommandEnvironmentMismatch,
     /// The backend could not construct a safe runtime path context.
-    #[error("invalid backend runtime context: {reason}")]
+    #[error("invalid backend runtime context: {source}")]
     InvalidRuntimeContext {
-        /// The stable reason reported by the backend.
-        reason: String,
+        /// The composition failure raised while narrowing the runtime context.
+        #[source]
+        source: CompositionError,
     },
     /// The backend could not construct the selected environment base.
-    #[error("environment preparation failed: {reason}")]
+    #[error("environment preparation failed: {source}")]
     EnvironmentPreparation {
-        /// The stable reason reported by the backend.
-        reason: String,
+        /// The composition failure raised while applying the environment.
+        #[source]
+        source: CompositionError,
     },
 }
 
-/// The common preparation contract implemented by a native backend.
+/// The capability-discovery contract implemented by a native backend.
 ///
-/// Implementations advertise only capabilities they can enforce and use the
-/// default [`Self::prepare`] method unless they need additional backend-owned
-/// preflight checks. Process launch, platform I/O, and backend-specific errors
-/// remain outside this trait.
+/// Implementations advertise only capabilities they can enforce. Call
+/// [`BackendRequest::prepare_for`] to run the common preflight; native
+/// backends cannot replace that check with a broader capability set. Process
+/// launch, platform I/O, and backend-specific errors remain outside this
+/// trait.
 pub trait SandboxBackend {
     /// Returns the capabilities this backend can enforce safely.
     fn capabilities(&self) -> BackendCapabilities;
-
-    /// Performs side-effect-free portable preflight.
-    fn prepare<'a>(
-        &self,
-        request: BackendRequest<'a>,
-    ) -> Result<PreparedBackendRequest<'a>, BackendContractError> {
-        request.validate(&self.capabilities())
-    }
 }
 
 fn add_command_capabilities(required: &mut BackendCapabilities, command: &CommandRequest) {
@@ -312,15 +356,21 @@ fn add_filesystem_capabilities(required: &mut BackendCapabilities, sandbox: &Eff
         FilesystemMode::Unrestricted => BackendCapability::FilesystemUnrestricted,
         FilesystemMode::External => BackendCapability::FilesystemExternal,
     });
-    if mode != FilesystemMode::Restricted {
-        return;
-    }
     if sandbox.workspace_roots().is_some() || sandbox.workspace_root_limit().is_some() {
         required
             .capabilities
             .insert(BackendCapability::FilesystemScopes);
     }
-    if sandbox.filesystem().glob_scan_max_depth().is_some() {
+    if mode != FilesystemMode::Restricted {
+        return;
+    }
+    let has_deny_glob = [requested, ceiling].iter().any(|policy| {
+        policy.entries().iter().any(|rule| {
+            matches!(rule.target(), FilesystemTarget::Glob(_))
+                && rule.access() == cageforge_policy::AccessMode::Deny
+        })
+    });
+    if has_deny_glob {
         required
             .capabilities
             .insert(BackendCapability::FilesystemGlobScanDepth);
@@ -337,11 +387,19 @@ fn add_filesystem_capabilities(required: &mut BackendCapabilities, sandbox: &Eff
                     required
                         .capabilities
                         .insert(BackendCapability::FilesystemScopes);
+                    required
+                        .capabilities
+                        .insert(BackendCapability::FilesystemMissingPathBehavior);
                 }
-                FilesystemTarget::Glob(_) => {
+                FilesystemTarget::Glob(pattern) => {
                     required
                         .capabilities
                         .insert(BackendCapability::FilesystemGlobs);
+                    if !pattern.is_absolute() {
+                        required
+                            .capabilities
+                            .insert(BackendCapability::FilesystemScopes);
+                    }
                 }
             }
             if !rule.read_only_subpaths().is_empty() {
@@ -380,6 +438,11 @@ fn add_network_capabilities(required: &mut BackendCapabilities, sandbox: &Effect
             required
                 .capabilities
                 .insert(BackendCapability::NetworkDomainRules);
+        }
+        if policy.local_network_access() == LocalNetworkAccess::Deny {
+            required
+                .capabilities
+                .insert(BackendCapability::NetworkLocalAddressRestrictions);
         }
         if !policy.unix_sockets().is_empty()
             || policy.unix_socket_mode() != UnixSocketMode::Disabled

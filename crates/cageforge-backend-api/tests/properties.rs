@@ -42,8 +42,8 @@ proptest! {
                 .filter(|capability| *capability != missing),
         );
         let backend = PropertyBackend { capabilities };
-        prop_assert!(backend
-            .prepare(BackendRequest::new(&command, &sandbox))
+        prop_assert!(BackendRequest::new(&command, &sandbox)
+            .prepare_for(&backend)
             .is_err());
     }
 }

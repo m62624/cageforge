@@ -42,23 +42,33 @@ The crate will expose the following independent concepts:
 - `SandboxBackend`: a synchronous preparation trait implemented by native
   backends.
 
-The trait exposes capability discovery and preparation only. It does not
-define a common process type, async runtime, PTY, signal model, cancellation
-model, or process-tree lifecycle. A native backend owns those concerns in its
-own API and error type.
+`BackendRequest::prepare_for` performs preparation using the capabilities
+advertised by the supplied `SandboxBackend`. The trait itself exposes only
+capability discovery, so an implementation cannot override the common
+preflight algorithm and validate against a broader, self-selected capability
+set. The API does not define a common process type, async runtime, PTY, signal
+model, cancellation model, or process-tree lifecycle. A native backend owns
+those concerns in its own API and error type.
 
 Capability values must use enums or named types rather than ambiguous boolean
 parameters. The capability vocabulary must cover the portable inputs that can
 change backend safety:
 
 - filesystem access modes and protected paths;
-- workspace, root, temporary, and minimal path scopes;
-- deny-glob support and scan-depth limits;
+- workspace, root, temporary, and minimal path scopes, including the runtime
+  scope needed by workspace-relative selectors and deny globs;
+- deny-glob support, including explicit and unbounded scan-depth semantics,
+  and missing-path behavior;
 - network domain rules, resolved-address authorization, local-address
   restrictions, and Unix sockets;
 - external enforcement declarations;
 - environment bases, filters, and overrides; and
 - supported command stdio and timeout modes.
+
+In particular, a restricted filesystem rule with a concrete scope requires
+`FilesystemMissingPathBehavior`, and a locally enforced network policy with
+`LocalNetworkAccess::Deny` requires `NetworkLocalAddressRestrictions` in
+addition to exact resolved-target authorization.
 
 The API must not claim a capability merely because a portable value can be
 parsed. A native backend must report a capability only when it can enforce the
@@ -80,6 +90,13 @@ Preparation is a synchronous, side-effect-free validation step. It must:
    native lowering; and
 6. keep network preparation on the resolved-target path. A hostname-only
    decision is never a connection authorization.
+
+The prepared request also exposes two checked lowering helpers:
+`PreparedBackendRequest::path_context` narrows a backend-supplied runtime
+context through `EffectiveSandbox::path_context`, and
+`PreparedBackendRequest::apply_environment` applies a backend-selected
+`EnvironmentInput`. Their composition failures remain typed backend contract
+errors.
 
 The `CommandRequest::environment` value must equal the requested environment
 used to create the `EffectiveSandbox`. Mixing a command with a composed result
@@ -137,6 +154,7 @@ Tests must cover:
 - rejection of every unsupported capability category;
 - workspace-root ceilings and effective path contexts;
 - protected metadata paths and deny-glob preservation;
+- missing-path behavior and local-address restriction capabilities;
 - environment base selection and filtering requirements;
 - network preparation without hostname-only authorization;
 - typed errors for invalid runtime context and unsupported rules; and

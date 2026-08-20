@@ -34,6 +34,19 @@ accept a raw `SandboxPolicy`, so a backend integration cannot skip the
 requested environment that was passed to `CompositionRequest`; the API rejects
 mixing values composed from different environment specifications.
 
+Call `request.prepare_for(&backend)` to run the common capability check. The
+backend trait only supplies its capabilities; it cannot override this
+preflight with a broader set. After preparation, use
+`PreparedBackendRequest::path_context` with the backend's runtime paths and
+`PreparedBackendRequest::apply_environment` with a backend-selected
+`EnvironmentInput`.
+
+Capability checks include implicit requirements: a workspace-relative glob
+needs `FilesystemScopes` so it is evaluated against the narrowed workspace
+context, and every deny glob needs `FilesystemGlobScanDepth` because an absent
+explicit depth means unbounded scanning. A backend that cannot enforce either
+behavior is rejected before lowering.
+
 ```rust
 use cageforge_backend_api::{
     BackendCapabilities, BackendRequest, SandboxBackend,
@@ -50,8 +63,8 @@ impl SandboxBackend for ExampleBackend {
 }
 
 // A real backend constructs its capabilities from the enforcement mechanisms
-// it can prove safe, then calls backend.prepare(request) before lowering it to
-// native process and filesystem APIs.
+// it can prove safe, then runs the common preflight before lowering the
+// request to native process and filesystem APIs.
 ```
 
 ## Responsibilities
@@ -60,7 +73,7 @@ The crate owns:
 
 - `BackendCapability` and `BackendCapabilities`;
 - `BackendRequest` and the opaque `PreparedBackendRequest`;
-- the synchronous `SandboxBackend` preparation contract; and
+- the synchronous `SandboxBackend` capability contract and common preflight;
 - common unsupported-capability and preparation errors.
 
 The native backend owns:
@@ -81,7 +94,7 @@ It is not a dependency of this crate.
 | `cageforge-command` | Supplies validated command and environment intent. |
 | `cageforge-policy-compose` | Supplies the narrowed `EffectiveSandbox`. |
 | `cageforge-policy` | Supplies portable policy values used during lowering. |
-| `cageforge-path` | Supplies shared native lexical path semantics to integrations. |
+| `cageforge-path` | Native integrations use its shared lexical path semantics when lowering paths; this contract crate reaches those semantics through the policy/context APIs. |
 | `cageforge-config` | Optional TOML producer; not a backend API dependency. |
 | Native backend crates | Implement OS enforcement and process launch after preflight. |
 
