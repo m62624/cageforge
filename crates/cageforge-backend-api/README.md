@@ -41,6 +41,11 @@ preflight with a broader set. After preparation, use
 `PreparedBackendRequest::apply_environment` with a backend-selected
 `EnvironmentInput`.
 
+If a capability is missing, preparation returns
+`BackendContractError::UnsupportedCapability`. The error remains matchable by
+its `BackendCapability` variant and its display text explains the missing
+enforcement, for example: `filesystem missing-path behavior (error or skip)`.
+
 Capability checks include implicit requirements: a workspace-relative glob
 needs `FilesystemScopes` so it is evaluated against the narrowed workspace
 context, and every deny glob needs `FilesystemGlobScanDepth` because an absent

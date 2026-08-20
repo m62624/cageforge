@@ -125,6 +125,47 @@ fn reports_the_first_missing_capability_deterministically() {
             capability: BackendCapability::WorkingDirectory,
         }
     );
+    assert_eq!(
+        error.to_string(),
+        "backend cannot safely enforce required capability: working-directory resolution"
+    );
+}
+
+#[test]
+fn every_capability_has_a_human_readable_description() {
+    for capability in [
+        BackendCapability::CommandExecution,
+        BackendCapability::WorkingDirectory,
+        BackendCapability::StdioInherit,
+        BackendCapability::StdioNull,
+        BackendCapability::StdioPipe,
+        BackendCapability::TimeoutBackendDefault,
+        BackendCapability::TimeoutLimit,
+        BackendCapability::TimeoutDisabled,
+        BackendCapability::FilesystemRestricted,
+        BackendCapability::FilesystemUnrestricted,
+        BackendCapability::FilesystemExternal,
+        BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemGlobs,
+        BackendCapability::FilesystemGlobScanDepth,
+        BackendCapability::FilesystemReadOnlySubpaths,
+        BackendCapability::FilesystemMissingPathBehavior,
+        BackendCapability::FilesystemProtectedPaths,
+        BackendCapability::NetworkDisabled,
+        BackendCapability::NetworkEnabled,
+        BackendCapability::NetworkExternal,
+        BackendCapability::NetworkDomainRules,
+        BackendCapability::NetworkLocalAddressRestrictions,
+        BackendCapability::NetworkResolvedTargets,
+        BackendCapability::NetworkUnixSockets,
+        BackendCapability::EnvironmentAll,
+        BackendCapability::EnvironmentCore,
+        BackendCapability::EnvironmentNone,
+        BackendCapability::EnvironmentFilters,
+        BackendCapability::EnvironmentOverrides,
+    ] {
+        assert!(!capability.to_string().is_empty());
+    }
 }
 
 #[test]
@@ -291,32 +332,51 @@ fn workspace_globs_require_workspace_scope_support() {
 #[test]
 fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
     let environment = EnvironmentSpec::empty();
-    for filesystem_mode in [
-        FilesystemMode::Restricted,
-        FilesystemMode::Unrestricted,
-        FilesystemMode::External,
-    ] {
-        for network_mode in [
-            NetworkMode::Disabled,
-            NetworkMode::Enabled,
-            NetworkMode::External,
+    let filesystem_modes = [
+        (FilesystemMode::Restricted, FilesystemMode::Restricted),
+        (FilesystemMode::Restricted, FilesystemMode::Unrestricted),
+        (FilesystemMode::Unrestricted, FilesystemMode::Restricted),
+        (FilesystemMode::Unrestricted, FilesystemMode::Unrestricted),
+        (FilesystemMode::External, FilesystemMode::External),
+    ];
+    for filesystem_pair in filesystem_modes {
+        for network_modes in [
+            (NetworkMode::Disabled, NetworkMode::Disabled),
+            (NetworkMode::Disabled, NetworkMode::Enabled),
+            (NetworkMode::Enabled, NetworkMode::Disabled),
+            (NetworkMode::Enabled, NetworkMode::Enabled),
+            (NetworkMode::External, NetworkMode::External),
         ] {
+            let (requested_filesystem_mode, ceiling_filesystem_mode) = filesystem_pair;
+            let (requested_network_mode, ceiling_network_mode) = network_modes;
             let requested = cageforge_policy::SandboxPolicy::new(
-                match filesystem_mode {
+                match requested_filesystem_mode {
                     FilesystemMode::Restricted => FilesystemPolicy::restricted([]),
                     FilesystemMode::Unrestricted => FilesystemPolicy::unrestricted(),
                     FilesystemMode::External => FilesystemPolicy::external(),
                 },
-                match network_mode {
+                match requested_network_mode {
                     NetworkMode::Disabled => NetworkPolicy::disabled(),
                     NetworkMode::Enabled => NetworkPolicy::enabled(),
                     NetworkMode::External => NetworkPolicy::external(),
                 },
             );
-            let external_owner = (filesystem_mode == FilesystemMode::External
-                || network_mode == NetworkMode::External)
+            let ceiling_policy = cageforge_policy::SandboxPolicy::new(
+                match ceiling_filesystem_mode {
+                    FilesystemMode::Restricted => FilesystemPolicy::restricted([]),
+                    FilesystemMode::Unrestricted => FilesystemPolicy::unrestricted(),
+                    FilesystemMode::External => FilesystemPolicy::external(),
+                },
+                match ceiling_network_mode {
+                    NetworkMode::Disabled => NetworkPolicy::disabled(),
+                    NetworkMode::Enabled => NetworkPolicy::enabled(),
+                    NetworkMode::External => NetworkPolicy::external(),
+                },
+            );
+            let external_owner = (requested_filesystem_mode == FilesystemMode::External
+                || requested_network_mode == NetworkMode::External)
                 .then(cageforge_policy_compose::ExternalOwner::new);
-            let mut ceiling = PolicyCeiling::new(requested.clone(), environment.clone());
+            let mut ceiling = PolicyCeiling::new(ceiling_policy, environment.clone());
             if let Some(owner) = &external_owner {
                 ceiling = ceiling.with_external_owner(owner.clone());
             }
@@ -329,12 +389,35 @@ fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
                 .with_environment(environment.clone());
             let required = BackendRequest::new(&command, &sandbox).required_capabilities();
 
-            let filesystem_capability = match filesystem_mode {
+            let effective_filesystem_mode =
+                match (requested_filesystem_mode, ceiling_filesystem_mode) {
+                    (FilesystemMode::External, FilesystemMode::External) => {
+                        FilesystemMode::External
+                    }
+                    (FilesystemMode::Restricted, _) | (_, FilesystemMode::Restricted) => {
+                        FilesystemMode::Restricted
+                    }
+                    (FilesystemMode::Unrestricted, FilesystemMode::Unrestricted) => {
+                        FilesystemMode::Unrestricted
+                    }
+                    (FilesystemMode::External, _) | (_, FilesystemMode::External) => {
+                        unreachable!("test matrix contains only valid ownership combinations")
+                    }
+                };
+            let effective_network_mode = match (requested_network_mode, ceiling_network_mode) {
+                (NetworkMode::External, NetworkMode::External) => NetworkMode::External,
+                (NetworkMode::Disabled, _) | (_, NetworkMode::Disabled) => NetworkMode::Disabled,
+                (NetworkMode::Enabled, NetworkMode::Enabled) => NetworkMode::Enabled,
+                (NetworkMode::External, _) | (_, NetworkMode::External) => {
+                    unreachable!("test matrix contains only valid ownership combinations")
+                }
+            };
+            let filesystem_capability = match effective_filesystem_mode {
                 FilesystemMode::Restricted => BackendCapability::FilesystemRestricted,
                 FilesystemMode::Unrestricted => BackendCapability::FilesystemUnrestricted,
                 FilesystemMode::External => BackendCapability::FilesystemExternal,
             };
-            let network_capability = match network_mode {
+            let network_capability = match effective_network_mode {
                 NetworkMode::Disabled => BackendCapability::NetworkDisabled,
                 NetworkMode::Enabled => BackendCapability::NetworkEnabled,
                 NetworkMode::External => BackendCapability::NetworkExternal,
@@ -348,17 +431,21 @@ fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
                 network_capability,
                 BackendCapability::EnvironmentNone,
             ]);
-            if filesystem_mode == FilesystemMode::Restricted {
+            if effective_filesystem_mode == FilesystemMode::Restricted {
                 expected = expected.with(BackendCapability::FilesystemProtectedPaths);
             }
-            if network_mode == NetworkMode::Enabled {
+            if effective_network_mode == NetworkMode::Enabled {
                 expected = expected
                     .with(BackendCapability::NetworkLocalAddressRestrictions)
                     .with(BackendCapability::NetworkResolvedTargets)
                     .with(BackendCapability::NetworkUnixSockets);
             }
 
-            assert_eq!(required, expected, "{filesystem_mode:?} + {network_mode:?}");
+            assert_eq!(
+                required, expected,
+                "{requested_filesystem_mode:?}/{ceiling_filesystem_mode:?} + \
+                 {requested_network_mode:?}/{ceiling_network_mode:?}"
+            );
             BackendRequest::new(&command, &sandbox)
                 .prepare_for(&TestBackend {
                     capabilities: required,

@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::fmt;
 
 use cageforge_command::{CommandRequest, EnvironmentBase, StdioMode, TimeoutPolicy};
 use cageforge_policy::{
@@ -97,6 +98,49 @@ pub enum BackendCapability {
     EnvironmentFilters,
     /// Apply environment set and remove overrides.
     EnvironmentOverrides,
+}
+
+impl fmt::Display for BackendCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let description = match self {
+            Self::CommandExecution => "command execution",
+            Self::WorkingDirectory => "working-directory resolution",
+            Self::StdioInherit => "inherited standard streams",
+            Self::StdioNull => "null standard streams",
+            Self::StdioPipe => "piped standard streams",
+            Self::TimeoutBackendDefault => "backend-default timeout",
+            Self::TimeoutLimit => "explicit timeout limits",
+            Self::TimeoutDisabled => "disabled automatic timeouts",
+            Self::FilesystemRestricted => "restricted filesystem enforcement",
+            Self::FilesystemUnrestricted => "unrestricted filesystem execution",
+            Self::FilesystemExternal => "external filesystem enforcement",
+            Self::FilesystemScopes => "filesystem scope resolution, including workspace roots",
+            Self::FilesystemGlobs => "filesystem deny-glob matching",
+            Self::FilesystemGlobScanDepth => {
+                "filesystem glob scan-depth semantics, including unbounded scans"
+            }
+            Self::FilesystemReadOnlySubpaths => "filesystem read-only subpaths",
+            Self::FilesystemMissingPathBehavior => {
+                "filesystem missing-path behavior (error or skip)"
+            }
+            Self::FilesystemProtectedPaths => "filesystem protected paths such as .git",
+            Self::NetworkDisabled => "disabled network enforcement",
+            Self::NetworkEnabled => "local network enforcement",
+            Self::NetworkExternal => "external network enforcement",
+            Self::NetworkDomainRules => "network domain rules",
+            Self::NetworkLocalAddressRestrictions => {
+                "network private, loopback, and link-local address restrictions"
+            }
+            Self::NetworkResolvedTargets => "exact resolved network targets",
+            Self::NetworkUnixSockets => "Unix socket network rules",
+            Self::EnvironmentAll => "all inherited environment variables",
+            Self::EnvironmentCore => "backend-selected core environment variables",
+            Self::EnvironmentNone => "an empty inherited environment",
+            Self::EnvironmentFilters => "environment include and exclude filters",
+            Self::EnvironmentOverrides => "environment set and remove overrides",
+        };
+        formatter.write_str(description)
+    }
 }
 
 /// The capabilities advertised by one backend.
@@ -273,7 +317,7 @@ impl<'a> PreparedBackendRequest<'a> {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum BackendContractError {
     /// The backend cannot safely enforce one required capability.
-    #[error("backend does not support required capability: {capability:?}")]
+    #[error("backend cannot safely enforce required capability: {capability}")]
     UnsupportedCapability {
         /// The missing capability.
         capability: BackendCapability,

@@ -103,6 +103,11 @@ used to create the `EffectiveSandbox`. Mixing a command with a composed result
 from another environment specification is a typed contract error, not a
 reason to choose one source implicitly.
 
+`UnsupportedCapability` remains matchable by its `BackendCapability` value and
+must render a human-readable description of the missing enforcement category;
+diagnostics must not require callers to decode an opaque boolean or numeric
+code.
+
 Preparation must not perform filesystem, DNS, or socket I/O. Native backends
 perform those operations only after successful preparation and must follow
 `specs/0012-native-backend-safety-contract.md`.
