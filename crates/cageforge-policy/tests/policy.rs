@@ -147,6 +147,16 @@ fn special_path_selectors_are_distinct() {
     assert!(selectors.iter().all(|selector| selector.path().is_none()));
     assert_ne!(selectors[0], selectors[1]);
     assert_ne!(selectors[1], selectors[2]);
+    assert!(PathSelector::root().is_root_scope());
+    assert!(PathSelector::minimal().is_minimal_scope());
+    assert!(PathSelector::tmpdir().is_tmpdir_scope());
+    assert!(PathSelector::slash_tmp().is_slash_tmp_scope());
+    assert!(PathSelector::workspace_root().is_workspace_scope());
+    assert!(
+        PathSelector::absolute("/workspace")
+            .expect("absolute selector")
+            .is_absolute_scope()
+    );
 }
 
 #[cfg(windows)]

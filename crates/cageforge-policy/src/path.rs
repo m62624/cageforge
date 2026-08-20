@@ -187,6 +187,37 @@ impl PathSelector {
         )
     }
 
+    /// Returns whether this selector resolves relative to runtime workspace
+    /// roots.
+    pub const fn is_workspace_scope(&self) -> bool {
+        matches!(&self.kind, PathSelectorKind::WorkspaceRoot(_))
+    }
+
+    /// Returns whether this selector targets caller-supplied system roots.
+    pub const fn is_root_scope(&self) -> bool {
+        matches!(&self.kind, PathSelectorKind::Root)
+    }
+
+    /// Returns whether this selector targets the platform-minimal scope.
+    pub const fn is_minimal_scope(&self) -> bool {
+        matches!(&self.kind, PathSelectorKind::Minimal)
+    }
+
+    /// Returns whether this selector targets the platform temporary directory.
+    pub const fn is_tmpdir_scope(&self) -> bool {
+        matches!(&self.kind, PathSelectorKind::Tmpdir)
+    }
+
+    /// Returns whether this selector targets the conventional `/tmp` scope.
+    pub const fn is_slash_tmp_scope(&self) -> bool {
+        matches!(&self.kind, PathSelectorKind::SlashTmp)
+    }
+
+    /// Returns whether this selector stores a native absolute path.
+    pub const fn is_absolute_scope(&self) -> bool {
+        matches!(&self.kind, PathSelectorKind::Absolute(_))
+    }
+
     /// Returns the number of concrete path components represented by this
     /// selector after resolution.
     pub(crate) fn is_definitely_outside(&self, parent: &Self) -> bool {

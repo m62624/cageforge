@@ -39,7 +39,9 @@ backend trait only supplies its capabilities; it cannot override this
 preflight with a broader set. After preparation, use
 `PreparedBackendRequest::path_context` with the backend's runtime paths and
 `PreparedBackendRequest::apply_environment` with a backend-selected
-`EnvironmentInput`.
+`EnvironmentInput`. Use its filesystem decision helpers and
+`authorize_connection` for policy evaluation so the backend does not need to
+manually combine the requested and ceiling sides.
 
 If a capability is missing, preparation returns
 `BackendContractError::UnsupportedCapability`. The error remains matchable by
@@ -49,7 +51,9 @@ enforcement, for example: `filesystem missing-path behavior (error or skip)`.
 Capability checks include implicit requirements: a workspace-relative glob
 needs `FilesystemScopes` so it is evaluated against the narrowed workspace
 context, and every deny glob needs `FilesystemGlobScanDepth` because an absent
-explicit depth means unbounded scanning. A backend that cannot enforce either
+explicit depth means unbounded scanning. Concrete scopes also require the
+matching selector capability: absolute, workspace, system-root, minimal,
+temporary-directory, or slash-tmp. A backend that cannot enforce any required
 behavior is rejected before lowering.
 
 ```rust

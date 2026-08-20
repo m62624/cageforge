@@ -16,14 +16,18 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
+mod capability;
+mod requirements;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fmt;
+use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
 
-use cageforge_command::{CommandRequest, EnvironmentBase, StdioMode, TimeoutPolicy};
+use cageforge_command::CommandRequest;
 use cageforge_policy::{
-    DomainMode, FilesystemMode, FilesystemTarget, LocalNetworkAccess, NetworkMode,
-    PathResolutionContext, UnixSocketMode,
+    ConnectionAuthorization, FilesystemDecision, NetworkDecision, PathResolutionContext,
+    PathSelector, ResolvedNetworkTarget,
 };
 use cageforge_policy_compose::{
     CompositionError, EffectivePathContext, EffectiveSandbox, EnvironmentInput,
@@ -63,6 +67,18 @@ pub enum BackendCapability {
     /// Enforce concrete and symbolic filesystem scopes, including workspace
     /// roots required by workspace-relative selectors and globs.
     FilesystemScopes,
+    /// Enforce native absolute filesystem scopes and absolute globs.
+    FilesystemAbsoluteScopes,
+    /// Resolve filesystem scopes and globs against runtime workspace roots.
+    FilesystemWorkspaceScopes,
+    /// Resolve filesystem scopes against caller-supplied system roots.
+    FilesystemRootScopes,
+    /// Resolve filesystem scopes against the platform-minimal paths.
+    FilesystemMinimalScopes,
+    /// Resolve filesystem scopes against the platform temporary directory.
+    FilesystemTmpdirScopes,
+    /// Resolve filesystem scopes against the conventional `/tmp` path.
+    FilesystemSlashTmpScopes,
     /// Enforce filesystem deny globs.
     FilesystemGlobs,
     /// Expand filesystem globs with the requested scan-depth semantics.
@@ -98,49 +114,6 @@ pub enum BackendCapability {
     EnvironmentFilters,
     /// Apply environment set and remove overrides.
     EnvironmentOverrides,
-}
-
-impl fmt::Display for BackendCapability {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let description = match self {
-            Self::CommandExecution => "command execution",
-            Self::WorkingDirectory => "working-directory resolution",
-            Self::StdioInherit => "inherited standard streams",
-            Self::StdioNull => "null standard streams",
-            Self::StdioPipe => "piped standard streams",
-            Self::TimeoutBackendDefault => "backend-default timeout",
-            Self::TimeoutLimit => "explicit timeout limits",
-            Self::TimeoutDisabled => "disabled automatic timeouts",
-            Self::FilesystemRestricted => "restricted filesystem enforcement",
-            Self::FilesystemUnrestricted => "unrestricted filesystem execution",
-            Self::FilesystemExternal => "external filesystem enforcement",
-            Self::FilesystemScopes => "filesystem scope resolution, including workspace roots",
-            Self::FilesystemGlobs => "filesystem deny-glob matching",
-            Self::FilesystemGlobScanDepth => {
-                "filesystem glob scan-depth semantics, including unbounded scans"
-            }
-            Self::FilesystemReadOnlySubpaths => "filesystem read-only subpaths",
-            Self::FilesystemMissingPathBehavior => {
-                "filesystem missing-path behavior (error or skip)"
-            }
-            Self::FilesystemProtectedPaths => "filesystem protected paths such as .git",
-            Self::NetworkDisabled => "disabled network enforcement",
-            Self::NetworkEnabled => "local network enforcement",
-            Self::NetworkExternal => "external network enforcement",
-            Self::NetworkDomainRules => "network domain rules",
-            Self::NetworkLocalAddressRestrictions => {
-                "network private, loopback, and link-local address restrictions"
-            }
-            Self::NetworkResolvedTargets => "exact resolved network targets",
-            Self::NetworkUnixSockets => "Unix socket network rules",
-            Self::EnvironmentAll => "all inherited environment variables",
-            Self::EnvironmentCore => "backend-selected core environment variables",
-            Self::EnvironmentNone => "an empty inherited environment",
-            Self::EnvironmentFilters => "environment include and exclude filters",
-            Self::EnvironmentOverrides => "environment set and remove overrides",
-        };
-        formatter.write_str(description)
-    }
 }
 
 /// The capabilities advertised by one backend.
@@ -237,10 +210,10 @@ impl<'a> BackendRequest<'a> {
     /// Computes the capabilities required by this request.
     pub fn required_capabilities(&self) -> BackendCapabilities {
         let mut required = BackendCapabilities::new().with(BackendCapability::CommandExecution);
-        add_command_capabilities(&mut required, self.command);
-        add_filesystem_capabilities(&mut required, self.sandbox);
-        add_network_capabilities(&mut required, self.sandbox);
-        add_environment_capabilities(&mut required, self.sandbox);
+        requirements::add_command_capabilities(&mut required, self.command);
+        requirements::add_filesystem_capabilities(&mut required, self.sandbox);
+        requirements::add_network_capabilities(&mut required, self.sandbox);
+        requirements::add_environment_capabilities(&mut required, self.sandbox);
         required
     }
 
@@ -311,6 +284,62 @@ impl<'a> PreparedBackendRequest<'a> {
             .apply_to(input)
             .map_err(|source| BackendContractError::EnvironmentPreparation { source })
     }
+
+    /// Evaluates one absolute path against both effective filesystem policies.
+    pub fn filesystem_access_for_path(
+        &self,
+        path: &Path,
+        context: &EffectivePathContext,
+    ) -> Result<FilesystemDecision, BackendContractError> {
+        self.sandbox()
+            .filesystem()
+            .access_for_path(path, context)
+            .map_err(|source| BackendContractError::FilesystemEvaluation { source })
+    }
+
+    /// Evaluates one symbolic filesystem selector against both effective
+    /// policies.
+    pub fn filesystem_access_for(&self, selector: &PathSelector) -> FilesystemDecision {
+        self.sandbox().filesystem().access_for(selector)
+    }
+
+    /// Evaluates a resolved hostname and all addresses captured for it.
+    ///
+    /// This is a policy query, not connection authorization. A backend must
+    /// call [`Self::authorize_connection`] immediately before connecting.
+    pub fn network_decision_for_domain_with_resolved_ips(
+        &self,
+        domain: &str,
+        resolved_ips: &[IpAddr],
+    ) -> Result<NetworkDecision, BackendContractError> {
+        self.sandbox()
+            .network()
+            .decision_for_domain_with_resolved_ips(domain, resolved_ips)
+            .map_err(|source| BackendContractError::NetworkEvaluation { source })
+    }
+
+    /// Authorizes the exact socket address the backend is about to connect to.
+    pub fn authorize_connection(
+        &self,
+        target: &ResolvedNetworkTarget,
+        connected: SocketAddr,
+    ) -> Result<ConnectionAuthorization, BackendContractError> {
+        self.sandbox()
+            .network()
+            .authorize_connection(target, connected)
+            .map_err(|source| BackendContractError::NetworkEvaluation { source })
+    }
+
+    /// Evaluates one Unix socket path against both effective network policies.
+    pub fn network_decision_for_unix_socket(
+        &self,
+        socket: &Path,
+    ) -> Result<NetworkDecision, BackendContractError> {
+        self.sandbox()
+            .network()
+            .decision_for_unix_socket(socket)
+            .map_err(|source| BackendContractError::NetworkEvaluation { source })
+    }
 }
 
 /// Common failures at the portable backend contract boundary.
@@ -340,6 +369,20 @@ pub enum BackendContractError {
         #[source]
         source: CompositionError,
     },
+    /// The effective filesystem policy rejected a backend query.
+    #[error("filesystem policy evaluation failed: {source}")]
+    FilesystemEvaluation {
+        /// The composition failure raised while evaluating filesystem access.
+        #[source]
+        source: CompositionError,
+    },
+    /// The effective network policy rejected a backend query.
+    #[error("network policy evaluation failed: {source}")]
+    NetworkEvaluation {
+        /// The composition failure raised while evaluating network access.
+        #[source]
+        source: CompositionError,
+    },
 }
 
 /// The capability-discovery contract implemented by a native backend.
@@ -352,172 +395,4 @@ pub enum BackendContractError {
 pub trait SandboxBackend {
     /// Returns the capabilities this backend can enforce safely.
     fn capabilities(&self) -> BackendCapabilities;
-}
-
-fn add_command_capabilities(required: &mut BackendCapabilities, command: &CommandRequest) {
-    if command.working_directory().is_some() {
-        required
-            .capabilities
-            .insert(BackendCapability::WorkingDirectory);
-    }
-    for mode in [
-        command.stdio().stdin(),
-        command.stdio().stdout(),
-        command.stdio().stderr(),
-    ] {
-        required.capabilities.insert(match mode {
-            StdioMode::Inherit => BackendCapability::StdioInherit,
-            StdioMode::Null => BackendCapability::StdioNull,
-            StdioMode::Pipe => BackendCapability::StdioPipe,
-        });
-    }
-    required
-        .capabilities
-        .insert(match command.timeout_policy() {
-            TimeoutPolicy::BackendDefault => BackendCapability::TimeoutBackendDefault,
-            TimeoutPolicy::Limit(_) => BackendCapability::TimeoutLimit,
-            TimeoutPolicy::Disabled => BackendCapability::TimeoutDisabled,
-        });
-}
-
-fn add_filesystem_capabilities(required: &mut BackendCapabilities, sandbox: &EffectiveSandbox) {
-    let requested = sandbox.filesystem().requested();
-    let ceiling = sandbox.filesystem().ceiling();
-    let mode = match (requested.mode(), ceiling.mode()) {
-        (FilesystemMode::External, FilesystemMode::External) => FilesystemMode::External,
-        (FilesystemMode::Restricted, _) | (_, FilesystemMode::Restricted) => {
-            FilesystemMode::Restricted
-        }
-        (FilesystemMode::Unrestricted, FilesystemMode::Unrestricted) => {
-            FilesystemMode::Unrestricted
-        }
-        (FilesystemMode::External, _) | (_, FilesystemMode::External) => {
-            unreachable!("effective sandbox cannot contain mixed filesystem ownership")
-        }
-    };
-    required.capabilities.insert(match mode {
-        FilesystemMode::Restricted => BackendCapability::FilesystemRestricted,
-        FilesystemMode::Unrestricted => BackendCapability::FilesystemUnrestricted,
-        FilesystemMode::External => BackendCapability::FilesystemExternal,
-    });
-    if sandbox.workspace_roots().is_some() || sandbox.workspace_root_limit().is_some() {
-        required
-            .capabilities
-            .insert(BackendCapability::FilesystemScopes);
-    }
-    if mode != FilesystemMode::Restricted {
-        return;
-    }
-    let has_deny_glob = [requested, ceiling].iter().any(|policy| {
-        policy.entries().iter().any(|rule| {
-            matches!(rule.target(), FilesystemTarget::Glob(_))
-                && rule.access() == cageforge_policy::AccessMode::Deny
-        })
-    });
-    if has_deny_glob {
-        required
-            .capabilities
-            .insert(BackendCapability::FilesystemGlobScanDepth);
-    }
-    for policy in [requested, ceiling] {
-        if !policy.protected_relative_paths().is_empty() {
-            required
-                .capabilities
-                .insert(BackendCapability::FilesystemProtectedPaths);
-        }
-        for rule in policy.entries() {
-            match rule.target() {
-                FilesystemTarget::Scope(_) => {
-                    required
-                        .capabilities
-                        .insert(BackendCapability::FilesystemScopes);
-                    required
-                        .capabilities
-                        .insert(BackendCapability::FilesystemMissingPathBehavior);
-                }
-                FilesystemTarget::Glob(pattern) => {
-                    required
-                        .capabilities
-                        .insert(BackendCapability::FilesystemGlobs);
-                    if !pattern.is_absolute() {
-                        required
-                            .capabilities
-                            .insert(BackendCapability::FilesystemScopes);
-                    }
-                }
-            }
-            if !rule.read_only_subpaths().is_empty() {
-                required
-                    .capabilities
-                    .insert(BackendCapability::FilesystemReadOnlySubpaths);
-            }
-        }
-    }
-}
-
-fn add_network_capabilities(required: &mut BackendCapabilities, sandbox: &EffectiveSandbox) {
-    let requested = sandbox.network().requested();
-    let ceiling = sandbox.network().ceiling();
-    let mode = match (requested.mode(), ceiling.mode()) {
-        (NetworkMode::External, NetworkMode::External) => NetworkMode::External,
-        (NetworkMode::Disabled, _) | (_, NetworkMode::Disabled) => NetworkMode::Disabled,
-        (NetworkMode::Enabled, NetworkMode::Enabled) => NetworkMode::Enabled,
-        (NetworkMode::External, _) | (_, NetworkMode::External) => {
-            unreachable!("effective sandbox cannot contain mixed network ownership")
-        }
-    };
-    required.capabilities.insert(match mode {
-        NetworkMode::Disabled => BackendCapability::NetworkDisabled,
-        NetworkMode::Enabled => BackendCapability::NetworkEnabled,
-        NetworkMode::External => BackendCapability::NetworkExternal,
-    });
-    if mode != NetworkMode::Enabled {
-        return;
-    }
-    required
-        .capabilities
-        .insert(BackendCapability::NetworkResolvedTargets);
-    for policy in [requested, ceiling] {
-        if !policy.domains().is_empty() || policy.domain_mode() != DomainMode::Enabled {
-            required
-                .capabilities
-                .insert(BackendCapability::NetworkDomainRules);
-        }
-        if policy.local_network_access() == LocalNetworkAccess::Deny {
-            required
-                .capabilities
-                .insert(BackendCapability::NetworkLocalAddressRestrictions);
-        }
-        if !policy.unix_sockets().is_empty()
-            || policy.unix_socket_mode() != UnixSocketMode::Disabled
-        {
-            required
-                .capabilities
-                .insert(BackendCapability::NetworkUnixSockets);
-        }
-    }
-}
-
-fn add_environment_capabilities(required: &mut BackendCapabilities, sandbox: &EffectiveSandbox) {
-    required
-        .capabilities
-        .insert(match sandbox.environment().base() {
-            EnvironmentBase::All => BackendCapability::EnvironmentAll,
-            EnvironmentBase::Core => BackendCapability::EnvironmentCore,
-            EnvironmentBase::None => BackendCapability::EnvironmentNone,
-        });
-    if !sandbox.environment().requested().filters().is_empty()
-        || !sandbox.environment().ceiling().filters().is_empty()
-    {
-        required
-            .capabilities
-            .insert(BackendCapability::EnvironmentFilters);
-    }
-    if !sandbox.environment().requested().overrides().is_empty()
-        || !sandbox.environment().ceiling().overrides().is_empty()
-    {
-        required
-            .capabilities
-            .insert(BackendCapability::EnvironmentOverrides);
-    }
 }

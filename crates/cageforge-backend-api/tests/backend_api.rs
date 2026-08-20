@@ -1,3 +1,4 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -6,8 +7,9 @@ use cageforge_backend_api::{
 };
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
 use cageforge_policy::{
-    AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemPolicy, FilesystemRule,
-    NetworkMode, NetworkPolicy, PathResolutionContext, PathSelector, UnixSocketMode,
+    AccessMode, ConnectionAuthorization, DomainAccess, DomainMode, FilesystemDecision,
+    FilesystemMode, FilesystemPolicy, FilesystemRule, NetworkDecision, NetworkMode, NetworkPolicy,
+    PathResolutionContext, PathSelector, ResolvedNetworkTarget, UnixSocketMode,
 };
 use cageforge_policy_compose::{
     CompositionError, CompositionRequest, CoreEnvironment, EnvironmentInput, PolicyCeiling, compose,
@@ -80,6 +82,12 @@ fn all_capabilities() -> BackendCapabilities {
         BackendCapability::FilesystemRestricted,
         BackendCapability::FilesystemUnrestricted,
         BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemAbsoluteScopes,
+        BackendCapability::FilesystemWorkspaceScopes,
+        BackendCapability::FilesystemRootScopes,
+        BackendCapability::FilesystemMinimalScopes,
+        BackendCapability::FilesystemTmpdirScopes,
+        BackendCapability::FilesystemSlashTmpScopes,
         BackendCapability::FilesystemGlobs,
         BackendCapability::FilesystemGlobScanDepth,
         BackendCapability::FilesystemReadOnlySubpaths,
@@ -146,6 +154,12 @@ fn every_capability_has_a_human_readable_description() {
         BackendCapability::FilesystemUnrestricted,
         BackendCapability::FilesystemExternal,
         BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemAbsoluteScopes,
+        BackendCapability::FilesystemWorkspaceScopes,
+        BackendCapability::FilesystemRootScopes,
+        BackendCapability::FilesystemMinimalScopes,
+        BackendCapability::FilesystemTmpdirScopes,
+        BackendCapability::FilesystemSlashTmpScopes,
         BackendCapability::FilesystemGlobs,
         BackendCapability::FilesystemGlobScanDepth,
         BackendCapability::FilesystemReadOnlySubpaths,
@@ -184,6 +198,7 @@ fn required_capabilities_are_stable_and_complete_for_the_fixture() {
             BackendCapability::TimeoutLimit,
             BackendCapability::FilesystemRestricted,
             BackendCapability::FilesystemScopes,
+            BackendCapability::FilesystemWorkspaceScopes,
             BackendCapability::FilesystemGlobs,
             BackendCapability::FilesystemGlobScanDepth,
             BackendCapability::FilesystemReadOnlySubpaths,
@@ -330,6 +345,59 @@ fn workspace_globs_require_workspace_scope_support() {
 }
 
 #[test]
+fn every_filesystem_scope_kind_requires_its_own_capability() {
+    let filesystem = FilesystemPolicy::restricted([
+        FilesystemRule::new(
+            PathSelector::absolute("/workspace").unwrap(),
+            AccessMode::Write,
+        )
+        .with_read_only_subpath(PathSelector::root())
+        .unwrap(),
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write)
+            .with_read_only_subpath(PathSelector::minimal())
+            .unwrap(),
+        FilesystemRule::new(PathSelector::tmpdir(), AccessMode::Write)
+            .with_read_only_subpath(PathSelector::slash_tmp())
+            .unwrap(),
+        FilesystemRule::absolute_glob("/outside/*.secret", AccessMode::Deny).unwrap(),
+    ]);
+    let requested = cageforge_policy::SandboxPolicy::new(
+        filesystem,
+        cageforge_policy::NetworkPolicy::disabled(),
+    );
+    let environment = EnvironmentSpec::empty();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
+    let command =
+        CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
+    let required = BackendRequest::new(&command, &sandbox).required_capabilities();
+
+    for capability in [
+        BackendCapability::FilesystemAbsoluteScopes,
+        BackendCapability::FilesystemWorkspaceScopes,
+        BackendCapability::FilesystemRootScopes,
+        BackendCapability::FilesystemMinimalScopes,
+        BackendCapability::FilesystemTmpdirScopes,
+        BackendCapability::FilesystemSlashTmpScopes,
+    ] {
+        let capabilities = required
+            .iter()
+            .copied()
+            .filter(|required| *required != capability)
+            .collect();
+        assert_eq!(
+            BackendRequest::new(&command, &sandbox)
+                .prepare_for(&TestBackend { capabilities })
+                .unwrap_err(),
+            BackendContractError::UnsupportedCapability { capability }
+        );
+    }
+}
+
+#[test]
 fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
     let environment = EnvironmentSpec::empty();
     let filesystem_modes = [
@@ -472,6 +540,43 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
         .unwrap();
     let context = prepared.path_context(&base).unwrap();
     assert_eq!(context.workspace_roots(), &[PathBuf::from("/workspace")]);
+    assert_eq!(
+        prepared
+            .filesystem_access_for_path(std::path::Path::new("/workspace/.git/config"), &context,)
+            .unwrap(),
+        FilesystemDecision::Read
+    );
+    assert_eq!(
+        prepared.filesystem_access_for(&PathSelector::workspace_root()),
+        FilesystemDecision::Write
+    );
+
+    let public_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), 443);
+    let target = ResolvedNetworkTarget::new("example.com", [public_address]).unwrap();
+    assert_eq!(
+        prepared
+            .network_decision_for_domain_with_resolved_ips("example.com", &[public_address.ip()],)
+            .unwrap(),
+        NetworkDecision::Allow
+    );
+    assert!(matches!(
+        prepared
+            .authorize_connection(&target, public_address)
+            .unwrap(),
+        ConnectionAuthorization::Allowed(_)
+    ));
+    assert_eq!(
+        prepared
+            .authorize_connection(&target, SocketAddr::new(public_address.ip(), 8443))
+            .unwrap(),
+        ConnectionAuthorization::Denied
+    );
+    assert_eq!(
+        prepared
+            .network_decision_for_unix_socket(std::path::Path::new("/run/example.sock"))
+            .unwrap(),
+        NetworkDecision::Allow
+    );
 
     let core = CoreEnvironment::from_selected([
         ("PATH".into(), "/bin".into()),
@@ -511,6 +616,33 @@ fn prepared_request_rejects_a_broader_environment_base() {
             },
         }
     );
+}
+
+#[test]
+fn prepared_request_reports_typed_policy_evaluation_errors() {
+    let (command, sandbox) = effective_request();
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&TestBackend {
+            capabilities: all_capabilities(),
+        })
+        .unwrap();
+    let context = prepared
+        .path_context(
+            &PathResolutionContext::new()
+                .with_workspace_root("/workspace")
+                .unwrap(),
+        )
+        .unwrap();
+
+    let error = prepared
+        .filesystem_access_for_path(std::path::Path::new("relative"), &context)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        BackendContractError::FilesystemEvaluation {
+            source: CompositionError::PolicyEvaluation { .. }
+        }
+    ));
 }
 
 #[test]

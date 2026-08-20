@@ -55,8 +55,10 @@ parameters. The capability vocabulary must cover the portable inputs that can
 change backend safety:
 
 - filesystem access modes and protected paths;
-- workspace, root, temporary, and minimal path scopes, including the runtime
-  scope needed by workspace-relative selectors and deny globs;
+- workspace, root, temporary, and minimal path scopes, with separate
+  capabilities for absolute, workspace, system-root, minimal, temporary-
+  directory, and slash-tmp selectors, including the runtime scope needed by
+  workspace-relative selectors and deny globs;
 - deny-glob support, including explicit and unbounded scan-depth semantics,
   and missing-path behavior;
 - network domain rules, resolved-address authorization, local-address
@@ -95,8 +97,10 @@ The prepared request also exposes two checked lowering helpers:
 `PreparedBackendRequest::path_context` narrows a backend-supplied runtime
 context through `EffectiveSandbox::path_context`, and
 `PreparedBackendRequest::apply_environment` applies a backend-selected
-`EnvironmentInput`. Their composition failures remain typed backend contract
-errors.
+`EnvironmentInput`. The prepared request also exposes effective filesystem
+decision helpers and the resolved network authorization flow, so a backend
+does not need to manually combine requested and ceiling policies. Their
+composition failures remain typed backend contract errors.
 
 The `CommandRequest::environment` value must equal the requested environment
 used to create the `EffectiveSandbox`. Mixing a command with a composed result
