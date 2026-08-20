@@ -142,4 +142,4 @@ allowlist. The type does not authorize arbitrary inherited variables by
 itself.
 
 Filesystem native enforcement is specified separately in
-`specs/0011-native-backend-safety-contract.md`.
+`specs/0012-native-backend-safety-contract.md`.
