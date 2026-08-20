@@ -1,0 +1,110 @@
+name: Labeler
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  labeler:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create and apply labels
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+
+            const conventional = [
+              ['feat', 'feat', '0576b9'],
+              ['fix', 'fix', 'd73a4a'],
+              ['refactor', 'refactor', 'f2c744'],
+              ['docs', 'docs', '0075ca'],
+              ['chore', 'chore', 'bbbbbb'],
+              ['build', 'build', 'ededed'],
+              ['ci', 'ci', '5319e7'],
+              ['test', 'test', 'c5def5'],
+              ['style', 'style', '2c61f6'],
+            ];
+
+            const ciLabels = [
+              ['ci-linux-test', '1d76db'],
+              ['ci-linux-quality', '5319e7'],
+              ['ci-macos-test', '1d76db'],
+              ['ci-macos-quality', '5319e7'],
+              ['ci-windows-test', '1d76db'],
+              ['ci-windows-quality', '5319e7'],
+            ];
+
+            const labelsToCreate = [...conventional.map(([, name, color]) => ({ name, color })),
+              ...ciLabels.map(([name, color]) => ({ name, color }))];
+
+            for (const { name, color } of labelsToCreate) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color,
+                });
+              }
+            }
+
+            const labelsToApply = [];
+            for (const [prefix, name] of conventional) {
+              if (title.startsWith(`${prefix}:`) || title.startsWith(`${prefix}(`)) {
+                labelsToApply.push(name);
+              }
+            }
+
+            const selectivePrefixes = [
+              ['test(linux):', 'ci-linux-test'],
+              ['quality(linux):', 'ci-linux-quality'],
+              ['test(macos):', 'ci-macos-test'],
+              ['quality(macos):', 'ci-macos-quality'],
+              ['test(windows):', 'ci-windows-test'],
+              ['quality(windows):', 'ci-windows-quality'],
+            ];
+            for (const [prefix, name] of selectivePrefixes) {
+              if (title.startsWith(prefix)) labelsToApply.push(name);
+            }
+
+            if (title.match(/^[a-z]+(!):/) || title.match(/^[a-z]+\(.*\)(!):/)) {
+              const name = 'breaking';
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color: 'd93f0b',
+                });
+              }
+              labelsToApply.push(name);
+            }
+
+            if (labelsToApply.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: [...new Set(labelsToApply)],
+              });
+            }

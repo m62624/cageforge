@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  # Keep pull_request unfiltered so a required status is always created,
+  # including for documentation-only changes.
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer commit supersedes an older run for the same branch or PR.
+  group: cageforge-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Current portable CI runners, following Plugmem's successful OS matrix:
+#   ubuntu-latest
+#   windows-latest
+#   macos-latest
+#
+# Reserved runner labels for future native backends and release builds:
+#   ubuntu-24.04       — Linux x64
+#   ubuntu-24.04-arm   — Linux ARM64
+#   macos-26-intel     — macOS Intel
+#   macos-26           — macOS Apple Silicon
+#   windows-2025       — Windows x64/release host
+#   windows-11-arm     — Windows ARM64
+
+jobs:
+  format:
+    name: format + docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
+  check:
+    name: clippy + test (${{ matrix.os_name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: Linux
+            os: ubuntu-latest
+          - os_name: Windows
+            os: windows-latest
+          - os_name: macOS
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+
+  ci-pass:
+    name: CI passed
+    if: always()
+    needs: [format, check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if a required job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "A required CI job failed or was cancelled."
+          echo "format = ${{ needs.format.result }}"
+          echo "check  = ${{ needs.check.result }}"
+          exit 1
+      - name: All required jobs passed
+        run: echo "format, documentation, clippy, and workspace tests passed."

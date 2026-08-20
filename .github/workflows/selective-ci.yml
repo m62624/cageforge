@@ -1,0 +1,137 @@
+name: Selective CI
+
+on:
+  # Adding one of the ci-* labels starts only the requested OS/suite. Keeping
+  # synchronize here reruns the selected suite for every new PR commit.
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      os:
+        description: OS to test
+        required: true
+        default: all
+        type: choice
+        options: [all, linux, macos, windows]
+      suite:
+        description: Test suite to run
+        required: true
+        default: quality
+        type: choice
+        options: [test, quality]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cageforge-selective-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-test:
+    name: Linux test
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.os == 'all' || inputs.os == 'linux') && inputs.suite == 'test') ||
+      (github.event_name != 'workflow_dispatch' &&
+      contains(github.event.pull_request.labels.*.name, 'ci-linux-test'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  linux-quality:
+    name: Linux fmt + clippy + test
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.os == 'all' || inputs.os == 'linux') && inputs.suite == 'quality') ||
+      (github.event_name != 'workflow_dispatch' &&
+      contains(github.event.pull_request.labels.*.name, 'ci-linux-quality'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  macos-test:
+    name: macOS test
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.os == 'all' || inputs.os == 'macos') && inputs.suite == 'test') ||
+      (github.event_name != 'workflow_dispatch' &&
+      contains(github.event.pull_request.labels.*.name, 'ci-macos-test'))
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  macos-quality:
+    name: macOS fmt + clippy + test
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.os == 'all' || inputs.os == 'macos') && inputs.suite == 'quality') ||
+      (github.event_name != 'workflow_dispatch' &&
+      contains(github.event.pull_request.labels.*.name, 'ci-macos-quality'))
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  windows-test:
+    name: Windows test
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.os == 'all' || inputs.os == 'windows') && inputs.suite == 'test') ||
+      (github.event_name != 'workflow_dispatch' &&
+      contains(github.event.pull_request.labels.*.name, 'ci-windows-test'))
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  windows-quality:
+    name: Windows fmt + clippy + test
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.os == 'all' || inputs.os == 'windows') && inputs.suite == 'quality') ||
+      (github.event_name != 'workflow_dispatch' &&
+      contains(github.event.pull_request.labels.*.name, 'ci-windows-quality'))
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  selective-ci-pass:
+    name: Selective CI passed
+    if: always()
+    needs:
+      [linux-test, linux-quality, macos-test, macos-quality, windows-test, windows-quality]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if a selected suite failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "Selected CI suites passed or were not requested."
