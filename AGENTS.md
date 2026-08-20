@@ -42,15 +42,17 @@ These rules are mandatory:
    the crate's public API. Do not expand the public API or add test-only helpers
    solely to make unit tests possible.
 9. Keep crate README files focused on the library's role, public API, practical
-   usage, and place in the workspace or an integrating project. Show a small
-   example when the API benefits from one. Describe what the crate provides in
-   positive, user-facing terms; avoid long lists of internal exclusions,
-   implementation history, audit notes, or test/coverage inventories. Tests
-   belong in the crate and CI, not in the README. If upstream work informed a
-   crate's design, mention that provenance once in a concise top banner. Keep
-   exact commits, paths, license details, and audit history in the project
-   specs and provenance records instead of repeating them throughout the
-   README.
+   usage, and place in the workspace or an integrating project. Start with a
+   direct positive statement of what the crate provides, then explain its
+   inputs, outputs, and integration sequence. Show a small example when the
+   API benefits from one. Do not write the main description as a list of
+   exclusions or repeated "does not ..." statements; implementation boundaries
+   belong in the API docs and specs. Avoid implementation history, audit notes,
+   and test/coverage inventories. Tests belong in the crate and CI, not in the
+   README. If upstream work informed a crate's design, mention that provenance
+   once in a concise top banner. Keep exact commits, paths, license details,
+   and audit history in the project specs and provenance records instead of
+   repeating them throughout the README.
 10. Treat public policy and command constructors/builders as security boundaries.
     Keep representations private, validate NUL/parent-traversal and mode
     invariants before backend handoff, and cover native POSIX and Windows path

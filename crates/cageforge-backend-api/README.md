@@ -7,13 +7,14 @@
 # cageforge-backend-api
 
 `cageforge-backend-api` is the contract layer between Cageforge's portable
-execution values and a native Linux, macOS, or Windows backend.
+execution values and a native Linux, macOS, or Windows backend. It defines the
+typed handoff from a composed command and sandbox policy to the operating-
+system integration that will enforce and launch them.
 
-It does not launch processes, open files or sockets, resolve DNS, allocate a
-PTY, or choose an operating-system sandbox. It performs a side-effect-free
-preflight check: a backend advertises what it can enforce, and a composed
-request is rejected with a typed error when it asks for an unsupported
-capability.
+The crate turns a backend's declared enforcement capabilities into a common
+preflight contract. `BackendRequest::prepare_for` accepts a request built from
+`CommandRequest` and `EffectiveSandbox`, verifies every required capability,
+and returns a prepared request or an actionable typed error.
 
 ## The handoff model
 
@@ -28,11 +29,11 @@ CommandRequest + EffectiveSandbox
      native backend lowering/launch
 ```
 
-`BackendRequest` accepts `CommandRequest` and `EffectiveSandbox`. It does not
-accept a raw `SandboxPolicy`, so a backend integration cannot skip the
-`PolicyCeiling` intersection. The command's `EnvironmentSpec` must be the same
-requested environment that was passed to `CompositionRequest`; the API rejects
-mixing values composed from different environment specifications.
+`BackendRequest` accepts `CommandRequest` and `EffectiveSandbox`, so policy
+composition and the `PolicyCeiling` intersection are completed before the
+backend handoff. The command's `EnvironmentSpec` is checked against the
+requested environment retained by the composed result, keeping command and
+policy construction aligned.
 
 Call `request.prepare_for(&backend)` to run the common capability check. The
 backend trait only supplies its capabilities; it cannot override this
@@ -40,12 +41,12 @@ preflight with a broader set. After preparation, use
 `PreparedBackendRequest::path_context` with the backend's runtime paths and
 `PreparedBackendRequest::apply_environment` with a backend-selected
 `EnvironmentInput`. Use its filesystem decision helpers and
-`authorize_connection` for policy evaluation so the backend does not need to
-manually combine the requested and ceiling sides.
+`authorize_connection` to receive decisions that already combine the requested
+and ceiling sides.
 
-If a capability is missing, preparation returns
-`BackendContractError::UnsupportedCapability`. The error remains matchable by
-its `BackendCapability` variant and its display text explains the missing
+When a request needs an unsupported capability, preparation returns
+`BackendContractError::UnsupportedCapability`. The error is matchable by its
+`BackendCapability` variant and its display text names the required
 enforcement, for example: `filesystem missing-path behavior (error or skip)`.
 
 Capability checks include implicit requirements: a workspace-relative glob
@@ -87,14 +88,15 @@ The crate owns:
 
 The native backend owns:
 
-- Landlock, bubblewrap, Seatbelt, Windows ACL/token, or another OS mechanism;
+- translating the effective contract to Landlock, bubblewrap, Seatbelt,
+  Windows ACL/token, or another OS mechanism;
 - symlink, junction, reparse-point, mount, and TOCTOU-safe enforcement;
 - DNS resolution and exact `SocketAddr` connection authorization;
 - platform-specific core environment selection; and
-- process launch, stdio, timeout, cancellation, and lifecycle errors.
+- process launch, stdio, timeout, cancellation, and lifecycle handling.
 
-`cageforge-core` will later provide an ergonomic facade and backend selection.
-It is not a dependency of this crate.
+`cageforge-core` will provide the ergonomic facade and backend selection that
+connect this contract to a concrete execution flow.
 
 ## Workspace role
 
@@ -102,9 +104,9 @@ It is not a dependency of this crate.
 | --- | --- |
 | `cageforge-command` | Supplies validated command and environment intent. |
 | `cageforge-policy-compose` | Supplies the narrowed `EffectiveSandbox`. |
-| `cageforge-policy` | Supplies portable policy values used during lowering. |
-| `cageforge-path` | Native integrations use its shared lexical path semantics when lowering paths; this contract crate reaches those semantics through the policy/context APIs. |
-| `cageforge-config` | Optional TOML producer; not a backend API dependency. |
+| `cageforge-policy` | Supplies portable policy values and decision types used during lowering. |
+| `cageforge-path` | Supplies the shared lexical path semantics used by policy and native integrations. |
+| `cageforge-config` | Produces validated TOML-backed command and policy values for the handoff. |
 | Native backend crates | Implement OS enforcement and process launch after preflight. |
 
 The complete API is documented on
