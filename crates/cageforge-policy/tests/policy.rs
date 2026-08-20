@@ -71,6 +71,29 @@ fn resolved_ip_literal_cannot_claim_a_different_address() {
 }
 
 #[test]
+fn resolved_ip_literal_decisions_reject_mismatched_addresses() {
+    let policy = NetworkPolicy::enabled()
+        .with_domain("*", DomainAccess::Allow)
+        .expect("wildcard domain");
+
+    for (literal, resolved) in [
+        ("8.8.8.8", "10.0.0.1"),
+        ("2001:4860:4860::8888", "2001:db8::1"),
+    ] {
+        assert_eq!(
+            policy
+                .decision_for_domain_with_resolved_ips(
+                    literal,
+                    &[resolved.parse().expect("resolved address")],
+                )
+                .expect("resolved literal decision"),
+            NetworkDecision::Deny,
+            "{literal} must not accept a different resolved address",
+        );
+    }
+}
+
+#[test]
 fn resolved_target_rejects_policy_patterns_and_non_host_syntax() {
     let public = SocketAddr::new("93.184.216.34".parse().expect("public address"), 443);
     for host in ["*.example.com", "[a-c].example.com", "user@example.com"] {

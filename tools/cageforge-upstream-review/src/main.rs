@@ -296,10 +296,7 @@ fn status(repository: &Repository) -> Result<(), String> {
     }
 
     let upstream_ref = repository.upstream_ref();
-    match git_output(
-        &upstream_root,
-        ["rev-parse", "--verify", upstream_ref.as_str()],
-    ) {
+    match resolve_commit(&upstream_root, &upstream_ref) {
         Ok(commit) => println!("fetched upstream commit: {commit}"),
         Err(_) => println!("upstream branch: unavailable (update the Codex checkout manually)"),
     }
@@ -456,19 +453,15 @@ fn run_git_diff(
     arguments.push("--".to_owned());
     arguments.extend(pathspecs.iter().map(ToString::to_string));
 
-    let output = Command::new("git")
+    let status = Command::new("git")
         .current_dir(root)
         .arg("--literal-pathspecs")
         .args(&arguments)
-        .output()
+        .status()
         .map_err(|error| format!("failed to run git diff: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git diff failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    if !status.success() {
+        return Err(format!("git diff failed: {status}"));
     }
-    print!("{}", String::from_utf8_lossy(&output.stdout));
     Ok(())
 }
 

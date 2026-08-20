@@ -613,6 +613,9 @@ impl NetworkPolicy {
         }
 
         if let Some(literal) = parse_ip_literal(&normalized_domain) {
+            if resolved_ips.iter().any(|ip| *ip != literal) {
+                return Ok(NetworkDecision::Deny);
+            }
             return Ok(
                 if self.has_exact_allow(&normalized_domain)
                     || self.local_network_access == LocalNetworkAccess::Allow

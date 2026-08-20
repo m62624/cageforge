@@ -68,10 +68,12 @@ license, and material adaptation.
 - Only configured repository-relative upstream paths are passed to Git.
 - Possible Rust module-directory splits next to a tracked `.rs` file are also
   passed as narrow pathspecs.
-- User-supplied diff targets are resolved to full commit IDs with Git's
-  end-of-options marker before they are passed to `git diff`.
+- Diff targets and the configured upstream ref used by `status` are resolved
+  to full commit IDs with Git's end-of-options marker before any Git operation
+  uses them as revisions.
 - Diff execution disables external diff and text-conversion hooks and treats
-  configured pathspecs literally.
+  configured pathspecs literally. Diff output is streamed instead of being
+  buffered in memory as one unbounded command result.
 - Unknown fields in the tracking TOML are rejected instead of being ignored.
 - Baseline upstream files and local Cageforge destinations are checked before
   a review is shown.
