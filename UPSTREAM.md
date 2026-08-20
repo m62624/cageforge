@@ -48,6 +48,13 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/protocol/src/shell_environment.rs` | `crates/cageforge-config`, `crates/cageforge-command` | Behavior-tracked; platform environment semantics audited |
 | `codex-rs/core/src/config/mod.rs` | `crates/cageforge-config` | Behavior-tracked; profile selection audited, product trust excluded |
 | `codex-rs/core/src/environment_selection.rs` | `crates/cageforge-config` | Behavior-tracked; runtime workspace-root consumption audited |
+| `codex-rs/sandboxing/src/lib.rs` | `crates/cageforge-backend-api` | Backend boundary and capability families audited; implementation remains independent |
+| `codex-rs/sandboxing/src/manager.rs` | `crates/cageforge-backend-api` | Sandbox preparation inputs and platform selection audited; Codex product types excluded |
+| `codex-rs/sandboxing/src/spawn.rs` | `crates/cageforge-backend-api` | Spawn handoff responsibilities audited; process and PTY APIs remain outside the portable contract |
+| `codex-rs/sandboxing/src/policy_transforms.rs` | `crates/cageforge-backend-api` | Effective-policy handoff audited; the Cageforge API accepts only `EffectiveSandbox` |
+| `codex-rs/core/src/exec.rs` | `crates/cageforge-backend-api` | Execution boundary consumers audited; process lifecycle remains backend-owned |
+| `codex-rs/exec-server/src/process_sandbox.rs` | `crates/cageforge-backend-api` | Prepared sandbox request flow audited; JSON-RPC and Codex protocol types excluded |
+| `codex-rs/exec-server/src/local_process.rs` | `crates/cageforge-backend-api` | Local process lifecycle consumer audited; PTY, telemetry, and session state excluded |
 | `codex-rs/sandboxing`, `codex-rs/linux-sandbox`, `codex-rs/windows-sandbox-rs`, `codex-rs/bwrap` | Future native backend crates | Planned; not imported |
 | `codex-rs/vendor/bubblewrap` | Future Linux third-party component | Planned; not imported |
 

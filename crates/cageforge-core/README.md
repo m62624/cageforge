@@ -24,9 +24,13 @@ Use the current libraries directly:
   for TOML profiles;
 - [`cageforge-policy-compose`](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/)
   for an outer policy ceiling.
+- [`cageforge-backend-api`](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/)
+  for capability negotiation and side-effect-free preflight before a native
+  backend takes ownership of execution.
 
 Future facade design must preserve the ownership boundaries of these crates:
-configuration produces validated values, composition narrows them, and a
-native backend performs operating-system enforcement.
+configuration produces validated values, composition narrows them,
+`cageforge-backend-api` checks the resulting contract, and a native backend
+performs operating-system enforcement.
 
 Repository: [github.com/m62624/cageforge](https://github.com/m62624/cageforge).

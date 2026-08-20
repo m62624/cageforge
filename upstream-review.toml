@@ -76,3 +76,16 @@ upstream_paths = [
     "codex-rs/protocol/src/models.rs",
 ]
 local_paths = ["crates/cageforge-policy-compose/"]
+
+[[scope]]
+name = "cageforge-backend-api"
+upstream_paths = [
+    "codex-rs/sandboxing/src/lib.rs",
+    "codex-rs/sandboxing/src/manager.rs",
+    "codex-rs/sandboxing/src/spawn.rs",
+    "codex-rs/sandboxing/src/policy_transforms.rs",
+    "codex-rs/core/src/exec.rs",
+    "codex-rs/exec-server/src/process_sandbox.rs",
+    "codex-rs/exec-server/src/local_process.rs",
+]
+local_paths = ["crates/cageforge-backend-api/"]

@@ -27,6 +27,7 @@ Choose the smallest entry point that matches your application:
 | Describe filesystem and network permissions | [`cageforge-policy`](https://docs.rs/cageforge-policy/latest/cageforge_policy/) | Portable policy values, validation, and access decisions |
 | Load named profiles from TOML | [`cageforge-config`](https://docs.rs/cageforge-config/latest/cageforge_config/) | Strict parsing, inheritance, diagnostics, schema, and resolved policy/command values |
 | Apply an outer safety limit | [`cageforge-policy-compose`](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/) | Monotonic intersection of requested permissions and a policy ceiling |
+| Check a request against a backend contract | [`cageforge-backend-api`](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/) | Typed capability negotiation and side-effect-free preflight for a native backend |
 | Integrate a native process sandbox | Future backend integration | OS-specific enforcement and safe process/file/network operations |
 
 Most applications use the crates in this order:
@@ -43,6 +44,9 @@ configuration source       Rust builders
                    │
                    ▼
        cageforge-policy-compose (optional outer limit)
+                   │
+                   ▼
+       cageforge-backend-api (capability preflight)
                    │
                    ▼
        native backend / application-owned executor
@@ -106,6 +110,9 @@ The crates are libraries, not a mandatory monolith:
   does not depend on a backend.
 - `cageforge-policy-compose` can narrow values produced by TOML, JSON, Rust,
   or another configuration source; it does not require `cageforge-config`.
+- `cageforge-backend-api` can validate a composed request before any native
+  backend or application-owned executor performs process, filesystem, or
+  network operations.
 
 The individual crate pages contain copyable examples and explain the handoff
 to the next layer:
@@ -115,6 +122,7 @@ to the next layer:
 - [`cageforge-policy` API guide](https://docs.rs/cageforge-policy/latest/cageforge_policy/)
 - [`cageforge-config` API guide](https://docs.rs/cageforge-config/latest/cageforge_config/)
 - [`cageforge-policy-compose` API guide](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/)
+- [`cageforge-backend-api` API guide](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/)
 
 ## Configuration examples
 
