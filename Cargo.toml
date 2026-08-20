@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/cageforge-backend-api",
     "crates/cageforge-command",
     "crates/cageforge-config",
     "crates/cageforge-path",
@@ -24,6 +25,7 @@ all = "warn"
 
 [workspace.dependencies]
 cageforge-command = { path = "crates/cageforge-command", version = "0.1.0" }
+cageforge-backend-api = { path = "crates/cageforge-backend-api", version = "0.1.0" }
 cageforge-policy = { path = "crates/cageforge-policy", version = "0.1.0" }
 cageforge-policy-compose = { path = "crates/cageforge-policy-compose", version = "0.1.0" }
 cageforge-path = { path = "crates/cageforge-path", version = "0.1.0" }

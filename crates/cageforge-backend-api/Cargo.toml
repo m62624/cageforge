@@ -1,0 +1,25 @@
+[package]
+name = "cageforge-backend-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Backend capability and preflight contracts for Cageforge execution"
+readme = "README.md"
+
+[lib]
+name = "cageforge_backend_api"
+path = "src/lib.rs"
+
+[dependencies]
+cageforge-command.workspace = true
+cageforge-policy.workspace = true
+cageforge-policy-compose.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

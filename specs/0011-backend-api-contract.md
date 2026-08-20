@@ -81,6 +81,11 @@ Preparation is a synchronous, side-effect-free validation step. It must:
 6. keep network preparation on the resolved-target path. A hostname-only
    decision is never a connection authorization.
 
+The `CommandRequest::environment` value must equal the requested environment
+used to create the `EffectiveSandbox`. Mixing a command with a composed result
+from another environment specification is a typed contract error, not a
+reason to choose one source implicitly.
+
 Preparation must not perform filesystem, DNS, or socket I/O. Native backends
 perform those operations only after successful preparation and must follow
 `specs/0012-native-backend-safety-contract.md`.
