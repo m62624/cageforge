@@ -5,7 +5,7 @@ use cageforge_policy::{
     FilesystemMode, FilesystemPolicy, FilesystemRule, FilesystemTarget, LocalNetworkAccess,
     MissingPathBehavior, NetworkDecision, NetworkMode, NetworkPolicy, PathPattern,
     PathResolutionContext, PathSelector, PolicyError, ResolvedNetworkTarget, SandboxPolicy,
-    UnixSocketMode,
+    UnixSocketMode, UnixSocketRule,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeSet, HashSet};
@@ -227,6 +227,30 @@ fn path_pattern_collections_use_posix_matching_identity() {
     assert_ne!(upper, lower);
     assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 2);
     assert_eq!(BTreeSet::from([upper, lower]).len(), 2);
+}
+
+#[test]
+fn unix_socket_rule_collections_follow_native_path_identity() {
+    let upper = if cfg!(windows) {
+        r"C:\Run\Cageforge.sock"
+    } else {
+        "/Run/Cageforge.sock"
+    };
+    let lower = if cfg!(windows) {
+        r"c:\run\cageforge.sock"
+    } else {
+        "/run/cageforge.sock"
+    };
+    let upper = UnixSocketRule::new(upper, DomainAccess::Allow).expect("valid socket rule");
+    let lower = UnixSocketRule::new(lower, DomainAccess::Allow).expect("valid socket rule");
+
+    if cfg!(windows) {
+        assert_eq!(upper, lower);
+        assert_eq!(HashSet::from([upper, lower]).len(), 1);
+    } else {
+        assert_ne!(upper, lower);
+        assert_eq!(HashSet::from([upper, lower]).len(), 2);
+    }
 }
 
 #[test]

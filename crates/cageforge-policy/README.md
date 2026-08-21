@@ -210,6 +210,11 @@ methods return `NetworkDecision::Allow`,
 checked socket address. `allows_unix_socket` remains a local boolean query
 because Unix socket paths do not involve DNS resolution.
 
+`UnixSocketRule` equality and hashing use the same native path identity as
+Unix-socket matching and policy normalization. On Windows this makes case
+variants one rule identity; on POSIX, case remains significant. The `path()`
+accessor still preserves the declared spelling for diagnostics.
+
 Network policy is independent from filesystem policy. Disabled mode denies
 destinations, while external mode records that another trusted boundary owns
 network enforcement. A project can connect these values to a proxy, firewall,

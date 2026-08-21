@@ -125,6 +125,9 @@ The workspace keeps a single owner for each reusable semantic operation:
   while `PathPattern` follows native path matching. Their display accessors
   preserve declaration spelling, so inspection and serialization do not need to
   reconstruct the original value from a collection key.
+- `UnixSocketRule` uses the shared native path identity for `Eq` and `Hash`,
+  matching socket evaluation and network-policy normalization on Windows and
+  POSIX.
 - `cageforge-policy` uses `globset` for filesystem and domain patterns. Its
   domain normalization and filesystem component handling are intentionally
   different layers around that matcher, not duplicate glob implementations.

@@ -43,6 +43,12 @@ available through `as_str()` for diagnostics and serialization. This prevents a
 Windows case variant from becoming a second policy key while preserving the
 declared spelling at the API boundary.
 
+`UnixSocketRule` follows the same native identity for its path when implementing
+`Eq` and `Hash`. This keeps public socket-rule collections consistent with
+`NetworkPolicy::normalized` and Unix-socket matching: Windows case variants are
+one identity, while POSIX case variants remain distinct. The public `path()`
+accessor continues to expose the original spelling.
+
 ## Resolved network target contract
 
 Domain rules alone cannot prevent a hostname from resolving to loopback,

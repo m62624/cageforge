@@ -270,10 +270,30 @@ impl DomainRule {
 }
 
 /// A Unix socket path and its access decision.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Equality and hashing use the same native lexical path identity as socket
+/// matching and policy normalization. The original path spelling remains
+/// available through [`Self::path`] for diagnostics.
+#[derive(Debug, Clone)]
 pub struct UnixSocketRule {
     path: PathBuf,
     access: DomainAccess,
+}
+
+impl PartialEq for UnixSocketRule {
+    fn eq(&self, other: &Self) -> bool {
+        NativePathKey::new(&self.path) == NativePathKey::new(&other.path)
+            && self.access == other.access
+    }
+}
+
+impl Eq for UnixSocketRule {}
+
+impl Hash for UnixSocketRule {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        NativePathKey::new(&self.path).hash(state);
+        self.access.hash(state);
+    }
 }
 
 impl UnixSocketRule {
