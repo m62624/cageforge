@@ -8,6 +8,13 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Check scope
+        required: true
+        default: auto
+        type: choice
+        options: [auto, default, full]
 
 permissions:
   contents: read
@@ -17,7 +24,7 @@ concurrency:
   group: cageforge-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Current portable CI runners, following Plugmem's successful OS matrix:
+# Current runners for portable checks:
 #   ubuntu-latest
 #   windows-latest
 #   macos-latest
@@ -29,36 +36,180 @@ concurrency:
 #   macos-26           — macOS Apple Silicon
 #   windows-2025       — Windows x64/release host
 #   windows-11-arm     — Windows ARM64
+#
+# CI routing algorithm (TODO: keep this synchronized with labeler.yml):
+# 1. The portable crates are the current default surface. Run their fmt, clippy,
+#    tests, and docs on one default Linux runner. Exclude cageforge-core and all
+#    future native sandbox crates from this job.
+# 2. A change to any portable crate, cageforge-core, workspace dependency or CI
+#    metadata is a shared-contract change. Run the complete workspace on Linux,
+#    macOS, and Windows immediately.
+# 3. A change limited to one native sandbox crate selects exactly cageforge-core
+#    and that native crate on its operating system. Do not run unrelated native
+#    crates. The same routing is exposed as ci-<os>-quality labels.
+# 4. When native crates and dedicated hardware are available, replace the
+#    placeholder native package names and runner labels below. Keep the package
+#    selection and the OS mapping explicit; never silently fall back to a broad
+#    workspace check for a native-only change.
+# 5. If several native crates change, run cageforge-core plus each changed native
+#    crate on its matching OS. If cageforge-core changes, use the complete matrix.
+# 6. Update the path classifier and labeler together whenever a crate is added,
+#    renamed, or moved between portable and native ownership.
+# 7. Configure branch protection to require the stable `CI passed` check. Do not
+#    require mode-specific jobs, because skipped jobs are intentional for other
+#    change classes.
 
 jobs:
-  format:
-    name: format + docs
+  changes:
+    name: classify changes
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+      linux_native: ${{ steps.classify.outputs.linux_native }}
+      macos_native: ${{ steps.classify.outputs.macos_native }}
+      windows_native: ${{ steps.classify.outputs.windows_native }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: classify
+        name: Classify changed paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          MANUAL_SCOPE: ${{ inputs.scope }}
+        run: |
+          set -euo pipefail
+
+          mode=default
+          linux_native=false
+          macos_native=false
+          windows_native=false
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            mode=full
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            case "${MANUAL_SCOPE:-auto}" in
+              full) mode=full ;;
+              default|auto) mode=default ;;
+              *) echo "Unknown scope: ${MANUAL_SCOPE}" >&2; exit 1 ;;
+            esac
+          else
+            mapfile -t changed_paths < <(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")
+            shared_change=false
+
+            for path in "${changed_paths[@]}"; do
+              case "$path" in
+                crates/cageforge-linux/*)
+                  linux_native=true
+                  ;;
+                crates/cageforge-macos/*)
+                  macos_native=true
+                  ;;
+                crates/cageforge-windows/*)
+                  windows_native=true
+                  ;;
+                crates/*)
+                  # A portable crate is shared by every future backend.
+                  shared_change=true
+                  ;;
+                *)
+                  # Anything outside crates/ can affect the build, policy, CI,
+                  # documentation contract, or release process. Be conservative
+                  # and run every OS before merge.
+                  shared_change=true
+                  ;;
+              esac
+            done
+
+            if [[ "$shared_change" == true ]]; then
+              mode=full
+            elif [[ "$linux_native" == true || "$macos_native" == true || "$windows_native" == true ]]; then
+              mode=native
+            fi
+          fi
+
+          {
+            echo "mode=${mode}"
+            echo "linux_native=${linux_native}"
+            echo "macos_native=${macos_native}"
+            echo "windows_native=${windows_native}"
+          } >> "$GITHUB_OUTPUT"
+
+  portable-default:
+    name: portable fmt + clippy + test (Linux)
+    needs: changes
+    if: needs.changes.outputs.mode == 'default'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
-        run: cargo fmt --all --check
-      - name: Check documentation
+        # Keep this list limited to the current portable packages. Add a new
+        # portable package here when it becomes part of the default surface.
+        run: >-
+          cargo fmt
+          -p cageforge-backend-api
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+          -- --check
+      - name: Clippy for portable crates
+        run: >-
+          cargo clippy
+          -p cageforge-backend-api
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+          --all-targets -- -D warnings
+      - name: Test portable crates
+        run: >-
+          cargo test
+          -p cageforge-backend-api
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+      - name: Check portable documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps
+        run: >-
+          cargo doc
+          -p cageforge-backend-api
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+          --no-deps
 
-  check:
-    name: clippy + test (${{ matrix.os_name }})
+  full-matrix:
+    name: full workspace (${{ matrix.os_name }})
+    needs: changes
+    if: needs.changes.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
         include:
           - os_name: Linux
             os: ubuntu-latest
-          - os_name: Windows
-            os: windows-latest
           - os_name: macOS
             os: macos-latest
+          - os_name: Windows
+            os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -66,23 +217,72 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
 
+  native-linux:
+    name: Linux core + native sandbox
+    needs: changes
+    if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.linux_native == 'true'
+    # TODO: use the dedicated Linux runner when cageforge-linux is introduced.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --package cageforge-core --package cageforge-linux -- --check
+      - run: cargo clippy -p cageforge-core -p cageforge-linux --all-targets -- -D warnings
+      - run: cargo test -p cageforge-core -p cageforge-linux
+
+  native-macos:
+    name: macOS core + native sandbox
+    needs: changes
+    if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.macos_native == 'true'
+    # TODO: use the dedicated macOS runner when cageforge-macos is introduced.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --package cageforge-core --package cageforge-macos -- --check
+      - run: cargo clippy -p cageforge-core -p cageforge-macos --all-targets -- -D warnings
+      - run: cargo test -p cageforge-core -p cageforge-macos
+
+  native-windows:
+    name: Windows core + native sandbox
+    needs: changes
+    if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.windows_native == 'true'
+    # TODO: use the dedicated Windows runner when cageforge-windows is introduced.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --package cageforge-core --package cageforge-windows -- --check
+      - run: cargo clippy -p cageforge-core -p cageforge-windows --all-targets -- -D warnings
+      - run: cargo test -p cageforge-core -p cageforge-windows
+
   ci-pass:
     name: CI passed
     if: always()
-    needs: [format, check]
+    needs:
+      [changes, portable-default, full-matrix, native-linux, native-macos, native-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Fail if a required job failed or was cancelled
+      - name: Fail if a selected job failed or was cancelled
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
-          echo "A required CI job failed or was cancelled."
-          echo "format = ${{ needs.format.result }}"
-          echo "check  = ${{ needs.check.result }}"
+          echo "A selected CI job failed or was cancelled."
           exit 1
-      - name: All required jobs passed
-        run: echo "format, documentation, clippy, and workspace tests passed."
+      - name: All selected checks passed
+        run: echo "Cageforge CI routing and selected checks passed."

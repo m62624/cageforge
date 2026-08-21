@@ -1,8 +1,11 @@
 name: Labeler
 
 on:
-  pull_request:
-    types: [opened, edited, synchronize]
+  # This workflow only runs a fixed github-script and never checks out or
+  # executes pull-request code, so pull_request_target can write labels for
+  # forked pull requests safely.
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read
@@ -18,6 +21,11 @@ jobs:
         with:
           script: |
             const title = context.payload.pull_request.title;
+            const pullRequest = context.payload.pull_request.number;
+            const repository = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            };
 
             const conventional = [
               ['feat', 'feat', '0576b9'],
@@ -40,25 +48,60 @@ jobs:
               ['ci-windows-quality', '5319e7'],
             ];
 
-            const labelsToCreate = [...conventional.map(([, name, color]) => ({ name, color })),
-              ...ciLabels.map(([name, color]) => ({ name, color }))];
+            const labelsToCreate = [
+              ...conventional.map(([, name, color]) => ({ name, color })),
+              ...ciLabels.map(([name, color]) => ({ name, color })),
+            ];
 
             for (const { name, color } of labelsToCreate) {
               try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name,
-                });
+                await github.rest.issues.getLabel({ ...repository, name });
               } catch (error) {
                 if (error.status !== 404) throw error;
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name,
-                  color,
-                });
+                await github.rest.issues.createLabel({ ...repository, name, color });
               }
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...repository,
+              pull_number: pullRequest,
+              per_page: 100,
+            });
+            const changedPaths = files.map(({ filename }) => filename);
+
+            const nativeCrates = [
+              ['crates/cageforge-linux/', 'ci-linux-quality'],
+              ['crates/cageforge-macos/', 'ci-macos-quality'],
+              ['crates/cageforge-windows/', 'ci-windows-quality'],
+            ];
+
+            const nativeLabelFor = (path) => {
+              const nativeCrate = nativeCrates.find(([prefix]) => path.startsWith(prefix));
+              return nativeCrate?.[1];
+            };
+
+            const isSharedChange = (path) => {
+              if (path.startsWith('crates/')) return nativeLabelFor(path) === undefined;
+              // Files outside crates/ can change build, policy, CI, docs, or
+              // release behavior, so they require the complete OS matrix.
+              return true;
+            };
+
+            // Remove stale routing labels before applying the current path
+            // classification. This prevents a previous native-only commit
+            // from selecting the wrong crate after the PR changes again.
+            const existingLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              ...repository,
+              issue_number: pullRequest,
+              per_page: 100,
+            });
+            for (const label of existingLabels) {
+              if (!ciLabels.some(([name]) => name === label.name)) continue;
+              await github.rest.issues.removeLabel({
+                ...repository,
+                issue_number: pullRequest,
+                name: label.name,
+              });
             }
 
             const labelsToApply = [];
@@ -80,19 +123,22 @@ jobs:
               if (title.startsWith(prefix)) labelsToApply.push(name);
             }
 
-            if (title.match(/^[a-z]+(!):/) || title.match(/^[a-z]+\(.*\)(!):/)) {
+            const hasSharedChange = changedPaths.some(isSharedChange);
+            if (!hasSharedChange) {
+              for (const path of changedPaths) {
+                const label = nativeLabelFor(path);
+                if (label) labelsToApply.push(label);
+              }
+            }
+
+            if (/^[a-z]+(!):/.test(title) || /^[a-z]+\(.*\)(!):/.test(title)) {
               const name = 'breaking';
               try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name,
-                });
+                await github.rest.issues.getLabel({ ...repository, name });
               } catch (error) {
                 if (error.status !== 404) throw error;
                 await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
+                  ...repository,
                   name,
                   color: 'd93f0b',
                 });
@@ -102,9 +148,8 @@ jobs:
 
             if (labelsToApply.length > 0) {
               await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
+                ...repository,
+                issue_number: pullRequest,
                 labels: [...new Set(labelsToApply)],
               });
             }
