@@ -128,6 +128,13 @@ The workspace keeps a single owner for each reusable semantic operation:
 - `UnixSocketRule` uses the shared native path identity for `Eq` and `Hash`,
   matching socket evaluation and network-policy normalization on Windows and
   POSIX.
+- Aggregate declaration and snapshot values such as `EnvironmentSpec`,
+  `PathResolutionContext`, `ResolvedProfile`, and the policy containers retain
+  structural equality because their public accessors preserve declared
+  spelling and/or order; they are not native-identity collection keys.
+  `EffectiveSandbox` and `EffectivePathContext` are the deliberate exception:
+  their equality includes the private composition identity, so equal-looking
+  results from different compositions never compare equal.
 - `cageforge-policy` uses `globset` for filesystem and domain patterns. Its
   domain normalization and filesystem component handling are intentionally
   different layers around that matcher, not duplicate glob implementations.

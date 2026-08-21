@@ -130,6 +130,8 @@ fn effective_context_identity_is_not_equal_across_compositions() {
     let first_context = first.path_context(&base).expect("valid first context");
     let second_context = second.path_context(&base).expect("valid second context");
 
+    assert_ne!(first, second);
+    assert_eq!(first, first.clone());
     assert_ne!(first_context, second_context);
     assert_eq!(first_context, first_context.clone());
 }
