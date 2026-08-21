@@ -82,6 +82,9 @@ These rules are mandatory:
     ownership as a separate state. An `Ord` implementation is appropriate for
     canonical collection keys or deterministic diagnostic labels only when it
     is not presented as an enforcement precedence.
+    Prepared backend handoffs must be type-bound to the backend whose
+    capabilities were checked; native lowering should accept
+    `PreparedBackendRequest<'_, Self>` rather than an unbound prepared value.
 12. A network backend must use `ResolvedNetworkTarget` and verify the exact
     `SocketAddr` immediately before connecting. `decision_for_domain` and
     `decision_for_domain_with_resolved_ips` are policy queries, not proof that

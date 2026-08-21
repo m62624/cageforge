@@ -21,6 +21,8 @@ mod requirements;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::fmt;
+use std::marker::PhantomData;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
@@ -205,13 +207,15 @@ impl<'a> BackendRequest<'a> {
     /// capability check is defined by Cageforge and cannot be overridden by a
     /// backend implementation. The context is narrowed before return, and an
     /// effective working directory must be supplied by the runtime context and
-    /// permitted by the effective filesystem policy.
+    /// permitted by the effective filesystem policy. The returned value is
+    /// bound to `B`, so a handoff prepared for one backend type cannot be passed
+    /// to a native lowering method for another backend type by accident.
     pub fn prepare_for<B: SandboxBackend>(
         self,
         backend: &B,
         base_context: &PathResolutionContext,
-    ) -> Result<PreparedBackendRequest<'a>, BackendContractError> {
-        self.validate(&backend.capabilities(), base_context)
+    ) -> Result<PreparedBackendRequest<'a, B>, BackendContractError> {
+        self.validate::<B>(&backend.capabilities(), base_context)
     }
 
     /// Computes the capabilities required by this request.
@@ -230,11 +234,11 @@ impl<'a> BackendRequest<'a> {
     /// returned value only proves that the request's portable requirements are
     /// represented by the advertised capability set; native enforcement still
     /// belongs to the backend.
-    fn validate(
+    fn validate<B: SandboxBackend>(
         self,
         capabilities: &BackendCapabilities,
         base_context: &PathResolutionContext,
-    ) -> Result<PreparedBackendRequest<'a>, BackendContractError> {
+    ) -> Result<PreparedBackendRequest<'a, B>, BackendContractError> {
         if self.command.environment() != self.sandbox.environment().requested() {
             return Err(BackendContractError::CommandEnvironmentMismatch);
         }
@@ -282,6 +286,7 @@ impl<'a> BackendRequest<'a> {
             request: self,
             path_context,
             working_directory,
+            backend: PhantomData,
         })
     }
 }
@@ -291,14 +296,66 @@ impl<'a> BackendRequest<'a> {
 /// This type is still portable and contains no process handle. Native backend
 /// code may lower it to an OS-specific launch request after applying the
 /// filesystem, network, environment, and lifecycle contracts.
-#[derive(Debug, Clone)]
-pub struct PreparedBackendRequest<'a> {
+///
+/// The `B` type parameter is a type-level binding to the backend whose
+/// capabilities were checked during preparation. Native lowering should accept
+/// `PreparedBackendRequest<'_, Self>` so a prepared request cannot be handed to
+/// a different backend implementation by accident.
+///
+/// ```compile_fail
+/// use cageforge_backend_api::{BackendCapabilities, PreparedBackendRequest, SandboxBackend};
+///
+/// struct LinuxBackend;
+/// struct WindowsBackend;
+///
+/// impl SandboxBackend for LinuxBackend {
+///     fn capabilities(&self) -> BackendCapabilities {
+///         BackendCapabilities::new()
+///     }
+/// }
+///
+/// impl SandboxBackend for WindowsBackend {
+///     fn capabilities(&self) -> BackendCapabilities {
+///         BackendCapabilities::new()
+///     }
+/// }
+///
+/// fn take_linux<'a>(_: PreparedBackendRequest<'a, LinuxBackend>) {}
+///
+/// fn pass_windows_to_linux<'a>(prepared: PreparedBackendRequest<'a, WindowsBackend>) {
+///     take_linux(prepared);
+/// }
+/// ```
+pub struct PreparedBackendRequest<'a, B: SandboxBackend> {
     request: BackendRequest<'a>,
     path_context: EffectivePathContext,
     working_directory: PathBuf,
+    backend: PhantomData<fn() -> B>,
 }
 
-impl<'a> PreparedBackendRequest<'a> {
+impl<'a, B: SandboxBackend> Clone for PreparedBackendRequest<'a, B> {
+    fn clone(&self) -> Self {
+        Self {
+            request: self.request,
+            path_context: self.path_context.clone(),
+            working_directory: self.working_directory.clone(),
+            backend: PhantomData,
+        }
+    }
+}
+
+impl<'a, B: SandboxBackend> fmt::Debug for PreparedBackendRequest<'a, B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedBackendRequest")
+            .field("request", &self.request)
+            .field("path_context", &self.path_context)
+            .field("working_directory", &self.working_directory)
+            .finish()
+    }
+}
+
+impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// Returns the validated executable and argv values.
     ///
     /// The working directory is intentionally exposed separately through
@@ -484,7 +541,9 @@ pub enum BackendContractError {
 /// [`BackendRequest::prepare_for`] to run the common preflight; native
 /// backends cannot replace that check with a broader capability set. Process
 /// launch, platform I/O, and backend-specific errors remain outside this
-/// trait.
+/// trait. The returned capabilities must remain stable for the lifetime of a
+/// [`PreparedBackendRequest`] produced from that backend instance; the
+/// type-level binding does not prove that operating-system enforcement exists.
 pub trait SandboxBackend {
     /// Returns the capabilities this backend can enforce safely.
     fn capabilities(&self) -> BackendCapabilities;

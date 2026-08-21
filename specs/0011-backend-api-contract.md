@@ -40,8 +40,9 @@ The crate will expose the following independent concepts:
 - `BackendCapability`: one typed capability that a native backend may support;
 - `BackendCapabilities`: a deterministic set of supported capabilities;
 - `BackendRequest`: the command and effective sandbox submitted for preflight;
-- `PreparedBackendRequest`: an opaque, validated handoff produced only after
-  preflight succeeds;
+- `PreparedBackendRequest<'_, B>`: an opaque, validated handoff produced only
+  after preflight succeeds and type-bound to the `SandboxBackend` `B` whose
+  capabilities were checked;
 - `BackendContractError`: common failures such as unsupported capabilities,
   invalid runtime context, or invalid environment preparation; and
 - `SandboxBackend`: a synchronous preparation trait implemented by native
@@ -55,6 +56,15 @@ preflight algorithm and validate against a broader, self-selected capability
 set. The API does not define a common process type, async runtime, PTY, signal
 model, cancellation model, or process-tree lifecycle. A native backend owns
 those concerns in its own API and error type.
+
+The prepared handoff is bound to the concrete backend type `B` at compile
+time. A native lowering method should accept `PreparedBackendRequest<'_, Self>`
+rather than an unbound prepared value. This prevents a request preflighted
+against one backend implementation type from being passed accidentally to
+another backend implementation with a different capability contract. The
+backend's advertised capabilities must also remain stable for the lifetime of
+a prepared handoff; the type binding is not a runtime proof that a backend's
+operating-system enforcement exists.
 
 Capability values must use enums or named types rather than ambiguous boolean
 parameters. The capability vocabulary must cover the portable inputs that can

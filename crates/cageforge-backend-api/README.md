@@ -53,6 +53,14 @@ symbolic selector is never evaluated without it. Use
 `authorize_connection` to receive a decision that already combines the
 requested and ceiling sides.
 
+The returned `PreparedBackendRequest<'_, B>` is bound to the concrete backend
+type `B` whose capabilities were checked. A native lowering method should
+accept `PreparedBackendRequest<'_, Self>` so a handoff prepared for one backend
+implementation cannot be passed to another backend implementation by accident.
+This type binding does not prove that operating-system enforcement exists; the
+backend remains responsible for advertising only stable capabilities it can
+actually enforce.
+
 When a request needs an unsupported capability, preparation returns
 `BackendContractError::UnsupportedCapability`. The error is matchable by its
 `BackendCapability` variant and its display text names the required

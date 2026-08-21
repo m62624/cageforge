@@ -145,6 +145,13 @@ The workspace keeps a single owner for each reusable semantic operation:
   arbitrary total order. `Ord` remains only on canonical collection keys and
   deterministic diagnostic labels where it agrees with identity semantics or
   is explicitly not an enforcement precedence.
+- Prepared backend handoffs are type-bound to the backend whose capabilities
+  were checked. Native lowering should accept
+  `PreparedBackendRequest<'_, Self>`; an unbound prepared value could be
+  preflighted against one backend capability set and accidentally lowered by
+  another. The backend must keep its advertised capabilities stable for the
+  lifetime of the handoff; the type parameter is not proof that operating-
+  system enforcement exists.
 - `cageforge-policy` uses `globset` for filesystem and domain patterns. Its
   domain normalization and filesystem component handling are intentionally
   different layers around that matcher, not duplicate glob implementations.
