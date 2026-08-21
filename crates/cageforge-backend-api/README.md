@@ -43,9 +43,10 @@ the launching process. The backend trait only supplies its capabilities; it
 cannot override this preflight with a broader set. The base context is
 narrowed to the effective workspace ceiling, and an effective working
 directory is rejected when the filesystem policy denies it. After preparation,
-use `PreparedBackendRequest::path_context` to inspect the already narrowed
-context, `PreparedBackendRequest::working_directory` for the resolved cwd, and
-`PreparedBackendRequest::apply_environment` with a
+use `PreparedBackendRequest::command_spec` for the executable and argv values,
+`PreparedBackendRequest::working_directory` for the resolved cwd,
+`PreparedBackendRequest::path_context` to inspect the already narrowed
+context, and `PreparedBackendRequest::apply_environment` with a
 backend-selected `EnvironmentInput`. The filesystem decision helpers use that
 same bound context and cannot be given a context from another request. A
 symbolic selector is never evaluated without it. Use

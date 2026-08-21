@@ -25,8 +25,13 @@ The backend API accepts:
 It must not accept a raw `SandboxPolicy` as an enforcement request. A backend
 must never bypass policy composition by using the requested policy directly.
 
-The API may retain read-only access to the command and effective sandbox in a
-prepared request, but it must not expose mutable policy or command internals.
+The API may retain read-only access to the executable/argv values and effective
+sandbox in a prepared request, but it must not expose mutable policy or command
+internals. The prepared request must not return the original `CommandRequest`:
+its optional or relative working directory would let a backend accidentally
+discard the checked runtime directory. Backends use the prepared command spec,
+the separate checked working directory, and the typed environment/stdio/timeout
+accessors instead.
 
 ## Public contract
 
@@ -104,7 +109,15 @@ runtime current directory is a typed preparation error; a backend cannot
 satisfy the `WorkingDirectory` capability by silently inheriting its own
 process cwd. Denied directories fail preparation with a typed error.
 
-The prepared request also exposes checked lowering helpers:
+The prepared request also exposes checked lowering helpers. Its
+`PreparedBackendRequest::command_spec` contains only the executable and argv;
+the checked cwd is available only from
+`PreparedBackendRequest::working_directory`. This keeps a backend from
+reconstructing an unchecked inherited or relative cwd from the original
+command. The remaining launch values are exposed through typed accessors, and
+the final environment is available only through
+`PreparedBackendRequest::apply_environment`.
+The other checked lowering helpers are:
 `PreparedBackendRequest::path_context` returns the runtime context already
 narrowed during `prepare_for`; `PreparedBackendRequest::working_directory`
 returns the effective cwd resolved against that context; and

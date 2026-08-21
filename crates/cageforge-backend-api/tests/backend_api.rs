@@ -127,7 +127,7 @@ fn prepares_a_composed_request_without_launching() {
     };
     let prepared = request.prepare_for(&backend, &workspace_context()).unwrap();
 
-    assert_eq!(prepared.command(), &command);
+    assert_eq!(prepared.command_spec(), command.command());
     assert_eq!(prepared.sandbox(), &sandbox);
 }
 

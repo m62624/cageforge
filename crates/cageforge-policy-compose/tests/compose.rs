@@ -116,6 +116,25 @@ fn filesystem_contexts_cannot_cross_compositions() {
 }
 
 #[test]
+fn effective_context_identity_is_not_equal_across_compositions() {
+    let requested = requested_policy();
+    let environment = EnvironmentSpec::empty();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let first = compose(CompositionRequest::new(&requested, &environment, &ceiling))
+        .expect("valid first composition");
+    let second = compose(CompositionRequest::new(&requested, &environment, &ceiling))
+        .expect("valid second composition");
+    let base = PathResolutionContext::new()
+        .with_workspace_root("/workspace")
+        .expect("valid workspace root");
+    let first_context = first.path_context(&base).expect("valid first context");
+    let second_context = second.path_context(&base).expect("valid second context");
+
+    assert_ne!(first_context, second_context);
+    assert_eq!(first_context, first_context.clone());
+}
+
+#[test]
 fn composition_canonicalizes_duplicate_filesystem_targets_before_backend_handoff() {
     let target = PathSelector::workspace_root();
     let requested = SandboxPolicy::new(

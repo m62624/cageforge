@@ -24,7 +24,7 @@ use std::ffi::OsString;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use cageforge_command::CommandRequest;
+use cageforge_command::{CommandRequest, CommandSpec, StdioSpec, TimeoutPolicy};
 use cageforge_path::normalize_lexical_path;
 use cageforge_policy::{
     ConnectionAuthorization, FilesystemDecision, NetworkDecision, PathResolutionContext,
@@ -297,9 +297,13 @@ pub struct PreparedBackendRequest<'a> {
 }
 
 impl<'a> PreparedBackendRequest<'a> {
-    /// Returns the validated command intent.
-    pub const fn command(&self) -> &'a CommandRequest {
-        self.request.command()
+    /// Returns the validated executable and argv values.
+    ///
+    /// The working directory is intentionally exposed separately through
+    /// [`Self::working_directory`]. A backend must not recover or inherit the
+    /// original optional cwd from a raw [`CommandRequest`] after preflight.
+    pub fn command_spec(&self) -> &'a CommandSpec {
+        self.request.command().command()
     }
 
     /// Returns the validated effective sandbox.
@@ -320,6 +324,16 @@ impl<'a> PreparedBackendRequest<'a> {
     /// context and checked against the effective filesystem policy.
     pub fn working_directory(&self) -> &Path {
         &self.working_directory
+    }
+
+    /// Returns the validated standard-stream routing.
+    pub fn stdio(&self) -> StdioSpec {
+        self.request.command().stdio()
+    }
+
+    /// Returns the validated timeout intent.
+    pub fn timeout_policy(&self) -> TimeoutPolicy {
+        self.request.command().timeout_policy()
     }
 
     /// Applies the effective environment to a backend-selected input base.

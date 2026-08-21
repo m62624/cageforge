@@ -14,7 +14,7 @@ use cageforge_policy::{PathResolutionContext, PathSelector};
 ///
 /// The value is intentionally opaque. Pointer identity, rather than the
 /// value stored in the token, binds a context to its originating composition.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ContextIdentity(Arc<()>);
 
 impl ContextIdentity {
@@ -26,6 +26,14 @@ impl ContextIdentity {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
+
+impl PartialEq for ContextIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other)
+    }
+}
+
+impl Eq for ContextIdentity {}
 
 /// A runtime path context created by [`crate::EffectiveSandbox::path_context`].
 ///
