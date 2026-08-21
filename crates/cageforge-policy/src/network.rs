@@ -720,12 +720,6 @@ impl NetworkPolicy {
         Ok(decision)
     }
 
-    /// Returns whether a Unix socket path is allowed under the complete network mode.
-    pub fn allows_unix_socket(&self, path: &Path) -> bool {
-        self.decision_for_unix_socket(path)
-            .is_ok_and(NetworkDecision::is_allowed)
-    }
-
     fn access_for_normalized_domain(&self, domain: &str) -> Option<DomainAccess> {
         let mut result = None;
         for rule in &self.domains {

@@ -68,6 +68,8 @@ These rules are mandatory:
     Audit every alternate public constructor, accessor, and convenience query
     for the same invariant as the primary path. Authorization queries must
     evaluate complete mode and ownership state, not only a matched rule;
+    do not add boolean authorization shortcuts when the result can be denied,
+    malformed, or externally enforced;
     runtime-dependent queries must require a validated runtime context; and
     environment transformations must accept a typed base rather than an
     unlabelled map.

@@ -1250,7 +1250,12 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
             .expect("disabled network"),
         NetworkDecision::Deny
     );
-    assert!(!policy.allows_unix_socket(Path::new(socket_path)));
+    assert_eq!(
+        policy
+            .decision_for_unix_socket(Path::new(socket_path))
+            .expect("socket decision"),
+        NetworkDecision::Deny
+    );
     let enabled = NetworkPolicy::enabled()
         .with_unix_socket(socket_path, DomainAccess::Deny)
         .expect("socket rule")
@@ -1259,8 +1264,18 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
             DomainAccess::Allow,
         )
         .expect("parent socket rule");
-    assert!(!enabled.allows_unix_socket(Path::new(socket_path)));
-    assert!(enabled.allows_unix_socket(Path::new(&native_path("/other.sock"))));
+    assert_eq!(
+        enabled
+            .decision_for_unix_socket(Path::new(socket_path))
+            .expect("socket decision"),
+        NetworkDecision::Deny
+    );
+    assert_eq!(
+        enabled
+            .decision_for_unix_socket(Path::new(&native_path("/other.sock")))
+            .expect("socket decision"),
+        NetworkDecision::Allow
+    );
     assert_eq!(
         enabled
             .decision_for_domain("unmatched.example")
@@ -1270,7 +1285,12 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
     let allow_only = NetworkPolicy::enabled()
         .with_unix_socket(socket_path, DomainAccess::Allow)
         .expect("allow socket rule");
-    assert!(allow_only.allows_unix_socket(Path::new(socket_path)));
+    assert_eq!(
+        allow_only
+            .decision_for_unix_socket(Path::new(socket_path))
+            .expect("socket decision"),
+        NetworkDecision::Allow
+    );
     assert_eq!(
         NetworkPolicy::external()
             .decision_for_domain("example.com")
@@ -1296,8 +1316,18 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
             .expect("unlisted domain"),
         NetworkDecision::Deny
     );
-    assert!(allowlisted.allows_unix_socket(Path::new(socket_path)));
-    assert!(!allowlisted.allows_unix_socket(Path::new(&native_path("/other.sock"))));
+    assert_eq!(
+        allowlisted
+            .decision_for_unix_socket(Path::new(socket_path))
+            .expect("socket decision"),
+        NetworkDecision::Allow
+    );
+    assert_eq!(
+        allowlisted
+            .decision_for_unix_socket(Path::new(&native_path("/other.sock")))
+            .expect("socket decision"),
+        NetworkDecision::Deny
+    );
 }
 
 #[test]
@@ -1545,11 +1575,13 @@ fn socket_access_rejects_parent_traversal_and_nul() {
     } else {
         "/run/../outside.sock"
     };
-    assert!(!policy.allows_unix_socket(Path::new(parent_path)));
-    assert!(!policy.allows_unix_socket(Path::new("/run/bad\0.sock")));
     assert!(matches!(
         policy.decision_for_unix_socket(Path::new(parent_path)),
         Err(PolicyError::ParentTraversal { .. })
+    ));
+    assert!(matches!(
+        policy.decision_for_unix_socket(Path::new("/run/bad\0.sock")),
+        Err(PolicyError::PathContainsNul { .. })
     ));
     assert!(matches!(
         NetworkPolicy::external()

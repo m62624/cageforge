@@ -629,7 +629,12 @@ mode = "backend-default"
             .expect("domain"),
         cageforge_policy::NetworkDecision::Deny
     );
-    assert!(network.allows_unix_socket(&socket));
+    assert_eq!(
+        network
+            .decision_for_unix_socket(&socket)
+            .expect("socket decision"),
+        cageforge_policy::NetworkDecision::Allow
+    );
 
     let command = resolved.command().expect("command");
     assert_eq!(

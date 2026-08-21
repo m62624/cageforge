@@ -207,8 +207,9 @@ its connection operation. The authorization token is intentionally not
 methods return `NetworkDecision::Allow`,
 `NetworkDecision::Deny`, or `NetworkDecision::ExternallyEnforced`. The
 `authorize_connection` method returns an `Allowed` value containing the exact
-checked socket address. `allows_unix_socket` remains a local boolean query
-because Unix socket paths do not involve DNS resolution.
+checked socket address. Unix socket checks also return the complete
+`NetworkDecision`, preserving the distinction between local denial and
+external enforcement.
 
 `UnixSocketRule` equality and hashing use the same native path identity as
 Unix-socket matching and policy normalization. On Windows this makes case
