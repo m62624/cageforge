@@ -87,6 +87,12 @@ capability checks and typed unsupported-capability errors belong to
 - keeping the inputs available for later backend lowering;
 - construction of a workspace-root-constrained runtime path context.
 
+Effective symbolic filesystem selectors are evaluated only with that narrowed
+context. An empty resolution is denied, so a caller cannot obtain a broad
+workspace decision and apply it to roots that the composition excluded.
+The context is bound to its originating effective result and cannot be mixed
+with another composition.
+
 It does not own:
 
 - TOML parsing, profile inheritance, or schema generation;

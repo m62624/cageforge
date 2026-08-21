@@ -51,11 +51,19 @@ fn intersects_filesystem_and_network_decisions() {
         &ceiling,
     ))
     .expect("valid policies compose");
+    let context = effective
+        .path_context(
+            &PathResolutionContext::new()
+                .with_workspace_root("/workspace")
+                .expect("valid workspace root"),
+        )
+        .expect("effective context");
 
     assert_eq!(
         effective
             .filesystem()
-            .access_for(&PathSelector::workspace_root()),
+            .access_for(&PathSelector::workspace_root(), &context)
+            .expect("workspace selector evaluation"),
         cageforge_policy::FilesystemDecision::Read
     );
     assert_eq!(
@@ -64,6 +72,46 @@ fn intersects_filesystem_and_network_decisions() {
             .decision_for_domain("example.com")
             .expect("valid domain"),
         cageforge_policy::NetworkDecision::Deny
+    );
+}
+
+#[test]
+fn filesystem_contexts_cannot_cross_compositions() {
+    let requested = requested_policy();
+    let environment = EnvironmentSpec::empty();
+    let first_ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone())
+        .with_workspace_roots([absolute_root("first")])
+        .expect("valid first ceiling");
+    let first = compose(CompositionRequest::new(
+        &requested,
+        &environment,
+        &first_ceiling,
+    ))
+    .expect("valid first composition");
+
+    let second_ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let second = compose(
+        CompositionRequest::new(&requested, &environment, &second_ceiling)
+            .with_workspace_roots([absolute_root("second")])
+            .expect("valid second request"),
+    )
+    .expect("valid second composition");
+    let second_context = second
+        .path_context(&PathResolutionContext::new())
+        .expect("valid second context");
+
+    assert_eq!(
+        first
+            .filesystem()
+            .access_for(&PathSelector::workspace_root(), &second_context),
+        Err(CompositionError::PathContextMismatch)
+    );
+    let second_path = absolute_root("second").join("file");
+    assert_eq!(
+        first
+            .filesystem()
+            .access_for_path(&second_path, &second_context),
+        Err(CompositionError::PathContextMismatch)
     );
 }
 
@@ -88,12 +136,20 @@ fn composition_canonicalizes_duplicate_filesystem_targets_before_backend_handoff
         &ceiling,
     ))
     .expect("duplicate filesystem targets should normalize safely");
+    let context = effective
+        .path_context(
+            &PathResolutionContext::new()
+                .with_workspace_root("/workspace")
+                .expect("valid workspace root"),
+        )
+        .expect("effective context");
 
     assert_eq!(effective.filesystem().requested().entries().len(), 1);
     assert_eq!(
         effective
             .filesystem()
-            .access_for(&PathSelector::workspace_root()),
+            .access_for(&PathSelector::workspace_root(), &context)
+            .expect("workspace selector evaluation"),
         cageforge_policy::FilesystemDecision::Deny
     );
 }
@@ -227,11 +283,15 @@ fn external_decisions_remain_external_when_both_sides_delegate() {
             .with_external_owner(owner.clone()),
     )
     .expect("matching external ownership composes");
+    let context = effective
+        .path_context(&PathResolutionContext::new())
+        .expect("effective context");
 
     assert!(
         effective
             .filesystem()
-            .access_for(&PathSelector::workspace_root())
+            .access_for(&PathSelector::workspace_root(), &context)
+            .expect("external selector evaluation")
             .is_externally_enforced()
     );
     assert!(

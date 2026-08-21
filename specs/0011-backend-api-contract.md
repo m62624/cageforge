@@ -93,14 +93,18 @@ Preparation is a synchronous, side-effect-free validation step. It must:
 6. keep network preparation on the resolved-target path. A hostname-only
    decision is never a connection authorization.
 
-The prepared request also exposes two checked lowering helpers:
+The prepared request also exposes checked lowering helpers:
 `PreparedBackendRequest::path_context` narrows a backend-supplied runtime
 context through `EffectiveSandbox::path_context`, and
 `PreparedBackendRequest::apply_environment` applies a backend-selected
 `EnvironmentInput`. The prepared request also exposes effective filesystem
-decision helpers and the resolved network authorization flow, so a backend
-does not need to manually combine requested and ceiling policies. Their
-composition failures remain typed backend contract errors.
+decision helpers that require this narrowed context and the resolved network
+authorization flow, so a backend does not need to manually combine requested
+and ceiling policies. A symbolic filesystem selector with no paths in the
+effective context is denied; it cannot be evaluated against a broader runtime
+context. The context is also bound to this effective result, so contexts from
+different requests are rejected. Their composition failures remain typed
+backend contract errors.
 
 The `CommandRequest::environment` value must equal the requested environment
 used to create the `EffectiveSandbox`. Mixing a command with a composed result

@@ -64,11 +64,16 @@ let effective = compose(CompositionRequest::new(
     &EnvironmentSpec::inherit_all(),
     &ceiling,
 ))?;
+let context = effective.path_context(
+    &cageforge_policy::PathResolutionContext::new()
+        .with_workspace_root("/workspace")
+        .expect("valid workspace root"),
+)?;
 
 assert_eq!(
     effective
         .filesystem()
-        .access_for(&PathSelector::workspace_root()),
+        .access_for(&PathSelector::workspace_root(), &context)?,
     cageforge_policy::FilesystemDecision::Read
 );
 # Ok::<(), cageforge_policy_compose::CompositionError>(())
@@ -110,11 +115,15 @@ assert_ne!(ExternalOwner::new(), owner);
   silently replaced by a broader runtime context.
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
   that are constrained by both policies and retain both inputs for backend
-  lowering. `glob_scan_max_depth` returns the widest depth required by all
-  effective deny-glob rules. `EffectiveNetworkPolicy::authorize_connection`
-  applies both policies to one `ResolvedNetworkTarget` and the exact socket
-  address supplied by a backend, then returns that address as a typed value.
-  It performs no DNS lookup itself.
+  lowering. Filesystem selector queries require the
+  `EffectivePathContext` created by `EffectiveSandbox::path_context`; the
+  context is bound to that composed result and cannot be reused with another
+  one. A selector with no effective runtime paths is denied.
+  `glob_scan_max_depth`
+  returns the widest depth required by all effective deny-glob rules.
+  `EffectiveNetworkPolicy::authorize_connection` applies both policies to one
+  `ResolvedNetworkTarget` and the exact socket address supplied by a backend,
+  then returns that address as a typed value. It performs no DNS lookup itself.
 - `CoreEnvironment` wraps the map selected by a platform backend's core
   environment allowlist. `EnvironmentInput::core` accepts this type instead of
   an arbitrary map, making the selection boundary explicit.

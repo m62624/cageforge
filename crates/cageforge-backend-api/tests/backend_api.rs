@@ -547,7 +547,9 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
         FilesystemDecision::Read
     );
     assert_eq!(
-        prepared.filesystem_access_for(&PathSelector::workspace_root()),
+        prepared
+            .filesystem_access_for(&PathSelector::workspace_root(), &context)
+            .unwrap(),
         FilesystemDecision::Write
     );
 
@@ -591,6 +593,36 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
             ("MODE".into(), "test".into()),
             ("PATH".into(), "/bin".into()),
         ])
+    );
+}
+
+#[test]
+fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceiling() {
+    let requested = cageforge_policy::SandboxPolicy::workspace();
+    let environment = EnvironmentSpec::empty();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    )
+    .with_workspace_roots([PathBuf::from("/allowed")])
+    .unwrap();
+    let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
+    let command =
+        CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
+    let capabilities = BackendRequest::new(&command, &sandbox).required_capabilities();
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&TestBackend { capabilities })
+        .unwrap();
+
+    let context = prepared
+        .path_context(&PathResolutionContext::new())
+        .unwrap();
+    assert!(context.workspace_roots().is_empty());
+    assert_eq!(
+        prepared
+            .filesystem_access_for(&PathSelector::workspace_root(), &context)
+            .unwrap(),
+        FilesystemDecision::Deny
     );
 }
 

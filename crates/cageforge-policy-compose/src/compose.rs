@@ -14,7 +14,7 @@ use cageforge_policy::{
     NetworkMode, PathSelector, ResolvedNetworkTarget,
 };
 
-use crate::context::EffectivePathContext;
+use crate::context::{ContextIdentity, EffectivePathContext};
 use crate::environment::EffectiveEnvironment;
 use crate::error::{CompositionBoundary, CompositionError};
 use crate::filesystem::EffectiveFilesystemPolicy;
@@ -75,11 +75,13 @@ pub fn compose(request: CompositionRequest<'_>) -> Result<EffectiveSandbox, Comp
         request.requested_workspace_roots.as_deref(),
         request.ceiling.workspace_roots(),
     )?;
+    let context_identity = ContextIdentity::new();
 
     Ok(EffectiveSandbox::new(
         EffectiveFilesystemPolicy::new(
             requested_policy.filesystem().clone(),
             ceiling_policy.filesystem().clone(),
+            context_identity,
         ),
         EffectiveNetworkPolicy::new(
             requested_policy.network().clone(),
@@ -96,11 +98,34 @@ pub fn compose(request: CompositionRequest<'_>) -> Result<EffectiveSandbox, Comp
 
 impl EffectiveFilesystemPolicy {
     /// Evaluates a symbolic filesystem selector against both policies.
-    pub fn access_for(&self, selector: &PathSelector) -> FilesystemDecision {
-        combine_filesystem_decisions(
-            self.requested().access_for(selector),
-            self.ceiling().access_for(selector),
-        )
+    ///
+    /// The selector is resolved only through the effective runtime context.
+    /// This prevents a workspace-root ceiling from being replaced by a broader
+    /// caller-owned context. A selector that resolves to no paths is denied;
+    /// external enforcement remains external without requiring local paths.
+    pub fn access_for(
+        &self,
+        selector: &PathSelector,
+        context: &EffectivePathContext,
+    ) -> Result<FilesystemDecision, CompositionError> {
+        if !self.owns_context(context) {
+            return Err(CompositionError::PathContextMismatch);
+        }
+        if self.requested().mode() == FilesystemMode::External
+            && self.ceiling().mode() == FilesystemMode::External
+        {
+            return Ok(FilesystemDecision::ExternallyEnforced);
+        }
+
+        let mut result = None;
+        for path in selector.resolve(context.as_ref()) {
+            let decision = self.access_for_path(&path, context)?;
+            result = Some(match result {
+                Some(previous) => combine_filesystem_decisions(previous, decision),
+                None => decision,
+            });
+        }
+        Ok(result.unwrap_or(FilesystemDecision::Deny))
     }
 
     /// Evaluates a concrete filesystem path against both policies.
@@ -109,6 +134,9 @@ impl EffectiveFilesystemPolicy {
         path: &Path,
         context: &EffectivePathContext,
     ) -> Result<FilesystemDecision, CompositionError> {
+        if !self.owns_context(context) {
+            return Err(CompositionError::PathContextMismatch);
+        }
         let requested = self
             .requested()
             .access_for_path(path, context.as_ref())

@@ -298,9 +298,20 @@ impl<'a> PreparedBackendRequest<'a> {
     }
 
     /// Evaluates one symbolic filesystem selector against both effective
-    /// policies.
-    pub fn filesystem_access_for(&self, selector: &PathSelector) -> FilesystemDecision {
-        self.sandbox().filesystem().access_for(selector)
+    /// policies and the narrowed runtime context.
+    ///
+    /// The context must come from [`Self::path_context`]. A selector that has
+    /// no effective runtime paths is denied, so a backend cannot accidentally
+    /// replace a workspace-root ceiling with a broader context.
+    pub fn filesystem_access_for(
+        &self,
+        selector: &PathSelector,
+        context: &EffectivePathContext,
+    ) -> Result<FilesystemDecision, BackendContractError> {
+        self.sandbox()
+            .filesystem()
+            .access_for(selector, context)
+            .map_err(|source| BackendContractError::FilesystemEvaluation { source })
     }
 
     /// Evaluates a resolved hostname and all addresses captured for it.

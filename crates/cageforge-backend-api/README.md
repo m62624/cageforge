@@ -40,9 +40,12 @@ backend trait only supplies its capabilities; it cannot override this
 preflight with a broader set. After preparation, use
 `PreparedBackendRequest::path_context` with the backend's runtime paths and
 `PreparedBackendRequest::apply_environment` with a backend-selected
-`EnvironmentInput`. Use its filesystem decision helpers and
-`authorize_connection` to receive decisions that already combine the requested
-and ceiling sides.
+`EnvironmentInput`. Pass that returned effective context to the filesystem
+decision helpers; it is bound to this prepared composition and cannot be
+reused with another request. A symbolic selector is never evaluated without
+it. Use
+`authorize_connection` to receive a decision that already combines the
+requested and ceiling sides.
 
 When a request needs an unsupported capability, preparation returns
 `BackendContractError::UnsupportedCapability`. The error is matchable by its

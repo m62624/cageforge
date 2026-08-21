@@ -9,16 +9,27 @@ use std::num::NonZeroUsize;
 
 use cageforge_policy::{AccessMode, FilesystemPolicy};
 
+use crate::context::{ContextIdentity, EffectivePathContext};
+
 /// A filesystem decision constrained by both input policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveFilesystemPolicy {
     requested: FilesystemPolicy,
     ceiling: FilesystemPolicy,
+    context_identity: ContextIdentity,
 }
 
 impl EffectiveFilesystemPolicy {
-    pub(crate) fn new(requested: FilesystemPolicy, ceiling: FilesystemPolicy) -> Self {
-        Self { requested, ceiling }
+    pub(crate) fn new(
+        requested: FilesystemPolicy,
+        ceiling: FilesystemPolicy,
+        context_identity: ContextIdentity,
+    ) -> Self {
+        Self {
+            requested,
+            ceiling,
+            context_identity,
+        }
     }
 
     /// Returns the requested filesystem policy retained for backend lowering.
@@ -29,6 +40,14 @@ impl EffectiveFilesystemPolicy {
     /// Returns the ceiling filesystem policy retained for backend lowering.
     pub fn ceiling(&self) -> &FilesystemPolicy {
         &self.ceiling
+    }
+
+    pub(crate) fn context_identity(&self) -> ContextIdentity {
+        self.context_identity.clone()
+    }
+
+    pub(crate) fn owns_context(&self, context: &EffectivePathContext) -> bool {
+        context.belongs_to(&self.context_identity)
     }
 
     /// Returns the scan depth required to preserve all deny-glob rules.

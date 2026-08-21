@@ -64,6 +64,9 @@ pub enum CompositionError {
         #[source]
         source: PolicyError,
     },
+    /// A filesystem context came from a different effective composition.
+    #[error("effective path context belongs to a different composed sandbox")]
+    PathContextMismatch,
     /// The caller supplied an environment base broader than the effective
     /// composition allows.
     #[error("environment input base {supplied:?} is broader than effective base {required:?}")]

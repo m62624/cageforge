@@ -232,7 +232,10 @@ impl EffectiveSandbox {
                 .with_slash_tmp(path.to_path_buf())
                 .map_err(|source| CompositionError::InvalidPathContext { source })?;
         }
-        Ok(EffectivePathContext::new(context))
+        Ok(EffectivePathContext::new(
+            context,
+            self.filesystem.context_identity(),
+        ))
     }
 }
 
