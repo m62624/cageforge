@@ -825,7 +825,7 @@ fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceilin
         .prepare_for(
             &TestBackend { capabilities },
             &PathResolutionContext::new()
-                .with_root("/")
+                .with_root(native_path("/"))
                 .unwrap()
                 .with_current_directory(native_path("/outside"))
                 .unwrap(),

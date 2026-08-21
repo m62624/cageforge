@@ -5,6 +5,18 @@ use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
 use cageforge_policy::{PathResolutionContext, SandboxPolicy};
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use proptest::prelude::*;
+use std::path::PathBuf;
+
+#[cfg(windows)]
+fn native_path(path: &str) -> PathBuf {
+    let suffix = path.strip_prefix('/').unwrap_or(path).replace('/', "\\");
+    PathBuf::from(format!(r"C:\{suffix}"))
+}
+
+#[cfg(not(windows))]
+fn native_path(path: &str) -> PathBuf {
+    PathBuf::from(path)
+}
 
 struct PropertyBackend {
     capabilities: BackendCapabilities,
@@ -46,9 +58,9 @@ proptest! {
             .prepare_for(
                 &backend,
                 &PathResolutionContext::new()
-                    .with_workspace_root("/workspace")
+                    .with_workspace_root(native_path("/workspace"))
                     .expect("valid workspace root")
-                    .with_current_directory("/workspace")
+                    .with_current_directory(native_path("/workspace"))
                     .expect("valid current directory"),
             )
             .is_err());
