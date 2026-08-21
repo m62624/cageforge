@@ -127,10 +127,13 @@ fn environment_override_names_are_case_insensitive() {
     );
     assert_eq!(
         environment
-            .apply_to(EnvironmentInput::all([
-                (OsString::from("Path"), OsString::from("/usr/bin")),
-                (OsString::from("HOME"), OsString::from("/home/user")),
-            ]))
+            .apply_to(
+                EnvironmentInput::all([
+                    (OsString::from("Path"), OsString::from("/usr/bin")),
+                    (OsString::from("HOME"), OsString::from("/home/user")),
+                ])
+                .expect("valid environment input")
+            )
             .expect("all-variable input should match the inherited base")
             .into_variables(),
         [(OsString::from("HOME"), OsString::from("/home/user"))]
@@ -143,10 +146,10 @@ fn environment_override_names_are_case_insensitive() {
         .expect("valid variable should be accepted");
     assert_eq!(
         environment
-            .apply_to(EnvironmentInput::all([(
-                OsString::from("path"),
-                OsString::from("/usr/bin")
-            )]))
+            .apply_to(
+                EnvironmentInput::all([(OsString::from("path"), OsString::from("/usr/bin"),)])
+                    .expect("valid environment input"),
+            )
             .expect("all-variable input should match the inherited base")
             .into_variables(),
         [(OsString::from("PATH"), OsString::from("/sandbox/bin"))]
@@ -185,7 +188,7 @@ fn malformed_unix_environment_names_do_not_collapse_lossily() {
     let inherited = [(left.clone(), OsString::from("inherited"))];
     assert_eq!(
         EnvironmentSpec::inherit_all()
-            .apply_to(EnvironmentInput::all(inherited.clone()))
+            .apply_to(EnvironmentInput::all(inherited.clone()).expect("valid environment input"))
             .expect("all-variable input should match the inherited base")
             .into_variables(),
         BTreeMap::from([(left.clone(), OsString::from("inherited"))])
@@ -194,7 +197,7 @@ fn malformed_unix_environment_names_do_not_collapse_lossily() {
         EnvironmentSpec::inherit_all()
             .with_exclude_pattern("SECRET_*")
             .expect("exclude filter")
-            .apply_to(EnvironmentInput::all(inherited))
+            .apply_to(EnvironmentInput::all(inherited).expect("valid environment input"))
             .expect("all-variable input should match the inherited base")
             .into_variables()
             .is_empty()
@@ -216,7 +219,10 @@ fn malformed_windows_environment_names_do_not_collapse_lossily() {
         EnvironmentSpec::inherit_all()
             .with_include_pattern("PATH")
             .expect("include filter")
-            .apply_to(EnvironmentInput::all([(left, OsString::from("value"))]))
+            .apply_to(
+                EnvironmentInput::all([(left, OsString::from("value"))])
+                    .expect("valid environment input"),
+            )
             .expect("all-variable input should match the inherited base")
             .into_variables()
             .is_empty()
@@ -300,11 +306,14 @@ fn environment_application_has_explicit_codex_compatible_stage_order() {
         .expect("remove override");
 
     let result = environment
-        .apply_to(EnvironmentInput::all([
-            (OsString::from("PATH"), OsString::from("/usr/bin")),
-            (OsString::from("ACCESS_TOKEN"), OsString::from("secret")),
-            (OsString::from("HOME"), OsString::from("/home/user")),
-        ]))
+        .apply_to(
+            EnvironmentInput::all([
+                (OsString::from("PATH"), OsString::from("/usr/bin")),
+                (OsString::from("ACCESS_TOKEN"), OsString::from("secret")),
+                (OsString::from("HOME"), OsString::from("/home/user")),
+            ])
+            .expect("valid environment input"),
+        )
         .expect("all-variable input should match the inherited base")
         .into_variables();
     assert_eq!(
@@ -321,10 +330,13 @@ fn environment_application_has_explicit_codex_compatible_stage_order() {
         .expect("explicit set override");
     assert_eq!(
         restored
-            .apply_to(EnvironmentInput::all([(
-                OsString::from("ACCESS_TOKEN"),
-                OsString::from("inherited secret"),
-            )]))
+            .apply_to(
+                EnvironmentInput::all([(
+                    OsString::from("ACCESS_TOKEN"),
+                    OsString::from("inherited secret"),
+                )])
+                .expect("valid environment input"),
+            )
             .expect("all-variable input should match the inherited base")
             .into_variables(),
         [(
@@ -350,9 +362,9 @@ fn environment_application_uses_the_backend_selected_core_base() {
 
     assert_eq!(
         environment
-            .apply_to(EnvironmentInput::core(CoreEnvironment::from_selected(
-                core_base
-            )))
+            .apply_to(EnvironmentInput::core(
+                CoreEnvironment::from_selected(core_base).expect("valid core environment"),
+            ))
             .expect("core input should match the core base")
             .into_variables(),
         [(OsString::from("PATH"), OsString::from("/sandbox/bin"))]
@@ -364,10 +376,10 @@ fn environment_application_uses_the_backend_selected_core_base() {
 #[test]
 fn environment_application_rejects_a_broader_snapshot_than_the_spec() {
     let error = EnvironmentSpec::empty()
-        .apply_to(EnvironmentInput::all([(
-            OsString::from("PATH"),
-            OsString::from("/usr/bin"),
-        )]))
+        .apply_to(
+            EnvironmentInput::all([(OsString::from("PATH"), OsString::from("/usr/bin"))])
+                .expect("valid environment input"),
+        )
         .expect_err("an empty policy must not accept an all-environment snapshot");
 
     assert_eq!(
@@ -379,10 +391,10 @@ fn environment_application_rejects_a_broader_snapshot_than_the_spec() {
     );
 
     let error = EnvironmentSpec::inherit_core()
-        .apply_to(EnvironmentInput::all([(
-            OsString::from("PATH"),
-            OsString::from("/usr/bin"),
-        )]))
+        .apply_to(
+            EnvironmentInput::all([(OsString::from("PATH"), OsString::from("/usr/bin"))])
+                .expect("valid environment input"),
+        )
         .expect_err("a core policy must not accept an all-environment snapshot");
 
     assert_eq!(
@@ -391,6 +403,20 @@ fn environment_application_rejects_a_broader_snapshot_than_the_spec() {
             required: EnvironmentBase::Core,
             supplied: EnvironmentBase::All,
         }
+    );
+}
+
+#[test]
+fn environment_inputs_validate_native_names_and_values() {
+    assert_eq!(
+        EnvironmentInput::all([(OsString::from("BAD=NAME"), OsString::from("value"),)])
+            .expect_err("equals in an environment name must fail"),
+        CommandError::EnvironmentNameContainsEquals
+    );
+    assert_eq!(
+        CoreEnvironment::from_selected([(OsString::from("NAME"), OsString::from("bad\0value"),)])
+            .expect_err("NUL in an environment value must fail"),
+        CommandError::EnvironmentValueContainsNul
     );
 }
 

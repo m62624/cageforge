@@ -201,7 +201,7 @@ inherits = ["base"]
         let actual = resolved.command().expect("generated command").environment();
 
         prop_assert_eq!(actual, &expected);
-        let input = EnvironmentInput::all(sample_environment());
+        let input = EnvironmentInput::all(sample_environment()).expect("valid environment input");
         prop_assert_eq!(actual.apply_to(input.clone()), expected.apply_to(input));
     }
 

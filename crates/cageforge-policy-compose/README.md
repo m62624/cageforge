@@ -126,9 +126,9 @@ assert_ne!(ExternalOwner::new(), owner);
   `EffectiveNetworkPolicy::authorize_connection` applies both policies to one
   `ResolvedNetworkTarget` and the exact socket address supplied by a backend,
   then returns that address as a typed value. It performs no DNS lookup itself.
-- `CoreEnvironment` wraps the map selected by a platform backend's core
-  environment allowlist. `EnvironmentInput::core` accepts this type instead of
-  an arbitrary map, making the selection boundary explicit.
+- `CoreEnvironment` wraps the validated map selected by a platform backend's
+  core environment allowlist. `EnvironmentInput::core` accepts this type
+  instead of an arbitrary map, making the selection boundary explicit.
 - `EffectiveEnvironment` exposes the least-permissive base and applies both
   environment transformations only to an `EnvironmentInput` whose selected
   base is no broader than the effective base. `EnvironmentSpec::apply_to`

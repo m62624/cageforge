@@ -418,9 +418,9 @@ fn environment_is_narrowed_in_sequence_without_ceiling_additions() {
 
     let result = effective
         .environment()
-        .apply_to(EnvironmentInput::core(CoreEnvironment::from_selected(
-            variables,
-        )))
+        .apply_to(EnvironmentInput::core(
+            CoreEnvironment::from_selected(variables).expect("valid core environment"),
+        ))
         .expect("core input is not broader than effective base");
 
     assert_eq!(
@@ -436,10 +436,10 @@ fn environment_is_narrowed_in_sequence_without_ceiling_additions() {
 
     let error = effective
         .environment()
-        .apply_to(EnvironmentInput::all([(
-            OsString::from("PATH"),
-            OsString::from("/bin"),
-        )]))
+        .apply_to(
+            EnvironmentInput::all([(OsString::from("PATH"), OsString::from("/bin"))])
+                .expect("valid environment input"),
+        )
         .expect_err("all variables are broader than the effective core base");
     assert_eq!(
         error,

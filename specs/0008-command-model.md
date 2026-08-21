@@ -63,7 +63,8 @@ application order is `inherit → exclude → set/remove → include`.
 The `*`/`?` matcher is provided by the `wildmatch` crate, which is also the
 matcher used by the corresponding Codex environment model; Cageforge keeps
 validation and policy precedence in its own API.
-`EnvironmentSpec::apply_to` accepts an `EnvironmentInput` tagged with the base
+`EnvironmentInput::all` and `CoreEnvironment::from_selected` validate native
+variable names and values before constructing a snapshot. `EnvironmentSpec::apply_to` accepts an `EnvironmentInput` tagged with the base
 map that the backend selected according to `All`, `Core`, or `None`. It rejects
 an input whose tag is broader than the specification before applying any
 transformation and returns the tagged result. A variable removed

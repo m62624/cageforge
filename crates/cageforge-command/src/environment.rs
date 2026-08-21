@@ -167,14 +167,15 @@ pub struct CoreEnvironment {
 }
 
 impl CoreEnvironment {
-    /// Creates a core snapshot from variables selected by the process adapter.
-    pub fn from_selected<I>(variables: I) -> Self
+    /// Creates a validated core snapshot from variables selected by the
+    /// process adapter.
+    pub fn from_selected<I>(variables: I) -> Result<Self, CommandError>
     where
         I: IntoIterator<Item = (OsString, OsString)>,
     {
-        Self {
-            variables: variables.into_iter().collect(),
-        }
+        Ok(Self {
+            variables: collect_environment(variables)?,
+        })
     }
 
     /// Returns the selected core variables.
@@ -184,15 +185,15 @@ impl CoreEnvironment {
 }
 
 impl EnvironmentInput {
-    /// Creates an input containing all inherited variables.
-    pub fn all<I>(variables: I) -> Self
+    /// Creates a validated input containing all inherited variables.
+    pub fn all<I>(variables: I) -> Result<Self, CommandError>
     where
         I: IntoIterator<Item = (OsString, OsString)>,
     {
-        Self {
+        Ok(Self {
             base: EnvironmentBase::All,
-            variables: variables.into_iter().collect(),
-        }
+            variables: collect_environment(variables)?,
+        })
     }
 
     /// Creates an input containing a process adapter's selected core set.
@@ -457,6 +458,21 @@ fn validate_name(name: &OsStr) -> Result<(), CommandError> {
         return Err(CommandError::EnvironmentNameContainsEquals);
     }
     Ok(())
+}
+
+fn collect_environment<I>(variables: I) -> Result<BTreeMap<OsString, OsString>, CommandError>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    let mut collected = BTreeMap::new();
+    for (name, value) in variables {
+        validate_name(&name)?;
+        if contains_nul(&value) {
+            return Err(CommandError::EnvironmentValueContainsNul);
+        }
+        collected.insert(name, value);
+    }
+    Ok(collected)
 }
 
 fn remove_environment_name<V>(

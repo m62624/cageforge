@@ -135,11 +135,14 @@ fn documented_examples_cover_their_declared_behavior() {
         .command()
         .expect("ordered command")
         .environment()
-        .apply_to(EnvironmentInput::all([
-            (OsString::from("PATH"), OsString::from("/usr/bin")),
-            (OsString::from("ACCESS_TOKEN"), OsString::from("secret")),
-            (OsString::from("REMOVE_ME"), OsString::from("old")),
-        ]))
+        .apply_to(
+            EnvironmentInput::all([
+                (OsString::from("PATH"), OsString::from("/usr/bin")),
+                (OsString::from("ACCESS_TOKEN"), OsString::from("secret")),
+                (OsString::from("REMOVE_ME"), OsString::from("old")),
+            ])
+            .expect("valid environment input"),
+        )
         .expect("all-variable input should match the inherited base")
         .into_variables();
     assert_eq!(
@@ -486,10 +489,13 @@ set = { path = "/child/bin" }
     );
     assert_eq!(
         environment
-            .apply_to(EnvironmentInput::core(CoreEnvironment::from_selected([(
-                OsString::from("Path"),
-                OsString::from("/system/bin"),
-            )])))
+            .apply_to(EnvironmentInput::core(
+                CoreEnvironment::from_selected([(
+                    OsString::from("Path"),
+                    OsString::from("/system/bin"),
+                )])
+                .expect("valid core environment"),
+            ))
             .expect("core input should match the default core base")
             .into_variables(),
         [(OsString::from("path"), OsString::from("/child/bin"))]

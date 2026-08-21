@@ -594,7 +594,8 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
     let core = CoreEnvironment::from_selected([
         ("PATH".into(), "/bin".into()),
         ("SECRET_TOKEN".into(), "hidden".into()),
-    ]);
+    ])
+    .expect("valid core environment");
     let environment = prepared
         .apply_environment(EnvironmentInput::core(core))
         .unwrap();
@@ -760,7 +761,10 @@ fn prepared_request_rejects_a_broader_environment_base() {
         .unwrap();
 
     let error = prepared
-        .apply_environment(EnvironmentInput::all([("PATH".into(), "/bin".into())]))
+        .apply_environment(
+            EnvironmentInput::all([("PATH".into(), "/bin".into())])
+                .expect("valid environment input"),
+        )
         .unwrap_err();
     assert_eq!(
         error,
