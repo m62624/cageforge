@@ -97,7 +97,7 @@ pub fn normalize_lexical_path(path: &Path) -> Cow<'_, Path> {
 pub fn paths_equal(left: &Path, right: &Path) -> bool {
     #[cfg(windows)]
     {
-        return NativePathKey::new(left) == NativePathKey::new(right);
+        NativePathKey::new(left) == NativePathKey::new(right)
     }
     #[cfg(not(windows))]
     let mut left = left
@@ -123,7 +123,7 @@ pub fn is_within(path: &Path, root: &Path) -> bool {
     {
         let path = NativePathKey::new(path);
         let root = NativePathKey::new(root);
-        return path.0.starts_with(&root.0);
+        path.0.starts_with(&root.0)
     }
     #[cfg(not(windows))]
     let mut path = path
@@ -154,12 +154,12 @@ pub fn contains_component_path(path: &Path, needle: &Path) -> bool {
     {
         let path = NativePathKey::new(path);
         let needle = NativePathKey::new(needle);
-        return !needle.0.is_empty()
+        !needle.0.is_empty()
             && needle.0.len() <= path.0.len()
             && path
                 .0
                 .windows(needle.0.len())
-                .any(|window| window == needle.0);
+                .any(|window| window == needle.0)
     }
     #[cfg(not(windows))]
     let path_components: Vec<_> = path
