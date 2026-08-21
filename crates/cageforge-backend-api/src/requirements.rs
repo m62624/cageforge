@@ -13,11 +13,13 @@ pub(super) fn add_command_capabilities(
     required: &mut BackendCapabilities,
     command: &CommandRequest,
 ) {
-    if command.working_directory().is_some() {
-        required
-            .capabilities
-            .insert(BackendCapability::WorkingDirectory);
-    }
+    // Every launched process has a working directory, even when the command
+    // does not override it. Preflight must therefore receive and validate the
+    // runtime current directory instead of allowing the backend to inherit an
+    // unchecked parent directory.
+    required
+        .capabilities
+        .insert(BackendCapability::WorkingDirectory);
     for mode in [
         command.stdio().stdin(),
         command.stdio().stdout(),

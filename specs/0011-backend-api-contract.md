@@ -95,15 +95,19 @@ the backend's runtime `PathResolutionContext` and must:
 6. keep network preparation on the resolved-target path. A hostname-only
    decision is never a connection authorization.
 
-If the command contains a working directory, preparation must evaluate that
-directory against the effective filesystem policy. A backend cannot satisfy
-the `WorkingDirectory` capability by merely passing the path to its process
-launcher; denied directories fail preparation with a typed error.
+Preparation must always receive the runtime current directory and evaluate the
+effective working directory against the effective filesystem policy. If the
+command contains an explicit working directory, it is resolved against that
+runtime directory when relative. If the command omits one, the runtime
+directory is the directory the child would otherwise inherit. A missing
+runtime current directory is a typed preparation error; a backend cannot
+satisfy the `WorkingDirectory` capability by silently inheriting its own
+process cwd. Denied directories fail preparation with a typed error.
 
 The prepared request also exposes checked lowering helpers:
 `PreparedBackendRequest::path_context` returns the runtime context already
 narrowed during `prepare_for`; `PreparedBackendRequest::working_directory`
-returns the command cwd resolved against that context; and
+returns the effective cwd resolved against that context; and
 `PreparedBackendRequest::apply_environment` applies a backend-selected
 `EnvironmentInput`. The prepared request also exposes effective filesystem
 decision helpers using this bound context and the resolved network

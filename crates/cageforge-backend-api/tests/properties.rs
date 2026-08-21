@@ -43,7 +43,14 @@ proptest! {
         );
         let backend = PropertyBackend { capabilities };
         prop_assert!(BackendRequest::new(&command, &sandbox)
-            .prepare_for(&backend, &PathResolutionContext::new())
+            .prepare_for(
+                &backend,
+                &PathResolutionContext::new()
+                    .with_workspace_root("/workspace")
+                    .expect("valid workspace root")
+                    .with_current_directory("/workspace")
+                    .expect("valid current directory"),
+            )
             .is_err());
     }
 }

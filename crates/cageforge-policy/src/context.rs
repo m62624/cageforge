@@ -89,7 +89,8 @@ impl PathResolutionContext {
         Ok(self)
     }
 
-    /// Sets the absolute directory used to resolve a relative command cwd.
+    /// Sets the absolute runtime current directory used for command cwd
+    /// resolution and for commands that otherwise inherit their cwd.
     ///
     /// This is runtime input only; the context never reads the directory or
     /// changes the process cwd.
@@ -123,7 +124,8 @@ impl PathResolutionContext {
         self.slash_tmp.as_deref()
     }
 
-    /// Returns the absolute directory used for relative command cwd values.
+    /// Returns the absolute runtime directory used for relative command cwd
+    /// values and for commands that inherit their cwd.
     pub fn current_directory(&self) -> Option<&Path> {
         self.current_directory.as_deref()
     }

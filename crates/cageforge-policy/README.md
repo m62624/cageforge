@@ -155,7 +155,8 @@ capability contract can prove support on every target platform.
 
 `PathResolutionContext::with_current_directory` records the absolute runtime
 directory against which a backend resolves a relative command working
-directory. It is a declaration only and never changes the process cwd.
+directory or validates the cwd that a command would otherwise inherit. It is a
+declaration only and never changes the process cwd.
 
 A read-only carve-out must be below its writable scope. Concrete absolute and
 workspace-relative selectors that are visibly outside the parent are rejected

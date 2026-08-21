@@ -36,13 +36,16 @@ requested environment retained by the composed result, keeping command and
 policy construction aligned.
 
 Call `request.prepare_for(&backend, &base_context)` to run the common
-capability and working-directory checks. The backend trait only supplies its
-capabilities; it cannot override this preflight with a broader set. The base
-context is narrowed to the effective workspace ceiling, and a requested
-working directory is rejected when the effective filesystem policy denies it.
-After preparation, use `PreparedBackendRequest::path_context` to inspect the
-already narrowed context, `PreparedBackendRequest::working_directory` for the
-resolved cwd, and `PreparedBackendRequest::apply_environment` with a
+capability and working-directory checks. `base_context` must include the
+runtime current directory: it is checked even when the command does not set an
+explicit cwd, so a child cannot silently inherit an unchecked directory from
+the launching process. The backend trait only supplies its capabilities; it
+cannot override this preflight with a broader set. The base context is
+narrowed to the effective workspace ceiling, and an effective working
+directory is rejected when the filesystem policy denies it. After preparation,
+use `PreparedBackendRequest::path_context` to inspect the already narrowed
+context, `PreparedBackendRequest::working_directory` for the resolved cwd, and
+`PreparedBackendRequest::apply_environment` with a
 backend-selected `EnvironmentInput`. The filesystem decision helpers use that
 same bound context and cannot be given a context from another request. A
 symbolic selector is never evaluated without it. Use

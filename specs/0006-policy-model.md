@@ -47,7 +47,8 @@ The first crate exposes:
   platform-defined scopes for minimal runtime files, the platform temporary
   directory, and `/tmp`;
 - `PathPattern` and `PathResolutionContext` for validated globs, runtime path
-  expansion, and the absolute base used to resolve relative command cwd;
+  expansion, and the absolute directory used to resolve or validate command
+  cwd;
 - `FilesystemRule`, `FilesystemTarget`, `FilesystemMode`,
   `MissingPathBehavior`, and `FilesystemPolicy`;
 - `DomainRule`, `DomainAccess`, `DomainMode`, `UnixSocketRule`,

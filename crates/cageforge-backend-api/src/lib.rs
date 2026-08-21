@@ -45,7 +45,8 @@ use thiserror::Error;
 pub enum BackendCapability {
     /// Execute a validated command request.
     CommandExecution,
-    /// Resolve and enforce a requested working directory.
+    /// Resolve and enforce the effective working directory, including the
+    /// runtime directory inherited when the command has no explicit cwd.
     WorkingDirectory,
     /// Inherit a standard stream from the launcher.
     StdioInherit,
@@ -200,9 +201,9 @@ impl<'a> BackendRequest<'a> {
     ///
     /// This is the safe handoff entry point for native integrations. The
     /// capability check is defined by Cageforge and cannot be overridden by a
-    /// backend implementation. The context is narrowed before return, and a
-    /// requested working directory must be permitted by the effective
-    /// filesystem policy.
+    /// backend implementation. The context is narrowed before return, and an
+    /// effective working directory must be supplied by the runtime context and
+    /// permitted by the effective filesystem policy.
     pub fn prepare_for<B: SandboxBackend>(
         self,
         backend: &B,
@@ -244,37 +245,35 @@ impl<'a> BackendRequest<'a> {
             .sandbox
             .path_context(base_context)
             .map_err(|source| BackendContractError::InvalidRuntimeContext { source })?;
-        let working_directory = self
-            .command
-            .working_directory()
-            .map(|path| {
-                if path.is_absolute() {
-                    Ok(path.to_path_buf())
-                } else {
-                    let current_directory = path_context.current_directory().ok_or_else(|| {
-                        BackendContractError::WorkingDirectoryResolution {
-                            path: path.to_path_buf(),
-                        }
-                    })?;
-                    Ok(normalize_lexical_path(&current_directory.join(path)).into_owned())
-                }
-            })
-            .transpose()?;
-        if let Some(working_directory) = &working_directory {
-            match self
-                .sandbox
-                .filesystem()
-                .access_for_path(working_directory, &path_context)
-                .map_err(|source| BackendContractError::FilesystemEvaluation { source })?
-            {
-                FilesystemDecision::Read
-                | FilesystemDecision::Write
-                | FilesystemDecision::ExternallyEnforced => {}
-                FilesystemDecision::Deny => {
-                    return Err(BackendContractError::WorkingDirectoryDenied {
-                        path: working_directory.to_path_buf(),
-                    });
-                }
+        let working_directory = match self.command.working_directory() {
+            Some(path) if path.is_absolute() => normalize_lexical_path(path).into_owned(),
+            Some(path) => {
+                let current_directory = path_context.current_directory().ok_or_else(|| {
+                    BackendContractError::WorkingDirectoryResolution {
+                        path: path.to_path_buf(),
+                    }
+                })?;
+                normalize_lexical_path(&current_directory.join(path)).into_owned()
+            }
+            None => path_context
+                .current_directory()
+                .map(normalize_lexical_path)
+                .map(std::borrow::Cow::into_owned)
+                .ok_or(BackendContractError::MissingRuntimeCurrentDirectory)?,
+        };
+        match self
+            .sandbox
+            .filesystem()
+            .access_for_path(&working_directory, &path_context)
+            .map_err(|source| BackendContractError::FilesystemEvaluation { source })?
+        {
+            FilesystemDecision::Read
+            | FilesystemDecision::Write
+            | FilesystemDecision::ExternallyEnforced => {}
+            FilesystemDecision::Deny => {
+                return Err(BackendContractError::WorkingDirectoryDenied {
+                    path: working_directory.clone(),
+                });
             }
         }
         Ok(PreparedBackendRequest {
@@ -294,7 +293,7 @@ impl<'a> BackendRequest<'a> {
 pub struct PreparedBackendRequest<'a> {
     request: BackendRequest<'a>,
     path_context: EffectivePathContext,
-    working_directory: Option<PathBuf>,
+    working_directory: PathBuf,
 }
 
 impl<'a> PreparedBackendRequest<'a> {
@@ -314,9 +313,13 @@ impl<'a> PreparedBackendRequest<'a> {
         &self.path_context
     }
 
-    /// Returns the working directory resolved during preflight.
-    pub fn working_directory(&self) -> Option<&Path> {
-        self.working_directory.as_deref()
+    /// Returns the effective working directory resolved during preflight.
+    ///
+    /// This is always present. When the command did not specify an explicit
+    /// directory, it is the runtime current directory supplied in the path
+    /// context and checked against the effective filesystem policy.
+    pub fn working_directory(&self) -> &Path {
+        &self.working_directory
     }
 
     /// Applies the effective environment to a backend-selected input base.
@@ -446,6 +449,10 @@ pub enum BackendContractError {
         /// The unresolved relative working directory.
         path: PathBuf,
     },
+    /// The command omitted a working directory and the runtime did not supply
+    /// the directory that would otherwise be inherited by the child.
+    #[error("runtime current directory is required for backend preflight")]
+    MissingRuntimeCurrentDirectory,
     /// The effective network policy rejected a backend query.
     #[error("network policy evaluation failed: {source}")]
     NetworkEvaluation {
