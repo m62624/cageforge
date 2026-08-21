@@ -118,7 +118,7 @@ impl EffectiveFilesystemPolicy {
         }
 
         let mut result = None;
-        for path in selector.resolve(context.as_ref()) {
+        for path in context.resolve(selector) {
             let decision = self.access_for_path(&path, context)?;
             result = Some(match result {
                 Some(previous) => combine_filesystem_decisions(previous, decision),
@@ -139,14 +139,14 @@ impl EffectiveFilesystemPolicy {
         }
         let requested = self
             .requested()
-            .access_for_path(path, context.as_ref())
+            .access_for_path(path, context.raw())
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Filesystem,
                 source,
             })?;
         let ceiling = self
             .ceiling()
-            .access_for_path(path, context.as_ref())
+            .access_for_path(path, context.raw())
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Filesystem,
                 source,

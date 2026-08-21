@@ -9,7 +9,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 
-use cageforge_command::{EnvironmentBase, EnvironmentNameKey, EnvironmentSpec};
+use cageforge_command::{
+    CommandError, EnvironmentBase, EnvironmentInput, EnvironmentNameKey, EnvironmentSpec,
+};
 
 use crate::CompositionError;
 
@@ -49,89 +51,37 @@ impl EffectiveEnvironment {
         &self,
         input: EnvironmentInput,
     ) -> Result<BTreeMap<OsString, OsString>, CompositionError> {
-        if !base_is_at_most(input.base, self.base()) {
+        if !base_is_at_most(input.base(), self.base()) {
             return Err(CompositionError::EnvironmentBaseTooPermissive {
                 required: self.base(),
-                supplied: input.base,
+                supplied: input.base(),
             });
         }
-        let requested = self.requested.apply_to(input.variables);
+        let requested = self
+            .requested
+            .apply_to(input)
+            .map_err(environment_application_error)?;
         let requested_names: HashSet<_> = requested
+            .variables()
             .keys()
             .map(|name| EnvironmentNameKey::new(name))
             .collect();
-        let mut effective = self.ceiling.apply_to(requested);
+        let mut effective = self
+            .ceiling
+            .apply_to(requested)
+            .map_err(environment_application_error)?
+            .into_variables();
         effective.retain(|name, _| requested_names.contains(&EnvironmentNameKey::new(name)));
         Ok(effective)
     }
 }
 
-/// A backend-selected environment snapshot for effective policy application.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnvironmentInput {
-    base: EnvironmentBase,
-    variables: BTreeMap<OsString, OsString>,
-}
-
-/// A platform-selected snapshot of the variables allowed in a core
-/// environment.
-///
-/// The portable crate cannot know which variables are safe on a particular
-/// operating system. A native backend must construct this value only after it
-/// applies its platform-specific core allowlist.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreEnvironment {
-    variables: BTreeMap<OsString, OsString>,
-}
-
-impl CoreEnvironment {
-    /// Creates a core snapshot from variables selected by a backend.
-    pub fn from_selected<I>(variables: I) -> Self
-    where
-        I: IntoIterator<Item = (OsString, OsString)>,
-    {
-        Self {
-            variables: variables.into_iter().collect(),
+fn environment_application_error(error: CommandError) -> CompositionError {
+    match error {
+        CommandError::EnvironmentBaseTooPermissive { required, supplied } => {
+            CompositionError::EnvironmentBaseTooPermissive { required, supplied }
         }
-    }
-
-    /// Returns the variables selected for this core snapshot.
-    pub fn variables(&self) -> &BTreeMap<OsString, OsString> {
-        &self.variables
-    }
-}
-
-impl EnvironmentInput {
-    /// Creates an input containing all inherited variables.
-    pub fn all<I>(variables: I) -> Self
-    where
-        I: IntoIterator<Item = (OsString, OsString)>,
-    {
-        Self {
-            base: EnvironmentBase::All,
-            variables: variables.into_iter().collect(),
-        }
-    }
-
-    /// Creates an input containing a backend-selected core environment.
-    pub fn core(environment: CoreEnvironment) -> Self {
-        Self {
-            base: EnvironmentBase::Core,
-            variables: environment.variables,
-        }
-    }
-
-    /// Creates an input with no inherited variables.
-    pub fn empty() -> Self {
-        Self {
-            base: EnvironmentBase::None,
-            variables: BTreeMap::new(),
-        }
-    }
-
-    /// Returns the base selected by the backend.
-    pub const fn base(&self) -> EnvironmentBase {
-        self.base
+        other => CompositionError::EnvironmentApplication { source: other },
     }
 }
 

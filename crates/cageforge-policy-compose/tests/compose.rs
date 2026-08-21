@@ -367,24 +367,12 @@ fn effective_context_restricts_workspace_roots_and_preserves_other_scopes() {
     let context = effective.path_context(&base).expect("effective context");
 
     assert_eq!(context.workspace_roots(), std::slice::from_ref(&safe_root));
+    assert_eq!(context.workspace_roots(), context.workspace_roots());
+    assert_eq!(context.root_paths(), &[absolute_root("system-root")]);
+    assert_eq!(context.minimal_paths(), &[absolute_root("minimal")]);
+    assert_eq!(context.tmpdir(), Some(absolute_root("tmpdir").as_path()));
     assert_eq!(
-        context.context().workspace_roots(),
-        context.workspace_roots()
-    );
-    assert_eq!(
-        context.as_ref().root_paths(),
-        &[absolute_root("system-root")]
-    );
-    assert_eq!(
-        context.as_ref().minimal_paths(),
-        &[absolute_root("minimal")]
-    );
-    assert_eq!(
-        context.as_ref().tmpdir(),
-        Some(absolute_root("tmpdir").as_path())
-    );
-    assert_eq!(
-        context.as_ref().slash_tmp(),
+        context.slash_tmp(),
         Some(absolute_root("slash-tmp").as_path())
     );
     assert_eq!(

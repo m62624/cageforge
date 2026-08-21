@@ -4,6 +4,8 @@
 //! [`crate::EnvironmentSpec`], and [`crate::CommandRequest`].
 
 use std::path::PathBuf;
+
+use crate::EnvironmentBase;
 use thiserror::Error;
 
 /// Errors raised while constructing a portable command request.
@@ -54,4 +56,12 @@ pub enum CommandError {
     /// An environment-variable filter pattern contained `=`.
     #[error("environment variable pattern must not contain '='")]
     EnvironmentPatternContainsEquals,
+    /// The supplied environment snapshot is broader than this specification's base.
+    #[error("environment input base {supplied:?} is broader than required base {required:?}")]
+    EnvironmentBaseTooPermissive {
+        /// The base requested by this specification.
+        required: EnvironmentBase,
+        /// The base represented by the supplied variables.
+        supplied: EnvironmentBase,
+    },
 }

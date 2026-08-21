@@ -149,6 +149,84 @@ pub enum EnvironmentOverride {
     Remove,
 }
 
+/// A base environment selected by the process adapter.
+///
+/// The constructors encode the base that the variables represent. This keeps
+/// an [`EnvironmentSpec`] from being applied to an arbitrarily broad map while
+/// claiming that the map is empty or platform-core input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentInput {
+    base: EnvironmentBase,
+    variables: BTreeMap<OsString, OsString>,
+}
+
+/// A platform-selected snapshot used to construct a core environment input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreEnvironment {
+    variables: BTreeMap<OsString, OsString>,
+}
+
+impl CoreEnvironment {
+    /// Creates a core snapshot from variables selected by the process adapter.
+    pub fn from_selected<I>(variables: I) -> Self
+    where
+        I: IntoIterator<Item = (OsString, OsString)>,
+    {
+        Self {
+            variables: variables.into_iter().collect(),
+        }
+    }
+
+    /// Returns the selected core variables.
+    pub fn variables(&self) -> &BTreeMap<OsString, OsString> {
+        &self.variables
+    }
+}
+
+impl EnvironmentInput {
+    /// Creates an input containing all inherited variables.
+    pub fn all<I>(variables: I) -> Self
+    where
+        I: IntoIterator<Item = (OsString, OsString)>,
+    {
+        Self {
+            base: EnvironmentBase::All,
+            variables: variables.into_iter().collect(),
+        }
+    }
+
+    /// Creates an input containing a process adapter's selected core set.
+    pub fn core(environment: CoreEnvironment) -> Self {
+        Self {
+            base: EnvironmentBase::Core,
+            variables: environment.variables,
+        }
+    }
+
+    /// Creates an input with no inherited variables.
+    pub fn empty() -> Self {
+        Self {
+            base: EnvironmentBase::None,
+            variables: BTreeMap::new(),
+        }
+    }
+
+    /// Returns the declared base represented by this input.
+    pub const fn base(&self) -> EnvironmentBase {
+        self.base
+    }
+
+    /// Returns the variables represented by this input.
+    pub fn variables(&self) -> &BTreeMap<OsString, OsString> {
+        &self.variables
+    }
+
+    /// Consumes the input and returns its selected variables.
+    pub fn into_variables(self) -> BTreeMap<OsString, OsString> {
+        self.variables
+    }
+}
+
 /// Environment construction rules for a command.
 ///
 /// Overrides are kept in a sorted map for deterministic inspection and are
@@ -242,14 +320,21 @@ impl EnvironmentSpec {
     /// environment.
     ///
     /// The caller selects the `All`, `Core`, or `None` base at the backend
-    /// boundary. This method then applies the portable sequence
-    /// `exclude -> set/remove -> include`. A variable removed by an exclude is
-    /// not restored by an include; an explicit set is applied after exclusion
-    /// and can intentionally reintroduce that named variable.
-    pub fn apply_to<I>(&self, variables: I) -> BTreeMap<OsString, OsString>
-    where
-        I: IntoIterator<Item = (OsString, OsString)>,
-    {
+    /// boundary. A broader input is rejected before transformation. This
+    /// method then applies the portable sequence `exclude -> set/remove ->
+    /// include` and keeps the validated base tag on the returned snapshot. A
+    /// variable removed by an exclude is not restored by an include; an
+    /// explicit set is applied after exclusion and can intentionally
+    /// reintroduce that named variable.
+    pub fn apply_to(&self, input: EnvironmentInput) -> Result<EnvironmentInput, CommandError> {
+        if !base_is_at_most(input.base, self.base) {
+            return Err(CommandError::EnvironmentBaseTooPermissive {
+                required: self.base,
+                supplied: input.base,
+            });
+        }
+        let base = input.base;
+        let variables = input.variables;
         let mut environment = BTreeMap::new();
         let mut environment_names = HashMap::new();
         for (name, value) in variables {
@@ -296,7 +381,10 @@ impl EnvironmentSpec {
             environment.retain(|name, _| name.to_str().is_some());
         }
 
-        environment
+        Ok(EnvironmentInput {
+            base,
+            variables: environment,
+        })
     }
 
     /// Adds a variable assignment and returns the updated environment.
@@ -392,5 +480,13 @@ fn environment_name_identity(name: &OsStr) -> EnvironmentNameIdentity {
     #[cfg(windows)]
     {
         EnvironmentNameIdentity::NativeWide(name.encode_wide().collect())
+    }
+}
+
+fn base_is_at_most(supplied: EnvironmentBase, required: EnvironmentBase) -> bool {
+    match required {
+        EnvironmentBase::None => supplied == EnvironmentBase::None,
+        EnvironmentBase::Core => supplied != EnvironmentBase::All,
+        EnvironmentBase::All => true,
     }
 }

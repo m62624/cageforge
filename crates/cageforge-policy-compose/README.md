@@ -116,9 +116,11 @@ assert_ne!(ExternalOwner::new(), owner);
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
   that are constrained by both policies and retain both inputs for backend
   lowering. Filesystem selector queries require the
-  `EffectivePathContext` created by `EffectiveSandbox::path_context`; the
-  context is bound to that composed result and cannot be reused with another
-  one. A selector with no effective runtime paths is denied.
+  `EffectivePathContext` created by `EffectiveSandbox::path_context`; its raw
+  `PathResolutionContext` is not exposed. The context is bound to that
+  composed result and cannot be reused with another one. Use its safe accessors
+  or `resolve` method when a backend needs the narrowed runtime paths. A
+  selector with no effective runtime paths is denied.
   `glob_scan_max_depth`
   returns the widest depth required by all effective deny-glob rules.
   `EffectiveNetworkPolicy::authorize_connection` applies both policies to one
@@ -129,7 +131,9 @@ assert_ne!(ExternalOwner::new(), owner);
   an arbitrary map, making the selection boundary explicit.
 - `EffectiveEnvironment` exposes the least-permissive base and applies both
   environment transformations only to an `EnvironmentInput` whose selected
-  base is no broader than the effective base.
+  base is no broader than the effective base. `EnvironmentSpec::apply_to`
+  returns a validated snapshot, so the base tag remains attached until the
+  process adapter deliberately extracts its variables.
 
 The complete API is documented on
 [docs.rs](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/).

@@ -52,8 +52,11 @@ accidentally grant access.
   runtime roots but never creates a root absent from the request or context.
   Composition accepts only runtime-resolved absolute roots.
   `EffectiveSandbox::path_context` creates an
-  opaque context whose workspace roots cannot be replaced by a broader caller
-  context; symlink behavior remains at the backend boundary.
+opaque context whose workspace roots cannot be replaced by a broader caller
+context; symlink behavior remains at the backend boundary. The resulting
+`EffectivePathContext` exposes only narrowed path accessors and selector
+resolution. Its raw `PathResolutionContext` cannot be extracted and reused
+with a different policy.
 - Environment composition chooses the least permissive base (`None`,
   `Core`, or `All`), applies the requested transformation, then applies the
   ceiling transformation. The caller must pass an `EnvironmentInput` whose

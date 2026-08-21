@@ -65,6 +65,12 @@ These rules are mandatory:
     backend semantics. A dependency such as `globset` belongs in the crate that
     interprets the pattern as a policy rule, not automatically in the shared
     path crate.
+    Audit every alternate public constructor, accessor, and convenience query
+    for the same invariant as the primary path. Authorization queries must
+    evaluate complete mode and ownership state, not only a matched rule;
+    runtime-dependent queries must require a validated runtime context; and
+    environment transformations must accept a typed base rather than an
+    unlabelled map.
 11. A network backend must use `ResolvedNetworkTarget` and verify the exact
     `SocketAddr` immediately before connecting. `decision_for_domain` and
     `decision_for_domain_with_resolved_ips` are policy queries, not proof that

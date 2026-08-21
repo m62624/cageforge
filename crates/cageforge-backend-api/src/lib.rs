@@ -251,12 +251,11 @@ impl<'a> BackendRequest<'a> {
                 if path.is_absolute() {
                     Ok(path.to_path_buf())
                 } else {
-                    let current_directory =
-                        path_context.context().current_directory().ok_or_else(|| {
-                            BackendContractError::WorkingDirectoryResolution {
-                                path: path.to_path_buf(),
-                            }
-                        })?;
+                    let current_directory = path_context.current_directory().ok_or_else(|| {
+                        BackendContractError::WorkingDirectoryResolution {
+                            path: path.to_path_buf(),
+                        }
+                    })?;
                     Ok(normalize_lexical_path(&current_directory.join(path)).into_owned())
                 }
             })

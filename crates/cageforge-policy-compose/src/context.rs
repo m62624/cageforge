@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cageforge_policy::PathResolutionContext;
+use cageforge_policy::{PathResolutionContext, PathSelector};
 
 /// Identity shared by one effective sandbox and the contexts it creates.
 ///
@@ -43,23 +43,46 @@ impl EffectivePathContext {
         Self { context, identity }
     }
 
-    /// Returns the validated context for backend inspection.
-    pub fn context(&self) -> &PathResolutionContext {
-        &self.context
-    }
-
     /// Returns the workspace roots permitted by the composed result.
     pub fn workspace_roots(&self) -> &[PathBuf] {
         self.context.workspace_roots()
     }
 
+    /// Returns the system roots retained by the composed runtime context.
+    pub fn root_paths(&self) -> &[PathBuf] {
+        self.context.root_paths()
+    }
+
+    /// Returns the platform-minimal paths retained by the composed context.
+    pub fn minimal_paths(&self) -> &[PathBuf] {
+        self.context.minimal_paths()
+    }
+
+    /// Returns the platform temporary directory, if one was supplied.
+    pub fn tmpdir(&self) -> Option<&std::path::Path> {
+        self.context.tmpdir()
+    }
+
+    /// Returns the conventional `/tmp` directory, if one was supplied.
+    pub fn slash_tmp(&self) -> Option<&std::path::Path> {
+        self.context.slash_tmp()
+    }
+
+    /// Returns the runtime current directory, if one was supplied.
+    pub fn current_directory(&self) -> Option<&std::path::Path> {
+        self.context.current_directory()
+    }
+
+    /// Resolves a symbolic selector through this bound effective context.
+    pub fn resolve(&self, selector: &PathSelector) -> Vec<PathBuf> {
+        selector.resolve(&self.context)
+    }
+
     pub(crate) fn belongs_to(&self, identity: &ContextIdentity) -> bool {
         self.identity.matches(identity)
     }
-}
 
-impl AsRef<PathResolutionContext> for EffectivePathContext {
-    fn as_ref(&self) -> &PathResolutionContext {
+    pub(crate) fn raw(&self) -> &PathResolutionContext {
         &self.context
     }
 }

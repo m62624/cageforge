@@ -32,9 +32,10 @@ mod filesystem;
 mod model;
 mod ownership;
 
+pub use cageforge_command::{CoreEnvironment, EnvironmentInput};
 pub use compose::compose;
 pub use context::EffectivePathContext;
-pub use environment::{CoreEnvironment, EffectiveEnvironment, EnvironmentInput};
+pub use environment::EffectiveEnvironment;
 pub use error::{CompositionBoundary, CompositionError};
 pub use filesystem::EffectiveFilesystemPolicy;
 pub use model::{CompositionRequest, EffectiveNetworkPolicy, EffectiveSandbox, PolicyCeiling};

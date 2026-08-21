@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use cageforge_command::EnvironmentBase;
+use cageforge_command::{CommandError, EnvironmentBase};
 use cageforge_policy::PolicyError;
 use thiserror::Error;
 
@@ -75,6 +75,13 @@ pub enum CompositionError {
         required: EnvironmentBase,
         /// The base supplied by the backend caller.
         supplied: EnvironmentBase,
+    },
+    /// Applying a validated environment transformation failed.
+    #[error("environment transformation failed: {source}")]
+    EnvironmentApplication {
+        /// The command-layer error raised while applying the transformation.
+        #[source]
+        source: CommandError,
     },
     /// One side delegates enforcement while the other expects local enforcement.
     #[error("{boundary} enforcement ownership cannot be composed safely")]

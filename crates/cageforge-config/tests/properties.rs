@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use cageforge_command::{EnvironmentFilterAction, EnvironmentSpec};
+use cageforge_command::{EnvironmentFilterAction, EnvironmentInput, EnvironmentSpec};
 use cageforge_config::{Config, ConfigError};
 use cageforge_policy::AccessMode;
 use proptest::prelude::*;
@@ -201,7 +201,8 @@ inherits = ["base"]
         let actual = resolved.command().expect("generated command").environment();
 
         prop_assert_eq!(actual, &expected);
-        prop_assert_eq!(actual.apply_to(sample_environment()), expected.apply_to(sample_environment()));
+        let input = EnvironmentInput::all(sample_environment());
+        prop_assert_eq!(actual.apply_to(input.clone()), expected.apply_to(input));
     }
 
     #[test]

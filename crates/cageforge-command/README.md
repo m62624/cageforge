@@ -62,6 +62,8 @@ owned handoff for a process backend.
 | `CommandRequest` | Complete portable request passed to a future execution backend. |
 | `CommandSpec` | Native argv vector with a non-empty executable. |
 | `EnvironmentSpec` | All/core/none base environment plus validated filters and explicit set/remove overrides. |
+| `EnvironmentInput` | A backend-selected environment snapshot tagged as `All`, `Core`, or `None`. |
+| `CoreEnvironment` | The explicit core-variable snapshot selected by a platform adapter. |
 | `EnvironmentNameKey` | Case-insensitive map/set identity for native environment names without lossy collisions. |
 | `StdioSpec` and `StdioMode` | Independent routing for stdin, stdout, and stderr. |
 | `TimeoutPolicy` | Backend default, explicit duration limit, or disabled automatic timeout. |
@@ -141,6 +143,13 @@ The `Core` set is not a hidden global constant. A backend explicitly selects
 the platform-specific core variables, passes that map to `apply_to`, and then
 enforces the resulting environment. This keeps Linux, macOS, and Windows
 differences in the backend that owns them.
+
+`EnvironmentSpec::apply_to` accepts an `EnvironmentInput` and returns another
+validated `EnvironmentInput`. The input tag is checked before any filtering or
+override is applied: an `All` snapshot cannot be supplied to a `Core` or
+`None` specification. This makes it impossible for a caller to label a broad
+process environment as a narrower base by accident. The returned snapshot can
+be passed to `into_variables()` at the process boundary.
 
 ## Standard streams and timeout
 

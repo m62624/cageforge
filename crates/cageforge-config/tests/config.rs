@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use cageforge_command::{
-    CommandError, CommandRequest, CommandSpec, EnvironmentBase, EnvironmentFilterAction,
-    EnvironmentOverride, EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
+    CommandError, CommandRequest, CommandSpec, CoreEnvironment, EnvironmentBase,
+    EnvironmentFilterAction, EnvironmentInput, EnvironmentOverride, EnvironmentPattern,
+    EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
 use cageforge_config::{Config, ConfigError, DiagnosticSeverity};
 use cageforge_policy::{
@@ -134,11 +135,13 @@ fn documented_examples_cover_their_declared_behavior() {
         .command()
         .expect("ordered command")
         .environment()
-        .apply_to([
+        .apply_to(EnvironmentInput::all([
             (OsString::from("PATH"), OsString::from("/usr/bin")),
             (OsString::from("ACCESS_TOKEN"), OsString::from("secret")),
             (OsString::from("REMOVE_ME"), OsString::from("old")),
-        ]);
+        ]))
+        .expect("all-variable input should match the inherited base")
+        .into_variables();
     assert_eq!(
         result,
         [
@@ -482,7 +485,13 @@ set = { path = "/child/bin" }
         Some(&EnvironmentOverride::Set(OsString::from("/child/bin")))
     );
     assert_eq!(
-        environment.apply_to([(OsString::from("Path"), OsString::from("/system/bin"))]),
+        environment
+            .apply_to(EnvironmentInput::core(CoreEnvironment::from_selected([(
+                OsString::from("Path"),
+                OsString::from("/system/bin"),
+            )])))
+            .expect("core input should match the default core base")
+            .into_variables(),
         [(OsString::from("path"), OsString::from("/child/bin"))]
             .into_iter()
             .collect()
@@ -1031,12 +1040,8 @@ inherits = ["left", "right"]
     let resolved = config.resolve("child").expect("shared ancestors resolve");
     assert_eq!(resolved.policy().network().domains().len(), 1);
     assert_eq!(
-        resolved
-            .policy()
-            .network()
-            .access_for_domain("base.example")
-            .expect("domain lookup"),
-        Some(DomainAccess::Deny)
+        resolved.policy().network().domains()[0].access(),
+        DomainAccess::Deny
     );
 }
 

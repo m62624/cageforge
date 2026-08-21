@@ -40,6 +40,7 @@ fn resolved_network_target_rejects_address_changes() {
     let target = ResolvedNetworkTarget::new("service.example", [checked])
         .expect("valid resolved network target");
     let policy = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
         .with_domain("service.example", DomainAccess::Allow)
         .expect("valid domain rule");
 
@@ -960,15 +961,15 @@ fn domain_rules_normalize_and_apply_deny_precedence() {
     assert_eq!(policy.domains()[0].pattern(), "api.example.com");
     assert_eq!(
         policy
-            .access_for_domain("blocked.example.com")
+            .decision_for_domain("blocked.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Deny)
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("api.example.com")
+            .decision_for_domain("api.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
     assert_eq!(policy.domains()[0].access(), DomainAccess::Allow);
     assert!(policy.unix_sockets().is_empty());
@@ -989,6 +990,7 @@ fn domain_rules_normalize_and_apply_deny_precedence() {
 #[test]
 fn domain_rules_normalize_ports_brackets_and_ip_literals() {
     let policy = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
         .with_domain("Example.COM:443", DomainAccess::Allow)
         .expect("host with port")
         .with_domain("[2001:DB8::1]:443", DomainAccess::Allow)
@@ -1002,54 +1004,56 @@ fn domain_rules_normalize_ports_brackets_and_ip_literals() {
     assert_eq!(policy.domains()[1].pattern(), "2001:db8::1");
     assert_eq!(
         policy
-            .access_for_domain("example.com:8443")
+            .decision_for_domain("example.com:8443")
             .expect("host lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
     assert_eq!(
         policy
-            .access_for_domain("[2001:DB8::1]:9443")
+            .decision_for_domain("[2001:DB8::1]:9443")
             .expect("IPv6 lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
 }
 
 #[test]
 fn domain_wildcards_have_explicit_apex_semantics() {
     let policy = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
         .with_domain("*.example.com", DomainAccess::Allow)
         .expect("subdomain wildcard")
         .with_domain("**.root.example", DomainAccess::Deny)
         .expect("apex wildcard");
     assert_eq!(
         policy
-            .access_for_domain("example.com")
+            .decision_for_domain("example.com")
             .expect("domain lookup"),
-        None
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("api.example.com")
+            .decision_for_domain("api.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
     assert_eq!(
         policy
-            .access_for_domain("root.example")
+            .decision_for_domain("root.example")
             .expect("domain lookup"),
-        Some(DomainAccess::Deny)
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("api.root.example")
+            .decision_for_domain("api.root.example")
             .expect("domain lookup"),
-        Some(DomainAccess::Deny)
+        NetworkDecision::Deny
     );
 }
 
 #[test]
 fn domain_rules_support_mid_label_globs() {
     let policy = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
         .with_domain("region*.v2.example.com", DomainAccess::Deny)
         .expect("mid-label wildcard")
         .with_domain("zone?.example.com", DomainAccess::Allow)
@@ -1057,39 +1061,40 @@ fn domain_rules_support_mid_label_globs() {
 
     assert_eq!(
         policy
-            .access_for_domain("region1.v2.example.com")
+            .decision_for_domain("region1.v2.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Deny)
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("region.v2.example.com")
+            .decision_for_domain("region.v2.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Deny)
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("xregion1.v2.example.com")
+            .decision_for_domain("xregion1.v2.example.com")
             .expect("domain lookup"),
-        None
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("zone1.example.com")
+            .decision_for_domain("zone1.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
     assert_eq!(
         policy
-            .access_for_domain("zone12.example.com")
+            .decision_for_domain("zone12.example.com")
             .expect("domain lookup"),
-        None
+        NetworkDecision::Deny
     );
 }
 
 #[test]
 fn domain_rules_support_character_classes() {
     let policy = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
         .with_domain("[a-c].example.com", DomainAccess::Allow)
         .expect("character class domain")
         .with_domain("[!x].blocked.example.com", DomainAccess::Deny)
@@ -1097,43 +1102,44 @@ fn domain_rules_support_character_classes() {
 
     assert_eq!(
         policy
-            .access_for_domain("a.example.com")
+            .decision_for_domain("a.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
     assert_eq!(
         policy
-            .access_for_domain("c.example.com")
+            .decision_for_domain("c.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
     assert_eq!(
         policy
-            .access_for_domain("d.example.com")
+            .decision_for_domain("d.example.com")
             .expect("domain lookup"),
-        None
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("a.blocked.example.com")
+            .decision_for_domain("a.blocked.example.com")
             .expect("domain lookup"),
-        Some(DomainAccess::Deny)
+        NetworkDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_domain("x.blocked.example.com")
+            .decision_for_domain("x.blocked.example.com")
             .expect("domain lookup"),
-        None
+        NetworkDecision::Deny
     );
 
     let with_port = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
         .with_domain("[a-c].example.com:443", DomainAccess::Allow)
         .expect("character class with a port");
     assert_eq!(
         with_port
-            .access_for_domain("b.example.com:443")
+            .decision_for_domain("b.example.com:443")
             .expect("domain lookup"),
-        Some(DomainAccess::Allow)
+        NetworkDecision::Allow
     );
 }
 
@@ -1196,12 +1202,6 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
     assert!(policy.validate().is_ok());
     assert_eq!(
         policy
-            .access_for_domain("anything.example")
-            .expect("lookup"),
-        Some(DomainAccess::Deny)
-    );
-    assert_eq!(
-        policy
             .decision_for_domain("anything.example")
             .expect("disabled network"),
         NetworkDecision::Deny
@@ -1254,6 +1254,20 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
     );
     assert!(allowlisted.allows_unix_socket(Path::new(socket_path)));
     assert!(!allowlisted.allows_unix_socket(Path::new(&native_path("/other.sock"))));
+}
+
+#[test]
+fn disabled_network_cannot_be_reenabled_by_a_domain_rule() {
+    let policy = NetworkPolicy::disabled()
+        .with_domain("example.com", DomainAccess::Allow)
+        .expect("valid domain rule");
+
+    assert_eq!(
+        policy
+            .decision_for_domain("example.com")
+            .expect("domain decision"),
+        NetworkDecision::Deny
+    );
 }
 
 #[test]

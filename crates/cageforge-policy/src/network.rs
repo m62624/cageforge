@@ -492,12 +492,6 @@ impl NetworkPolicy {
         })
     }
 
-    /// Returns the strictest matching domain decision, if a rule matches.
-    pub fn access_for_domain(&self, domain: &str) -> Result<Option<DomainAccess>, PolicyError> {
-        let domain = normalize_domain(domain)?;
-        Ok(self.access_for_normalized_domain(&domain))
-    }
-
     /// Evaluates a domain against the complete network policy.
     ///
     /// Returns the policy result for a hostname without authorizing a socket
