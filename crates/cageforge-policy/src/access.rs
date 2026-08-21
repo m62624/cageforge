@@ -8,7 +8,11 @@
 //! because connection authorization also carries an exact socket address.
 
 /// Filesystem access requested or granted for a policy entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// This type intentionally does not implement [`Ord`]. Use
+/// [`Self::most_restrictive`] when combining access modes; declaration order
+/// is not an authorization rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessMode {
     /// Permit reads but not modifications.
     Read,
@@ -57,7 +61,12 @@ impl AccessMode {
 /// `ExternallyEnforced` is intentionally distinct from [`AccessMode::Deny`].
 /// It tells a backend that Cageforge does not make the local decision because
 /// another trusted sandbox owns the filesystem boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// This type intentionally does not implement [`Ord`]. Local access decisions
+/// and external ownership are not one total permission ordering; callers must
+/// handle `ExternallyEnforced` explicitly instead of combining decisions with
+/// `min` or `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FilesystemDecision {
     /// Permit reads but not modifications.
     Read,

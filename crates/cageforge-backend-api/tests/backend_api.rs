@@ -1,5 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use cageforge_backend_api::{
@@ -15,6 +15,21 @@ use cageforge_policy_compose::{
     CompositionError, CompositionRequest, CoreEnvironment, EnvironmentInput, PolicyCeiling, compose,
 };
 use pretty_assertions::assert_eq;
+
+#[cfg(windows)]
+fn native_path(path: &str) -> PathBuf {
+    let suffix = path.strip_prefix('/').unwrap_or(path).replace('/', "\\");
+    PathBuf::from(format!(r"C:\{suffix}"))
+}
+
+#[cfg(not(windows))]
+fn native_path(path: &str) -> PathBuf {
+    PathBuf::from(path)
+}
+
+fn native_path_string(path: &str) -> String {
+    native_path(path).to_string_lossy().into_owned()
+}
 
 struct TestBackend {
     capabilities: BackendCapabilities,
@@ -40,7 +55,7 @@ fn effective_request() -> (CommandRequest, cageforge_policy_compose::EffectiveSa
         .with_unix_socket_mode(UnixSocketMode::Restricted)
         .with_domain("example.com", DomainAccess::Allow)
         .unwrap()
-        .with_unix_socket("/run/example.sock", DomainAccess::Allow)
+        .with_unix_socket(native_path("/run/example.sock"), DomainAccess::Allow)
         .unwrap();
     let requested = cageforge_policy::SandboxPolicy::new(filesystem, network);
     let command_environment = EnvironmentSpec::inherit_core()
@@ -49,7 +64,7 @@ fn effective_request() -> (CommandRequest, cageforge_policy_compose::EffectiveSa
         .with_var("MODE", "test")
         .unwrap();
     let command = CommandRequest::new(CommandSpec::new("tool").unwrap())
-        .with_working_directory("/workspace")
+        .with_working_directory(native_path("/workspace"))
         .unwrap()
         .with_environment(command_environment.clone())
         .with_stdio(StdioSpec::new(
@@ -64,7 +79,7 @@ fn effective_request() -> (CommandRequest, cageforge_policy_compose::EffectiveSa
     );
     let effective = compose(
         CompositionRequest::new(&requested, &command_environment, &ceiling)
-            .with_workspace_roots([PathBuf::from("/workspace")])
+            .with_workspace_roots([native_path("/workspace")])
             .unwrap(),
     )
     .unwrap();
@@ -106,15 +121,15 @@ fn all_capabilities() -> BackendCapabilities {
 
 fn workspace_context() -> PathResolutionContext {
     PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(native_path("/workspace"))
         .expect("valid workspace root")
-        .with_current_directory("/workspace")
+        .with_current_directory(native_path("/workspace"))
         .expect("valid current directory")
 }
 
 fn workspace_context_without_current_directory() -> PathResolutionContext {
     PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(native_path("/workspace"))
         .expect("valid workspace root")
 }
 
@@ -302,7 +317,7 @@ fn required_capabilities_cover_external_enforcement_modes() {
     let sandbox = compose(
         CompositionRequest::new(&requested, &environment, &ceiling)
             .with_external_owner(owner)
-            .with_workspace_roots([PathBuf::from("/workspace")])
+            .with_workspace_roots([native_path("/workspace")])
             .unwrap(),
     )
     .unwrap();
@@ -362,7 +377,7 @@ fn workspace_globs_require_workspace_scope_support() {
 fn every_filesystem_scope_kind_requires_its_own_capability() {
     let filesystem = FilesystemPolicy::restricted([
         FilesystemRule::new(
-            PathSelector::absolute("/workspace").unwrap(),
+            PathSelector::absolute(native_path("/workspace")).unwrap(),
             AccessMode::Write,
         )
         .with_read_only_subpath(PathSelector::root())
@@ -373,7 +388,8 @@ fn every_filesystem_scope_kind_requires_its_own_capability() {
         FilesystemRule::new(PathSelector::tmpdir(), AccessMode::Write)
             .with_read_only_subpath(PathSelector::slash_tmp())
             .unwrap(),
-        FilesystemRule::absolute_glob("/outside/*.secret", AccessMode::Deny).unwrap(),
+        FilesystemRule::absolute_glob(native_path_string("/outside/*.secret"), AccessMode::Deny)
+            .unwrap(),
     ]);
     let requested = cageforge_policy::SandboxPolicy::new(
         filesystem,
@@ -540,11 +556,11 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
         capabilities: all_capabilities(),
     };
     let base = PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(native_path("/workspace"))
         .unwrap()
-        .with_workspace_root("/outside")
+        .with_workspace_root(native_path("/outside"))
         .unwrap()
-        .with_current_directory("/workspace")
+        .with_current_directory(native_path("/workspace"))
         .unwrap();
     let prepared = BackendRequest::new(&command, &sandbox)
         .prepare_for(&backend, &base)
@@ -552,11 +568,11 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
 
     assert_eq!(
         prepared.path_context().workspace_roots(),
-        &[PathBuf::from("/workspace")]
+        &[native_path("/workspace")]
     );
     assert_eq!(
         prepared
-            .filesystem_access_for_path(std::path::Path::new("/workspace/.git/config"))
+            .filesystem_access_for_path(native_path("/workspace/.git/config").as_path())
             .unwrap(),
         FilesystemDecision::Read
     );
@@ -589,7 +605,7 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
     );
     assert_eq!(
         prepared
-            .network_decision_for_unix_socket(std::path::Path::new("/run/example.sock"))
+            .network_decision_for_unix_socket(native_path("/run/example.sock").as_path())
             .unwrap(),
         NetworkDecision::Allow
     );
@@ -621,12 +637,12 @@ fn preflight_rejects_a_working_directory_outside_the_effective_filesystem() {
     );
     let sandbox = compose(
         CompositionRequest::new(&requested, &environment, &ceiling)
-            .with_workspace_roots([PathBuf::from("/workspace")])
+            .with_workspace_roots([native_path("/workspace")])
             .unwrap(),
     )
     .unwrap();
     let command = CommandRequest::new(CommandSpec::new("tool").unwrap())
-        .with_working_directory("/outside")
+        .with_working_directory(native_path("/outside"))
         .unwrap()
         .with_environment(environment)
         .with_timeout(Duration::from_secs(1));
@@ -644,7 +660,7 @@ fn preflight_rejects_a_working_directory_outside_the_effective_filesystem() {
     assert_eq!(
         error,
         BackendContractError::WorkingDirectoryDenied {
-            path: PathBuf::from("/outside"),
+            path: native_path("/outside"),
         }
     );
 }
@@ -659,7 +675,7 @@ fn preflight_resolves_and_checks_a_relative_working_directory() {
     );
     let sandbox = compose(
         CompositionRequest::new(&requested, &environment, &ceiling)
-            .with_workspace_roots([PathBuf::from("/workspace")])
+            .with_workspace_roots([native_path("/workspace")])
             .unwrap(),
     )
     .unwrap();
@@ -669,7 +685,7 @@ fn preflight_resolves_and_checks_a_relative_working_directory() {
         .with_environment(environment)
         .with_timeout(Duration::from_secs(1));
     let base = workspace_context()
-        .with_current_directory("/workspace")
+        .with_current_directory(native_path("/workspace"))
         .unwrap();
     let prepared = BackendRequest::new(&command, &sandbox)
         .prepare_for(
@@ -684,7 +700,7 @@ fn preflight_resolves_and_checks_a_relative_working_directory() {
 
     assert_eq!(
         prepared.working_directory(),
-        std::path::Path::new("/workspace/src/nested")
+        native_path("/workspace/src/nested").as_path()
     );
 }
 
@@ -698,7 +714,7 @@ fn preflight_rejects_relative_working_directory_without_runtime_base() {
     );
     let sandbox = compose(
         CompositionRequest::new(&requested, &environment, &ceiling)
-            .with_workspace_roots([PathBuf::from("/workspace")])
+            .with_workspace_roots([native_path("/workspace")])
             .unwrap(),
     )
     .unwrap();
@@ -736,7 +752,7 @@ fn preflight_rejects_an_implicit_working_directory_without_runtime_base() {
     );
     let sandbox = compose(
         CompositionRequest::new(&requested, &environment, &ceiling)
-            .with_workspace_roots([PathBuf::from("/workspace")])
+            .with_workspace_roots([native_path("/workspace")])
             .unwrap(),
     )
     .unwrap();
@@ -767,7 +783,7 @@ fn preflight_checks_and_returns_an_implicit_working_directory() {
     );
     let sandbox = compose(
         CompositionRequest::new(&requested, &environment, &ceiling)
-            .with_workspace_roots([PathBuf::from("/workspace")])
+            .with_workspace_roots([native_path("/workspace")])
             .unwrap(),
     )
     .unwrap();
@@ -785,7 +801,10 @@ fn preflight_checks_and_returns_an_implicit_working_directory() {
         )
         .unwrap();
 
-    assert_eq!(prepared.working_directory(), Path::new("/workspace"));
+    assert_eq!(
+        prepared.working_directory(),
+        native_path("/workspace").as_path()
+    );
 }
 
 #[test]
@@ -796,7 +815,7 @@ fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceilin
         cageforge_policy::SandboxPolicy::full_access(),
         environment.clone(),
     )
-    .with_workspace_roots([PathBuf::from("/allowed")])
+    .with_workspace_roots([native_path("/allowed")])
     .unwrap();
     let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
     let command =
@@ -808,7 +827,7 @@ fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceilin
             &PathResolutionContext::new()
                 .with_root("/")
                 .unwrap()
-                .with_current_directory("/outside")
+                .with_current_directory(native_path("/outside"))
                 .unwrap(),
         )
         .unwrap();

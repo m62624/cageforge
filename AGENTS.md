@@ -71,27 +71,38 @@ These rules are mandatory:
     runtime-dependent queries must require a validated runtime context; and
     environment transformations must accept a typed base rather than an
     unlabelled map.
-11. A network backend must use `ResolvedNetworkTarget` and verify the exact
+11. Treat Rust trait derivations as part of each type's security contract.
+    Collection identity (`Eq`, `Hash`, and `Ord`) must use the same canonical
+    semantics as matching; declaration aggregates may remain structural when
+    their spelling or order is public. Opaque composition and authorization
+    identities must use identity semantics and must not gain `Copy` or `Clone`
+    when copying could detach a value from its checked boundary. Authorization
+    modes and results must not expose an arbitrary `Ord`; use an explicit
+    narrowing operation such as `most_restrictive` and handle external
+    ownership as a separate state. An `Ord` implementation is appropriate for
+    canonical collection keys or deterministic diagnostic labels only when it
+    is not presented as an enforcement precedence.
+12. A network backend must use `ResolvedNetworkTarget` and verify the exact
     `SocketAddr` immediately before connecting. `decision_for_domain` and
     `decision_for_domain_with_resolved_ips` are policy queries, not proof that
     a later connection uses the checked address. A filesystem backend must
     combine policy evaluation with native symlink, reparse-point, mount, and
     TOCTOU-safe enforcement.
-12. `ExternalOwner` is an identity token supplied by a trusted caller. It is
+13. `ExternalOwner` is an identity token supplied by a trusted caller. It is
     not evidence that an external sandbox exists or is enforcing anything.
     `CoreEnvironment` likewise requires a backend-selected core environment;
     the label must never be applied to the complete process environment.
-13. Keep the Codex baseline in `upstream-review.toml` frozen until a deliberate
+14. Keep the Codex baseline in `upstream-review.toml` frozen until a deliberate
     review approves an advance. Never pull or fetch Codex automatically; the
     upstream-review tool is read-only and only compares an externally updated
     checkout.
-14. Configuration files are trusted application input, not an untrusted wire
+15. Configuration files are trusted application input, not an untrusted wire
     format. Keep resolution efficient for large files and shared inheritance
     graphs through one iterative inheritance linearization and indexed
     canonical merges. Do not add
     arbitrary resource limits or silently truncate valid configuration without
     a separate specification decision.
-15. When several imports belong to one crate or responsibility domain, prefer
+16. When several imports belong to one crate or responsibility domain, prefer
     one grouped `use` declaration. Split imports only when they represent
     genuinely different responsibility zones or the split materially improves
     readability.

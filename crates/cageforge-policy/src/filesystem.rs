@@ -20,7 +20,10 @@ use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
 /// The enforcement ownership for filesystem access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// The modes are ownership states, not a permission scale, so this type does
+/// not implement [`Ord`]. Composition uses explicit ownership checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FilesystemMode {
     /// Cageforge must enforce the listed restrictions through its backend.
     Restricted,
@@ -31,7 +34,10 @@ pub enum FilesystemMode {
 }
 
 /// What a filesystem rule targets.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// Target equality and hashing remain available for canonical deduplication;
+/// variant declaration order is not exposed as a policy precedence.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FilesystemTarget {
     /// A concrete or runtime-defined filesystem scope.
     Scope(PathSelector),
@@ -64,12 +70,27 @@ fn target_key(target: &FilesystemTarget) -> FilesystemTargetKey {
 }
 
 /// What a backend should do when a concrete rule target is absent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MissingPathBehavior {
     /// Treat an absent target as an error during backend preparation.
     Error,
     /// Ignore an absent target without creating it.
     Skip,
+}
+
+impl MissingPathBehavior {
+    /// Returns the safer result when two rules disagree about a missing path.
+    ///
+    /// This is intentionally an explicit operation instead of an `Ord`
+    /// implementation: `Error` is more conservative than `Skip`, but that
+    /// relationship is specific to this merge operation and is not a general
+    /// ordering for filesystem policy values.
+    pub const fn most_conservative(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Error, _) | (_, Self::Error) => Self::Error,
+            (Self::Skip, Self::Skip) => Self::Skip,
+        }
+    }
 }
 
 /// One filesystem target and its access mode.
@@ -370,7 +391,7 @@ impl FilesystemPolicy {
                 existing.access = existing.access.most_restrictive(rule.access);
                 existing.missing_path_behavior = existing
                     .missing_path_behavior
-                    .min(rule.missing_path_behavior);
+                    .most_conservative(rule.missing_path_behavior);
                 for selector in &rule.read_only_subpaths {
                     if !existing
                         .read_only_subpaths

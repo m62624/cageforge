@@ -32,7 +32,10 @@ pub enum NetworkMode {
 }
 
 /// Default behavior for domain rules when no rule matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// These are policy states rather than a narrowing scale, so this type does
+/// not implement [`Ord`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DomainMode {
     /// Reject every domain.
     Disabled,
@@ -43,7 +46,10 @@ pub enum DomainMode {
 }
 
 /// Default behavior for Unix socket rules when no rule matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// These are policy states rather than a narrowing scale, so this type does
+/// not implement [`Ord`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnixSocketMode {
     /// Reject every Unix socket path.
     Disabled,
@@ -55,7 +61,10 @@ pub enum UnixSocketMode {
 
 /// Controls access to loopback, private, link-local, and otherwise
 /// non-public IP addresses reached through a domain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// This is an explicit opt-in state, not an orderable permission value, so it
+/// does not implement [`Ord`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LocalNetworkAccess {
     /// Reject non-public destinations unless the caller explicitly opts in.
     Deny,
@@ -73,6 +82,9 @@ pub enum DomainAccess {
 }
 
 /// The result of evaluating a complete network policy.
+///
+/// Local denial, local allowance, and external ownership are distinct states,
+/// not values in one total permission order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NetworkDecision {
     /// The local policy allows the destination.

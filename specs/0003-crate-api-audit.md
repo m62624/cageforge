@@ -135,6 +135,16 @@ The workspace keeps a single owner for each reusable semantic operation:
   `EffectiveSandbox` and `EffectivePathContext` are the deliberate exception:
   their equality includes the private composition identity, so equal-looking
   results from different compositions never compare equal.
+- Permission results do not implement `Ord`: `AccessMode::most_restrictive`
+  and the composition functions are the only supported ways to combine
+  permissions. A total ordering would make `min`/`max` look like authorization
+  operations even though local access and external enforcement are not one
+  comparable scale.
+- State enums such as filesystem/network modes, missing-path behavior, and
+  environment filter actions likewise expose named operations rather than an
+  arbitrary total order. `Ord` remains only on canonical collection keys and
+  deterministic diagnostic labels where it agrees with identity semantics or
+  is explicitly not an enforcement precedence.
 - `cageforge-policy` uses `globset` for filesystem and domain patterns. Its
   domain normalization and filesystem component handling are intentionally
   different layers around that matcher, not duplicate glob implementations.

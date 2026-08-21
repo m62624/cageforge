@@ -33,7 +33,10 @@ pub enum EnvironmentBase {
 }
 
 /// The action applied to a matching environment-variable pattern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// Include and exclude are evaluated with named precedence rules; their enum
+/// declaration order is not an environment authorization order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EnvironmentFilterAction {
     /// Retain matching variables when the include allowlist is active.
     Include,

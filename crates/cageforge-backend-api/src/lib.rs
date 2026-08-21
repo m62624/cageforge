@@ -40,7 +40,9 @@ use thiserror::Error;
 /// A capability means that the backend can enforce the corresponding
 /// effective request safely. It is not a hint that the backend can parse the
 /// value. Backends must not advertise a capability whose enforcement would be
-/// best-effort or silently incomplete.
+/// best-effort or silently incomplete. `Ord` is used only for deterministic
+/// capability-set iteration and diagnostics; it is not an enforcement
+/// precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BackendCapability {
     /// Execute a validated command request.

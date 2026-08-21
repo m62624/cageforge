@@ -293,6 +293,26 @@ fn access_modes_follow_security_precedence() {
 }
 
 #[test]
+fn missing_path_behavior_uses_explicit_conservative_merge() {
+    assert_eq!(
+        MissingPathBehavior::Error.most_conservative(MissingPathBehavior::Skip),
+        MissingPathBehavior::Error
+    );
+    assert_eq!(
+        MissingPathBehavior::Skip.most_conservative(MissingPathBehavior::Error),
+        MissingPathBehavior::Error
+    );
+    assert_eq!(
+        MissingPathBehavior::Skip.most_conservative(MissingPathBehavior::Skip),
+        MissingPathBehavior::Skip
+    );
+    assert_eq!(
+        MissingPathBehavior::Error.most_conservative(MissingPathBehavior::Error),
+        MissingPathBehavior::Error
+    );
+}
+
+#[test]
 fn filesystem_decisions_keep_external_ownership_distinct_from_deny() {
     assert_eq!(
         FilesystemDecision::Read.as_access_mode(),
