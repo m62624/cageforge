@@ -22,9 +22,10 @@ mod requirements;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cageforge_command::CommandRequest;
+use cageforge_path::normalize_lexical_path;
 use cageforge_policy::{
     ConnectionAuthorization, FilesystemDecision, NetworkDecision, PathResolutionContext,
     PathSelector, ResolvedNetworkTarget,
@@ -195,16 +196,19 @@ impl<'a> BackendRequest<'a> {
     }
 
     /// Performs common preflight using exactly the capabilities advertised by
-    /// `backend`.
+    /// `backend` and the backend's runtime path context.
     ///
     /// This is the safe handoff entry point for native integrations. The
     /// capability check is defined by Cageforge and cannot be overridden by a
-    /// backend implementation.
+    /// backend implementation. The context is narrowed before return, and a
+    /// requested working directory must be permitted by the effective
+    /// filesystem policy.
     pub fn prepare_for<B: SandboxBackend>(
         self,
         backend: &B,
+        base_context: &PathResolutionContext,
     ) -> Result<PreparedBackendRequest<'a>, BackendContractError> {
-        self.validate(&backend.capabilities())
+        self.validate(&backend.capabilities(), base_context)
     }
 
     /// Computes the capabilities required by this request.
@@ -226,6 +230,7 @@ impl<'a> BackendRequest<'a> {
     fn validate(
         self,
         capabilities: &BackendCapabilities,
+        base_context: &PathResolutionContext,
     ) -> Result<PreparedBackendRequest<'a>, BackendContractError> {
         if self.command.environment() != self.sandbox.environment().requested() {
             return Err(BackendContractError::CommandEnvironmentMismatch);
@@ -235,7 +240,49 @@ impl<'a> BackendRequest<'a> {
                 return Err(BackendContractError::UnsupportedCapability { capability });
             }
         }
-        Ok(PreparedBackendRequest { request: self })
+        let path_context = self
+            .sandbox
+            .path_context(base_context)
+            .map_err(|source| BackendContractError::InvalidRuntimeContext { source })?;
+        let working_directory = self
+            .command
+            .working_directory()
+            .map(|path| {
+                if path.is_absolute() {
+                    Ok(path.to_path_buf())
+                } else {
+                    let current_directory =
+                        path_context.context().current_directory().ok_or_else(|| {
+                            BackendContractError::WorkingDirectoryResolution {
+                                path: path.to_path_buf(),
+                            }
+                        })?;
+                    Ok(normalize_lexical_path(&current_directory.join(path)).into_owned())
+                }
+            })
+            .transpose()?;
+        if let Some(working_directory) = &working_directory {
+            match self
+                .sandbox
+                .filesystem()
+                .access_for_path(working_directory, &path_context)
+                .map_err(|source| BackendContractError::FilesystemEvaluation { source })?
+            {
+                FilesystemDecision::Read
+                | FilesystemDecision::Write
+                | FilesystemDecision::ExternallyEnforced => {}
+                FilesystemDecision::Deny => {
+                    return Err(BackendContractError::WorkingDirectoryDenied {
+                        path: working_directory.to_path_buf(),
+                    });
+                }
+            }
+        }
+        Ok(PreparedBackendRequest {
+            request: self,
+            path_context,
+            working_directory,
+        })
     }
 }
 
@@ -244,9 +291,11 @@ impl<'a> BackendRequest<'a> {
 /// This type is still portable and contains no process handle. Native backend
 /// code may lower it to an OS-specific launch request after applying the
 /// filesystem, network, environment, and lifecycle contracts.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PreparedBackendRequest<'a> {
     request: BackendRequest<'a>,
+    path_context: EffectivePathContext,
+    working_directory: Option<PathBuf>,
 }
 
 impl<'a> PreparedBackendRequest<'a> {
@@ -260,15 +309,15 @@ impl<'a> PreparedBackendRequest<'a> {
         self.request.sandbox()
     }
 
-    /// Narrows a backend-owned runtime path context to the effective
-    /// workspace-root ceiling.
-    pub fn path_context(
-        &self,
-        base: &PathResolutionContext,
-    ) -> Result<EffectivePathContext, BackendContractError> {
-        self.sandbox()
-            .path_context(base)
-            .map_err(|source| BackendContractError::InvalidRuntimeContext { source })
+    /// Returns the runtime path context that was narrowed and checked during
+    /// [`BackendRequest::prepare_for`].
+    pub fn path_context(&self) -> &EffectivePathContext {
+        &self.path_context
+    }
+
+    /// Returns the working directory resolved during preflight.
+    pub fn working_directory(&self) -> Option<&Path> {
+        self.working_directory.as_deref()
     }
 
     /// Applies the effective environment to a backend-selected input base.
@@ -289,11 +338,10 @@ impl<'a> PreparedBackendRequest<'a> {
     pub fn filesystem_access_for_path(
         &self,
         path: &Path,
-        context: &EffectivePathContext,
     ) -> Result<FilesystemDecision, BackendContractError> {
         self.sandbox()
             .filesystem()
-            .access_for_path(path, context)
+            .access_for_path(path, &self.path_context)
             .map_err(|source| BackendContractError::FilesystemEvaluation { source })
     }
 
@@ -306,11 +354,10 @@ impl<'a> PreparedBackendRequest<'a> {
     pub fn filesystem_access_for(
         &self,
         selector: &PathSelector,
-        context: &EffectivePathContext,
     ) -> Result<FilesystemDecision, BackendContractError> {
         self.sandbox()
             .filesystem()
-            .access_for(selector, context)
+            .access_for(selector, &self.path_context)
             .map_err(|source| BackendContractError::FilesystemEvaluation { source })
     }
 
@@ -386,6 +433,19 @@ pub enum BackendContractError {
         /// The composition failure raised while evaluating filesystem access.
         #[source]
         source: CompositionError,
+    },
+    /// The command's working directory is outside the effective filesystem
+    /// policy.
+    #[error("working directory {path:?} is denied by the effective filesystem policy")]
+    WorkingDirectoryDenied {
+        /// The denied working directory.
+        path: PathBuf,
+    },
+    /// A relative working directory had no runtime current directory.
+    #[error("relative working directory {path:?} requires a runtime current directory")]
+    WorkingDirectoryResolution {
+        /// The unresolved relative working directory.
+        path: PathBuf,
     },
     /// The effective network policy rejected a backend query.
     #[error("network policy evaluation failed: {source}")]

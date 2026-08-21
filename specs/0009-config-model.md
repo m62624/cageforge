@@ -142,6 +142,9 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
 - The upstream runtime state that combines profile roots with harness/runtime
   roots is tracked separately from TOML parsing; Cageforge keeps that merge at
   the future backend/context boundary.
+- A backend that receives a relative command working directory must also put
+  its absolute current directory in `PathResolutionContext`; the backend API
+  resolves and checks that cwd before preparation succeeds.
 - `root` is a symbolic filesystem target. The selected backend must populate
   `PathResolutionContext` with POSIX `/` or the relevant Windows drive/UNC
   roots; config resolution never discovers system roots.

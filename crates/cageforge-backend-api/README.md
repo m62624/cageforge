@@ -35,15 +35,17 @@ backend handoff. The command's `EnvironmentSpec` is checked against the
 requested environment retained by the composed result, keeping command and
 policy construction aligned.
 
-Call `request.prepare_for(&backend)` to run the common capability check. The
-backend trait only supplies its capabilities; it cannot override this
-preflight with a broader set. After preparation, use
-`PreparedBackendRequest::path_context` with the backend's runtime paths and
-`PreparedBackendRequest::apply_environment` with a backend-selected
-`EnvironmentInput`. Pass that returned effective context to the filesystem
-decision helpers; it is bound to this prepared composition and cannot be
-reused with another request. A symbolic selector is never evaluated without
-it. Use
+Call `request.prepare_for(&backend, &base_context)` to run the common
+capability and working-directory checks. The backend trait only supplies its
+capabilities; it cannot override this preflight with a broader set. The base
+context is narrowed to the effective workspace ceiling, and a requested
+working directory is rejected when the effective filesystem policy denies it.
+After preparation, use `PreparedBackendRequest::path_context` to inspect the
+already narrowed context, `PreparedBackendRequest::working_directory` for the
+resolved cwd, and `PreparedBackendRequest::apply_environment` with a
+backend-selected `EnvironmentInput`. The filesystem decision helpers use that
+same bound context and cannot be given a context from another request. A
+symbolic selector is never evaluated without it. Use
 `authorize_connection` to receive a decision that already combines the
 requested and ceiling sides.
 

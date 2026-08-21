@@ -26,7 +26,8 @@ TOML, JSON, Rust builders, or an application-specific configuration system.
 The normal sequence is:
 
 1. Build a `SandboxPolicy` with validated filesystem and network rules.
-2. Give symbolic filesystem selectors a runtime `PathResolutionContext`.
+2. Give symbolic filesystem selectors a runtime `PathResolutionContext`;
+   include `with_current_directory` when a command uses a relative cwd.
 3. Query policy values for preparation and capability checks.
 4. If an outer limit exists, pass the policy through
    `cageforge-policy-compose`.
@@ -72,7 +73,7 @@ an unchecked path selector by writing a public enum payload.
 | `SandboxPolicy` | Combines filesystem and network policy. |
 | `FilesystemPolicy` and `FilesystemRule` | Describes restricted, unrestricted, or externally enforced filesystem access. |
 | `FilesystemDecision` | Distinguishes local read/write/deny results from an externally enforced boundary. |
-| `PathSelector` and `PathResolutionContext` | Represents absolute, system-root, workspace, minimal-runtime, and temporary-directory scopes. |
+| `PathSelector` and `PathResolutionContext` | Represents absolute, system-root, workspace, minimal-runtime, temporary-directory, and runtime current-directory scopes. |
 | `PathPattern` | Represents validated absolute or workspace-relative globs. |
 | `AccessMode` | Expresses `Read`, `Write`, or `Deny`. |
 | `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults; `enabled()` keeps local destinations denied, while `unrestricted()` removes that local restriction explicitly. |
@@ -139,6 +140,9 @@ diagnostics and serialization. The portable crate does not resolve symlinks;
 that remains a native backend decision. Built-in protected metadata follows the
 same native path case rules. Windows drive/UNC device and verbatim aliases are
 normalized by `cageforge-path` before identity and containment comparisons.
+When inspecting a symbolic selector with `FilesystemPolicy::access_for`, pass
+the same runtime context explicitly; a selector with no resolved paths is
+denied.
 
 `PathSelector::root()` is a symbolic request for every system root supplied in
 `PathResolutionContext`. POSIX callers normally provide `/`; Windows callers
@@ -148,6 +152,10 @@ these roots itself. Glob rules are portable deny rules only. They support `*`,
 as `[!secret]`, and ranges. Read/write globs are rejected with
 `PolicyError::UnsupportedGlobAccess` until a backend
 capability contract can prove support on every target platform.
+
+`PathResolutionContext::with_current_directory` records the absolute runtime
+directory against which a backend resolves a relative command working
+directory. It is a declaration only and never changes the process cwd.
 
 A read-only carve-out must be below its writable scope. Concrete absolute and
 workspace-relative selectors that are visibly outside the parent are rejected

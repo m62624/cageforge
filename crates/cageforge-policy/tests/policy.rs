@@ -343,7 +343,9 @@ fn resolution_context_expands_all_runtime_scopes() {
         .with_tmpdir(native_path("/tmp/runtime"))
         .expect("tmpdir")
         .with_slash_tmp(native_path("/tmp"))
-        .expect("slash tmp");
+        .expect("slash tmp")
+        .with_current_directory(native_path("/workspace"))
+        .expect("current directory");
     assert_eq!(
         PathSelector::root().resolve(&context),
         vec![native_path("/")]
@@ -365,6 +367,10 @@ fn resolution_context_expands_all_runtime_scopes() {
     assert_eq!(
         PathSelector::slash_tmp().resolve(&context),
         vec![native_path("/tmp")]
+    );
+    assert_eq!(
+        context.current_directory(),
+        Some(Path::new(&native_path("/workspace")))
     );
     assert_eq!(
         PathSelector::absolute(native_path("/workspace"))
@@ -661,7 +667,12 @@ fn filesystem_rules_support_carveouts_missing_paths_and_glob_depth() {
         AccessMode::Write,
     )]);
     assert_eq!(
-        exact_mixed_case.access_for(&PathSelector::workspace(".GIT").expect("protected selector")),
+        exact_mixed_case
+            .access_for(
+                &PathSelector::workspace(".GIT").expect("protected selector"),
+                &context,
+            )
+            .expect("protected selector decision"),
         if cfg!(windows) {
             FilesystemDecision::Read
         } else {
@@ -783,7 +794,15 @@ fn filesystem_policy_normalizes_duplicate_rules_conservatively() {
     ]);
     let normalized = policy.normalized().expect("valid policy");
     assert_eq!(normalized.entries().len(), 1);
-    assert_eq!(normalized.access_for(&selector), FilesystemDecision::Deny);
+    let context = PathResolutionContext::new()
+        .with_workspace_root("/workspace")
+        .expect("workspace root");
+    assert_eq!(
+        normalized
+            .access_for(&selector, &context)
+            .expect("selector decision"),
+        FilesystemDecision::Deny
+    );
 }
 
 #[test]
@@ -866,25 +885,42 @@ fn filesystem_matching_preserves_posix_case_sensitivity() {
 #[test]
 fn filesystem_modes_have_explicit_access_behavior() {
     let selector = PathSelector::workspace_root();
-    let restricted =
-        FilesystemPolicy::restricted([FilesystemRule::new(selector.clone(), AccessMode::Read)]);
-    assert_eq!(restricted.mode(), FilesystemMode::Restricted);
-    assert_eq!(restricted.access_for(&selector), FilesystemDecision::Read);
-    assert_eq!(
-        restricted.access_for(&PathSelector::minimal()),
-        FilesystemDecision::Deny
-    );
-    assert_eq!(
-        FilesystemPolicy::unrestricted().access_for(&selector),
-        FilesystemDecision::Write
-    );
-    assert_eq!(
-        FilesystemPolicy::external().access_for(&selector),
-        FilesystemDecision::ExternallyEnforced
-    );
     let context = PathResolutionContext::new()
         .with_workspace_root(native_path("/workspace"))
         .expect("workspace root");
+    let restricted =
+        FilesystemPolicy::restricted([FilesystemRule::new(selector.clone(), AccessMode::Read)]);
+    assert_eq!(restricted.mode(), FilesystemMode::Restricted);
+    assert_eq!(
+        restricted
+            .access_for(&selector, &PathResolutionContext::new())
+            .expect("empty context decision"),
+        FilesystemDecision::Deny
+    );
+    assert_eq!(
+        restricted
+            .access_for(&selector, &context)
+            .expect("selector decision"),
+        FilesystemDecision::Read
+    );
+    assert_eq!(
+        restricted
+            .access_for(&PathSelector::minimal(), &context)
+            .expect("selector decision"),
+        FilesystemDecision::Deny
+    );
+    assert_eq!(
+        FilesystemPolicy::unrestricted()
+            .access_for(&selector, &context)
+            .expect("selector decision"),
+        FilesystemDecision::Write
+    );
+    assert_eq!(
+        FilesystemPolicy::external()
+            .access_for(&selector, &context)
+            .expect("selector decision"),
+        FilesystemDecision::ExternallyEnforced
+    );
     assert_eq!(
         FilesystemPolicy::external()
             .access_for_path(Path::new(&native_path("/workspace/file")), &context)
@@ -1529,6 +1565,11 @@ fn built_in_policies_are_documented_and_distinct() {
     let read_only = SandboxPolicy::read_only();
     let workspace = SandboxPolicy::workspace();
     let full_access = SandboxPolicy::full_access();
+    let context = PathResolutionContext::new()
+        .with_root(native_path("/"))
+        .expect("system root")
+        .with_workspace_root(native_path("/workspace"))
+        .expect("workspace root");
 
     assert_eq!(read_only.network().mode(), NetworkMode::Disabled);
     assert_eq!(workspace.network().mode(), NetworkMode::Disabled);
@@ -1550,20 +1591,17 @@ fn built_in_policies_are_documented_and_distinct() {
     assert_eq!(
         workspace
             .filesystem()
-            .access_for(&PathSelector::workspace_root()),
+            .access_for(&PathSelector::workspace_root(), &context)
+            .expect("workspace selector decision"),
         FilesystemDecision::Write
     );
     assert_eq!(
         read_only
             .filesystem()
-            .access_for(&PathSelector::workspace_root()),
+            .access_for(&PathSelector::workspace_root(), &context)
+            .expect("workspace selector decision"),
         FilesystemDecision::Read
     );
-    let context = PathResolutionContext::new()
-        .with_root(native_path("/"))
-        .expect("system root")
-        .with_workspace_root(native_path("/workspace"))
-        .expect("workspace root");
     assert_eq!(
         read_only
             .filesystem()

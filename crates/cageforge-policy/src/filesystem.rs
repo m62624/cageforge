@@ -394,34 +394,39 @@ impl FilesystemPolicy {
         })
     }
 
-    /// Resolves a rule for an exact selector, defaulting to deny in restricted mode.
-    pub fn access_for(&self, selector: &PathSelector) -> FilesystemDecision {
-        let access = match self.mode {
-            FilesystemMode::Unrestricted => AccessMode::Write,
-            FilesystemMode::External => return FilesystemDecision::ExternallyEnforced,
-            FilesystemMode::Restricted => self
-                .entries
-                .iter()
-                .filter_map(|entry| match entry.target() {
-                    FilesystemTarget::Scope(candidate)
-                        if crate::path::selectors_equal(candidate, selector) =>
-                    {
-                        Some(entry.access())
-                    }
-                    FilesystemTarget::Scope(_) | FilesystemTarget::Glob(_) => None,
-                })
-                .reduce(AccessMode::most_restrictive)
-                .unwrap_or(AccessMode::Deny),
-        };
-        if access == AccessMode::Write
-            && selector
-                .path()
-                .is_some_and(|path| self.is_protected_path(path))
-        {
-            FilesystemDecision::Read
-        } else {
-            access.into()
+    /// Resolves a symbolic selector through a caller-provided runtime
+    /// context.
+    ///
+    /// An unresolvable symbolic selector is denied. This context requirement
+    /// prevents a static declaration such as `workspace-root` from being
+    /// mistaken for an actual runtime path.
+    pub fn access_for(
+        &self,
+        selector: &PathSelector,
+        context: &PathResolutionContext,
+    ) -> Result<FilesystemDecision, PolicyError> {
+        if self.mode == FilesystemMode::External {
+            return Ok(FilesystemDecision::ExternallyEnforced);
         }
+        let mut result = None;
+        for path in selector.resolve(context) {
+            let decision = self.access_for_path(&path, context)?;
+            result = Some(match (result, decision) {
+                (Some(FilesystemDecision::Deny), _) | (_, FilesystemDecision::Deny) => {
+                    FilesystemDecision::Deny
+                }
+                (Some(FilesystemDecision::Read), _) | (_, FilesystemDecision::Read) => {
+                    FilesystemDecision::Read
+                }
+                (Some(FilesystemDecision::Write), FilesystemDecision::Write) => {
+                    FilesystemDecision::Write
+                }
+                (None, decision) => decision,
+                (Some(FilesystemDecision::ExternallyEnforced), decision) => decision,
+                (Some(decision), FilesystemDecision::ExternallyEnforced) => decision,
+            });
+        }
+        Ok(result.unwrap_or(FilesystemDecision::Deny))
     }
 
     /// Resolves access for an absolute path using recursive and most-specific matching.

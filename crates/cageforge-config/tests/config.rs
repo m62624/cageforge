@@ -1063,11 +1063,15 @@ inherits = ["left", "right"]
     .expect("diamond inheritance should parse");
 
     let resolved = config.resolve("child").expect("diamond should resolve");
+    let context = cageforge_policy::PathResolutionContext::new()
+        .with_workspace_root("/workspace")
+        .expect("workspace root");
     assert_eq!(
         resolved
             .policy()
             .filesystem()
-            .access_for(&cageforge_policy::PathSelector::workspace_root()),
+            .access_for(&cageforge_policy::PathSelector::workspace_root(), &context,)
+            .expect("workspace selector decision"),
         cageforge_policy::FilesystemDecision::Write
     );
 }

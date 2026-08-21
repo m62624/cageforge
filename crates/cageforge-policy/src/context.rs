@@ -27,6 +27,7 @@ pub struct PathResolutionContext {
     minimal_path_keys: HashSet<NativePathKey>,
     tmpdir: Option<PathBuf>,
     slash_tmp: Option<PathBuf>,
+    current_directory: Option<PathBuf>,
 }
 
 impl PathResolutionContext {
@@ -41,6 +42,7 @@ impl PathResolutionContext {
             minimal_path_keys: HashSet::new(),
             tmpdir: None,
             slash_tmp: None,
+            current_directory: None,
         }
     }
 
@@ -87,6 +89,15 @@ impl PathResolutionContext {
         Ok(self)
     }
 
+    /// Sets the absolute directory used to resolve a relative command cwd.
+    ///
+    /// This is runtime input only; the context never reads the directory or
+    /// changes the process cwd.
+    pub fn with_current_directory(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
+        self.current_directory = Some(validated_absolute(path.into())?);
+        Ok(self)
+    }
+
     /// Returns the configured workspace roots.
     pub fn workspace_roots(&self) -> &[PathBuf] {
         &self.workspace_roots
@@ -110,6 +121,11 @@ impl PathResolutionContext {
     /// Returns the configured conventional `/tmp` directory.
     pub fn slash_tmp(&self) -> Option<&Path> {
         self.slash_tmp.as_deref()
+    }
+
+    /// Returns the absolute directory used for relative command cwd values.
+    pub fn current_directory(&self) -> Option<&Path> {
+        self.current_directory.as_deref()
     }
 }
 

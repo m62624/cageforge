@@ -14,6 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 cageforge-command.workspace = true
+cageforge-path.workspace = true
 cageforge-policy.workspace = true
 cageforge-policy-compose.workspace = true
 thiserror.workspace = true

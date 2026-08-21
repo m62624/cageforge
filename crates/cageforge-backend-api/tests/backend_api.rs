@@ -104,6 +104,12 @@ fn all_capabilities() -> BackendCapabilities {
     ])
 }
 
+fn workspace_context() -> PathResolutionContext {
+    PathResolutionContext::new()
+        .with_workspace_root("/workspace")
+        .expect("valid workspace root")
+}
+
 #[test]
 fn prepares_a_composed_request_without_launching() {
     let (command, sandbox) = effective_request();
@@ -111,7 +117,7 @@ fn prepares_a_composed_request_without_launching() {
     let backend = TestBackend {
         capabilities: all_capabilities(),
     };
-    let prepared = request.prepare_for(&backend).unwrap();
+    let prepared = request.prepare_for(&backend, &workspace_context()).unwrap();
 
     assert_eq!(prepared.command(), &command);
     assert_eq!(prepared.sandbox(), &sandbox);
@@ -124,7 +130,7 @@ fn reports_the_first_missing_capability_deterministically() {
         capabilities: BackendCapabilities::from_capabilities([BackendCapability::CommandExecution]),
     };
     let error = BackendRequest::new(&command, &sandbox)
-        .prepare_for(&backend)
+        .prepare_for(&backend, &workspace_context())
         .unwrap_err();
 
     assert_eq!(
@@ -228,7 +234,7 @@ fn required_capabilities_follow_effective_modes_not_broad_inputs() {
         capabilities: required.clone(),
     };
     BackendRequest::new(&command, &sandbox)
-        .prepare_for(&backend)
+        .prepare_for(&backend, &workspace_context())
         .unwrap();
 }
 
@@ -334,7 +340,7 @@ fn workspace_globs_require_workspace_scope_support() {
         .filter(|capability| *capability != BackendCapability::FilesystemScopes)
         .collect();
     let error = BackendRequest::new(&command, &sandbox)
-        .prepare_for(&TestBackend { capabilities })
+        .prepare_for(&TestBackend { capabilities }, &workspace_context())
         .unwrap_err();
     assert_eq!(
         error,
@@ -390,7 +396,7 @@ fn every_filesystem_scope_kind_requires_its_own_capability() {
             .collect();
         assert_eq!(
             BackendRequest::new(&command, &sandbox)
-                .prepare_for(&TestBackend { capabilities })
+                .prepare_for(&TestBackend { capabilities }, &workspace_context())
                 .unwrap_err(),
             BackendContractError::UnsupportedCapability { capability }
         );
@@ -515,9 +521,12 @@ fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
                  {requested_network_mode:?}/{ceiling_network_mode:?}"
             );
             BackendRequest::new(&command, &sandbox)
-                .prepare_for(&TestBackend {
-                    capabilities: required,
-                })
+                .prepare_for(
+                    &TestBackend {
+                        capabilities: required,
+                    },
+                    &workspace_context(),
+                )
                 .unwrap();
         }
     }
@@ -529,26 +538,28 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
     let backend = TestBackend {
         capabilities: all_capabilities(),
     };
-    let prepared = BackendRequest::new(&command, &sandbox)
-        .prepare_for(&backend)
-        .unwrap();
-
     let base = PathResolutionContext::new()
         .with_workspace_root("/workspace")
         .unwrap()
         .with_workspace_root("/outside")
         .unwrap();
-    let context = prepared.path_context(&base).unwrap();
-    assert_eq!(context.workspace_roots(), &[PathBuf::from("/workspace")]);
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&backend, &base)
+        .unwrap();
+
+    assert_eq!(
+        prepared.path_context().workspace_roots(),
+        &[PathBuf::from("/workspace")]
+    );
     assert_eq!(
         prepared
-            .filesystem_access_for_path(std::path::Path::new("/workspace/.git/config"), &context,)
+            .filesystem_access_for_path(std::path::Path::new("/workspace/.git/config"))
             .unwrap(),
         FilesystemDecision::Read
     );
     assert_eq!(
         prepared
-            .filesystem_access_for(&PathSelector::workspace_root(), &context)
+            .filesystem_access_for(&PathSelector::workspace_root())
             .unwrap(),
         FilesystemDecision::Write
     );
@@ -597,6 +608,121 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
 }
 
 #[test]
+fn preflight_rejects_a_working_directory_outside_the_effective_filesystem() {
+    let requested = cageforge_policy::SandboxPolicy::workspace();
+    let environment = EnvironmentSpec::empty();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(
+        CompositionRequest::new(&requested, &environment, &ceiling)
+            .with_workspace_roots([PathBuf::from("/workspace")])
+            .unwrap(),
+    )
+    .unwrap();
+    let command = CommandRequest::new(CommandSpec::new("tool").unwrap())
+        .with_working_directory("/outside")
+        .unwrap()
+        .with_environment(environment)
+        .with_timeout(Duration::from_secs(1));
+    let error = BackendRequest::new(&command, &sandbox)
+        .prepare_for(
+            &TestBackend {
+                capabilities: all_capabilities()
+                    .with(BackendCapability::NetworkDisabled)
+                    .with(BackendCapability::EnvironmentNone),
+            },
+            &workspace_context(),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        BackendContractError::WorkingDirectoryDenied {
+            path: PathBuf::from("/outside"),
+        }
+    );
+}
+
+#[test]
+fn preflight_resolves_and_checks_a_relative_working_directory() {
+    let requested = cageforge_policy::SandboxPolicy::workspace();
+    let environment = EnvironmentSpec::empty();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(
+        CompositionRequest::new(&requested, &environment, &ceiling)
+            .with_workspace_roots([PathBuf::from("/workspace")])
+            .unwrap(),
+    )
+    .unwrap();
+    let command = CommandRequest::new(CommandSpec::new("tool").unwrap())
+        .with_working_directory("src/./nested")
+        .unwrap()
+        .with_environment(environment)
+        .with_timeout(Duration::from_secs(1));
+    let base = workspace_context()
+        .with_current_directory("/workspace")
+        .unwrap();
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(
+            &TestBackend {
+                capabilities: all_capabilities()
+                    .with(BackendCapability::NetworkDisabled)
+                    .with(BackendCapability::EnvironmentNone),
+            },
+            &base,
+        )
+        .unwrap();
+
+    assert_eq!(
+        prepared.working_directory(),
+        Some(std::path::Path::new("/workspace/src/nested"))
+    );
+}
+
+#[test]
+fn preflight_rejects_relative_working_directory_without_runtime_base() {
+    let requested = cageforge_policy::SandboxPolicy::workspace();
+    let environment = EnvironmentSpec::empty();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(
+        CompositionRequest::new(&requested, &environment, &ceiling)
+            .with_workspace_roots([PathBuf::from("/workspace")])
+            .unwrap(),
+    )
+    .unwrap();
+    let command = CommandRequest::new(CommandSpec::new("tool").unwrap())
+        .with_working_directory("src")
+        .unwrap()
+        .with_environment(environment)
+        .with_timeout(Duration::from_secs(1));
+    let error = BackendRequest::new(&command, &sandbox)
+        .prepare_for(
+            &TestBackend {
+                capabilities: all_capabilities()
+                    .with(BackendCapability::NetworkDisabled)
+                    .with(BackendCapability::EnvironmentNone),
+            },
+            &workspace_context(),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        BackendContractError::WorkingDirectoryResolution {
+            path: PathBuf::from("src"),
+        }
+    );
+}
+
+#[test]
 fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceiling() {
     let requested = cageforge_policy::SandboxPolicy::workspace();
     let environment = EnvironmentSpec::empty();
@@ -611,16 +737,13 @@ fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceilin
         CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
     let capabilities = BackendRequest::new(&command, &sandbox).required_capabilities();
     let prepared = BackendRequest::new(&command, &sandbox)
-        .prepare_for(&TestBackend { capabilities })
+        .prepare_for(&TestBackend { capabilities }, &PathResolutionContext::new())
         .unwrap();
 
-    let context = prepared
-        .path_context(&PathResolutionContext::new())
-        .unwrap();
-    assert!(context.workspace_roots().is_empty());
+    assert!(prepared.path_context().workspace_roots().is_empty());
     assert_eq!(
         prepared
-            .filesystem_access_for(&PathSelector::workspace_root(), &context)
+            .filesystem_access_for(&PathSelector::workspace_root())
             .unwrap(),
         FilesystemDecision::Deny
     );
@@ -633,7 +756,7 @@ fn prepared_request_rejects_a_broader_environment_base() {
         capabilities: all_capabilities(),
     };
     let prepared = BackendRequest::new(&command, &sandbox)
-        .prepare_for(&backend)
+        .prepare_for(&backend, &workspace_context())
         .unwrap();
 
     let error = prepared
@@ -654,20 +777,16 @@ fn prepared_request_rejects_a_broader_environment_base() {
 fn prepared_request_reports_typed_policy_evaluation_errors() {
     let (command, sandbox) = effective_request();
     let prepared = BackendRequest::new(&command, &sandbox)
-        .prepare_for(&TestBackend {
-            capabilities: all_capabilities(),
-        })
-        .unwrap();
-    let context = prepared
-        .path_context(
-            &PathResolutionContext::new()
-                .with_workspace_root("/workspace")
-                .unwrap(),
+        .prepare_for(
+            &TestBackend {
+                capabilities: all_capabilities(),
+            },
+            &workspace_context(),
         )
         .unwrap();
 
     let error = prepared
-        .filesystem_access_for_path(std::path::Path::new("relative"), &context)
+        .filesystem_access_for_path(std::path::Path::new("relative"))
         .unwrap_err();
     assert!(matches!(
         error,
@@ -693,7 +812,7 @@ fn local_address_and_missing_path_capabilities_are_required() {
             .collect();
         let backend = TestBackend { capabilities };
         let error = BackendRequest::new(&command, &sandbox)
-            .prepare_for(&backend)
+            .prepare_for(&backend, &workspace_context())
             .unwrap_err();
         assert_eq!(
             error,
@@ -717,7 +836,7 @@ fn every_derived_capability_is_a_hard_preflight_requirement() {
             .collect();
         let backend = TestBackend { capabilities };
         let error = BackendRequest::new(&command, &sandbox)
-            .prepare_for(&backend)
+            .prepare_for(&backend, &workspace_context())
             .unwrap_err();
         assert_eq!(
             error,
@@ -736,7 +855,7 @@ fn rejects_a_command_with_a_different_environment_specification() {
         capabilities: all_capabilities(),
     };
     let error = BackendRequest::new(&command, &sandbox)
-        .prepare_for(&backend)
+        .prepare_for(&backend, &workspace_context())
         .unwrap_err();
 
     assert_eq!(error, BackendContractError::CommandEnvironmentMismatch);

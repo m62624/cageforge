@@ -232,6 +232,11 @@ impl EffectiveSandbox {
                 .with_slash_tmp(path.to_path_buf())
                 .map_err(|source| CompositionError::InvalidPathContext { source })?;
         }
+        if let Some(path) = base.current_directory() {
+            context = context
+                .with_current_directory(path.to_path_buf())
+                .map_err(|source| CompositionError::InvalidPathContext { source })?;
+        }
         Ok(EffectivePathContext::new(
             context,
             self.filesystem.context_identity(),

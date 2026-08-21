@@ -43,7 +43,8 @@ The crate will expose the following independent concepts:
   backends.
 
 `BackendRequest::prepare_for` performs preparation using the capabilities
-advertised by the supplied `SandboxBackend`. The trait itself exposes only
+advertised by the supplied `SandboxBackend` and a backend-supplied runtime
+`PathResolutionContext`. The trait itself exposes only
 capability discovery, so an implementation cannot override the common
 preflight algorithm and validate against a broader, self-selected capability
 set. The API does not define a common process type, async runtime, PTY, signal
@@ -78,7 +79,8 @@ corresponding rule safely.
 
 ## Preflight behavior
 
-Preparation is a synchronous, side-effect-free validation step. It must:
+Preparation is a synchronous, side-effect-free validation step. It receives
+the backend's runtime `PathResolutionContext` and must:
 
 1. verify that the effective policy and command can be represented by the
    backend's capabilities;
@@ -93,12 +95,18 @@ Preparation is a synchronous, side-effect-free validation step. It must:
 6. keep network preparation on the resolved-target path. A hostname-only
    decision is never a connection authorization.
 
+If the command contains a working directory, preparation must evaluate that
+directory against the effective filesystem policy. A backend cannot satisfy
+the `WorkingDirectory` capability by merely passing the path to its process
+launcher; denied directories fail preparation with a typed error.
+
 The prepared request also exposes checked lowering helpers:
-`PreparedBackendRequest::path_context` narrows a backend-supplied runtime
-context through `EffectiveSandbox::path_context`, and
+`PreparedBackendRequest::path_context` returns the runtime context already
+narrowed during `prepare_for`; `PreparedBackendRequest::working_directory`
+returns the command cwd resolved against that context; and
 `PreparedBackendRequest::apply_environment` applies a backend-selected
 `EnvironmentInput`. The prepared request also exposes effective filesystem
-decision helpers that require this narrowed context and the resolved network
+decision helpers using this bound context and the resolved network
 authorization flow, so a backend does not need to manually combine requested
 and ceiling policies. A symbolic filesystem selector with no paths in the
 effective context is denied; it cannot be evaluated against a broader runtime

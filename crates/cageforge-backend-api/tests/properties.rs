@@ -2,7 +2,7 @@ use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendRequest, SandboxBackend,
 };
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
-use cageforge_policy::SandboxPolicy;
+use cageforge_policy::{PathResolutionContext, SandboxPolicy};
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use proptest::prelude::*;
 
@@ -43,7 +43,7 @@ proptest! {
         );
         let backend = PropertyBackend { capabilities };
         prop_assert!(BackendRequest::new(&command, &sandbox)
-            .prepare_for(&backend)
+            .prepare_for(&backend, &PathResolutionContext::new())
             .is_err());
     }
 }
