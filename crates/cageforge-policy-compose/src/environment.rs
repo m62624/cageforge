@@ -16,10 +16,38 @@ use cageforge_command::{
 use crate::CompositionError;
 
 /// An environment transformation constrained by two portable specifications.
+/// The component specifications remain private so a backend can apply only
+/// the composed transformation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveEnvironment {
     requested: EnvironmentSpec,
     ceiling: EnvironmentSpec,
+}
+
+/// The environment features a backend must be able to enforce for one
+/// effective composition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectiveEnvironmentRequirements {
+    base: EnvironmentBase,
+    filters: bool,
+    overrides: bool,
+}
+
+impl EffectiveEnvironmentRequirements {
+    /// Returns the least-permissive effective environment base.
+    pub const fn base(self) -> EnvironmentBase {
+        self.base
+    }
+
+    /// Returns whether include/exclude filters are present.
+    pub const fn filters(self) -> bool {
+        self.filters
+    }
+
+    /// Returns whether set/remove overrides are present.
+    pub const fn overrides(self) -> bool {
+        self.overrides
+    }
 }
 
 impl EffectiveEnvironment {
@@ -32,14 +60,20 @@ impl EffectiveEnvironment {
         least_permissive_base(self.requested.base(), self.ceiling.base())
     }
 
-    /// Returns the requested environment specification.
-    pub fn requested(&self) -> &EnvironmentSpec {
-        &self.requested
+    /// Returns the aggregate environment requirements for backend preflight.
+    pub fn requirements(&self) -> EffectiveEnvironmentRequirements {
+        EffectiveEnvironmentRequirements {
+            base: self.base(),
+            filters: !self.requested.filters().is_empty() || !self.ceiling.filters().is_empty(),
+            overrides: !self.requested.overrides().is_empty()
+                || !self.ceiling.overrides().is_empty(),
+        }
     }
 
-    /// Returns the ceiling environment specification.
-    pub fn ceiling(&self) -> &EnvironmentSpec {
-        &self.ceiling
+    /// Returns whether a command environment is the requested input used for
+    /// this composition.
+    pub fn requested_matches(&self, environment: &EnvironmentSpec) -> bool {
+        self.requested == *environment
     }
 
     /// Applies both environment transformations without allowing the ceiling

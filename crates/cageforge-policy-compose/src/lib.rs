@@ -6,9 +6,10 @@
 //! requested policy and a [`PolicyCeiling`]. It deliberately does not select
 //! a backend, inspect an operating system, start a process, or decide whether
 //! a native backend supports a particular rule. The result keeps both policy
-//! sides available so a later backend can compile the same constraint without
-//! accidentally widening it. Network backends should use the resolved-target
-//! methods and verify the exact address immediately before connecting.
+//! sides internally, but exposes only their combined decisions and aggregate
+//! requirements so a later backend cannot accidentally widen it. Network
+//! backends should use the resolved-target methods and verify the exact address
+//! immediately before connecting.
 //!
 //! # Reading this crate
 //!
@@ -35,8 +36,11 @@ mod ownership;
 pub use cageforge_command::{CoreEnvironment, EnvironmentInput};
 pub use compose::compose;
 pub use context::EffectivePathContext;
-pub use environment::EffectiveEnvironment;
+pub use environment::{EffectiveEnvironment, EffectiveEnvironmentRequirements};
 pub use error::{CompositionBoundary, CompositionError};
-pub use filesystem::EffectiveFilesystemPolicy;
-pub use model::{CompositionRequest, EffectiveNetworkPolicy, EffectiveSandbox, PolicyCeiling};
+pub use filesystem::{EffectiveFilesystemPolicy, EffectiveFilesystemRequirements};
+pub use model::{
+    CompositionRequest, EffectiveNetworkPolicy, EffectiveNetworkRequirements, EffectiveSandbox,
+    PolicyCeiling,
+};
 pub use ownership::ExternalOwner;

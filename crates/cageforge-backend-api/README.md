@@ -51,15 +51,20 @@ backend-selected `EnvironmentInput`. The filesystem decision helpers use that
 same bound context and cannot be given a context from another request. A
 symbolic selector is never evaluated without it. Use
 `authorize_connection` to receive a decision that already combines the
-requested and ceiling sides.
+requested and ceiling sides. Every prepared accessor takes `&backend` and
+checks that it is the same instance used by `prepare_for`.
 
 The returned `PreparedBackendRequest<'_, B>` is bound to the concrete backend
 type `B` whose capabilities were checked. A native lowering method should
 accept `PreparedBackendRequest<'_, Self>` so a handoff prepared for one backend
 implementation cannot be passed to another backend implementation by accident.
-This type binding does not prove that operating-system enforcement exists; the
-backend remains responsible for advertising only stable capabilities it can
-actually enforce.
+It also carries a runtime `BackendIdentity`; every prepared accessor must be
+called with the same backend instance that was passed to `prepare_for`, or it
+returns `BackendContractError::BackendIdentityMismatch`. This prevents two
+instances of one backend type with different enforcement state from sharing a
+prepared handoff. The identity is a caller-managed token, not proof that
+operating-system enforcement exists; the backend remains responsible for
+advertising only stable capabilities it can actually enforce.
 
 When a request needs an unsupported capability, preparation returns
 `BackendContractError::UnsupportedCapability`. The error is matchable by its
@@ -81,9 +86,23 @@ use cageforge_backend_api::{
 
 struct ExampleBackend {
     capabilities: BackendCapabilities,
+    identity: cageforge_backend_api::BackendIdentity,
+}
+
+impl ExampleBackend {
+    fn new(capabilities: BackendCapabilities) -> Self {
+        Self {
+            capabilities,
+            identity: cageforge_backend_api::BackendIdentity::new(),
+        }
+    }
 }
 
 impl SandboxBackend for ExampleBackend {
+    fn identity(&self) -> &cageforge_backend_api::BackendIdentity {
+        &self.identity
+    }
+
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities.clone()
     }

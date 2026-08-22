@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use cageforge_command::{CommandRequest, EnvironmentBase, StdioMode, TimeoutPolicy};
-use cageforge_policy::{
-    AccessMode, DomainMode, FilesystemMode, FilesystemTarget, LocalNetworkAccess, NetworkMode,
-    PathSelector, UnixSocketMode,
-};
+use cageforge_policy::{FilesystemMode, NetworkMode};
 use cageforge_policy_compose::EffectiveSandbox;
 
 use crate::{BackendCapabilities, BackendCapability};
@@ -44,128 +41,92 @@ pub(super) fn add_filesystem_capabilities(
     required: &mut BackendCapabilities,
     sandbox: &EffectiveSandbox,
 ) {
-    let requested = sandbox.filesystem().requested();
-    let ceiling = sandbox.filesystem().ceiling();
-    let mode = match (requested.mode(), ceiling.mode()) {
-        (FilesystemMode::External, FilesystemMode::External) => FilesystemMode::External,
-        (FilesystemMode::Restricted, _) | (_, FilesystemMode::Restricted) => {
-            FilesystemMode::Restricted
-        }
-        (FilesystemMode::Unrestricted, FilesystemMode::Unrestricted) => {
-            FilesystemMode::Unrestricted
-        }
-        (FilesystemMode::External, _) | (_, FilesystemMode::External) => {
-            unreachable!("effective sandbox cannot contain mixed filesystem ownership")
-        }
-    };
+    let requirements = sandbox.filesystem().requirements();
+    let mode = requirements.mode();
     required.capabilities.insert(match mode {
         FilesystemMode::Restricted => BackendCapability::FilesystemRestricted,
         FilesystemMode::Unrestricted => BackendCapability::FilesystemUnrestricted,
         FilesystemMode::External => BackendCapability::FilesystemExternal,
     });
     if sandbox.workspace_roots().is_some() || sandbox.workspace_root_limit().is_some() {
-        add_workspace_scope_capabilities(required);
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemScopes);
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemWorkspaceScopes);
     }
     if mode != FilesystemMode::Restricted {
         return;
     }
-    let has_deny_glob = [requested, ceiling].iter().any(|policy| {
-        policy.entries().iter().any(|rule| {
-            matches!(rule.target(), FilesystemTarget::Glob(_)) && rule.access() == AccessMode::Deny
-        })
-    });
-    if has_deny_glob {
+    if requirements.glob_scan_depth() {
         required
             .capabilities
             .insert(BackendCapability::FilesystemGlobScanDepth);
     }
-    for policy in [requested, ceiling] {
-        if !policy.protected_relative_paths().is_empty() {
-            required
-                .capabilities
-                .insert(BackendCapability::FilesystemProtectedPaths);
-        }
-        for rule in policy.entries() {
-            match rule.target() {
-                FilesystemTarget::Scope(selector) => {
-                    add_selector_capabilities(required, selector);
-                    required
-                        .capabilities
-                        .insert(BackendCapability::FilesystemMissingPathBehavior);
-                }
-                FilesystemTarget::Glob(pattern) => {
-                    required
-                        .capabilities
-                        .insert(BackendCapability::FilesystemGlobs);
-                    if pattern.is_absolute() {
-                        required
-                            .capabilities
-                            .insert(BackendCapability::FilesystemScopes);
-                        required
-                            .capabilities
-                            .insert(BackendCapability::FilesystemAbsoluteScopes);
-                    } else {
-                        add_workspace_scope_capabilities(required);
-                    }
-                }
-            }
-            for selector in rule.read_only_subpaths() {
-                add_selector_capabilities(required, selector);
-            }
-            if !rule.read_only_subpaths().is_empty() {
-                required
-                    .capabilities
-                    .insert(BackendCapability::FilesystemReadOnlySubpaths);
-            }
-        }
+    if requirements.protected_paths() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemProtectedPaths);
     }
-}
-
-fn add_workspace_scope_capabilities(required: &mut BackendCapabilities) {
-    required
-        .capabilities
-        .insert(BackendCapability::FilesystemScopes);
-    required
-        .capabilities
-        .insert(BackendCapability::FilesystemWorkspaceScopes);
-}
-
-fn add_selector_capabilities(required: &mut BackendCapabilities, selector: &PathSelector) {
-    required
-        .capabilities
-        .insert(BackendCapability::FilesystemScopes);
-    let capability = if selector.is_absolute_scope() {
-        BackendCapability::FilesystemAbsoluteScopes
-    } else if selector.is_workspace_scope() {
-        BackendCapability::FilesystemWorkspaceScopes
-    } else if selector.is_root_scope() {
-        BackendCapability::FilesystemRootScopes
-    } else if selector.is_minimal_scope() {
-        BackendCapability::FilesystemMinimalScopes
-    } else if selector.is_tmpdir_scope() {
-        BackendCapability::FilesystemTmpdirScopes
-    } else if selector.is_slash_tmp_scope() {
-        BackendCapability::FilesystemSlashTmpScopes
-    } else {
-        unreachable!("PathSelector has an unrecognized scope kind")
-    };
-    required.capabilities.insert(capability);
+    if requirements.scopes() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemScopes);
+    }
+    if requirements.absolute_scopes() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemAbsoluteScopes);
+    }
+    if requirements.workspace_scopes() || sandbox.workspace_roots().is_some() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemWorkspaceScopes);
+    }
+    if requirements.root_scopes() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemRootScopes);
+    }
+    if requirements.minimal_scopes() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemMinimalScopes);
+    }
+    if requirements.tmpdir_scopes() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemTmpdirScopes);
+    }
+    if requirements.slash_tmp_scopes() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemSlashTmpScopes);
+    }
+    if requirements.globs() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemGlobs);
+    }
+    if requirements.read_only_subpaths() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemReadOnlySubpaths);
+    }
+    if requirements.missing_path_behavior() {
+        required
+            .capabilities
+            .insert(BackendCapability::FilesystemMissingPathBehavior);
+    }
 }
 
 pub(super) fn add_network_capabilities(
     required: &mut BackendCapabilities,
     sandbox: &EffectiveSandbox,
 ) {
-    let requested = sandbox.network().requested();
-    let ceiling = sandbox.network().ceiling();
-    let mode = match (requested.mode(), ceiling.mode()) {
-        (NetworkMode::External, NetworkMode::External) => NetworkMode::External,
-        (NetworkMode::Disabled, _) | (_, NetworkMode::Disabled) => NetworkMode::Disabled,
-        (NetworkMode::Enabled, NetworkMode::Enabled) => NetworkMode::Enabled,
-        (NetworkMode::External, _) | (_, NetworkMode::External) => {
-            unreachable!("effective sandbox cannot contain mixed network ownership")
-        }
-    };
+    let requirements = sandbox.network().requirements();
+    let mode = requirements.mode();
     required.capabilities.insert(match mode {
         NetworkMode::Disabled => BackendCapability::NetworkDisabled,
         NetworkMode::Enabled => BackendCapability::NetworkEnabled,
@@ -174,27 +135,25 @@ pub(super) fn add_network_capabilities(
     if mode != NetworkMode::Enabled {
         return;
     }
-    required
-        .capabilities
-        .insert(BackendCapability::NetworkResolvedTargets);
-    for policy in [requested, ceiling] {
-        if !policy.domains().is_empty() || policy.domain_mode() != DomainMode::Enabled {
-            required
-                .capabilities
-                .insert(BackendCapability::NetworkDomainRules);
-        }
-        if policy.local_network_access() == LocalNetworkAccess::Deny {
-            required
-                .capabilities
-                .insert(BackendCapability::NetworkLocalAddressRestrictions);
-        }
-        if !policy.unix_sockets().is_empty()
-            || policy.unix_socket_mode() != UnixSocketMode::Disabled
-        {
-            required
-                .capabilities
-                .insert(BackendCapability::NetworkUnixSockets);
-        }
+    if requirements.resolved_targets() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkResolvedTargets);
+    }
+    if requirements.domain_rules() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkDomainRules);
+    }
+    if requirements.local_address_restrictions() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkLocalAddressRestrictions);
+    }
+    if requirements.unix_sockets() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkUnixSockets);
     }
 }
 
@@ -202,23 +161,18 @@ pub(super) fn add_environment_capabilities(
     required: &mut BackendCapabilities,
     sandbox: &EffectiveSandbox,
 ) {
-    required
-        .capabilities
-        .insert(match sandbox.environment().base() {
-            EnvironmentBase::All => BackendCapability::EnvironmentAll,
-            EnvironmentBase::Core => BackendCapability::EnvironmentCore,
-            EnvironmentBase::None => BackendCapability::EnvironmentNone,
-        });
-    if !sandbox.environment().requested().filters().is_empty()
-        || !sandbox.environment().ceiling().filters().is_empty()
-    {
+    let requirements = sandbox.environment().requirements();
+    required.capabilities.insert(match requirements.base() {
+        EnvironmentBase::All => BackendCapability::EnvironmentAll,
+        EnvironmentBase::Core => BackendCapability::EnvironmentCore,
+        EnvironmentBase::None => BackendCapability::EnvironmentNone,
+    });
+    if requirements.filters() {
         required
             .capabilities
             .insert(BackendCapability::EnvironmentFilters);
     }
-    if !sandbox.environment().requested().overrides().is_empty()
-        || !sandbox.environment().ceiling().overrides().is_empty()
-    {
+    if requirements.overrides() {
         required
             .capabilities
             .insert(BackendCapability::EnvironmentOverrides);

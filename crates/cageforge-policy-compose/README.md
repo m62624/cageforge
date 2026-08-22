@@ -10,8 +10,10 @@
 portable `PolicyCeiling`. It is the reusable policy-limiting layer for projects
 that need to apply an outer safety boundary before execution.
 
-The result keeps the requested and ceiling policies as separate constraints.
-Filesystem and network decisions are allowed only when both sides allow them;
+The result keeps the requested and ceiling policies as separate internal
+constraints. Public effective APIs expose only combined decisions and
+aggregate backend requirements, so a consumer cannot select the requested
+side and accidentally bypass the ceiling. Filesystem and network decisions are allowed only when both sides allow them;
 external enforcement is accepted only when both sides delegate that boundary
 to an external owner. Environment rules are applied in sequence and cannot
 add a variable that was absent from the requested result. Workspace roots must
@@ -114,8 +116,9 @@ assert_ne!(ExternalOwner::new(), owner);
   effective filesystem path evaluation, so a workspace-root ceiling cannot be
   silently replaced by a broader runtime context.
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
-  that are constrained by both policies and retain both inputs for backend
-  lowering. Filesystem selector queries require the
+  constrained by both policies plus aggregate requirements for capability
+  negotiation; they do not expose either input policy as a separate backend
+  choice. Filesystem selector queries require the
   `EffectivePathContext` created by `EffectiveSandbox::path_context`; its raw
   `PathResolutionContext` is not exposed. The context is bound to that
   composed result and cannot be reused with another one. Use its safe accessors

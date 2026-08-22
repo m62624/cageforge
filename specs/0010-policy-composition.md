@@ -28,10 +28,10 @@ layer without making this crate depend on any of them.
 
 `compose(CompositionRequest)` validates both policies and returns an
 `EffectiveSandbox`. The result retains the requested and ceiling policies as
-private components with read-only accessors. It does not concatenate policy
-rules into a new allowlist: that would be unsafe because a restricted policy
-with no entries means deny-all, and concatenating it with another policy could
-accidentally grant access.
+private components and exposes only combined decision and requirement
+accessors. It does not concatenate policy rules into a new allowlist: that
+would be unsafe because a restricted policy with no entries means deny-all,
+and concatenating it with another policy could accidentally grant access.
 
 - Filesystem decisions are evaluated against both policies. `Deny` is stronger
   than `Read`, and `Read` is stronger than `Write`.
@@ -69,16 +69,18 @@ with a different policy.
   path, a write request below it cannot become writable through composition.
   A dangerous opt-out is effective only if both input policies opt out.
 
-The effective types expose the two component policies to a future backend
-lowering layer. Composition first normalizes both `SandboxPolicy` values, so
-the retained filesystem entries have deterministic duplicate-target semantics.
+The effective types retain the two component policies internally, but do not
+expose either side as a public backend choice. They expose only decisions that
+already combine both sides and aggregate requirements for capability
+negotiation. Composition first normalizes both `SandboxPolicy` values, so the
+retained filesystem entries have deterministic duplicate-target semantics.
 `EffectiveFilesystemPolicy::glob_scan_max_depth` combines the
 depth requirements conservatively: the larger bounded depth wins, and any
-relevant unbounded deny-glob makes the result unbounded. The backend must still
-preserve both component policies, including their rules and protected paths;
-the composer does not concatenate them into an unsafe allowlist. Backend
-capability checks and typed unsupported-capability errors belong to
-`cageforge-backend-api`.
+relevant unbounded deny-glob makes the result unbounded. The backend must
+consume the combined decisions and all reported requirements; it cannot select
+one private component policy. The composer does not concatenate them into an
+unsafe allowlist. Backend capability checks and typed unsupported-capability
+errors belong to `cageforge-backend-api`.
 
 ## Ownership boundary
 
@@ -87,7 +89,8 @@ capability checks and typed unsupported-capability errors belong to
 - monotonic filesystem, network, environment, and workspace-root narrowing;
 - external-enforcement owner-proof checks;
 - typed composition and policy-evaluation errors;
-- keeping the inputs available for later backend lowering;
+- exposing combined decisions and aggregate backend requirements for later
+  lowering;
 - construction of a workspace-root-constrained runtime path context.
 
 Effective symbolic filesystem selectors are evaluated only with that narrowed

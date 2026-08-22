@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use cageforge_backend_api::{
-    BackendCapabilities, BackendCapability, BackendContractError, BackendRequest, SandboxBackend,
+    BackendCapabilities, BackendCapability, BackendContractError, BackendIdentity, BackendRequest,
+    SandboxBackend,
 };
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
 use cageforge_policy::{
@@ -15,6 +16,7 @@ use cageforge_policy_compose::{
     CompositionError, CompositionRequest, CoreEnvironment, EnvironmentInput, PolicyCeiling, compose,
 };
 use pretty_assertions::assert_eq;
+use std::sync::OnceLock;
 
 #[cfg(windows)]
 fn native_path(path: &str) -> PathBuf {
@@ -36,6 +38,35 @@ struct TestBackend {
 }
 
 impl SandboxBackend for TestBackend {
+    fn identity(&self) -> &BackendIdentity {
+        static IDENTITY: OnceLock<BackendIdentity> = OnceLock::new();
+        IDENTITY.get_or_init(BackendIdentity::new)
+    }
+
+    fn capabilities(&self) -> BackendCapabilities {
+        self.capabilities.clone()
+    }
+}
+
+struct InstanceBackend {
+    capabilities: BackendCapabilities,
+    identity: BackendIdentity,
+}
+
+impl InstanceBackend {
+    fn new(capabilities: BackendCapabilities) -> Self {
+        Self {
+            capabilities,
+            identity: BackendIdentity::new(),
+        }
+    }
+}
+
+impl SandboxBackend for InstanceBackend {
+    fn identity(&self) -> &BackendIdentity {
+        &self.identity
+    }
+
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities.clone()
     }
@@ -142,8 +173,24 @@ fn prepares_a_composed_request_without_launching() {
     };
     let prepared = request.prepare_for(&backend, &workspace_context()).unwrap();
 
-    assert_eq!(prepared.command_spec(), command.command());
-    assert_eq!(prepared.sandbox(), &sandbox);
+    assert_eq!(prepared.command_spec(&backend).unwrap(), command.command());
+    assert_eq!(prepared.sandbox(&backend).unwrap(), &sandbox);
+}
+
+#[test]
+fn prepared_request_rejects_a_different_backend_instance() {
+    let (command, sandbox) = effective_request();
+    let backend = InstanceBackend::new(all_capabilities());
+    let unrelated_backend = InstanceBackend::new(all_capabilities());
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&backend, &workspace_context())
+        .unwrap();
+
+    assert_eq!(
+        prepared.command_spec(&unrelated_backend).unwrap_err(),
+        BackendContractError::BackendIdentityMismatch
+    );
+    assert_eq!(prepared.command_spec(&backend).unwrap(), command.command());
 }
 
 #[test]
@@ -567,18 +614,18 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
         .unwrap();
 
     assert_eq!(
-        prepared.path_context().workspace_roots(),
+        prepared.path_context(&backend).unwrap().workspace_roots(),
         &[native_path("/workspace")]
     );
     assert_eq!(
         prepared
-            .filesystem_access_for_path(native_path("/workspace/.git/config").as_path())
+            .filesystem_access_for_path(&backend, native_path("/workspace/.git/config").as_path())
             .unwrap(),
         FilesystemDecision::Read
     );
     assert_eq!(
         prepared
-            .filesystem_access_for(&PathSelector::workspace_root())
+            .filesystem_access_for(&backend, &PathSelector::workspace_root())
             .unwrap(),
         FilesystemDecision::Write
     );
@@ -587,25 +634,33 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
     let target = ResolvedNetworkTarget::new("example.com", [public_address]).unwrap();
     assert_eq!(
         prepared
-            .network_decision_for_domain_with_resolved_ips("example.com", &[public_address.ip()],)
+            .network_decision_for_domain_with_resolved_ips(
+                &backend,
+                "example.com",
+                &[public_address.ip()],
+            )
             .unwrap(),
         NetworkDecision::Allow
     );
     assert!(matches!(
         prepared
-            .authorize_connection(&target, public_address)
+            .authorize_connection(&backend, &target, public_address)
             .unwrap(),
         ConnectionAuthorization::Allowed(_)
     ));
     assert_eq!(
         prepared
-            .authorize_connection(&target, SocketAddr::new(public_address.ip(), 8443))
+            .authorize_connection(
+                &backend,
+                &target,
+                SocketAddr::new(public_address.ip(), 8443),
+            )
             .unwrap(),
         ConnectionAuthorization::Denied
     );
     assert_eq!(
         prepared
-            .network_decision_for_unix_socket(native_path("/run/example.sock").as_path())
+            .network_decision_for_unix_socket(&backend, native_path("/run/example.sock").as_path(),)
             .unwrap(),
         NetworkDecision::Allow
     );
@@ -616,7 +671,7 @@ fn prepared_request_narrows_paths_and_applies_backend_selected_environment() {
     ])
     .expect("valid core environment");
     let environment = prepared
-        .apply_environment(EnvironmentInput::core(core))
+        .apply_environment(&backend, EnvironmentInput::core(core))
         .unwrap();
     assert_eq!(
         environment,
@@ -687,19 +742,17 @@ fn preflight_resolves_and_checks_a_relative_working_directory() {
     let base = workspace_context()
         .with_current_directory(native_path("/workspace"))
         .unwrap();
+    let backend = TestBackend {
+        capabilities: all_capabilities()
+            .with(BackendCapability::NetworkDisabled)
+            .with(BackendCapability::EnvironmentNone),
+    };
     let prepared = BackendRequest::new(&command, &sandbox)
-        .prepare_for(
-            &TestBackend {
-                capabilities: all_capabilities()
-                    .with(BackendCapability::NetworkDisabled)
-                    .with(BackendCapability::EnvironmentNone),
-            },
-            &base,
-        )
+        .prepare_for(&backend, &base)
         .unwrap();
 
     assert_eq!(
-        prepared.working_directory(),
+        prepared.working_directory(&backend).unwrap(),
         native_path("/workspace/src/nested").as_path()
     );
 }
@@ -790,19 +843,17 @@ fn preflight_checks_and_returns_an_implicit_working_directory() {
     let command = CommandRequest::new(CommandSpec::new("tool").unwrap())
         .with_environment(environment)
         .with_timeout(Duration::from_secs(1));
+    let backend = TestBackend {
+        capabilities: all_capabilities()
+            .with(BackendCapability::NetworkDisabled)
+            .with(BackendCapability::EnvironmentNone),
+    };
     let prepared = BackendRequest::new(&command, &sandbox)
-        .prepare_for(
-            &TestBackend {
-                capabilities: all_capabilities()
-                    .with(BackendCapability::NetworkDisabled)
-                    .with(BackendCapability::EnvironmentNone),
-            },
-            &workspace_context(),
-        )
+        .prepare_for(&backend, &workspace_context())
         .unwrap();
 
     assert_eq!(
-        prepared.working_directory(),
+        prepared.working_directory(&backend).unwrap(),
         native_path("/workspace").as_path()
     );
 }
@@ -821,9 +872,12 @@ fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceilin
     let command =
         CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
     let capabilities = BackendRequest::new(&command, &sandbox).required_capabilities();
+    let backend = TestBackend {
+        capabilities: capabilities.clone(),
+    };
     let prepared = BackendRequest::new(&command, &sandbox)
         .prepare_for(
-            &TestBackend { capabilities },
+            &backend,
             &PathResolutionContext::new()
                 .with_root(native_path("/"))
                 .unwrap()
@@ -832,10 +886,16 @@ fn symbolic_filesystem_queries_cannot_restore_workspace_roots_outside_the_ceilin
         )
         .unwrap();
 
-    assert!(prepared.path_context().workspace_roots().is_empty());
+    assert!(
+        prepared
+            .path_context(&backend)
+            .unwrap()
+            .workspace_roots()
+            .is_empty()
+    );
     assert_eq!(
         prepared
-            .filesystem_access_for(&PathSelector::workspace_root())
+            .filesystem_access_for(&backend, &PathSelector::workspace_root())
             .unwrap(),
         FilesystemDecision::Deny
     );
@@ -853,6 +913,7 @@ fn prepared_request_rejects_a_broader_environment_base() {
 
     let error = prepared
         .apply_environment(
+            &backend,
             EnvironmentInput::all([("PATH".into(), "/bin".into())])
                 .expect("valid environment input"),
         )
@@ -881,7 +942,12 @@ fn prepared_request_reports_typed_policy_evaluation_errors() {
         .unwrap();
 
     let error = prepared
-        .filesystem_access_for_path(std::path::Path::new("relative"))
+        .filesystem_access_for_path(
+            &TestBackend {
+                capabilities: all_capabilities(),
+            },
+            std::path::Path::new("relative"),
+        )
         .unwrap_err();
     assert!(matches!(
         error,

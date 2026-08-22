@@ -165,7 +165,7 @@ fn composition_canonicalizes_duplicate_filesystem_targets_before_backend_handoff
         )
         .expect("effective context");
 
-    assert_eq!(effective.filesystem().requested().entries().len(), 1);
+    assert!(effective.filesystem().requirements().scopes());
     assert_eq!(
         effective
             .filesystem()
@@ -452,8 +452,13 @@ fn environment_is_narrowed_in_sequence_without_ceiling_additions() {
         effective.environment().base(),
         cageforge_command::EnvironmentBase::Core
     );
-    assert_eq!(effective.environment().requested(), &requested_environment);
-    assert_eq!(effective.environment().ceiling(), ceiling.environment());
+    let requirements = effective.environment().requirements();
+    assert_eq!(
+        requirements.base(),
+        cageforge_command::EnvironmentBase::Core
+    );
+    assert!(requirements.filters());
+    assert!(requirements.overrides());
 
     let error = effective
         .environment()
@@ -661,7 +666,7 @@ fn custom_protected_paths_remain_read_only_after_composition() {
 }
 
 #[test]
-fn composes_unix_socket_allowlists_and_exposes_component_policies() {
+fn composes_unix_socket_allowlists_without_exposing_component_policies() {
     let requested_network = NetworkPolicy::enabled()
         .with_unix_socket_mode(UnixSocketMode::Restricted)
         .with_unix_socket("/tmp/allowed", DomainAccess::Allow)
@@ -677,13 +682,15 @@ fn composes_unix_socket_allowlists_and_exposes_component_policies() {
     ))
     .expect("valid policies compose");
 
-    assert_eq!(effective.filesystem().requested(), requested.filesystem());
     assert_eq!(
-        effective.filesystem().ceiling(),
-        ceiling.policy().filesystem()
+        effective.filesystem().requirements().mode(),
+        cageforge_policy::FilesystemMode::Unrestricted
     );
-    assert_eq!(effective.network().requested(), requested.network());
-    assert_eq!(effective.network().ceiling(), ceiling.policy().network());
+    assert_eq!(
+        effective.network().requirements().mode(),
+        cageforge_policy::NetworkMode::Enabled
+    );
+    assert!(effective.network().requirements().unix_sockets());
     assert_eq!(
         effective
             .network()

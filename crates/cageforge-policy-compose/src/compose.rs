@@ -111,8 +111,8 @@ impl EffectiveFilesystemPolicy {
         if !self.owns_context(context) {
             return Err(CompositionError::PathContextMismatch);
         }
-        if self.requested().mode() == FilesystemMode::External
-            && self.ceiling().mode() == FilesystemMode::External
+        if self.requested_policy().mode() == FilesystemMode::External
+            && self.ceiling_policy().mode() == FilesystemMode::External
         {
             return Ok(FilesystemDecision::ExternallyEnforced);
         }
@@ -138,14 +138,14 @@ impl EffectiveFilesystemPolicy {
             return Err(CompositionError::PathContextMismatch);
         }
         let requested = self
-            .requested()
+            .requested_policy()
             .access_for_path(path, context.raw())
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Filesystem,
                 source,
             })?;
         let ceiling = self
-            .ceiling()
+            .ceiling_policy()
             .access_for_path(path, context.raw())
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Filesystem,
@@ -159,14 +159,14 @@ impl EffectiveNetworkPolicy {
     /// Evaluates a domain against both policies.
     pub fn decision_for_domain(&self, domain: &str) -> Result<NetworkDecision, CompositionError> {
         let requested = self
-            .requested()
+            .requested_policy()
             .decision_for_domain(domain)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
                 source,
             })?;
         let ceiling = self
-            .ceiling()
+            .ceiling_policy()
             .decision_for_domain(domain)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
@@ -183,14 +183,14 @@ impl EffectiveNetworkPolicy {
         resolved_ips: &[IpAddr],
     ) -> Result<NetworkDecision, CompositionError> {
         let requested = self
-            .requested()
+            .requested_policy()
             .decision_for_domain_with_resolved_ips(domain, resolved_ips)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
                 source,
             })?;
         let ceiling = self
-            .ceiling()
+            .ceiling_policy()
             .decision_for_domain_with_resolved_ips(domain, resolved_ips)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
@@ -210,14 +210,14 @@ impl EffectiveNetworkPolicy {
         connected: SocketAddr,
     ) -> Result<ConnectionAuthorization, CompositionError> {
         let requested = self
-            .requested()
+            .requested_policy()
             .authorize_connection(target, connected)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
                 source,
             })?;
         let ceiling = self
-            .ceiling()
+            .ceiling_policy()
             .authorize_connection(target, connected)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
@@ -232,14 +232,14 @@ impl EffectiveNetworkPolicy {
         socket: &Path,
     ) -> Result<NetworkDecision, CompositionError> {
         let requested = self
-            .requested()
+            .requested_policy()
             .decision_for_unix_socket(socket)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,
                 source,
             })?;
         let ceiling = self
-            .ceiling()
+            .ceiling_policy()
             .decision_for_unix_socket(socket)
             .map_err(|source| CompositionError::PolicyEvaluation {
                 boundary: CompositionBoundary::Network,

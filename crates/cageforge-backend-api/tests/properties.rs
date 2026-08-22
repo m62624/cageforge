@@ -1,11 +1,12 @@
 use cageforge_backend_api::{
-    BackendCapabilities, BackendCapability, BackendRequest, SandboxBackend,
+    BackendCapabilities, BackendCapability, BackendIdentity, BackendRequest, SandboxBackend,
 };
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
 use cageforge_policy::{PathResolutionContext, SandboxPolicy};
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use proptest::prelude::*;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 #[cfg(windows)]
 fn native_path(path: &str) -> PathBuf {
@@ -23,6 +24,11 @@ struct PropertyBackend {
 }
 
 impl SandboxBackend for PropertyBackend {
+    fn identity(&self) -> &BackendIdentity {
+        static IDENTITY: OnceLock<BackendIdentity> = OnceLock::new();
+        IDENTITY.get_or_init(BackendIdentity::new)
+    }
+
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities.clone()
     }

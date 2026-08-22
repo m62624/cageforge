@@ -42,7 +42,8 @@ The crate will expose the following independent concepts:
 - `BackendRequest`: the command and effective sandbox submitted for preflight;
 - `PreparedBackendRequest<'_, B>`: an opaque, validated handoff produced only
   after preflight succeeds and type-bound to the `SandboxBackend` `B` whose
-  capabilities were checked;
+  capabilities were checked, with a runtime identity check for the exact
+  backend instance;
 - `BackendContractError`: common failures such as unsupported capabilities,
   invalid runtime context, or invalid environment preparation; and
 - `SandboxBackend`: a synchronous preparation trait implemented by native
@@ -57,14 +58,15 @@ set. The API does not define a common process type, async runtime, PTY, signal
 model, cancellation model, or process-tree lifecycle. A native backend owns
 those concerns in its own API and error type.
 
-The prepared handoff is bound to the concrete backend type `B` at compile
-time. A native lowering method should accept `PreparedBackendRequest<'_, Self>`
-rather than an unbound prepared value. This prevents a request preflighted
-against one backend implementation type from being passed accidentally to
-another backend implementation with a different capability contract. The
-backend's advertised capabilities must also remain stable for the lifetime of
-a prepared handoff; the type binding is not a runtime proof that a backend's
-operating-system enforcement exists.
+The prepared handoff is bound to the concrete backend type `B` at compile time
+and stores a runtime `BackendIdentity` for the exact instance passed to
+`prepare_for`. A native lowering method should accept
+`PreparedBackendRequest<'_, Self>` and pass that same instance to every
+accessor. This prevents a request preflighted against one backend instance
+from being consumed by another instance of the same type with different
+capabilities or enforcement state. The backend's advertised capabilities must
+also remain stable for the lifetime of a prepared handoff; the identity token
+is not proof that operating-system enforcement exists.
 
 Capability values must use enums or named types rather than ambiguous boolean
 parameters. The capability vocabulary must cover the portable inputs that can
@@ -105,8 +107,9 @@ the backend's runtime `PathResolutionContext` and must:
    environment request;
 4. reject unsupported filesystem rules with a typed error instead of silently
    dropping or widening them;
-5. preserve both policy sides, including protected paths and deny globs, for
-   native lowering; and
+5. consume only the combined effective decisions and aggregate requirements
+   exposed by `EffectiveSandbox`; private requested/ceiling policies are never
+   a backend choice; and
 6. keep network preparation on the resolved-target path. A hostname-only
    decision is never a connection authorization.
 

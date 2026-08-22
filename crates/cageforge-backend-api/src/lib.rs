@@ -25,6 +25,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cageforge_command::{CommandRequest, CommandSpec, StdioSpec, TimeoutPolicy};
 use cageforge_path::normalize_lexical_path;
@@ -215,7 +216,7 @@ impl<'a> BackendRequest<'a> {
         backend: &B,
         base_context: &PathResolutionContext,
     ) -> Result<PreparedBackendRequest<'a, B>, BackendContractError> {
-        self.validate::<B>(&backend.capabilities(), base_context)
+        self.validate::<B>(&backend.capabilities(), backend.identity(), base_context)
     }
 
     /// Computes the capabilities required by this request.
@@ -237,9 +238,14 @@ impl<'a> BackendRequest<'a> {
     fn validate<B: SandboxBackend>(
         self,
         capabilities: &BackendCapabilities,
+        backend_identity: &BackendIdentity,
         base_context: &PathResolutionContext,
     ) -> Result<PreparedBackendRequest<'a, B>, BackendContractError> {
-        if self.command.environment() != self.sandbox.environment().requested() {
+        if !self
+            .sandbox
+            .environment()
+            .requested_matches(self.command.environment())
+        {
             return Err(BackendContractError::CommandEnvironmentMismatch);
         }
         for capability in self.required_capabilities().iter().copied() {
@@ -286,10 +292,50 @@ impl<'a> BackendRequest<'a> {
             request: self,
             path_context,
             working_directory,
+            backend_identity: backend_identity.clone(),
             backend: PhantomData,
         })
     }
 }
+
+/// Identity of one backend enforcement instance.
+///
+/// A backend must store one identity for the lifetime of its enforcement
+/// state and return a reference to it from [`SandboxBackend::identity`]. Two
+/// backend instances may share an identity only when they intentionally share
+/// the same capability and enforcement state. This is an identity token, not
+/// proof that operating-system enforcement exists.
+#[derive(Clone)]
+pub struct BackendIdentity(Arc<()>);
+
+impl BackendIdentity {
+    /// Creates a new backend-instance identity.
+    pub fn new() -> Self {
+        Self(Arc::new(()))
+    }
+}
+
+impl Default for BackendIdentity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for BackendIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BackendIdentity")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for BackendIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for BackendIdentity {}
 
 /// A request that passed backend capability preflight.
 ///
@@ -298,23 +344,35 @@ impl<'a> BackendRequest<'a> {
 /// filesystem, network, environment, and lifecycle contracts.
 ///
 /// The `B` type parameter is a type-level binding to the backend whose
-/// capabilities were checked during preparation. Native lowering should accept
-/// `PreparedBackendRequest<'_, Self>` so a prepared request cannot be handed to
-/// a different backend implementation by accident.
+/// capabilities were checked during preparation. The handoff also stores a
+/// runtime [`BackendIdentity`], so every accessor verifies the exact backend
+/// instance that was checked. Native lowering should accept
+/// `PreparedBackendRequest<'_, Self>` and pass the same backend instance to its
+/// accessors.
 ///
 /// ```compile_fail
-/// use cageforge_backend_api::{BackendCapabilities, PreparedBackendRequest, SandboxBackend};
+/// use cageforge_backend_api::{
+///     BackendCapabilities, BackendIdentity, PreparedBackendRequest, SandboxBackend,
+/// };
 ///
-/// struct LinuxBackend;
-/// struct WindowsBackend;
+/// struct LinuxBackend(BackendIdentity);
+/// struct WindowsBackend(BackendIdentity);
 ///
 /// impl SandboxBackend for LinuxBackend {
+///     fn identity(&self) -> &BackendIdentity {
+///         &self.0
+///     }
+///
 ///     fn capabilities(&self) -> BackendCapabilities {
 ///         BackendCapabilities::new()
 ///     }
 /// }
 ///
 /// impl SandboxBackend for WindowsBackend {
+///     fn identity(&self) -> &BackendIdentity {
+///         &self.0
+///     }
+///
 ///     fn capabilities(&self) -> BackendCapabilities {
 ///         BackendCapabilities::new()
 ///     }
@@ -330,6 +388,7 @@ pub struct PreparedBackendRequest<'a, B: SandboxBackend> {
     request: BackendRequest<'a>,
     path_context: EffectivePathContext,
     working_directory: PathBuf,
+    backend_identity: BackendIdentity,
     backend: PhantomData<fn() -> B>,
 }
 
@@ -339,6 +398,7 @@ impl<'a, B: SandboxBackend> Clone for PreparedBackendRequest<'a, B> {
             request: self.request,
             path_context: self.path_context.clone(),
             working_directory: self.working_directory.clone(),
+            backend_identity: self.backend_identity.clone(),
             backend: PhantomData,
         }
     }
@@ -356,24 +416,35 @@ impl<'a, B: SandboxBackend> fmt::Debug for PreparedBackendRequest<'a, B> {
 }
 
 impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
+    fn ensure_backend(&self, backend: &B) -> Result<(), BackendContractError> {
+        if self.backend_identity == *backend.identity() {
+            Ok(())
+        } else {
+            Err(BackendContractError::BackendIdentityMismatch)
+        }
+    }
+
     /// Returns the validated executable and argv values.
     ///
     /// The working directory is intentionally exposed separately through
     /// [`Self::working_directory`]. A backend must not recover or inherit the
     /// original optional cwd from a raw [`CommandRequest`] after preflight.
-    pub fn command_spec(&self) -> &'a CommandSpec {
-        self.request.command().command()
+    pub fn command_spec(&self, backend: &B) -> Result<&'a CommandSpec, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(self.request.command().command())
     }
 
     /// Returns the validated effective sandbox.
-    pub const fn sandbox(&self) -> &'a EffectiveSandbox {
-        self.request.sandbox()
+    pub fn sandbox(&self, backend: &B) -> Result<&'a EffectiveSandbox, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(self.request.sandbox())
     }
 
     /// Returns the runtime path context that was narrowed and checked during
     /// [`BackendRequest::prepare_for`].
-    pub fn path_context(&self) -> &EffectivePathContext {
-        &self.path_context
+    pub fn path_context(&self, backend: &B) -> Result<&EffectivePathContext, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(&self.path_context)
     }
 
     /// Returns the effective working directory resolved during preflight.
@@ -381,18 +452,21 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// This is always present. When the command did not specify an explicit
     /// directory, it is the runtime current directory supplied in the path
     /// context and checked against the effective filesystem policy.
-    pub fn working_directory(&self) -> &Path {
-        &self.working_directory
+    pub fn working_directory(&self, backend: &B) -> Result<&Path, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(&self.working_directory)
     }
 
     /// Returns the validated standard-stream routing.
-    pub fn stdio(&self) -> StdioSpec {
-        self.request.command().stdio()
+    pub fn stdio(&self, backend: &B) -> Result<StdioSpec, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(self.request.command().stdio())
     }
 
     /// Returns the validated timeout intent.
-    pub fn timeout_policy(&self) -> TimeoutPolicy {
-        self.request.command().timeout_policy()
+    pub fn timeout_policy(&self, backend: &B) -> Result<TimeoutPolicy, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(self.request.command().timeout_policy())
     }
 
     /// Applies the effective environment to a backend-selected input base.
@@ -401,9 +475,12 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// selected the platform's conservative core environment.
     pub fn apply_environment(
         &self,
+        backend: &B,
         input: EnvironmentInput,
     ) -> Result<BTreeMap<OsString, OsString>, BackendContractError> {
-        self.sandbox()
+        self.ensure_backend(backend)?;
+        self.request
+            .sandbox()
             .environment()
             .apply_to(input)
             .map_err(|source| BackendContractError::EnvironmentPreparation { source })
@@ -412,9 +489,12 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// Evaluates one absolute path against both effective filesystem policies.
     pub fn filesystem_access_for_path(
         &self,
+        backend: &B,
         path: &Path,
     ) -> Result<FilesystemDecision, BackendContractError> {
-        self.sandbox()
+        self.ensure_backend(backend)?;
+        self.request
+            .sandbox()
             .filesystem()
             .access_for_path(path, &self.path_context)
             .map_err(|source| BackendContractError::FilesystemEvaluation { source })
@@ -428,9 +508,12 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// replace a workspace-root ceiling with a broader context.
     pub fn filesystem_access_for(
         &self,
+        backend: &B,
         selector: &PathSelector,
     ) -> Result<FilesystemDecision, BackendContractError> {
-        self.sandbox()
+        self.ensure_backend(backend)?;
+        self.request
+            .sandbox()
             .filesystem()
             .access_for(selector, &self.path_context)
             .map_err(|source| BackendContractError::FilesystemEvaluation { source })
@@ -442,10 +525,13 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// call [`Self::authorize_connection`] immediately before connecting.
     pub fn network_decision_for_domain_with_resolved_ips(
         &self,
+        backend: &B,
         domain: &str,
         resolved_ips: &[IpAddr],
     ) -> Result<NetworkDecision, BackendContractError> {
-        self.sandbox()
+        self.ensure_backend(backend)?;
+        self.request
+            .sandbox()
             .network()
             .decision_for_domain_with_resolved_ips(domain, resolved_ips)
             .map_err(|source| BackendContractError::NetworkEvaluation { source })
@@ -454,10 +540,13 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// Authorizes the exact socket address the backend is about to connect to.
     pub fn authorize_connection(
         &self,
+        backend: &B,
         target: &ResolvedNetworkTarget,
         connected: SocketAddr,
     ) -> Result<ConnectionAuthorization, BackendContractError> {
-        self.sandbox()
+        self.ensure_backend(backend)?;
+        self.request
+            .sandbox()
             .network()
             .authorize_connection(target, connected)
             .map_err(|source| BackendContractError::NetworkEvaluation { source })
@@ -466,9 +555,12 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     /// Evaluates one Unix socket path against both effective network policies.
     pub fn network_decision_for_unix_socket(
         &self,
+        backend: &B,
         socket: &Path,
     ) -> Result<NetworkDecision, BackendContractError> {
-        self.sandbox()
+        self.ensure_backend(backend)?;
+        self.request
+            .sandbox()
             .network()
             .decision_for_unix_socket(socket)
             .map_err(|source| BackendContractError::NetworkEvaluation { source })
@@ -533,6 +625,10 @@ pub enum BackendContractError {
         #[source]
         source: CompositionError,
     },
+    /// A prepared handoff was used with a different backend instance than the
+    /// one whose capabilities were checked.
+    #[error("prepared backend request belongs to a different backend instance")]
+    BackendIdentityMismatch,
 }
 
 /// The capability-discovery contract implemented by a native backend.
@@ -545,6 +641,13 @@ pub enum BackendContractError {
 /// [`PreparedBackendRequest`] produced from that backend instance; the
 /// type-level binding does not prove that operating-system enforcement exists.
 pub trait SandboxBackend {
+    /// Returns the stable identity of this backend enforcement instance.
+    ///
+    /// The same reference must be returned for the lifetime of the backend.
+    /// Two instances may return the same identity only when they share the
+    /// same enforcement state and capability contract.
+    fn identity(&self) -> &BackendIdentity;
+
     /// Returns the capabilities this backend can enforce safely.
     fn capabilities(&self) -> BackendCapabilities;
 }

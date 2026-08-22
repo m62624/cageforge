@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 
 use cageforge_command::EnvironmentSpec;
 use cageforge_path::{NativePathKey, contains_parent_traversal, is_within};
-use cageforge_policy::{NetworkPolicy, PathResolutionContext, SandboxPolicy};
+use cageforge_policy::{
+    DomainMode, LocalNetworkAccess, NetworkMode, NetworkPolicy, PathResolutionContext,
+    SandboxPolicy, UnixSocketMode,
+};
 
 use crate::CompositionError;
 use crate::context::EffectivePathContext;
@@ -244,11 +247,53 @@ impl EffectiveSandbox {
     }
 }
 
-/// A network decision constrained by both input policies.
+/// Network decisions constrained by both input policies.
+///
+/// The component policies remain private. Use the decision methods and
+/// [`EffectiveNetworkRequirements`] rather than selecting one side for
+/// backend lowering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveNetworkPolicy {
     requested: NetworkPolicy,
     ceiling: NetworkPolicy,
+}
+
+/// The network features a backend must be able to enforce for one effective
+/// composition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectiveNetworkRequirements {
+    mode: NetworkMode,
+    domain_rules: bool,
+    local_address_restrictions: bool,
+    resolved_targets: bool,
+    unix_sockets: bool,
+}
+
+impl EffectiveNetworkRequirements {
+    /// Returns the effective network ownership mode.
+    pub const fn mode(self) -> NetworkMode {
+        self.mode
+    }
+
+    /// Returns whether domain rules or a non-default domain mode are present.
+    pub const fn domain_rules(self) -> bool {
+        self.domain_rules
+    }
+
+    /// Returns whether private and loopback address restrictions are present.
+    pub const fn local_address_restrictions(self) -> bool {
+        self.local_address_restrictions
+    }
+
+    /// Returns whether exact resolved-target authorization is required.
+    pub const fn resolved_targets(self) -> bool {
+        self.resolved_targets
+    }
+
+    /// Returns whether Unix socket rules or a non-default socket mode are present.
+    pub const fn unix_sockets(self) -> bool {
+        self.unix_sockets
+    }
 }
 
 impl EffectiveNetworkPolicy {
@@ -256,14 +301,46 @@ impl EffectiveNetworkPolicy {
         Self { requested, ceiling }
     }
 
-    /// Returns the requested network policy retained for backend lowering.
-    pub fn requested(&self) -> &NetworkPolicy {
+    pub(crate) fn requested_policy(&self) -> &NetworkPolicy {
         &self.requested
     }
 
-    /// Returns the ceiling network policy retained for backend lowering.
-    pub fn ceiling(&self) -> &NetworkPolicy {
+    pub(crate) fn ceiling_policy(&self) -> &NetworkPolicy {
         &self.ceiling
+    }
+
+    /// Returns the aggregate network requirements for backend preflight.
+    pub fn requirements(&self) -> EffectiveNetworkRequirements {
+        let mode = effective_network_mode(self.requested.mode(), self.ceiling.mode());
+        let enabled = mode == NetworkMode::Enabled;
+        EffectiveNetworkRequirements {
+            mode,
+            domain_rules: enabled
+                && [&self.requested, &self.ceiling].iter().any(|policy| {
+                    !policy.domains().is_empty() || policy.domain_mode() != DomainMode::Enabled
+                }),
+            local_address_restrictions: enabled
+                && [&self.requested, &self.ceiling]
+                    .iter()
+                    .any(|policy| policy.local_network_access() == LocalNetworkAccess::Deny),
+            resolved_targets: enabled,
+            unix_sockets: enabled
+                && [&self.requested, &self.ceiling].iter().any(|policy| {
+                    !policy.unix_sockets().is_empty()
+                        || policy.unix_socket_mode() != UnixSocketMode::Disabled
+                }),
+        }
+    }
+}
+
+fn effective_network_mode(left: NetworkMode, right: NetworkMode) -> NetworkMode {
+    match (left, right) {
+        (NetworkMode::External, NetworkMode::External) => NetworkMode::External,
+        (NetworkMode::Disabled, _) | (_, NetworkMode::Disabled) => NetworkMode::Disabled,
+        (NetworkMode::Enabled, NetworkMode::Enabled) => NetworkMode::Enabled,
+        (NetworkMode::External, _) | (_, NetworkMode::External) => {
+            unreachable!("mixed network ownership is rejected during composition")
+        }
     }
 }
 
