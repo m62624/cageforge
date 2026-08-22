@@ -84,6 +84,10 @@ These rules are mandatory:
     ownership as a separate state. An `Ord` implementation is appropriate for
     canonical collection keys or deterministic diagnostic labels only when it
     is not presented as an enforcement precedence.
+    Types that define a logical case-insensitive namespace must canonicalize
+    duplicate inputs before exposing snapshots, and their `Eq` must compare
+    that logical identity rather than diagnostic spelling. Preserved spelling
+    is presentation data, not a second authorization identity.
     Prepared backend handoffs must be type-bound to the backend whose
     capabilities were checked; native lowering should accept
     `PreparedBackendRequest<'_, Self>` rather than an unbound prepared value.

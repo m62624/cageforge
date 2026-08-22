@@ -238,13 +238,29 @@ impl EnvironmentInput {
 /// value of [`EnvironmentOverride::Remove`] is distinct from setting an empty
 /// string. Variable names are one logical, case-insensitive namespace, so a
 /// later case variant replaces an earlier override.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct EnvironmentSpec {
     base: EnvironmentBase,
     overrides: BTreeMap<OsString, EnvironmentOverride>,
     override_names: HashMap<EnvironmentNameKey, OsString>,
     filters: BTreeMap<EnvironmentPattern, EnvironmentFilterAction>,
 }
+
+impl PartialEq for EnvironmentSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.base == other.base
+            && self.filters == other.filters
+            && self.override_names.len() == other.override_names.len()
+            && self.override_names.iter().all(|(key, name)| {
+                let Some(other_name) = other.override_names.get(key) else {
+                    return false;
+                };
+                self.overrides.get(name) == other.overrides.get(other_name)
+            })
+    }
+}
+
+impl Eq for EnvironmentSpec {}
 
 impl EnvironmentSpec {
     /// Creates an environment that inherits all parent variables.
@@ -283,6 +299,9 @@ impl EnvironmentSpec {
     }
 
     /// Returns all explicit variable overrides in deterministic key order.
+    ///
+    /// The spelling of a name is retained for backend diagnostics, but names
+    /// are one case-insensitive logical namespace for lookup and equality.
     pub fn overrides(&self) -> &BTreeMap<OsString, EnvironmentOverride> {
         &self.overrides
     }
@@ -468,11 +487,14 @@ where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
     let mut collected = BTreeMap::new();
+    let mut names = HashMap::new();
     for (name, value) in variables {
         validate_name(&name)?;
         if contains_nul(&value) {
             return Err(CommandError::EnvironmentValueContainsNul);
         }
+        remove_environment_name(&mut collected, &mut names, &name);
+        names.insert(EnvironmentNameKey::new(&name), name.clone());
         collected.insert(name, value);
     }
     Ok(collected)

@@ -78,6 +78,14 @@ config layer. The portable crate does not define the contents of `Core`;
 each native backend supplies that platform's conservative base map before
 calling `apply_to`.
 
+`EnvironmentInput::all` and `CoreEnvironment::from_selected` apply the same
+canonical namespace when collecting variables: a later case variant replaces
+the earlier value before the snapshot is exposed. This prevents a backend from
+receiving two platform-equivalent names through the public `variables()` map.
+`EnvironmentSpec` equality follows the logical override identity rather than
+the preserved spelling of an override key, so separately constructed
+case-variant specifications cannot fail composition merely because of casing.
+
 The type intentionally does not reproduce Codex's product-specific secret
 patterns, environment discovery, shell profiles, or configuration compatibility
 rules. It stores only generic filter intent; config parsing resolves profile

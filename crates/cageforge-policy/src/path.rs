@@ -502,7 +502,8 @@ fn glob_components_match(pattern: &[String], matchers: &[GlobMatcher], path: &[S
         } else {
             let matcher = &matchers[pattern_index];
             for index in 1..=path.len() {
-                next[index] = current[index - 1] && matcher.is_match(&path[index - 1]);
+                next[index] =
+                    current[index - 1] && glob_component_matches(matcher, &path[index - 1]);
             }
         }
         std::mem::swap(&mut current, &mut next);
@@ -511,9 +512,15 @@ fn glob_components_match(pattern: &[String], matchers: &[GlobMatcher], path: &[S
 }
 
 fn compile_glob_component(component: &str, pattern: &str) -> Result<GlobMatcher, PolicyError> {
-    let mut builder = GlobBuilder::new(component);
+    // Apply the same native case fold used by PathPattern's Eq/Hash/Ord
+    // contract to both the glob and candidate components. globset's
+    // byte-oriented case-insensitive regex mode is ASCII-only, which would
+    // otherwise make Windows matching disagree with the collection identity
+    // for non-ASCII path names.
+    let component = case_fold(component);
+    let mut builder = GlobBuilder::new(&component);
     builder
-        .case_insensitive(cfg!(windows))
+        .case_insensitive(false)
         .literal_separator(true)
         .backslash_escape(false);
     builder
@@ -536,5 +543,16 @@ fn prefixes_equal(left: Option<&str>, right: Option<&str>) -> bool {
         (Some(left), Some(right)) => strings_equal(left, right),
         (None, None) => true,
         _ => false,
+    }
+}
+
+fn glob_component_matches(matcher: &GlobMatcher, component: &str) -> bool {
+    #[cfg(windows)]
+    {
+        matcher.is_match(case_fold(component))
+    }
+    #[cfg(not(windows))]
+    {
+        matcher.is_match(component)
     }
 }

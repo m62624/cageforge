@@ -43,6 +43,12 @@ available through `as_str()` for diagnostics and serialization. This prevents a
 Windows case variant from becoming a second policy key while preserving the
 declared spelling at the API boundary.
 
+Path-pattern matching applies the same native fold to the glob and candidate
+components before invoking `globset`. This is intentional: `globset`'s
+byte-oriented case-insensitive regex mode is not sufficient for non-ASCII
+Windows names, and using it directly would let matching disagree with the
+`PathPattern` collection identity.
+
 `UnixSocketRule` follows the same native identity for its path when implementing
 `Eq` and `Hash`. This keeps public socket-rule collections consistent with
 `NetworkPolicy::normalized` and Unix-socket matching: Windows case variants are

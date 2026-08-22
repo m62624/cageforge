@@ -128,10 +128,14 @@ The workspace keeps a single owner for each reusable semantic operation:
 - `UnixSocketRule` uses the shared native path identity for `Eq` and `Hash`,
   matching socket evaluation and network-policy normalization on Windows and
   POSIX.
-- Aggregate declaration and snapshot values such as `EnvironmentSpec`,
-  `PathResolutionContext`, `ResolvedProfile`, and the policy containers retain
+- Aggregate declaration and snapshot values such as `PathResolutionContext`,
+  `ResolvedProfile`, and the policy containers retain
   structural equality because their public accessors preserve declared
   spelling and/or order; they are not native-identity collection keys.
+  `EnvironmentSpec` is the exception for its case-insensitive override
+  namespace: its snapshots deduplicate case variants and `Eq` compares the
+  canonical logical names while `overrides()` preserves one spelling for
+  diagnostics.
   `EffectiveSandbox` and `EffectivePathContext` are the deliberate exception:
   their equality includes the private composition identity, so equal-looking
   results from different compositions never compare equal.

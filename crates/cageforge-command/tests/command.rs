@@ -10,9 +10,7 @@ use cageforge_command::{
     EnvironmentPattern, EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
 use pretty_assertions::assert_eq;
-#[cfg(unix)]
-use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[test]
 fn command_spec_preserves_native_argv() {
@@ -164,6 +162,32 @@ fn environment_name_keys_follow_case_insensitive_policy_identity() {
         EnvironmentNameKey::new("Path".as_ref()),
         EnvironmentNameKey::new("PATH".as_ref())
     );
+}
+
+#[test]
+fn environment_input_deduplicates_case_variants_before_backend_handoff() {
+    let input = EnvironmentInput::all([
+        (OsString::from("PATH"), OsString::from("/first")),
+        (OsString::from("path"), OsString::from("/last")),
+    ])
+    .expect("valid environment input");
+
+    assert_eq!(
+        input.variables(),
+        &BTreeMap::from([(OsString::from("path"), OsString::from("/last"))])
+    );
+}
+
+#[test]
+fn environment_spec_equality_uses_logical_override_identity() {
+    let upper = EnvironmentSpec::inherit_all()
+        .with_var("PATH", "/custom/bin")
+        .expect("valid variable");
+    let lower = EnvironmentSpec::inherit_all()
+        .with_var("path", "/custom/bin")
+        .expect("valid variable");
+
+    assert_eq!(upper, lower);
 }
 
 #[cfg(unix)]

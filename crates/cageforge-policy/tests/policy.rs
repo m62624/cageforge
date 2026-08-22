@@ -195,6 +195,31 @@ fn path_pattern_collections_use_windows_matching_identity() {
 
 #[cfg(windows)]
 #[test]
+fn unicode_windows_globs_follow_their_native_trait_identity() {
+    let pattern = PathPattern::workspace("ångström/**").expect("valid Unicode glob");
+    let case_variant = PathPattern::workspace("ÅNGSTRÖM/**").expect("valid Unicode glob");
+    assert_eq!(pattern, case_variant);
+    assert_eq!(HashSet::from([pattern.clone(), case_variant]).len(), 1);
+
+    let context = PathResolutionContext::new()
+        .with_workspace_root(r"C:\Workspace")
+        .expect("valid workspace root");
+    let policy = FilesystemPolicy::restricted([FilesystemRule::from_target(
+        FilesystemTarget::Glob(pattern),
+        AccessMode::Deny,
+    )
+    .expect("valid deny glob")]);
+
+    assert_eq!(
+        policy
+            .access_for_path(Path::new(r"c:\workspace\ÅNGSTRÖM\secret.txt"), &context,)
+            .expect("filesystem decision"),
+        FilesystemDecision::Deny
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn absolute_globs_match_windows_verbatim_path_aliases() {
     let context = PathResolutionContext::new();
     let policy = FilesystemPolicy::restricted([])
