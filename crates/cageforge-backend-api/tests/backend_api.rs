@@ -178,6 +178,85 @@ fn prepares_a_composed_request_without_launching() {
 }
 
 #[test]
+fn prepared_request_exposes_complete_native_lowering_inputs() {
+    let (command, sandbox) = effective_request();
+    let backend = TestBackend {
+        capabilities: all_capabilities(),
+    };
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&backend, &workspace_context())
+        .unwrap();
+
+    let filesystem_layers: Vec<_> = prepared
+        .filesystem_lowering(&backend)
+        .unwrap()
+        .layers()
+        .collect();
+    assert_eq!(filesystem_layers.len(), 2);
+    assert!(filesystem_layers.iter().any(|layer| {
+        layer
+            .entries()
+            .iter()
+            .any(|rule| rule.access() == AccessMode::Write)
+    }));
+    assert!(filesystem_layers.iter().any(|layer| {
+        layer
+            .protected_relative_paths()
+            .iter()
+            .any(|path| path == ".git")
+    }));
+    assert_eq!(
+        prepared
+            .filesystem_lowering(&backend)
+            .unwrap()
+            .glob_scan_max_depth(),
+        std::num::NonZeroUsize::new(8)
+    );
+
+    let network_layers: Vec<_> = prepared
+        .network_lowering(&backend)
+        .unwrap()
+        .layers()
+        .collect();
+    assert_eq!(network_layers.len(), 2);
+    assert!(
+        network_layers
+            .iter()
+            .any(|layer| !layer.domains().is_empty())
+    );
+    assert!(
+        network_layers
+            .iter()
+            .any(|layer| !layer.unix_sockets().is_empty())
+    );
+}
+
+#[test]
+fn prepared_working_directory_is_checked_independently_of_runtime_context_base() {
+    let (command, sandbox) = effective_request();
+    let backend = TestBackend {
+        capabilities: all_capabilities(),
+    };
+    let base = PathResolutionContext::new()
+        .with_workspace_root(native_path("/workspace"))
+        .unwrap()
+        .with_current_directory(native_path("/outside"))
+        .unwrap();
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&backend, &base)
+        .unwrap();
+
+    assert_eq!(
+        prepared.working_directory(&backend).unwrap(),
+        native_path("/workspace").as_path()
+    );
+    assert_eq!(
+        prepared.path_context(&backend).unwrap().workspace_roots(),
+        &[native_path("/workspace")]
+    );
+}
+
+#[test]
 fn prepared_request_rejects_a_different_backend_instance() {
     let (command, sandbox) = effective_request();
     let backend = InstanceBackend::new(all_capabilities());
@@ -188,6 +267,16 @@ fn prepared_request_rejects_a_different_backend_instance() {
 
     assert_eq!(
         prepared.command_spec(&unrelated_backend).unwrap_err(),
+        BackendContractError::BackendIdentityMismatch
+    );
+    assert_eq!(
+        prepared
+            .filesystem_lowering(&unrelated_backend)
+            .unwrap_err(),
+        BackendContractError::BackendIdentityMismatch
+    );
+    assert_eq!(
+        prepared.network_lowering(&unrelated_backend).unwrap_err(),
         BackendContractError::BackendIdentityMismatch
     );
     assert_eq!(prepared.command_spec(&backend).unwrap(), command.command());

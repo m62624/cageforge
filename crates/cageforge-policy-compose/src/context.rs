@@ -76,11 +76,6 @@ impl EffectivePathContext {
         self.context.slash_tmp()
     }
 
-    /// Returns the runtime current directory, if one was supplied.
-    pub fn current_directory(&self) -> Option<&std::path::Path> {
-        self.context.current_directory()
-    }
-
     /// Resolves a symbolic selector through this bound effective context.
     pub fn resolve(&self, selector: &PathSelector) -> Vec<PathBuf> {
         selector.resolve(&self.context)

@@ -11,9 +11,10 @@ portable `PolicyCeiling`. It is the reusable policy-limiting layer for projects
 that need to apply an outer safety boundary before execution.
 
 The result keeps the requested and ceiling policies as separate internal
-constraints. Public effective APIs expose only combined decisions and
-aggregate backend requirements, so a consumer cannot select the requested
-side and accidentally bypass the ceiling. Filesystem and network decisions are allowed only when both sides allow them;
+constraints. Public effective APIs expose combined decisions, aggregate
+backend requirements, and immutable lowering views containing every required
+constraint layer, so a consumer cannot select the requested side and
+accidentally bypass the ceiling. Filesystem and network decisions are allowed only when both sides allow them;
 external enforcement is accepted only when both sides delegate that boundary
 to an external owner. Environment rules are applied in sequence and cannot
 add a variable that was absent from the requested result. Workspace roots must
@@ -117,8 +118,12 @@ assert_ne!(ExternalOwner::new(), owner);
   silently replaced by a broader runtime context.
 - `EffectiveFilesystemPolicy` and `EffectiveNetworkPolicy` expose decisions
   constrained by both policies plus aggregate requirements for capability
-  negotiation; they do not expose either input policy as a separate backend
-  choice. Filesystem selector queries require the
+  negotiation. Their `lowering()` views expose every immutable filesystem or
+  network constraint layer needed by a native backend, including rules,
+  protected paths, glob depth, domain defaults, local-address settings, and
+  Unix socket rules. A backend must process every returned layer as a
+  conjunction; the layers are not alternative policies and neither input is
+  exposed as an independent backend choice. Filesystem selector queries require the
   `EffectivePathContext` created by `EffectiveSandbox::path_context`; its raw
   `PathResolutionContext` is not exposed. The context is bound to that
   composed result and cannot be reused with another one. Use its safe accessors

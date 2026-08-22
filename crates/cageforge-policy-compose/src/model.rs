@@ -21,6 +21,7 @@ use crate::CompositionError;
 use crate::context::EffectivePathContext;
 use crate::environment::EffectiveEnvironment;
 use crate::filesystem::EffectiveFilesystemPolicy;
+use crate::lowering::EffectiveNetworkLowering;
 use crate::ownership::ExternalOwner;
 
 /// A neutral maximum policy supplied by the component that owns the outer
@@ -235,11 +236,6 @@ impl EffectiveSandbox {
                 .with_slash_tmp(path.to_path_buf())
                 .map_err(|source| CompositionError::InvalidPathContext { source })?;
         }
-        if let Some(path) = base.current_directory() {
-            context = context
-                .with_current_directory(path.to_path_buf())
-                .map_err(|source| CompositionError::InvalidPathContext { source })?;
-        }
         Ok(EffectivePathContext::new(
             context,
             self.filesystem.context_identity(),
@@ -250,8 +246,9 @@ impl EffectiveSandbox {
 /// Network decisions constrained by both input policies.
 ///
 /// The component policies remain private. Use the decision methods and
-/// [`EffectiveNetworkRequirements`] rather than selecting one side for
-/// backend lowering.
+/// [`EffectiveNetworkRequirements`] for preflight, and [`Self::lowering`] for
+/// native lowering. The lowering view contains both sides as mandatory
+/// constraints rather than selecting one side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveNetworkPolicy {
     requested: NetworkPolicy,
@@ -330,6 +327,16 @@ impl EffectiveNetworkPolicy {
                         || policy.unix_socket_mode() != UnixSocketMode::Disabled
                 }),
         }
+    }
+
+    /// Returns every immutable network constraint needed by a native backend
+    /// to lower this effective result.
+    ///
+    /// The returned view contains both mandatory layers. A backend must
+    /// enforce their conjunction; the view is not a permission to select one
+    /// layer and discard the other.
+    pub fn lowering(&self) -> EffectiveNetworkLowering<'_> {
+        EffectiveNetworkLowering::new(&self.requested, &self.ceiling)
     }
 }
 

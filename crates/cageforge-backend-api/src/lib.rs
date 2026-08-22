@@ -34,7 +34,8 @@ use cageforge_policy::{
     PathSelector, ResolvedNetworkTarget,
 };
 use cageforge_policy_compose::{
-    CompositionError, EffectivePathContext, EffectiveSandbox, EnvironmentInput,
+    CompositionError, EffectiveFilesystemLowering, EffectiveNetworkLowering, EffectivePathContext,
+    EffectiveSandbox, EnvironmentInput,
 };
 use thiserror::Error;
 
@@ -260,14 +261,14 @@ impl<'a> BackendRequest<'a> {
         let working_directory = match self.command.working_directory() {
             Some(path) if path.is_absolute() => normalize_lexical_path(path).into_owned(),
             Some(path) => {
-                let current_directory = path_context.current_directory().ok_or_else(|| {
+                let current_directory = base_context.current_directory().ok_or_else(|| {
                     BackendContractError::WorkingDirectoryResolution {
                         path: path.to_path_buf(),
                     }
                 })?;
                 normalize_lexical_path(&current_directory.join(path)).into_owned()
             }
-            None => path_context
+            None => base_context
                 .current_directory()
                 .map(normalize_lexical_path)
                 .map(std::borrow::Cow::into_owned)
@@ -438,6 +439,34 @@ impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     pub fn sandbox(&self, backend: &B) -> Result<&'a EffectiveSandbox, BackendContractError> {
         self.ensure_backend(backend)?;
         Ok(self.request.sandbox())
+    }
+
+    /// Returns all filesystem constraint layers required for native lowering.
+    ///
+    /// The backend must enforce every layer in the returned view. This is
+    /// distinct from the combined decision helpers: a native sandbox builder
+    /// needs the concrete rules, protected paths, and glob settings, while
+    /// the view prevents it from selecting only the requested or ceiling
+    /// side.
+    pub fn filesystem_lowering(
+        &self,
+        backend: &B,
+    ) -> Result<EffectiveFilesystemLowering<'_>, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(self.request.sandbox().filesystem().lowering())
+    }
+
+    /// Returns all network constraint layers required for native lowering.
+    ///
+    /// These rules configure enforcement only. Actual connections must still
+    /// use [`Self::authorize_connection`] with a resolved target and exact
+    /// socket address.
+    pub fn network_lowering(
+        &self,
+        backend: &B,
+    ) -> Result<EffectiveNetworkLowering<'_>, BackendContractError> {
+        self.ensure_backend(backend)?;
+        Ok(self.request.sandbox().network().lowering())
     }
 
     /// Returns the runtime path context that was narrowed and checked during

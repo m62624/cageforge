@@ -10,6 +10,12 @@ identity, mount boundaries, or connection races. Every native backend must
 close those gaps before it launches a restricted process or performs a
 restricted file operation.
 
+Before lowering, the backend must consume the complete immutable filesystem
+and network lowering views from the prepared backend request. A view contains
+both sides of policy composition and is a mandatory conjunction, not a choice
+between requested and ceiling rules. Dropping a layer is a policy-widening
+error even when the combined decision helpers appear permissive.
+
 ## Filesystem contract
 
 `FilesystemPolicy::access_for_path` and

@@ -107,9 +107,10 @@ the backend's runtime `PathResolutionContext` and must:
    environment request;
 4. reject unsupported filesystem rules with a typed error instead of silently
    dropping or widening them;
-5. consume only the combined effective decisions and aggregate requirements
-   exposed by `EffectiveSandbox`; private requested/ceiling policies are never
-   a backend choice; and
+5. consume only the combined effective decisions, aggregate requirements, and
+   complete immutable lowering views exposed by `EffectiveSandbox`; private
+   requested/ceiling policies are never a backend choice. Every layer in a
+   lowering view is mandatory input to native enforcement; and
 6. keep network preparation on the resolved-target path. A hostname-only
    decision is never a connection authorization.
 
@@ -143,6 +144,14 @@ effective context is denied; it cannot be evaluated against a broader runtime
 context. The context is also bound to this effective result, so contexts from
 different requests are rejected. Their composition failures remain typed
 backend contract errors.
+
+`PreparedBackendRequest::filesystem_lowering` and
+`PreparedBackendRequest::network_lowering` expose the complete immutable rule
+inputs for native lowering. Filesystem layers include access rules, protected
+relative paths, missing-path behavior, and glob settings. Network layers
+include domain and Unix-socket rules, default modes, and local-address policy.
+These views deliberately do not expose an independent requested or ceiling
+policy; native code must apply every layer together.
 
 The `CommandRequest::environment` value must equal the requested environment
 used to create the `EffectiveSandbox`. Mixing a command with a composed result
@@ -205,6 +214,8 @@ Tests must cover:
 - rejection of every unsupported capability category;
 - workspace-root ceilings and effective path contexts;
 - protected metadata paths and deny-glob preservation;
+- complete filesystem and network lowering views, including both composition
+  layers;
 - missing-path behavior and local-address restriction capabilities;
 - environment base selection and filtering requirements;
 - network preparation without hostname-only authorization;

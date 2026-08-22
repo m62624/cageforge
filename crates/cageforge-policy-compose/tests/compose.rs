@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use cageforge_command::{EnvironmentFilterAction, EnvironmentSpec};
 use cageforge_policy::{
-    AccessMode, DomainAccess, FilesystemPolicy, FilesystemRule, NetworkPolicy,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, NetworkPolicy,
     PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{
@@ -72,6 +72,80 @@ fn intersects_filesystem_and_network_decisions() {
             .decision_for_domain("example.com")
             .expect("valid domain"),
         cageforge_policy::NetworkDecision::Deny
+    );
+}
+
+#[test]
+fn lowering_views_retain_every_filesystem_and_network_constraint_layer() {
+    let requested_filesystem = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        FilesystemRule::workspace_glob("**/*.secret", AccessMode::Deny)
+            .expect("valid requested glob"),
+    ])
+    .with_additional_protected_relative_path(".secrets")
+    .expect("valid requested protected path")
+    .with_glob_scan_max_depth(NonZeroUsize::new(4).expect("non-zero depth"))
+    .expect("valid requested scan depth");
+    let requested_network = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_domain("example.com", DomainAccess::Allow)
+        .expect("valid requested domain");
+    let requested = SandboxPolicy::new(requested_filesystem, requested_network);
+    let ceiling_filesystem = FilesystemPolicy::restricted([FilesystemRule::absolute_glob(
+        "/workspace/**/private/**",
+        AccessMode::Deny,
+    )
+    .expect("valid ceiling glob")]);
+    let ceiling_network = NetworkPolicy::enabled()
+        .with_unix_socket_mode(UnixSocketMode::Restricted)
+        .with_unix_socket("/run/example.sock", DomainAccess::Allow)
+        .expect("valid ceiling socket");
+    let ceiling = PolicyCeiling::new(
+        SandboxPolicy::new(ceiling_filesystem, ceiling_network),
+        EnvironmentSpec::empty(),
+    );
+    let effective = compose(CompositionRequest::new(
+        &requested,
+        &EnvironmentSpec::empty(),
+        &ceiling,
+    ))
+    .expect("valid policies compose");
+
+    let filesystem_layers: Vec<_> = effective.filesystem().lowering().layers().collect();
+    assert_eq!(filesystem_layers.len(), 2);
+    assert!(filesystem_layers.iter().any(|layer| {
+        layer
+            .protected_relative_paths()
+            .iter()
+            .any(|path| path == ".secrets")
+    }));
+    assert!(
+        filesystem_layers
+            .iter()
+            .all(|layer| !layer.entries().is_empty())
+    );
+    assert_eq!(
+        effective.filesystem().lowering().glob_scan_max_depth(),
+        None,
+        "an unbounded deny-glob layer must keep the effective scan depth unbounded"
+    );
+    assert!(
+        filesystem_layers
+            .iter()
+            .any(|layer| layer.glob_scan_max_depth() == NonZeroUsize::new(4))
+    );
+
+    let network_layers: Vec<_> = effective.network().lowering().layers().collect();
+    assert_eq!(network_layers.len(), 2);
+    assert!(
+        network_layers
+            .iter()
+            .any(|layer| !layer.domains().is_empty())
+    );
+    assert!(
+        network_layers
+            .iter()
+            .any(|layer| !layer.unix_sockets().is_empty())
     );
 }
 

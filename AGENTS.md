@@ -91,6 +91,9 @@ These rules are mandatory:
     Prepared backend handoffs must be type-bound to the backend whose
     capabilities were checked; native lowering should accept
     `PreparedBackendRequest<'_, Self>` rather than an unbound prepared value.
+    Native lowering must consume the complete immutable filesystem and network
+    lowering views; it must not reconstruct enforcement from only one side of
+    a policy composition.
 12. A network backend must use `ResolvedNetworkTarget` and verify the exact
     `SocketAddr` immediately before connecting. `decision_for_domain` and
     `decision_for_domain_with_resolved_ips` are policy queries, not proof that

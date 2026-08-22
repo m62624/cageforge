@@ -28,8 +28,9 @@ layer without making this crate depend on any of them.
 
 `compose(CompositionRequest)` validates both policies and returns an
 `EffectiveSandbox`. The result retains the requested and ceiling policies as
-private components and exposes only combined decision and requirement
-accessors. It does not concatenate policy rules into a new allowlist: that
+private components and exposes combined decision and requirement accessors
+plus immutable lowering views. It does not concatenate policy rules into a new
+allowlist: that
 would be unsafe because a restricted policy with no entries means deny-all,
 and concatenating it with another policy could accidentally grant access.
 
@@ -70,10 +71,13 @@ with a different policy.
   A dangerous opt-out is effective only if both input policies opt out.
 
 The effective types retain the two component policies internally, but do not
-expose either side as a public backend choice. They expose only decisions that
-already combine both sides and aggregate requirements for capability
-negotiation. Composition first normalizes both `SandboxPolicy` values, so the
-retained filesystem entries have deterministic duplicate-target semantics.
+expose either side as a public backend choice. They expose decisions that
+already combine both sides, aggregate requirements for capability negotiation,
+and `lowering()` views that retain every rule-bearing layer required by a
+native backend. The backend must process every layer as a conjunction; the
+view is not a permission to choose one side. Composition first normalizes both
+`SandboxPolicy` values, so the retained filesystem entries have deterministic
+duplicate-target semantics.
 `EffectiveFilesystemPolicy::glob_scan_max_depth` combines the
 depth requirements conservatively: the larger bounded depth wins, and any
 relevant unbounded deny-glob makes the result unbounded. The backend must
@@ -89,8 +93,8 @@ errors belong to `cageforge-backend-api`.
 - monotonic filesystem, network, environment, and workspace-root narrowing;
 - external-enforcement owner-proof checks;
 - typed composition and policy-evaluation errors;
-- exposing combined decisions and aggregate backend requirements for later
-  lowering;
+- exposing combined decisions, aggregate backend requirements, and complete
+  immutable lowering views for later native lowering;
 - construction of a workspace-root-constrained runtime path context.
 
 Effective symbolic filesystem selectors are evaluated only with that narrowed

@@ -49,8 +49,11 @@ use `PreparedBackendRequest::command_spec` for the executable and argv values,
 context, and `PreparedBackendRequest::apply_environment` with a
 backend-selected `EnvironmentInput`. The filesystem decision helpers use that
 same bound context and cannot be given a context from another request. A
-symbolic selector is never evaluated without it. Use
-`authorize_connection` to receive a decision that already combines the
+symbolic selector is never evaluated without it. Use `filesystem_lowering` and
+`network_lowering` to obtain every immutable constraint layer needed by native
+lowering. Every returned layer is mandatory: the backend must enforce their
+conjunction and must not lower only the requested or only the ceiling side.
+Use `authorize_connection` to receive a decision that already combines the
 requested and ceiling sides. Every prepared accessor takes `&backend` and
 checks that it is the same instance used by `prepare_for`.
 

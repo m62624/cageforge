@@ -6,10 +6,12 @@
 //! requested policy and a [`PolicyCeiling`]. It deliberately does not select
 //! a backend, inspect an operating system, start a process, or decide whether
 //! a native backend supports a particular rule. The result keeps both policy
-//! sides internally, but exposes only their combined decisions and aggregate
-//! requirements so a later backend cannot accidentally widen it. Network
-//! backends should use the resolved-target methods and verify the exact address
-//! immediately before connecting.
+//! sides internally, exposes combined decisions and aggregate requirements,
+//! and provides immutable lowering views containing every constraint layer. A
+//! later backend must enforce all layers together and cannot accidentally
+//! widen the result by selecting one side. Network backends should use the
+//! resolved-target methods and verify the exact address immediately before
+//! connecting.
 //!
 //! # Reading this crate
 //!
@@ -30,6 +32,7 @@ mod context;
 mod environment;
 mod error;
 mod filesystem;
+mod lowering;
 mod model;
 mod ownership;
 
@@ -39,6 +42,10 @@ pub use context::EffectivePathContext;
 pub use environment::{EffectiveEnvironment, EffectiveEnvironmentRequirements};
 pub use error::{CompositionBoundary, CompositionError};
 pub use filesystem::{EffectiveFilesystemPolicy, EffectiveFilesystemRequirements};
+pub use lowering::{
+    EffectiveFilesystemLayer, EffectiveFilesystemLowering, EffectiveNetworkLayer,
+    EffectiveNetworkLowering,
+};
 pub use model::{
     CompositionRequest, EffectiveNetworkPolicy, EffectiveNetworkRequirements, EffectiveSandbox,
     PolicyCeiling,

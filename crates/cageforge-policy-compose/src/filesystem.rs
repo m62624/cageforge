@@ -3,9 +3,9 @@
 //! Effective filesystem constraints for backend lowering.
 //!
 //! [`crate::EffectiveFilesystemPolicy`] keeps its component policies private
-//! and exposes only combined decisions and aggregate requirements. This keeps
-//! a backend from accidentally lowering the requested side without the
-//! ceiling.
+//! and exposes combined decisions, aggregate requirements, and a complete
+//! immutable lowering view. This keeps a backend from accidentally lowering
+//! the requested side without the ceiling.
 
 use std::num::NonZeroUsize;
 
@@ -14,12 +14,14 @@ use cageforge_policy::{
 };
 
 use crate::context::{ContextIdentity, EffectivePathContext};
+use crate::lowering::EffectiveFilesystemLowering;
 
 /// Filesystem decisions constrained by both input policies.
 ///
 /// The component policies remain private. Use the decision methods and
-/// [`EffectiveFilesystemRequirements`] rather than selecting one side for
-/// backend lowering.
+/// [`EffectiveFilesystemRequirements`] for preflight, and [`Self::lowering`]
+/// for native lowering. The lowering view contains both sides as mandatory
+/// constraints rather than selecting one side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveFilesystemPolicy {
     requested: FilesystemPolicy,
@@ -183,6 +185,16 @@ impl EffectiveFilesystemPolicy {
             }
         }
         requirements
+    }
+
+    /// Returns every immutable filesystem constraint needed by a native
+    /// backend to lower this effective result.
+    ///
+    /// The returned view contains both mandatory layers. A backend must
+    /// enforce their conjunction and must not treat either layer as an
+    /// alternative policy.
+    pub fn lowering(&self) -> EffectiveFilesystemLowering<'_> {
+        EffectiveFilesystemLowering::new(&self.requested, &self.ceiling, self.glob_scan_max_depth())
     }
 
     pub(crate) fn context_identity(&self) -> ContextIdentity {
