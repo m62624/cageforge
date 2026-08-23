@@ -51,9 +51,10 @@ Windows names, and using it directly would let matching disagree with the
 
 `UnixSocketRule` follows the same native identity for its path when implementing
 `Eq` and `Hash`. This keeps public socket-rule collections consistent with
-`NetworkPolicy::normalized` and Unix-socket matching: Windows case variants are
-one identity, while POSIX case variants remain distinct. The public `path()`
-accessor continues to expose the original spelling.
+`NetworkPolicy::normalized` and Unix-socket matching. A socket rule matches one
+exact native path; it is not an implicit directory-prefix grant. Windows case
+variants are one identity, while POSIX case variants remain distinct. The
+public `path()` accessor continues to expose the original spelling.
 
 ## Resolved network target contract
 

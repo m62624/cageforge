@@ -10,7 +10,7 @@
 
 use crate::PathSelector;
 use crate::PolicyError;
-use cageforge_path::{NativePathKey, is_within};
+use cageforge_path::{NativePathKey, paths_equal};
 use globset::GlobBuilder;
 use globset::GlobMatcher;
 use std::collections::{HashMap, HashSet};
@@ -693,7 +693,7 @@ impl NetworkPolicy {
         }
         let mut result = None;
         for rule in &self.unix_sockets {
-            if is_within(path, rule.path()) {
+            if paths_equal(path, rule.path()) {
                 result = Some(match (result, rule.access()) {
                     (Some(DomainAccess::Deny), _) | (_, DomainAccess::Deny) => DomainAccess::Deny,
                     _ => DomainAccess::Allow,

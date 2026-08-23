@@ -212,9 +212,11 @@ checked socket address. Unix socket checks also return the complete
 external enforcement.
 
 `UnixSocketRule` equality and hashing use the same native path identity as
-Unix-socket matching and policy normalization. On Windows this makes case
-variants one rule identity; on POSIX, case remains significant. The `path()`
-accessor still preserves the declared spelling for diagnostics.
+Unix-socket matching and policy normalization. A rule matches one exact native
+socket path; it does not implicitly grant a directory or path prefix. On
+Windows this makes case variants one rule identity; on POSIX, case remains
+significant. The `path()` accessor still preserves the declared spelling for
+diagnostics.
 
 Network policy is independent from filesystem policy. Disabled mode denies
 destinations, while external mode records that another trusted boundary owns

@@ -1308,6 +1308,7 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
         NetworkDecision::Allow
     );
     let allow_only = NetworkPolicy::enabled()
+        .with_unix_socket_mode(UnixSocketMode::Restricted)
         .with_unix_socket(socket_path, DomainAccess::Allow)
         .expect("allow socket rule");
     assert_eq!(
@@ -1315,6 +1316,12 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
             .decision_for_unix_socket(Path::new(socket_path))
             .expect("socket decision"),
         NetworkDecision::Allow
+    );
+    assert_eq!(
+        allow_only
+            .decision_for_unix_socket(Path::new(&format!("{socket_path}/child")))
+            .expect("child socket decision"),
+        NetworkDecision::Deny
     );
     assert_eq!(
         NetworkPolicy::external()

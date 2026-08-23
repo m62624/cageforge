@@ -192,7 +192,9 @@ proptest! {
         let query = socket_query(kind, &path);
         let declared = PathBuf::from(&path);
         let unknown = declared.with_file_name("unknown.sock");
-        let expected = if socket_mode == "disabled" {
+        let expected = if socket_mode == "disabled"
+            || (socket_mode == "restricted" && kind == 3)
+        {
             NetworkDecision::Deny
         } else {
             NetworkDecision::Allow
