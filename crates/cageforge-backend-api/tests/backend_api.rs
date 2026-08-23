@@ -16,7 +16,7 @@ use cageforge_policy_compose::{
     CompositionError, CompositionRequest, CoreEnvironment, EnvironmentInput, PolicyCeiling, compose,
 };
 use pretty_assertions::assert_eq;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 #[cfg(windows)]
 fn native_path(path: &str) -> PathBuf {
@@ -69,6 +69,30 @@ impl SandboxBackend for InstanceBackend {
 
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities.clone()
+    }
+}
+
+struct MutableBackend {
+    capabilities: RwLock<BackendCapabilities>,
+    identity: BackendIdentity,
+}
+
+impl MutableBackend {
+    fn new(capabilities: BackendCapabilities) -> Self {
+        Self {
+            capabilities: RwLock::new(capabilities),
+            identity: BackendIdentity::new(),
+        }
+    }
+}
+
+impl SandboxBackend for MutableBackend {
+    fn identity(&self) -> &BackendIdentity {
+        &self.identity
+    }
+
+    fn capabilities(&self) -> BackendCapabilities {
+        self.capabilities.read().unwrap().clone()
     }
 }
 
@@ -280,6 +304,22 @@ fn prepared_request_rejects_a_different_backend_instance() {
         BackendContractError::BackendIdentityMismatch
     );
     assert_eq!(prepared.command_spec(&backend).unwrap(), command.command());
+}
+
+#[test]
+fn prepared_request_rejects_capability_changes_after_preflight() {
+    let (command, sandbox) = effective_request();
+    let backend = MutableBackend::new(all_capabilities());
+    let prepared = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&backend, &workspace_context())
+        .unwrap();
+
+    *backend.capabilities.write().unwrap() = BackendCapabilities::new();
+
+    assert_eq!(
+        prepared.command_spec(&backend).unwrap_err(),
+        BackendContractError::BackendCapabilitiesMismatch
+    );
 }
 
 #[test]

@@ -64,9 +64,11 @@ and stores a runtime `BackendIdentity` for the exact instance passed to
 `PreparedBackendRequest<'_, Self>` and pass that same instance to every
 accessor. This prevents a request preflighted against one backend instance
 from being consumed by another instance of the same type with different
-capabilities or enforcement state. The backend's advertised capabilities must
-also remain stable for the lifetime of a prepared handoff; the identity token
-is not proof that operating-system enforcement exists.
+capabilities or enforcement state. The prepared handoff also stores the
+capability snapshot and each accessor rejects a changed snapshot with a typed
+`BackendCapabilitiesMismatch` error. The identity and snapshot checks are
+caller-managed contract checks, not proof that operating-system enforcement
+exists.
 
 Capability values must use enums or named types rather than ambiguous boolean
 parameters. The capability vocabulary must cover the portable inputs that can

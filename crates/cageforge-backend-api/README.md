@@ -66,8 +66,11 @@ called with the same backend instance that was passed to `prepare_for`, or it
 returns `BackendContractError::BackendIdentityMismatch`. This prevents two
 instances of one backend type with different enforcement state from sharing a
 prepared handoff. The identity is a caller-managed token, not proof that
-operating-system enforcement exists; the backend remains responsible for
-advertising only stable capabilities it can actually enforce.
+operating-system enforcement exists. Prepared accessors also compare the
+capability snapshot captured during preflight and return
+`BackendContractError::BackendCapabilitiesMismatch` if the backend changes
+capabilities afterwards. The backend remains responsible for advertising only
+capabilities it can actually enforce.
 
 When a request needs an unsupported capability, preparation returns
 `BackendContractError::UnsupportedCapability`. The error is matchable by its

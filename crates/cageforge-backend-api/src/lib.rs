@@ -293,6 +293,7 @@ impl<'a> BackendRequest<'a> {
             request: self,
             path_context,
             working_directory,
+            capabilities: capabilities.clone(),
             backend_identity: backend_identity.clone(),
             backend: PhantomData,
         })
@@ -389,6 +390,7 @@ pub struct PreparedBackendRequest<'a, B: SandboxBackend> {
     request: BackendRequest<'a>,
     path_context: EffectivePathContext,
     working_directory: PathBuf,
+    capabilities: BackendCapabilities,
     backend_identity: BackendIdentity,
     backend: PhantomData<fn() -> B>,
 }
@@ -399,6 +401,7 @@ impl<'a, B: SandboxBackend> Clone for PreparedBackendRequest<'a, B> {
             request: self.request,
             path_context: self.path_context.clone(),
             working_directory: self.working_directory.clone(),
+            capabilities: self.capabilities.clone(),
             backend_identity: self.backend_identity.clone(),
             backend: PhantomData,
         }
@@ -412,16 +415,19 @@ impl<'a, B: SandboxBackend> fmt::Debug for PreparedBackendRequest<'a, B> {
             .field("request", &self.request)
             .field("path_context", &self.path_context)
             .field("working_directory", &self.working_directory)
+            .field("capabilities", &self.capabilities)
             .finish()
     }
 }
 
 impl<'a, B: SandboxBackend> PreparedBackendRequest<'a, B> {
     fn ensure_backend(&self, backend: &B) -> Result<(), BackendContractError> {
-        if self.backend_identity == *backend.identity() {
-            Ok(())
-        } else {
+        if self.backend_identity != *backend.identity() {
             Err(BackendContractError::BackendIdentityMismatch)
+        } else if self.capabilities != backend.capabilities() {
+            Err(BackendContractError::BackendCapabilitiesMismatch)
+        } else {
+            Ok(())
         }
     }
 
@@ -658,6 +664,9 @@ pub enum BackendContractError {
     /// one whose capabilities were checked.
     #[error("prepared backend request belongs to a different backend instance")]
     BackendIdentityMismatch,
+    /// A prepared handoff was used after its backend changed capabilities.
+    #[error("backend capabilities changed after request preparation")]
+    BackendCapabilitiesMismatch,
 }
 
 /// The capability-discovery contract implemented by a native backend.
@@ -666,9 +675,9 @@ pub enum BackendContractError {
 /// [`BackendRequest::prepare_for`] to run the common preflight; native
 /// backends cannot replace that check with a broader capability set. Process
 /// launch, platform I/O, and backend-specific errors remain outside this
-/// trait. The returned capabilities must remain stable for the lifetime of a
-/// [`PreparedBackendRequest`] produced from that backend instance; the
-/// type-level binding does not prove that operating-system enforcement exists.
+/// trait. Prepared accessors reject a changed capability snapshot with a typed
+/// error. The identity and capability checks do not prove that operating-system
+/// enforcement exists.
 pub trait SandboxBackend {
     /// Returns the stable identity of this backend enforcement instance.
     ///
