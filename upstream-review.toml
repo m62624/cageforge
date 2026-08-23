@@ -66,6 +66,7 @@ upstream_paths = [
     "codex-rs/core/src/config/resolved_permission_profile.rs",
     "codex-rs/core/src/environment_selection.rs",
     "codex-rs/core/src/exec_env.rs",
+    "codex-rs/network-proxy/src/config.rs",
 ]
 local_paths = ["crates/cageforge-config/"]
 
@@ -77,6 +78,21 @@ upstream_paths = [
     "codex-rs/protocol/src/models.rs",
 ]
 local_paths = ["crates/cageforge-policy-compose/"]
+
+[[scope]]
+name = "cageforge-network-proxy"
+upstream_paths = [
+    "codex-rs/network-proxy/src/lib.rs",
+    "codex-rs/network-proxy/src/config.rs",
+    "codex-rs/network-proxy/src/policy.rs",
+    "codex-rs/network-proxy/src/connect_policy.rs",
+    "codex-rs/network-proxy/src/http_proxy.rs",
+    "codex-rs/network-proxy/src/socks5.rs",
+    "codex-rs/network-proxy/src/runtime.rs",
+    "codex-rs/network-proxy/src/upstream.rs",
+    "codex-rs/network-proxy/src/proxy.rs",
+]
+local_paths = ["crates/cageforge-network-proxy/"]
 
 [[scope]]
 name = "cageforge-backend-api"

@@ -13,6 +13,7 @@ syntax remains a real configuration surface.
 | [`profile-inheritance.toml`](profile-inheritance.toml) | Parent profile refined by a child | Inheritance, exact target replacement, environment filter replacement |
 | [`environment-order.toml`](environment-order.toml) | Explicit environment processing | `inherit → exclude → set/remove → include` |
 | [`trusted-metadata-write.toml`](trusted-metadata-write.toml) | Deliberate repository metadata opt-out | Additional protection and `dangerously_allow_git_write` |
+| [`network-gateway.toml`](network-gateway.toml) | Restricted outbound gateway runtime | Timeouts, resource bounds, inheritance, explicit unlimited relay mode |
 | [`platform-targets-unix.toml`](platform-targets-unix.toml) | Unix/macOS path and socket syntax | All filesystem targets and network rule fields |
 | [`platform-targets-windows.toml`](platform-targets-windows.toml) | Windows-native equivalent | Drive-qualified paths and the same portable policy fields |
 
@@ -35,7 +36,8 @@ Suggested reading order:
    declarations.
 3. `profile-inheritance.toml` for parent/child overrides.
 4. `environment-order.toml` for environment filtering stages.
-5. The platform examples for native path spelling and all supported target
+5. `network-gateway.toml` for proxy runtime limits and inheritance.
+6. The platform examples for native path spelling and all supported target
    forms.
 
 Domain entries accept host-like inputs such as `Example.com:443` and

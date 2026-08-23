@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared policy-enforcing outbound gateway for native Cageforge backends.
+//! Validated outbound gateway settings and an optional policy-enforcing
+//! HTTP/SOCKS runtime for native Cageforge backends.
 //!
-//! A native backend obtains an [`EffectiveNetworkPolicy`] from its prepared
-//! request, constructs a [`NetworkGateway`], and passes only authenticated
-//! private ingress streams to [`NetworkGateway::serve_connection`]. Every
-//! outbound connection is resolved once and checked immediately before the
-//! exact socket operation.
-//!
-//! [`EffectiveNetworkPolicy`]: cageforge_policy_compose::EffectiveNetworkPolicy
+//! [`GatewayConfig`] and [`GatewayConfigError`] remain available without
+//! default features for configuration-only consumers.
 
-#![doc = include_str!("../README.md")]
+#![cfg_attr(
+    feature = "runtime",
+    doc = "A native backend obtains an [`EffectiveNetworkPolicy`](cageforge_policy_compose::EffectiveNetworkPolicy) from its prepared request, constructs a [`NetworkGateway`], and passes only authenticated private ingress streams to [`NetworkGateway::serve_connection`]. Every outbound connection is resolved once and checked immediately before the exact socket operation."
+)]
+#![cfg_attr(feature = "runtime", doc = include_str!("../README.md"))]
 #![deny(missing_docs)]
 
 mod config;

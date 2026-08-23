@@ -5,9 +5,8 @@ Status: accepted; portable implementation complete
 ## Purpose
 
 `cageforge-config` is the strict TOML boundary for Cageforge. It resolves
-named profiles into the already validated `SandboxPolicy` and optional
-`CommandRequest` values. It does not launch processes, discover paths, select a
-native backend, or expose Codex protocol/configuration types.
+named profiles into validated `SandboxPolicy`, optional `CommandRequest`, and
+outbound `GatewayConfig` values.
 
 The design was informed by the Codex `config` crate and its permission-profile
 resolution, but this crate has its own schema and API. Codex legacy names and
@@ -18,12 +17,16 @@ aliases are not accepted.
 ```text
 cageforge-config
     ├── cageforge-policy
-    └── cageforge-command
+    ├── cageforge-command
+    └── cageforge-network-proxy (runtime feature disabled)
 ```
 
 The workspace declares these local crates in `[workspace.dependencies]`. The
 config crate consumes their public APIs and never reaches into their private
 modules. It produces requested values; it does not apply a `PolicyCeiling`.
+The feature-disabled proxy dependency exposes only `GatewayConfig` and its
+typed validation error, so config parsing does not pull in Tokio, Hyper, DNS,
+or policy-composition runtime code.
 
 Configuration is trusted application input. Resolution uses an iterative
 depth-first traversal to produce one parent-before-child order, applies shared
@@ -64,6 +67,18 @@ domains = [
   { pattern = "api.example.com:443", access = "allow" },
   { pattern = "[2001:db8::1]:443", access = "deny" },
 ]
+
+[profiles.workspace.network.gateway]
+handshake_timeout_ms = 10000
+dns_timeout_ms = 10000
+connect_timeout_ms = 10000
+response_header_timeout_ms = 30000
+relay_idle_timeout_ms = 300000
+max_concurrent_connections = 128
+max_requests_per_connection = 64
+max_resolved_addresses = 64
+http_header_bytes = 32768
+relay_byte_limit = 1073741824
 
 [profiles.workspace.command]
 program = "cargo"
@@ -139,6 +154,11 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   native path identity; this preserves case-sensitive POSIX behavior while
   refusing ambiguous case-only duplicates on Windows. The backend resolves
   relative paths and registers absolute roots in its execution context.
+- Gateway settings merge field by field. Omitted settings use secure
+  `GatewayConfig` defaults, numeric settings must be positive and representable
+  on the target, and the relay byte ceiling can be removed only through the
+  explicit `relay_byte_limit = "unlimited"` spelling. Construction delegates to
+  proxy-crate builders so TOML and direct Rust callers share one invariant.
 - The upstream runtime state that combines profile roots with harness/runtime
   roots is tracked separately from TOML parsing; Cageforge keeps that merge at
   the future backend/context boundary.
@@ -185,9 +205,9 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   replace semantic resolution checks such as inheritance cycles or policy
   safety validation.
 
-All final values are constructed through `cageforge-policy` and
-`cageforge-command`, so their path, mode, NUL, environment, and ownership
-invariants remain authoritative.
+All final values are constructed through `cageforge-policy`,
+`cageforge-command`, and `cageforge-network-proxy`, so their path, mode, NUL,
+environment, ownership, timeout, and resource invariants remain authoritative.
 
 ## Public API
 
@@ -196,6 +216,7 @@ The crate exposes:
 - `Config::from_toml` and `Config::from_file`;
 - `profile_names`, `default_profile_name`, `resolve`, and `resolve_default`;
 - `ResolvedProfile::policy` and `ResolvedProfile::command`;
+- `ResolvedProfile::network_gateway`;
 - `ResolvedProfile::description` and `ResolvedProfile::workspace_roots`;
 - `config_schema_json` for editor and preflight tooling;
 - `ConfigError::diagnostic` for stable JSON-ready diagnostics with parser

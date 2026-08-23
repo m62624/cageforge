@@ -1598,6 +1598,8 @@ fn exposes_json_schema_and_structured_diagnostics() {
     assert!(schema_text.contains("root"));
     assert!(schema_text.contains("description"));
     assert!(schema_text.contains("filters"));
+    assert!(schema_text.contains("gateway"));
+    assert!(schema_text.contains("relay_byte_limit"));
 
     let error = Config::from_toml("default_profile = [").expect_err("invalid TOML");
     let diagnostic = error.diagnostic();

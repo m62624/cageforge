@@ -7,8 +7,8 @@
 # cageforge-config
 
 `cageforge-config` is the strict TOML boundary for Cageforge. It resolves
-named profiles into validated `SandboxPolicy` and optional `CommandRequest`
-values that other crates or applications can consume.
+named profiles into validated `SandboxPolicy`, optional `CommandRequest`, and
+outbound `GatewayConfig` values that other crates or applications can consume.
 
 Configuration is treated as trusted input. Resolution iteratively linearizes
 the reachable inheritance graph once and merges canonical entries through
@@ -39,9 +39,10 @@ Config::resolve / resolve_default
      │
      ▼
 ResolvedProfile
-     ├── policy()  -> SandboxPolicy
-     ├── command() -> CommandRequest
-     └── workspace_roots() -> backend declarations
+    ├── policy()  -> SandboxPolicy
+    ├── command() -> CommandRequest
+    ├── network_gateway() -> GatewayConfig
+    └── workspace_roots() -> backend declarations
 ```
 
 `ResolvedProfile` is an owned, validated result. It does not discover paths or
@@ -57,6 +58,7 @@ result before execution.
 |---|---|
 | `cageforge-policy` | Supplies the validated filesystem and network policy model. |
 | `cageforge-command` | Supplies the validated command and environment request model. |
+| `cageforge-network-proxy` | Supplies gateway runtime settings without enabling its async runtime in this dependency path. |
 | `cageforge-policy-compose` | Optionally narrows resolved values with an outer policy ceiling. |
 | Backend integrations | Resolve declared roots and consume the resulting policy and command values. |
 
@@ -87,6 +89,11 @@ rules = [
 mode = "disabled"
 local_network_access = "deny"
 
+[profiles.workspace.network.gateway]
+dns_timeout_ms = 5000
+connect_timeout_ms = 10000
+max_resolved_addresses = 32
+
 [profiles.workspace.command]
 program = "cargo"
 args = ["test", "--workspace"]
@@ -103,7 +110,9 @@ milliseconds = 60000
 More complete, copyable scenarios are in the
 [configuration examples](examples/README.md). They explain the TOML syntax,
 profile inheritance, environment stage order, protected metadata, and the
-native Unix/macOS versus Windows path forms.
+native Unix/macOS versus Windows path forms. The
+[`network-gateway.toml`](examples/network-gateway.toml) fixture demonstrates
+every gateway field and field-wise inheritance.
 
 Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minimal`,
 `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`. Network modes are
@@ -129,6 +138,13 @@ cycles, missing command programs, invalid paths, NUL values, contradictory
 policy modes, and invalid enum values are rejected. A profile without a
 filesystem section is an empty restricted policy; a profile without a network
 section denies networking; the command section is optional.
+
+`network.gateway` configures bounded proxy runtime behavior independently from
+domain and Unix-socket permissions. Omitted fields use `GatewayConfig` secure
+defaults. Timeouts are positive milliseconds; connection, request, address,
+and header limits are positive integers. `relay_byte_limit` accepts a positive
+byte count or the explicit string `"unlimited"`. Child profiles override only
+the gateway fields they declare.
 
 One profile may not declare the same canonical filesystem target, domain,
 protected path, or Unix-socket path twice. This prevents declaration order or
@@ -198,10 +214,12 @@ let config = Config::from_toml(source)?;
 let resolved = config.resolve_default()?;
 
 let policy = resolved.policy();
+let gateway_config = resolved.network_gateway();
 if let Some(command) = resolved.command() {
     // Pass both values to the execution integration.
     let _program = command.command().program();
     let _filesystem = policy.filesystem();
+    let _dns_timeout = gateway_config.dns_timeout();
 }
 # Ok::<(), cageforge_config::ConfigError>(())
 ```
@@ -232,7 +250,7 @@ own runtime and backend while reusing the same validated policy and command
 models. The normal Cageforge flow is:
 
 ```text
-TOML → cageforge-config → SandboxPolicy/CommandRequest
+TOML → cageforge-config → SandboxPolicy/CommandRequest/GatewayConfig
                               │
                               v
                     policy composition/backend
