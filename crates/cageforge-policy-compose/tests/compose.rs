@@ -404,7 +404,7 @@ fn external_decisions_remain_external_when_both_sides_delegate() {
             .is_externally_enforced()
     );
     assert_eq!(owner.clone(), owner);
-    assert_ne!(ExternalOwner::default(), owner);
+    assert_ne!(ExternalOwner::new(), owner);
     assert!(format!("{owner:?}").contains("ExternalOwner"));
 }
 

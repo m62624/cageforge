@@ -91,6 +91,10 @@ These rules are mandatory:
     Prepared backend handoffs must be type-bound to the backend whose
     capabilities were checked; native lowering should accept
     `PreparedBackendRequest<'_, Self>` rather than an unbound prepared value.
+    Identity tokens such as `BackendIdentity` and `ExternalOwner` must be
+    created explicitly with `new()` and must not implement `Default`, because
+    each default construction would create a fresh identity that can be
+    mistaken for a shared boundary.
     Native lowering must consume the complete immutable filesystem and network
     lowering views; it must not reconstruct enforcement from only one side of
     a policy composition.
@@ -100,6 +104,13 @@ These rules are mandatory:
     a later connection uses the checked address. A filesystem backend must
     combine policy evaluation with native symlink, reparse-point, mount, and
     TOCTOU-safe enforcement.
+    Native backend implementation modules and integration tests must use the
+    exact OS-family guard for their crate: Linux enforcement uses
+    `cfg(target_os = "linux")`, macOS enforcement uses
+    `cfg(target_os = "macos")`, and Windows enforcement uses
+    `cfg(target_os = "windows")`. Do not use a broad `cfg(unix)` guard for
+    Linux-only tests or allow a backend test to pass on another OS without
+    executing its native enforcement path.
 13. `ExternalOwner` is an identity token supplied by a trusted caller. It is
     not evidence that an external sandbox exists or is enforcing anything.
     `CoreEnvironment` likewise requires a backend-selected core environment;
@@ -108,6 +119,13 @@ These rules are mandatory:
     review approves an advance. Never pull or fetch Codex automatically; the
     upstream-review tool is read-only and only compares an externally updated
     checkout.
+    Before implementing or changing any native backend behavior, inspect the
+    corresponding current Codex release line by line for every affected API,
+    lowering rule, capability, and security invariant. Record the relevant
+    correspondence and intentional Cageforge differences in the backend spec,
+    then add tests for each retained behavior before considering the backend
+    complete. Codex comparison is mandatory for every backend revision, not a
+    one-time design review.
 15. Configuration files are trusted application input, not an untrusted wire
     format. Keep resolution efficient for large files and shared inheritance
     graphs through one iterative inheritance linearization and indexed

@@ -105,6 +105,11 @@ assert_eq!(owner.clone(), owner);
 assert_ne!(ExternalOwner::new(), owner);
 ```
 
+Create owners explicitly with `ExternalOwner::new()`. The type deliberately
+does not implement `Default`: every newly created owner is a different identity,
+so a generic default value must not be mistaken for a shared enforcement
+boundary. Cloning an owner preserves its identity.
+
 ## API guide
 
 - `PolicyCeiling` stores the outer portable maximum policy, environment rules,

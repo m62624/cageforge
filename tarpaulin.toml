@@ -9,5 +9,6 @@ output-dir = "coverage"
 fail-under = 90
 exclude-files = [
     "crates/*/tests/*",
+    "crates/cageforge-linux/**",
     "tools/*",
 ]

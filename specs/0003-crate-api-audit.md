@@ -161,6 +161,11 @@ The workspace keeps a single owner for each reusable semantic operation:
   another. The backend must keep its advertised capabilities stable for the
   lifetime of the handoff; the type parameter is not proof that operating-
   system enforcement exists.
+- `BackendIdentity` and `ExternalOwner` use explicit `new()` constructors and
+  pointer identity. They intentionally do not implement `Default`: each
+  constructor call creates a fresh identity, so a generic default cannot be
+  mistaken for a shared backend or external-enforcement boundary. Their
+  `Clone` implementations preserve identity and do not create a new token.
 - `cageforge-policy` uses `globset` for filesystem and domain patterns. Its
   domain normalization and filesystem component handling are intentionally
   different layers around that matcher, not duplicate glob implementations.

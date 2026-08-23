@@ -189,6 +189,10 @@ The native backend remains responsible for:
 embedding application must separately establish that the external enforcement
 boundary exists and is trusted.
 
+`BackendIdentity` is created explicitly with `BackendIdentity::new()` and has
+no `Default` implementation. Each constructor call creates a distinct backend
+identity; cloning preserves identity and does not create a shared boundary.
+
 ## Dependency boundaries
 
 `cageforge-backend-api` may depend on:

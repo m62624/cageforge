@@ -307,19 +307,23 @@ impl<'a> BackendRequest<'a> {
 /// backend instances may share an identity only when they intentionally share
 /// the same capability and enforcement state. This is an identity token, not
 /// proof that operating-system enforcement exists.
+///
+/// This type intentionally has no [`Default`] implementation. Every identity
+/// must be created explicitly with [`Self::new`], because a default value
+/// would be a fresh identity rather than a shared backend boundary.
+///
+/// ```compile_fail
+/// use cageforge_backend_api::BackendIdentity;
+/// let _ = BackendIdentity::default();
+/// ```
 #[derive(Clone)]
 pub struct BackendIdentity(Arc<()>);
 
 impl BackendIdentity {
     /// Creates a new backend-instance identity.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(Arc::new(()))
-    }
-}
-
-impl Default for BackendIdentity {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

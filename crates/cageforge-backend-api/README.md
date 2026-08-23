@@ -72,6 +72,10 @@ capability snapshot captured during preflight and return
 capabilities afterwards. The backend remains responsible for advertising only
 capabilities it can actually enforce.
 
+Create `BackendIdentity` explicitly with `BackendIdentity::new()`. It has no
+`Default` implementation because each new identity represents a distinct
+backend boundary; cloning preserves an existing identity.
+
 When a request needs an unsupported capability, preparation returns
 `BackendContractError::UnsupportedCapability`. The error is matchable by its
 `BackendCapability` variant and its display text names the required

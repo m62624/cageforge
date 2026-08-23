@@ -147,8 +147,11 @@ dangerous request.
   rules; its rule builders reject the combination at construction time.
 - `NetworkPolicy::decision_for_domain` and
   `NetworkPolicy::decision_for_unix_socket` return typed `Allow`, `Deny`, or
-  `ExternallyEnforced` results. The boolean `allows_*` helpers intentionally
-  return true only for local `Allow`; they do not hide external ownership.
+  `ExternallyEnforced` results. The public API does not expose boolean
+  authorization helpers, so callers cannot accidentally collapse local denial
+  and externally enforced policy into the same `bool` result. Backends must
+  handle the typed decision explicitly and use `authorize_connection` for
+  actual network authorization.
 - A network backend must use `authorize_connection`; it is the only network
   API that can return an `AuthorizedSocketAddr` bound to the resolution
   snapshot and exact connected address.

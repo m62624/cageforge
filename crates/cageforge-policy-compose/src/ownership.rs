@@ -16,19 +16,23 @@ use std::sync::Arc;
 /// The `Arc<()>` payload stores no platform or harness data: the allocation's
 /// identity is the proof, and `Arc::ptr_eq` is the comparison. This keeps the
 /// type reusable wherever one trusted enforcement boundary owns both sides.
+///
+/// This type intentionally has no [`Default`] implementation. Every owner
+/// must be created explicitly with [`Self::new`], because a default value
+/// would be a fresh owner identity rather than a shared enforcement boundary.
+///
+/// ```compile_fail
+/// use cageforge_policy_compose::ExternalOwner;
+/// let _ = ExternalOwner::default();
+/// ```
 #[derive(Clone)]
 pub struct ExternalOwner(Arc<()>);
 
 impl ExternalOwner {
     /// Creates a new external-enforcement owner identity.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(Arc::new(()))
-    }
-}
-
-impl Default for ExternalOwner {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

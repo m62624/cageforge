@@ -151,6 +151,8 @@ are not connection permissions.
 
 `ExternalOwner` is only an opaque caller identity token. It does not prove
 that an external sandbox exists or that it is enforcing anything.
+It must be created explicitly with `ExternalOwner::new()`; the type has no
+`Default` implementation because each new owner is a distinct identity.
 
 `CoreEnvironment` and `EnvironmentInput::core` form the backend contract: a
 backend must create the value only after selecting the platform's core

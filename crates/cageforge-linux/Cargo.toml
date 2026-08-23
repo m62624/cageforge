@@ -1,0 +1,31 @@
+[package]
+name = "cageforge-linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Linux native backend for Cageforge process sandboxing"
+readme = "README.md"
+
+[lib]
+name = "cageforge_linux"
+path = "src/lib.rs"
+
+[dependencies]
+cageforge-backend-api.workspace = true
+cageforge-command.workspace = true
+cageforge-policy.workspace = true
+cageforge-policy-compose.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+seccompiler.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

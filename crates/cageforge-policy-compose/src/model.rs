@@ -310,21 +310,23 @@ impl EffectiveNetworkPolicy {
     pub fn requirements(&self) -> EffectiveNetworkRequirements {
         let mode = effective_network_mode(self.requested.mode(), self.ceiling.mode());
         let enabled = mode == NetworkMode::Enabled;
+        let domain_rules = enabled
+            && [&self.requested, &self.ceiling].iter().any(|policy| {
+                !policy.domains().is_empty() || policy.domain_mode() != DomainMode::Enabled
+            });
+        let local_address_restrictions = enabled
+            && [&self.requested, &self.ceiling]
+                .iter()
+                .any(|policy| policy.local_network_access() == LocalNetworkAccess::Deny);
         EffectiveNetworkRequirements {
             mode,
-            domain_rules: enabled
-                && [&self.requested, &self.ceiling].iter().any(|policy| {
-                    !policy.domains().is_empty() || policy.domain_mode() != DomainMode::Enabled
-                }),
-            local_address_restrictions: enabled
-                && [&self.requested, &self.ceiling]
-                    .iter()
-                    .any(|policy| policy.local_network_access() == LocalNetworkAccess::Deny),
-            resolved_targets: enabled,
+            domain_rules,
+            local_address_restrictions,
+            resolved_targets: domain_rules || local_address_restrictions,
             unix_sockets: enabled
                 && [&self.requested, &self.ceiling].iter().any(|policy| {
                     !policy.unix_sockets().is_empty()
-                        || policy.unix_socket_mode() != UnixSocketMode::Disabled
+                        || policy.unix_socket_mode() != UnixSocketMode::Enabled
                 }),
         }
     }

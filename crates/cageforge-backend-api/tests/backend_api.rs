@@ -454,12 +454,31 @@ fn required_capabilities_cover_unrestricted_default_modes() {
     assert!(required.supports(BackendCapability::FilesystemUnrestricted));
     assert!(required.supports(BackendCapability::NetworkEnabled));
     assert!(!required.supports(BackendCapability::NetworkLocalAddressRestrictions));
-    assert!(required.supports(BackendCapability::NetworkResolvedTargets));
-    assert!(required.supports(BackendCapability::NetworkUnixSockets));
+    assert!(!required.supports(BackendCapability::NetworkResolvedTargets));
+    assert!(!required.supports(BackendCapability::NetworkUnixSockets));
     assert!(required.supports(BackendCapability::EnvironmentAll));
 
     let collected: BackendCapabilities = required.iter().copied().collect();
     assert_eq!(collected, required);
+}
+
+#[test]
+fn enabled_network_socket_restrictions_require_socket_capability() {
+    let requested = cageforge_policy::SandboxPolicy::new(
+        FilesystemPolicy::unrestricted(),
+        NetworkPolicy::enabled().with_unix_socket_mode(UnixSocketMode::Disabled),
+    );
+    let environment = EnvironmentSpec::inherit_all();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
+    let command =
+        CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
+    let required = BackendRequest::new(&command, &sandbox).required_capabilities();
+
+    assert!(required.supports(BackendCapability::NetworkUnixSockets));
 }
 
 #[test]
@@ -712,8 +731,7 @@ fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
             if effective_network_mode == NetworkMode::Enabled {
                 expected = expected
                     .with(BackendCapability::NetworkLocalAddressRestrictions)
-                    .with(BackendCapability::NetworkResolvedTargets)
-                    .with(BackendCapability::NetworkUnixSockets);
+                    .with(BackendCapability::NetworkResolvedTargets);
             }
 
             assert_eq!(

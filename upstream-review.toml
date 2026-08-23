@@ -90,3 +90,26 @@ upstream_paths = [
     "codex-rs/exec-server/src/local_process.rs",
 ]
 local_paths = ["crates/cageforge-backend-api/"]
+
+[[scope]]
+name = "cageforge-linux"
+upstream_paths = [
+    "codex-rs/linux-sandbox/src/lib.rs",
+    "codex-rs/linux-sandbox/src/main.rs",
+    "codex-rs/linux-sandbox/src/launcher.rs",
+    "codex-rs/linux-sandbox/src/bwrap.rs",
+    "codex-rs/linux-sandbox/src/landlock.rs",
+    "codex-rs/linux-sandbox/src/linux_run_main.rs",
+    "codex-rs/linux-sandbox/src/exec_util.rs",
+    "codex-rs/sandboxing/src/lib.rs",
+    "codex-rs/sandboxing/src/manager.rs",
+    "codex-rs/sandboxing/src/bwrap.rs",
+    "codex-rs/sandboxing/src/landlock.rs",
+    "codex-rs/sandboxing/src/spawn.rs",
+    "codex-rs/core/src/sandboxing/mod.rs",
+    "codex-rs/process-hardening/src/lib.rs",
+    "codex-rs/bwrap/src/main.rs",
+    "codex-rs/bwrap/build.rs",
+    "codex-rs/bwrap/config.h",
+]
+local_paths = ["crates/cageforge-linux/"]
