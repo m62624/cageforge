@@ -193,10 +193,49 @@ pub(crate) struct RawNetwork {
     pub(crate) domain_mode: Option<RawDomainMode>,
     pub(crate) unix_socket_mode: Option<RawUnixSocketMode>,
     pub(crate) local_network_access: Option<RawLocalNetworkAccess>,
+    pub(crate) gateway: Option<RawGatewayConfig>,
     #[serde(default)]
     pub(crate) domains: Vec<RawDomainRule>,
     #[serde(default)]
     pub(crate) unix_sockets: Vec<RawUnixSocketRule>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawGatewayConfig {
+    #[schemars(range(min = 1))]
+    pub(crate) handshake_timeout_ms: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) dns_timeout_ms: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) connect_timeout_ms: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) response_header_timeout_ms: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) relay_idle_timeout_ms: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) max_concurrent_connections: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) max_requests_per_connection: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) max_resolved_addresses: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub(crate) http_header_bytes: Option<u64>,
+    pub(crate) relay_byte_limit: Option<RawRelayByteLimit>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum RawRelayByteLimit {
+    Bytes(u64),
+    Mode(RawRelayByteLimitMode),
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RawRelayByteLimitMode {
+    Unlimited,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

@@ -5,7 +5,8 @@ use cageforge_command::{
     EnvironmentFilterAction, EnvironmentInput, EnvironmentOverride, EnvironmentPattern,
     EnvironmentSpec, StdioMode, StdioSpec, TimeoutPolicy,
 };
-use cageforge_config::{Config, ConfigError, DiagnosticSeverity};
+use cageforge_config::{Config, ConfigError, DiagnosticSeverity, GatewayConfig};
+use cageforge_network_proxy::GatewayConfigError;
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemTarget, LocalNetworkAccess,
     MissingPathBehavior, NetworkMode, PathSelector, UnixSocketMode,
@@ -39,7 +40,7 @@ default_profile = "safe"
     .expect("valid empty profile")
 }
 
-const COMMON_EXAMPLES: [(&str, &str); 5] = [
+const COMMON_EXAMPLES: [(&str, &str); 6] = [
     (
         "minimal-policy.toml",
         include_str!("../examples/minimal-policy.toml"),
@@ -59,6 +60,10 @@ const COMMON_EXAMPLES: [(&str, &str); 5] = [
     (
         "trusted-metadata-write.toml",
         include_str!("../examples/trusted-metadata-write.toml"),
+    ),
+    (
+        "network-gateway.toml",
+        include_str!("../examples/network-gateway.toml"),
     ),
 ];
 
@@ -163,6 +168,103 @@ fn documented_examples_cover_their_declared_behavior() {
         trusted.policy().filesystem().protected_relative_paths(),
         &[PathBuf::from(".cargo"), PathBuf::from(".env")]
     );
+
+    let gateway = Config::from_toml(include_str!("../examples/network-gateway.toml"))
+        .expect("network gateway example parses")
+        .resolve_default()
+        .expect("network gateway example resolves");
+    assert_eq!(
+        gateway.network_gateway().handshake_timeout(),
+        Duration::from_millis(1500)
+    );
+    assert_eq!(
+        gateway.network_gateway().dns_timeout(),
+        Duration::from_millis(750)
+    );
+    assert_eq!(
+        gateway.network_gateway().connect_timeout(),
+        Duration::from_millis(2500)
+    );
+    assert_eq!(
+        gateway.network_gateway().response_header_timeout(),
+        Duration::from_millis(4000)
+    );
+    assert_eq!(
+        gateway.network_gateway().relay_idle_timeout(),
+        Duration::from_millis(30000)
+    );
+    assert_eq!(
+        gateway.network_gateway().max_concurrent_connections().get(),
+        32
+    );
+    assert_eq!(
+        gateway
+            .network_gateway()
+            .max_requests_per_connection()
+            .get(),
+        16
+    );
+    assert_eq!(gateway.network_gateway().max_resolved_addresses().get(), 8);
+    assert_eq!(gateway.network_gateway().http_header_bytes().get(), 16384);
+    assert_eq!(gateway.network_gateway().relay_byte_limit(), None);
+}
+
+#[test]
+fn omitted_gateway_table_uses_the_proxy_crates_secure_defaults() {
+    let resolved = empty_profile()
+        .resolve_default()
+        .expect("empty profile resolves");
+    assert_eq!(resolved.network_gateway(), &GatewayConfig::new());
+}
+
+#[test]
+fn gateway_numbers_and_modes_fail_closed_with_typed_errors() {
+    let zero = Config::from_toml(
+        r#"
+[profiles.safe.network.gateway]
+dns_timeout_ms = 0
+"#,
+    )
+    .expect("zero is structurally valid TOML")
+    .resolve("safe")
+    .expect_err("zero timeout must fail semantic validation");
+    assert_eq!(
+        zero,
+        ConfigError::InvalidValue {
+            profile: "safe".to_owned(),
+            field: "network.gateway.dns_timeout_ms".to_owned(),
+            value: "0 must be representable and greater than zero".to_owned(),
+        }
+    );
+
+    let small_header = Config::from_toml(
+        r#"
+[profiles.safe.network.gateway]
+http_header_bytes = 4096
+"#,
+    )
+    .expect("small header is structurally valid TOML")
+    .resolve("safe")
+    .expect_err("small HTTP parser buffer must fail semantic validation");
+    assert_eq!(
+        small_header,
+        ConfigError::NetworkGateway {
+            profile: "safe".to_owned(),
+            source: GatewayConfigError::HttpHeaderLimitTooSmall {
+                minimum: 8192,
+                actual: 4096,
+            },
+        }
+    );
+
+    let invalid_mode = Config::from_toml(
+        r#"
+[profiles.safe.network.gateway]
+relay_byte_limit = "none"
+"#,
+    )
+    .expect_err("only the explicit unlimited mode is accepted");
+    assert!(matches!(invalid_mode, ConfigError::InvalidToml { .. }));
 }
 
 #[test]

@@ -1,0 +1,44 @@
+[package]
+name = "cageforge-network-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Policy-enforcing HTTP and SOCKS5 network gateway for Cageforge"
+readme = "README.md"
+
+[features]
+default = ["runtime"]
+runtime = [
+    "dep:bytes",
+    "dep:cageforge-policy",
+    "dep:cageforge-policy-compose",
+    "dep:getrandom",
+    "dep:hickory-resolver",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:tokio",
+]
+
+[dependencies]
+bytes = { workspace = true, optional = true }
+cageforge-policy = { workspace = true, optional = true }
+cageforge-policy-compose = { workspace = true, optional = true }
+getrandom = { workspace = true, features = ["std"], optional = true }
+hickory-resolver = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, features = ["client", "http1", "server"], optional = true }
+hyper-util = { workspace = true, features = ["tokio"], optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time"], optional = true }
+
+[dev-dependencies]
+cageforge-command.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

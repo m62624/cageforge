@@ -89,6 +89,12 @@ impl ConfigError {
             }
             Self::Policy { profile, .. } => ("invalid_policy", Some(profile.clone()), None, None),
             Self::Command { profile, .. } => ("invalid_command", Some(profile.clone()), None, None),
+            Self::NetworkGateway { profile, .. } => (
+                "invalid_network_gateway",
+                Some(profile.clone()),
+                Some("network.gateway".to_owned()),
+                None,
+            ),
         };
         ConfigDiagnostic {
             code,

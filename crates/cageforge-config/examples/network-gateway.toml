@@ -1,0 +1,34 @@
+# A restricted outbound-network profile with explicit gateway runtime bounds.
+#
+# The child inherits every limit from `gateway-base`, narrows the DNS deadline,
+# and explicitly removes the default combined relay byte ceiling. Applications
+# that do not need custom runtime limits can omit the entire `gateway` table.
+default_profile = "restricted-network"
+
+[profiles.gateway-base.network]
+mode = "enabled"
+domain_mode = "restricted"
+local_network_access = "deny"
+domains = [
+  { pattern = "**.example.com", access = "allow" },
+]
+
+[profiles.gateway-base.network.gateway]
+handshake_timeout_ms = 1500
+dns_timeout_ms = 1200
+connect_timeout_ms = 2500
+response_header_timeout_ms = 4000
+relay_idle_timeout_ms = 30000
+max_concurrent_connections = 32
+max_requests_per_connection = 16
+max_resolved_addresses = 8
+http_header_bytes = 16384
+relay_byte_limit = 1048576
+
+[profiles.restricted-network]
+inherits = ["gateway-base"]
+description = "Restricted network with a shorter DNS deadline"
+
+[profiles.restricted-network.network.gateway]
+dns_timeout_ms = 750
+relay_byte_limit = "unlimited"

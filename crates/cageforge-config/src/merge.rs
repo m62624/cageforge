@@ -17,7 +17,8 @@ use cageforge_policy::{DomainAccess, DomainRule, PathPattern, PathSelector};
 
 use crate::model::{
     RawCommand, RawEnvironment, RawFilesystem, RawFilesystemMode, RawFilesystemRule,
-    RawFilesystemTarget, RawNetwork, RawNetworkMode, RawProfile, RawStdio, RawTimeout,
+    RawFilesystemTarget, RawGatewayConfig, RawNetwork, RawNetworkMode, RawProfile, RawStdio,
+    RawTimeout,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -176,6 +177,9 @@ impl ProfileMerger {
         if child.local_network_access.is_some() {
             merged.local_network_access = child.local_network_access;
         }
+        if let Some(gateway) = &child.gateway {
+            merged.gateway = Some(merge_gateway(merged.gateway.take(), gateway));
+        }
         for rule in &child.domains {
             let key = domain_rule_key(&rule.pattern);
             if let Some(&index) = self.domain_rules.get(&key) {
@@ -224,6 +228,28 @@ impl ProfileMerger {
             merged.timeout = Some(merge_timeout(merged.timeout.take(), timeout));
         }
     }
+}
+
+fn merge_gateway(parent: Option<RawGatewayConfig>, child: &RawGatewayConfig) -> RawGatewayConfig {
+    let mut merged = parent.unwrap_or_default();
+    macro_rules! replace_present {
+        ($field:ident) => {
+            if child.$field.is_some() {
+                merged.$field = child.$field;
+            }
+        };
+    }
+    replace_present!(handshake_timeout_ms);
+    replace_present!(dns_timeout_ms);
+    replace_present!(connect_timeout_ms);
+    replace_present!(response_header_timeout_ms);
+    replace_present!(relay_idle_timeout_ms);
+    replace_present!(max_concurrent_connections);
+    replace_present!(max_requests_per_connection);
+    replace_present!(max_resolved_addresses);
+    replace_present!(http_header_bytes);
+    replace_present!(relay_byte_limit);
+    merged
 }
 
 pub(crate) fn filesystem_rule_key(rule: &RawFilesystemRule) -> FilesystemRuleKey {

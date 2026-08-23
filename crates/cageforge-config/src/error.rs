@@ -6,6 +6,7 @@
 //! available without requiring callers to parse display strings.
 
 use cageforge_command::CommandError;
+use cageforge_network_proxy::GatewayConfigError;
 use cageforge_policy::PolicyError;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -97,6 +98,15 @@ pub enum ConfigError {
         /// The command validation error.
         #[source]
         source: CommandError,
+    },
+    /// The network gateway rejected a resolved runtime setting.
+    #[error("profile {profile:?} has an invalid network gateway: {source}")]
+    NetworkGateway {
+        /// The profile being resolved.
+        profile: String,
+        /// Gateway validation error.
+        #[source]
+        source: GatewayConfigError,
     },
 }
 

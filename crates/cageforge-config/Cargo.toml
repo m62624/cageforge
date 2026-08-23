@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 cageforge-command = { workspace = true }
+cageforge-network-proxy = { workspace = true, default-features = false }
 cageforge-path = { workspace = true }
 cageforge-policy = { workspace = true }
 serde = { workspace = true }

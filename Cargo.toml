@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cageforge-backend-api",
     "crates/cageforge-linux",
+    "crates/cageforge-network-proxy",
     "crates/cageforge-command",
     "crates/cageforge-config",
     "crates/cageforge-path",
@@ -17,7 +18,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/m62624/cageforge"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -29,6 +30,7 @@ all = "warn"
 cageforge-command = { path = "crates/cageforge-command", version = "0.1.0" }
 cageforge-backend-api = { path = "crates/cageforge-backend-api", version = "0.1.0" }
 cageforge-linux = { path = "crates/cageforge-linux", version = "0.1.0" }
+cageforge-network-proxy = { path = "crates/cageforge-network-proxy", version = "0.1.0", default-features = false }
 cageforge-policy = { path = "crates/cageforge-policy", version = "0.1.0" }
 cageforge-policy-compose = { path = "crates/cageforge-policy-compose", version = "0.1.0" }
 cageforge-path = { path = "crates/cageforge-path", version = "0.1.0" }
@@ -42,6 +44,13 @@ globset = "0.4.20"
 wildmatch = "2.6.1"
 libc = "0.2.177"
 seccompiler = "0.5.0"
+bytes = "1.12.1"
+getrandom = "0.4.3"
+hickory-resolver = "0.26.1"
+http-body-util = "0.1.5"
+hyper = "1.11.0"
+hyper-util = "0.1.20"
+tokio = "1.53.1"
 jsonschema = { version = "0.49.9", default-features = false }
 schemars = "1.2.2"
 serde_json = "1.0.151"

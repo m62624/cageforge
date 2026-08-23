@@ -7,7 +7,9 @@
 //! `cageforge-policy` and `cageforge-command`.
 
 mod command;
+mod gateway;
 mod policy;
 
 pub(crate) use command::build_command;
+pub(crate) use gateway::build_gateway_config;
 pub(crate) use policy::build_policy;

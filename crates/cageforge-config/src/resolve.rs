@@ -12,6 +12,7 @@ use crate::error::{ConfigError, invalid_value};
 use crate::merge::{MergedProfile, ProfileMerger, domain_rule_key, filesystem_rule_key};
 use crate::model::{RawConfig, RawProfile};
 use cageforge_command::{CommandRequest, EnvironmentNameKey};
+use cageforge_network_proxy::GatewayConfig;
 use cageforge_path::{NativePathKey, contains_parent_traversal};
 use cageforge_policy::SandboxPolicy;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -31,6 +32,7 @@ pub struct ResolvedProfile {
     workspace_roots: Vec<PathBuf>,
     policy: SandboxPolicy,
     command: Option<CommandRequest>,
+    network_gateway: GatewayConfig,
 }
 
 impl Config {
@@ -70,6 +72,13 @@ impl Config {
         let policy =
             build::build_policy(merged.filesystem.as_ref(), merged.network.as_ref(), name)?;
         let command = build::build_command(merged.command.as_ref(), name)?;
+        let network_gateway = build::build_gateway_config(
+            merged
+                .network
+                .as_ref()
+                .and_then(|network| network.gateway.as_ref()),
+            name,
+        )?;
         let workspace_roots = merged
             .workspace_roots
             .into_iter()
@@ -80,6 +89,7 @@ impl Config {
             workspace_roots,
             policy,
             command,
+            network_gateway,
         })
     }
 
@@ -187,6 +197,11 @@ impl ResolvedProfile {
     pub fn command(&self) -> Option<&CommandRequest> {
         self.command.as_ref()
     }
+
+    /// Returns the validated outbound gateway runtime configuration.
+    pub fn network_gateway(&self) -> &GatewayConfig {
+        &self.network_gateway
+    }
 }
 
 struct ResolveFrame {
@@ -237,45 +252,45 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
                 ));
             }
         }
-        if let Some(command) = &profile.command {
-            if let Some(environment) = &command.environment {
-                let mut filter_patterns = BTreeSet::new();
-                for pattern in environment.filters.keys() {
-                    if !filter_patterns.insert(pattern.to_lowercase()) {
-                        return Err(invalid_value(
-                            name,
-                            "command.environment.filters",
-                            format!("duplicate pattern ignoring case {pattern:?}"),
-                        ));
-                    }
+        if let Some(command) = &profile.command
+            && let Some(environment) = &command.environment
+        {
+            let mut filter_patterns = BTreeSet::new();
+            for pattern in environment.filters.keys() {
+                if !filter_patterns.insert(pattern.to_lowercase()) {
+                    return Err(invalid_value(
+                        name,
+                        "command.environment.filters",
+                        format!("duplicate pattern ignoring case {pattern:?}"),
+                    ));
                 }
-                let mut set_names = HashSet::new();
-                for variable in environment.set.keys() {
-                    if !set_names.insert(EnvironmentNameKey::new(OsStr::new(variable))) {
-                        return Err(invalid_value(
-                            name,
-                            "command.environment",
-                            format!("duplicate set variable ignoring case {variable:?}"),
-                        ));
-                    }
+            }
+            let mut set_names = HashSet::new();
+            for variable in environment.set.keys() {
+                if !set_names.insert(EnvironmentNameKey::new(OsStr::new(variable))) {
+                    return Err(invalid_value(
+                        name,
+                        "command.environment",
+                        format!("duplicate set variable ignoring case {variable:?}"),
+                    ));
                 }
-                let mut remove_names = HashSet::new();
-                for variable in &environment.remove {
-                    let key = EnvironmentNameKey::new(OsStr::new(variable));
-                    if !remove_names.insert(key.clone()) {
-                        return Err(invalid_value(
-                            name,
-                            "command.environment.remove",
-                            format!("duplicate removed variable ignoring case {variable:?}"),
-                        ));
-                    }
-                    if set_names.contains(&key) {
-                        return Err(invalid_value(
-                            name,
-                            "command.environment",
-                            format!("variable {variable:?} appears in both set and remove"),
-                        ));
-                    }
+            }
+            let mut remove_names = HashSet::new();
+            for variable in &environment.remove {
+                let key = EnvironmentNameKey::new(OsStr::new(variable));
+                if !remove_names.insert(key.clone()) {
+                    return Err(invalid_value(
+                        name,
+                        "command.environment.remove",
+                        format!("duplicate removed variable ignoring case {variable:?}"),
+                    ));
+                }
+                if set_names.contains(&key) {
+                    return Err(invalid_value(
+                        name,
+                        "command.environment",
+                        format!("variable {variable:?} appears in both set and remove"),
+                    ));
                 }
             }
         }
