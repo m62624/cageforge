@@ -151,13 +151,6 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Build bundled Bubblewrap
-        if: matrix.os_name == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libcap-dev pkg-config
-          cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
-          echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
       - name: Check formatting
         # Keep this list limited to the current portable packages. Add a new
         # portable package here when it becomes part of the default surface.
@@ -227,6 +220,13 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Build bundled Bubblewrap on Linux
+        if: matrix.os_name == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libcap-dev pkg-config
+          cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
+          echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Clippy
