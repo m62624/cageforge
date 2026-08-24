@@ -154,7 +154,7 @@ fn special_path_selectors_are_distinct() {
     assert!(PathSelector::slash_tmp().is_slash_tmp_scope());
     assert!(PathSelector::workspace_root().is_workspace_scope());
     assert!(
-        PathSelector::absolute("/workspace")
+        PathSelector::absolute(native_path("/workspace"))
             .expect("absolute selector")
             .is_absolute_scope()
     );
@@ -570,8 +570,9 @@ fn path_patterns_expose_static_prefixes_without_changing_match_semantics() {
 
 #[test]
 fn filesystem_globs_support_character_classes_and_ranges() {
+    let workspace_root = native_path("/workspace");
     let context = PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(&workspace_root)
         .expect("workspace root");
     let policy = FilesystemPolicy::restricted([
         FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
@@ -583,19 +584,28 @@ fn filesystem_globs_support_character_classes_and_ranges() {
 
     assert_eq!(
         policy
-            .access_for_path(Path::new("/workspace/Secrets/a7.token"), &context)
+            .access_for_path(
+                &Path::new(&workspace_root).join("Secrets").join("a7.token"),
+                &context,
+            )
             .expect("range match"),
         FilesystemDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_path(Path::new("/workspace/Secrets/token"), &context)
+            .access_for_path(
+                &Path::new(&workspace_root).join("Secrets").join("token"),
+                &context,
+            )
             .expect("negative class match"),
         FilesystemDecision::Deny
     );
     assert_eq!(
         policy
-            .access_for_path(Path::new("/workspace/Secrets/xoken"), &context)
+            .access_for_path(
+                &Path::new(&workspace_root).join("Secrets").join("xoken"),
+                &context,
+            )
             .expect("negative class non-match"),
         FilesystemDecision::Write
     );
@@ -893,8 +903,9 @@ fn filesystem_policy_normalizes_duplicate_rules_conservatively() {
     ]);
     let normalized = policy.normalized().expect("valid policy");
     assert_eq!(normalized.entries().len(), 1);
+    let workspace_root = native_path("/workspace");
     let context = PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(&workspace_root)
         .expect("workspace root");
     assert_eq!(
         normalized
