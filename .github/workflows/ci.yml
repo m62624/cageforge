@@ -159,6 +159,7 @@ jobs:
           -p cageforge-backend-api
           -p cageforge-command
           -p cageforge-config
+          -p cageforge-network-proxy
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
@@ -170,6 +171,7 @@ jobs:
           -p cageforge-backend-api
           -p cageforge-command
           -p cageforge-config
+          -p cageforge-network-proxy
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
@@ -181,10 +183,25 @@ jobs:
           -p cageforge-backend-api
           -p cageforge-command
           -p cageforge-config
+          -p cageforge-network-proxy
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
+      - name: Check network proxy without runtime feature
+        run: >-
+          cargo check
+          -p cageforge-network-proxy
+          --no-default-features
+          --all-targets
+      - name: Lint network proxy without runtime feature
+        run: >-
+          cargo clippy
+          -p cageforge-network-proxy
+          --no-default-features
+          --all-targets -- -D warnings
+      - name: Test network proxy without runtime feature
+        run: cargo test -p cageforge-network-proxy --no-default-features
       - name: Check portable documentation
         env:
           RUSTDOCFLAGS: -D warnings
@@ -193,6 +210,7 @@ jobs:
           -p cageforge-backend-api
           -p cageforge-command
           -p cageforge-config
+          -p cageforge-network-proxy
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
@@ -311,11 +329,67 @@ jobs:
       - run: cargo clippy -p cageforge-core -p cageforge-windows --all-targets -- -D warnings
       - run: cargo test -p cageforge-core -p cageforge-windows
 
+  coverage-portable:
+    name: portable coverage (Linux)
+    needs: [changes, portable-default, full-matrix]
+    # Coverage follows the fast portable checks in default mode and the full
+    # matrix in shared-contract mode. Native-only changes do not run this
+    # portable metric: their enforcement is tested by the matching native job.
+    if: >-
+      always() &&
+      (needs.changes.outputs.mode == 'default' || needs.changes.outputs.mode == 'full') &&
+      (needs.portable-default.result == 'success' || needs.full-matrix.result == 'success')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Pin the installer action so the coverage toolchain remains reproducible
+      # and does not turn a routine CI run into a cargo install build.
+      - uses: taiki-e/install-action@v2.85.13
+        with:
+          tool: cargo-tarpaulin
+      - name: Generate portable coverage
+        run: >-
+          cargo tarpaulin
+          --locked
+          --ignore-config
+          --timeout 300
+          --fail-under 90
+          --out Xml
+          --output-dir coverage
+          --exclude-files
+          'crates/*/tests/*'
+          'crates/cageforge-bwrap/**'
+          'crates/cageforge-linux/**'
+          'tools/*'
+          --packages
+          cageforge-backend-api
+          cageforge-command
+          cageforge-config
+          cageforge-network-proxy
+          cageforge-path
+          cageforge-policy
+          cageforge-policy-compose
+          cageforge-upstream-review
+          -- --test-threads=1
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-portable-coverage
+          path: coverage/*.xml
+          if-no-files-found: error
+
+      # TODO: add a separate Linux-native coverage measurement once the tool
+      # can attribute code across the Bubblewrap/helper process boundary. Do
+      # not merge that number into portable coverage or pretend compilation
+      # on another OS replaces native enforcement coverage.
+
   ci-pass:
     name: CI passed
     if: always()
     needs:
-      [changes, portable-default, full-matrix, native-linux, native-macos, native-windows]
+      [changes, portable-default, full-matrix, native-linux, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

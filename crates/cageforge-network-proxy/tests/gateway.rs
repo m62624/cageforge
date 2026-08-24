@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#![cfg(feature = "runtime")]
+
 mod support;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

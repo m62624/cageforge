@@ -920,6 +920,13 @@ pub enum LinuxBackendError {
         /// Protected path removed by the backend monitor.
         path: PathBuf,
     },
+    /// The protected directory changed identity before the backend could
+    /// remove it.
+    #[error("protected directory changed before removal: {path:?}")]
+    ProtectedPathChanged {
+        /// Protected path whose inode no longer matches the observed entry.
+        path: PathBuf,
+    },
     /// The per-launch protected-path monitor could not be started.
     #[error("failed to start protected-path monitor: {source}")]
     ProtectedPathMonitorSetupFailed {

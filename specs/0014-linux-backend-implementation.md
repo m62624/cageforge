@@ -464,8 +464,11 @@ instance's host mount descriptors.
 
 The protected-create monitor must not remove a path through an unchecked host
 pathname. It opens every parent component with `openat(..., O_NOFOLLOW)`,
-reserves the final directory entry relative to that descriptor, and removes
-the reserved entry without following a replacement parent or child symlink.
+opens the final directory without following symlinks, compares its device/inode
+identity with the current parent-relative entry, and only then reserves and
+removes the entry. A replacement or identity mismatch fails closed rather than
+deleting a different directory under the protected name; recursive cleanup
+must not follow child symlinks.
 Protected-path monitoring also rejects a writable symlink in the parent chain
 before registering the monitor. Cross-process synthetic-mount owner markers
 include the process start time as well as the PID, so PID reuse cannot keep a

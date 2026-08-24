@@ -246,11 +246,19 @@ fn open_directory_entry(parent: libc::c_int, name: &CString) -> io::Result<Owned
 fn remove_directory_entry(
     parent: libc::c_int,
     name: &CString,
-    // Keep the O_NOFOLLOW descriptor alive while the parent-relative
-    // rename/removal sequence runs; its Drop closes the pinned directory.
-    _directory: OwnedFd,
+    directory: OwnedFd,
     path: &Path,
 ) -> Result<bool, LinuxBackendError> {
+    let expected = file_identity(directory.as_raw_fd())
+        .map_err(|source| protected_path_monitor_error(path, source))?;
+    let current = entry_identity(parent, name)
+        .map_err(|source| protected_path_monitor_error(path, source))?;
+    if current != expected {
+        return Err(LinuxBackendError::ProtectedPathChanged {
+            path: path.to_path_buf(),
+        });
+    }
+
     let sequence = REMOVE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temporary_name = OsString::from(format!(
         ".cageforge-protected-remove-{}-{sequence}",
@@ -298,6 +306,44 @@ fn remove_directory_entry(
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(true),
         Err(source) => Err(protected_path_monitor_error(path, source)),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[allow(unsafe_code)]
+fn file_identity(fd: libc::c_int) -> io::Result<FileIdentity> {
+    let mut metadata = unsafe { std::mem::zeroed::<libc::stat>() };
+    if unsafe { libc::fstat(fd, &mut metadata) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(FileIdentity {
+        device: metadata.st_dev as u64,
+        inode: metadata.st_ino as u64,
+    })
+}
+
+#[allow(unsafe_code)]
+fn entry_identity(parent: libc::c_int, name: &CString) -> io::Result<FileIdentity> {
+    let mut metadata = unsafe { std::mem::zeroed::<libc::stat>() };
+    if unsafe {
+        libc::fstatat(
+            parent,
+            name.as_ptr(),
+            &mut metadata,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(FileIdentity {
+        device: metadata.st_dev as u64,
+        inode: metadata.st_ino as u64,
+    })
 }
 
 fn unlink_entry(
@@ -412,8 +458,11 @@ impl Drop for ProtectedCreateWatcher {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::fd::AsRawFd;
 
     use tempfile::TempDir;
+
+    use crate::error::LinuxBackendError;
 
     use super::remove_if_created;
 
@@ -453,5 +502,31 @@ mod tests {
             fs::read_to_string(outside_file).expect("outside file"),
             "keep"
         );
+    }
+
+    #[test]
+    fn protected_removal_rejects_a_replaced_directory() {
+        let workspace = TempDir::new().expect("workspace");
+        let protected = workspace.path().join(".git");
+        let replacement = workspace.path().join("replacement");
+        fs::create_dir(&protected).expect("protected directory");
+        fs::create_dir(&replacement).expect("replacement directory");
+
+        let parent =
+            super::open_directory_without_symlinks(workspace.path()).expect("parent descriptor");
+        let name = std::ffi::CString::new(".git").expect("name");
+        let directory =
+            super::open_directory_entry(parent.as_raw_fd(), &name).expect("protected descriptor");
+        fs::rename(&protected, workspace.path().join("old")).expect("move protected");
+        fs::rename(&replacement, &protected).expect("install replacement");
+
+        let result =
+            super::remove_directory_entry(parent.as_raw_fd(), &name, directory, &protected);
+
+        assert!(matches!(
+            result,
+            Err(LinuxBackendError::ProtectedPathChanged { .. })
+        ));
+        assert!(protected.is_dir(), "replacement must remain intact");
     }
 }

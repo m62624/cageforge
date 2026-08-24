@@ -427,6 +427,13 @@ fn detach_standard_streams() -> Result<(), LinuxBridgeError> {
             source: io::Error::last_os_error(),
         });
     }
+    let read_fd = match move_fd_above_standard_streams(read_fd) {
+        Ok(fd) => fd,
+        Err(error) => {
+            let _ = close_fd(read_fd);
+            return Err(error);
+        }
+    };
     let write_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
     if write_fd < 0 {
         let error = io::Error::last_os_error();
@@ -436,6 +443,14 @@ fn detach_standard_streams() -> Result<(), LinuxBridgeError> {
             source: error,
         });
     }
+    let write_fd = match move_fd_above_standard_streams(write_fd) {
+        Ok(fd) => fd,
+        Err(error) => {
+            let _ = close_fd(read_fd);
+            let _ = close_fd(write_fd);
+            return Err(error);
+        }
+    };
     for (source, target) in [
         (read_fd, libc::STDIN_FILENO),
         (write_fd, libc::STDOUT_FILENO),

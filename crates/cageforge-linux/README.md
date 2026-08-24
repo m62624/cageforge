@@ -178,6 +178,7 @@ it, and an unsupported combination is rejected before launch.
 | Deny-glob expansion | A deny glob | Expands bounded matches, accounts for symlinks, and masks every authorized match |
 | Protected metadata paths | `.git` by default plus configured additional paths | Blocks existing paths and monitors missing paths against creation/replacement with inotify and fail-closed cleanup |
 | Symlink and mount-boundary checks | Any native filesystem lowering | Rejects writable symlink escapes and unsafe path/mount relationships |
+| Protected-directory inode pinning | Protected-path monitor | Rejects a replacement directory before removal instead of deleting a different entry under the protected name |
 | Descriptor pinning | Mount sources, Bubblewrap, and hardening helper | Prevents path replacement from changing the file handed to Bubblewrap |
 | Close-on-exec and FD inheritance | Every launch | Keeps mount, authentication, gateway, and coordination descriptors out of unrelated child processes |
 | Helper authentication | Every hardened launch | Requires the backend-owned descriptor, peer-namespace check, and authentication token before the helper runs |
