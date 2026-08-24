@@ -77,6 +77,7 @@ impl ConfigError {
             Self::InvalidProfileName { .. } => ("invalid_profile_name", None, None, None),
             Self::UnknownProfile { .. } => ("unknown_profile", None, None, None),
             Self::NoDefaultProfile => ("missing_default_profile", None, None, None),
+            Self::ResolutionInvariant { .. } => ("profile_resolution_invariant", None, None, None),
             Self::ProfileCycle { .. } => ("profile_inheritance_cycle", None, None, None),
             Self::InvalidValue { profile, field, .. } => (
                 "invalid_value",

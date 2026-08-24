@@ -2,11 +2,162 @@
 
 //! Typed Linux backend failures.
 
+use std::fmt;
+use std::io;
 use std::path::PathBuf;
 
 use cageforge_backend_api::{BackendCapability, BackendContractError};
 use cageforge_network_proxy::GatewayError;
 use thiserror::Error;
+
+/// The filesystem operation whose native lowering failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilesystemMetadataOperation {
+    /// Inspecting a requested scope.
+    Scope,
+    /// Inspecting a mask target.
+    Mask,
+    /// Inspecting an ancestor while checking a writable symlink boundary.
+    WritableSymlinkAncestor,
+    /// Inspecting a descendant mount target.
+    DescendantMount,
+}
+
+impl fmt::Display for FilesystemMetadataOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let operation = match self {
+            Self::Scope => "scope",
+            Self::Mask => "mask",
+            Self::WritableSymlinkAncestor => "writable symlink ancestor",
+            Self::DescendantMount => "descendant mount",
+        };
+        formatter.write_str(operation)
+    }
+}
+
+/// A typed failure while translating a portable filesystem rule to Bubblewrap
+/// mounts. Each variant identifies the failed operation without requiring a
+/// caller to parse an implementation-specific reason string.
+#[derive(Debug, Error)]
+pub enum FilesystemLoweringError {
+    /// Metadata for a native path could not be inspected.
+    #[error("cannot inspect {operation} metadata: {source}")]
+    Metadata {
+        /// Operation being performed.
+        operation: FilesystemMetadataOperation,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// A mount target was empty or relative.
+    #[error("mount target must be an absolute non-empty path")]
+    InvalidMountTarget,
+    /// The requested target overlaps a backend-reserved path.
+    #[error("the Linux backend reserves /proc and its private runtime/state mounts")]
+    ReservedRuntimePath,
+    /// The fixed in-sandbox gateway socket has no parent directory.
+    #[error("gateway socket has no parent directory")]
+    GatewaySocketParentMissing,
+    /// A mount source could not be canonicalized before Bubblewrap lowering.
+    #[error("cannot canonicalize the mount source: {source}")]
+    Canonicalize {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// A deny target was incorrectly passed to a bind-mount operation.
+    #[error("deny access cannot be lowered as a bind mount")]
+    DenyBind,
+    /// A pinned mount source descriptor could not be cloned.
+    #[error("cannot clone the pinned mount source: {source}")]
+    CloneSource {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// A mount source contained an embedded NUL byte.
+    #[error("mount source contains NUL")]
+    SourceContainsNul,
+    /// A mount source descriptor could not be opened.
+    #[error("cannot open the mount source: {source}")]
+    OpenSource {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The filesystem root cannot be replaced with a deny mask.
+    #[error("the filesystem root cannot be masked")]
+    RootCannotBeMasked,
+    /// An attempted protected mask crosses a writable symbolic link.
+    #[error("protected path crosses writable symbolic link {symlink:?}")]
+    WritableSymlink {
+        /// Symbolic link that would make the mask escape its writable root.
+        symlink: PathBuf,
+    },
+    /// The shared empty mask source could not be opened.
+    #[error("cannot open the empty mask source: {source}")]
+    EmptyMaskSource {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// A network mount relationship that cannot be lowered safely.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkLoweringError {
+    /// A proxy-routed policy did not receive its authenticated gateway mount.
+    #[error("proxy-routed policy has no authenticated gateway mount")]
+    MissingGatewayMount,
+    /// A gateway mount was supplied to a policy that must not use one.
+    #[error("gateway mount was supplied for a policy that must not use it")]
+    UnexpectedGatewayMount,
+}
+
+/// A network policy combination that needs a capability not represented by
+/// the Linux backend's native lowering.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkCombinationError {
+    /// Proxy routing must also isolate unrestricted pathname Unix sockets.
+    #[error("proxy-routed Linux networking requires pathname Unix socket isolation")]
+    ProxyRequiresUnixSocketIsolation,
+}
+
+/// The expected invariant when portable and native filesystem decisions
+/// disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyLoweringExpectation {
+    /// A directly matched deny glob must lower to a denied path.
+    DenyGlobMatch,
+}
+
+impl fmt::Display for PolicyLoweringExpectation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DenyGlobMatch => formatter.write_str("deny-glob match"),
+        }
+    }
+}
+
+/// A failure returned by the per-launch gateway thread.
+#[derive(Debug, Error)]
+pub enum NetworkGatewayRuntimeError {
+    /// The runtime reported a concrete failure.
+    #[error("{reason}")]
+    Failed {
+        /// Runtime diagnostic.
+        reason: String,
+    },
+    /// The startup readiness channel closed before reporting a result.
+    #[error("gateway startup channel closed: {message}")]
+    StartupChannelClosed {
+        /// Channel diagnostic.
+        message: String,
+    },
+    /// The gateway thread terminated by panic.
+    #[error("gateway runtime thread panicked")]
+    Panicked,
+}
 
 /// Errors raised while constructing, lowering, or launching the Linux
 /// backend. Security-relevant failures remain distinguishable from ordinary
@@ -92,25 +243,20 @@ pub enum LinuxBackendError {
         capability: BackendCapability,
     },
     /// The runtime path cannot be safely lowered.
-    #[error("filesystem lowering failed for {path:?}: {reason}")]
+    #[error("filesystem lowering failed for {path:?}: {source}")]
     FilesystemLoweringFailed {
         /// Path whose mount or mask could not be constructed.
         path: PathBuf,
-        /// Explanation of the failed lowering step.
-        reason: String,
+        /// Typed native lowering failure.
+        #[source]
+        source: FilesystemLoweringError,
     },
     /// The network policy cannot be lowered by this backend.
-    #[error("network lowering failed: {reason}")]
-    NetworkLoweringFailed {
-        /// Explanation of the failed network lowering step.
-        reason: String,
-    },
+    #[error("network lowering failed: {0}")]
+    NetworkLoweringFailed(#[from] NetworkLoweringError),
     /// Two individually valid network settings require an unsupported Linux lowering.
-    #[error("Linux backend cannot enforce this network policy combination: {reason}")]
-    UnsupportedNetworkCombination {
-        /// Stable explanation of the incompatible effective settings.
-        reason: &'static str,
-    },
+    #[error("Linux backend cannot enforce this network policy combination: {0}")]
+    UnsupportedNetworkCombination(#[from] NetworkCombinationError),
     /// The policy-enforcing host gateway could not be constructed.
     #[error("failed to initialize the Linux network gateway: {source}")]
     NetworkGatewayInitialization {
@@ -133,11 +279,8 @@ pub enum LinuxBackendError {
         source: std::io::Error,
     },
     /// The host gateway stopped while its sandboxed process still depended on it.
-    #[error("Linux network gateway runtime failed: {reason}")]
-    NetworkGatewayRuntimeFailed {
-        /// Runtime failure diagnostic.
-        reason: String,
-    },
+    #[error("Linux network gateway runtime failed: {0}")]
+    NetworkGatewayRuntimeFailed(#[from] NetworkGatewayRuntimeError),
     /// A deny-glob would require scanning an unsafe or unbounded root.
     #[error("deny-glob {pattern:?} cannot be scanned safely from {search_root:?}")]
     UnsafeGlobScan {
@@ -179,7 +322,7 @@ pub enum LinuxBackendError {
         /// Path whose portable and native interpretations disagreed.
         path: PathBuf,
         /// Native invariant that was expected.
-        expected: &'static str,
+        expected: PolicyLoweringExpectation,
     },
     /// The per-user setup lock could not be opened or acquired.
     #[error("failed to acquire Linux sandbox setup lock {path:?}: {source}")]

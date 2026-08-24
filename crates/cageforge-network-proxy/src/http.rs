@@ -176,10 +176,9 @@ where
         crate::relay::copy_bidirectional(TokioIo::new(upgraded), upstream, idle_timeout, byte_limit)
             .await
     });
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .body(body::empty())
-        .expect("static CONNECT response is valid"))
+    let mut response = Response::new(body::empty());
+    *response.status_mut() = StatusCode::OK;
+    Ok(response)
 }
 
 fn ordinary_authority(uri: &Uri) -> Result<Authority, GatewayError> {
@@ -195,10 +194,10 @@ fn ordinary_authority(uri: &Uri) -> Result<Authority, GatewayError> {
 }
 
 fn origin_form(uri: &Uri) -> Result<Uri, GatewayError> {
-    let path = uri.path_and_query().cloned().unwrap_or_else(|| {
-        "/".parse::<PathAndQuery>()
-            .expect("root path-and-query is valid")
-    });
+    let path = uri
+        .path_and_query()
+        .cloned()
+        .unwrap_or_else(|| PathAndQuery::from_static("/"));
     Uri::builder()
         .path_and_query(path)
         .build()
@@ -347,10 +346,8 @@ fn response_for_error(error: &GatewayError) -> Response<ProxyBody> {
 }
 
 fn error_response(status: StatusCode, message: &'static str, close: bool) -> Response<ProxyBody> {
-    let mut response = Response::builder()
-        .status(status)
-        .body(body::text(message))
-        .expect("static error response is valid");
+    let mut response = Response::new(body::text(message));
+    *response.status_mut() = status;
     if close {
         response
             .headers_mut()

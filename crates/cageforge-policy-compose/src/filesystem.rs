@@ -227,7 +227,10 @@ fn effective_mode(left: FilesystemMode, right: FilesystemMode) -> FilesystemMode
             FilesystemMode::Unrestricted
         }
         (FilesystemMode::External, _) | (_, FilesystemMode::External) => {
-            unreachable!("mixed filesystem ownership is rejected during composition")
+            // `compose` rejects mixed ownership before constructing this
+            // model. If that invariant changes, fail closed rather than
+            // widening local filesystem access.
+            FilesystemMode::Restricted
         }
     }
 }

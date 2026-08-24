@@ -59,6 +59,14 @@ pub enum ConfigError {
     /// `resolve_default` was requested without a configured default profile.
     #[error("no default profile is configured")]
     NoDefaultProfile,
+    /// The iterative inheritance resolver reached an impossible internal
+    /// state. This is returned instead of panicking so callers still receive
+    /// a typed configuration failure if the resolver is changed incorrectly.
+    #[error("configuration profile resolution invariant failed: {message}")]
+    ResolutionInvariant {
+        /// Stable explanation of the violated resolver invariant.
+        message: &'static str,
+    },
     /// Profile inheritance contains a cycle.
     #[error("profile inheritance cycle: {}", chain.join(" -> "))]
     ProfileCycle {

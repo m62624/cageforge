@@ -22,7 +22,10 @@ use cageforge_policy_compose::{EffectiveFilesystemLayer, EffectiveSandbox};
 
 use self::synthetic::{SetupLock, SyntheticMountTarget};
 use crate::backend::{IN_SANDBOX_HELPER_PATH, LinuxBackend};
-use crate::error::LinuxBackendError;
+use crate::error::{
+    FilesystemLoweringError, FilesystemMetadataOperation, LinuxBackendError,
+    PolicyLoweringExpectation,
+};
 use crate::network::IN_SANDBOX_GATEWAY_SOCKET;
 
 const PRIVATE_RUNTIME_ROOT: &str = "/dev/.cageforge-runtime";
@@ -251,7 +254,7 @@ fn collect_layer_mounts<'a>(
                     {
                         return Err(LinuxBackendError::PolicyLoweringMismatch {
                             path,
-                            expected: "deny-glob match",
+                            expected: PolicyLoweringExpectation::DenyGlobMatch,
                         });
                     }
                     insert_mount(mounts, path, Mount::Deny);
@@ -308,7 +311,10 @@ fn add_existing_scope(
         Err(source) => {
             return Err(LinuxBackendError::FilesystemLoweringFailed {
                 path: path.to_path_buf(),
-                reason: source.to_string(),
+                source: FilesystemLoweringError::Metadata {
+                    operation: FilesystemMetadataOperation::Scope,
+                    source,
+                },
             });
         }
     }
@@ -419,7 +425,10 @@ fn materialize_missing_masks(
             Err(source) => {
                 return Err(LinuxBackendError::FilesystemLoweringFailed {
                     path,
-                    reason: source.to_string(),
+                    source: FilesystemLoweringError::Metadata {
+                        operation: FilesystemMetadataOperation::Mask,
+                        source,
+                    },
                 });
             }
         }
@@ -471,7 +480,10 @@ fn first_missing_component(path: &Path) -> Result<Option<PathBuf>, LinuxBackendE
             Err(source) => {
                 return Err(LinuxBackendError::FilesystemLoweringFailed {
                     path: current,
-                    reason: source.to_string(),
+                    source: FilesystemLoweringError::Metadata {
+                        operation: FilesystemMetadataOperation::WritableSymlinkAncestor,
+                        source,
+                    },
                 });
             }
         }
@@ -500,7 +512,7 @@ fn validate_mount_path(path: &Path) -> Result<(), LinuxBackendError> {
     if path.as_os_str().is_empty() || !path.is_absolute() {
         Err(LinuxBackendError::FilesystemLoweringFailed {
             path: path.to_path_buf(),
-            reason: "mount target must be an absolute non-empty path".to_string(),
+            source: FilesystemLoweringError::InvalidMountTarget,
         })
     } else {
         Ok(())
@@ -521,8 +533,7 @@ fn reject_reserved_runtime_paths(
     }) {
         return Err(LinuxBackendError::FilesystemLoweringFailed {
             path: path.clone(),
-            reason: "the Linux backend reserves /proc and its private runtime/state mounts"
-                .to_string(),
+            source: FilesystemLoweringError::ReservedRuntimePath,
         });
     }
     Ok(())
@@ -569,7 +580,10 @@ fn append_private_runtime(
     if let Some(gateway_mount) = gateway_mount {
         let gateway_directory = Path::new(IN_SANDBOX_GATEWAY_SOCKET)
             .parent()
-            .expect("gateway socket has a parent");
+            .ok_or_else(|| LinuxBackendError::FilesystemLoweringFailed {
+                path: PathBuf::from(IN_SANDBOX_GATEWAY_SOCKET),
+                source: FilesystemLoweringError::GatewaySocketParentMissing,
+            })?;
         args.extend(["--dir".into(), gateway_directory.as_os_str().into()]);
         add_bind_fd(
             args,
@@ -592,7 +606,7 @@ fn add_bind(
     let canonical =
         fs::canonicalize(path).map_err(|source| LinuxBackendError::FilesystemLoweringFailed {
             path: path.to_path_buf(),
-            reason: source.to_string(),
+            source: FilesystemLoweringError::Canonicalize { source },
         })?;
     if canonical == path {
         add_bind_fd(args, path, path, access, preserved_files)
@@ -606,7 +620,12 @@ fn add_bind(
             match access {
                 AccessMode::Read => "--ro-bind".into(),
                 AccessMode::Write => "--bind".into(),
-                AccessMode::Deny => unreachable!(),
+                AccessMode::Deny => {
+                    return Err(LinuxBackendError::FilesystemLoweringFailed {
+                        path: path.to_path_buf(),
+                        source: FilesystemLoweringError::DenyBind,
+                    });
+                }
             },
             canonical.into_os_string(),
             path.as_os_str().into(),
@@ -628,7 +647,12 @@ fn add_bind_fd(
         match access {
             AccessMode::Read => "--ro-bind-fd".into(),
             AccessMode::Write => "--bind-fd".into(),
-            AccessMode::Deny => unreachable!(),
+            AccessMode::Deny => {
+                return Err(LinuxBackendError::FilesystemLoweringFailed {
+                    path: destination.to_path_buf(),
+                    source: FilesystemLoweringError::DenyBind,
+                });
+            }
         },
         descriptor.to_string().into(),
         destination.as_os_str().into(),
@@ -649,14 +673,19 @@ fn add_bind_file(
             .try_clone()
             .map_err(|source| LinuxBackendError::FilesystemLoweringFailed {
                 path: destination.to_path_buf(),
-                reason: source.to_string(),
+                source: FilesystemLoweringError::CloneSource { source },
             })?;
     let descriptor = file.as_raw_fd();
     args.extend([
         match access {
             AccessMode::Read => "--ro-bind-fd".into(),
             AccessMode::Write => "--bind-fd".into(),
-            AccessMode::Deny => unreachable!(),
+            AccessMode::Deny => {
+                return Err(LinuxBackendError::FilesystemLoweringFailed {
+                    path: destination.to_path_buf(),
+                    source: FilesystemLoweringError::DenyBind,
+                });
+            }
         },
         descriptor.to_string().into(),
         destination.as_os_str().into(),
@@ -669,7 +698,7 @@ fn open_mount_source(path: &Path) -> Result<File, LinuxBackendError> {
     let path_bytes = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
         LinuxBackendError::FilesystemLoweringFailed {
             path: path.to_path_buf(),
-            reason: "mount source contains NUL".to_string(),
+            source: FilesystemLoweringError::SourceContainsNul,
         }
     })?;
     #[allow(unsafe_code)]
@@ -677,7 +706,9 @@ fn open_mount_source(path: &Path) -> Result<File, LinuxBackendError> {
     if descriptor < 0 {
         return Err(LinuxBackendError::FilesystemLoweringFailed {
             path: path.to_path_buf(),
-            reason: std::io::Error::last_os_error().to_string(),
+            source: FilesystemLoweringError::OpenSource {
+                source: std::io::Error::last_os_error(),
+            },
         });
     }
     #[allow(unsafe_code)]
@@ -696,7 +727,7 @@ fn add_mask(
     if path == Path::new("/") {
         return Err(LinuxBackendError::FilesystemLoweringFailed {
             path: path.to_path_buf(),
-            reason: "the filesystem root cannot be masked".to_string(),
+            source: FilesystemLoweringError::RootCannotBeMasked,
         });
     }
     if let Some(symlink) = first_writable_symlink(path, writable_roots) {
@@ -705,7 +736,10 @@ fn add_mask(
     let metadata = fs::symlink_metadata(path).map_err(|source| {
         LinuxBackendError::FilesystemLoweringFailed {
             path: path.to_path_buf(),
-            reason: source.to_string(),
+            source: FilesystemLoweringError::Metadata {
+                operation: FilesystemMetadataOperation::Mask,
+                source,
+            },
         }
     })?;
     if metadata.file_type().is_symlink() && mount == Mount::Deny {
@@ -736,7 +770,7 @@ fn add_mask(
                 let file = File::open("/dev/null").map_err(|source| {
                     LinuxBackendError::FilesystemLoweringFailed {
                         path: path.to_path_buf(),
-                        reason: source.to_string(),
+                        source: FilesystemLoweringError::EmptyMaskSource { source },
                     }
                 })?;
                 let descriptor = file.as_raw_fd();
@@ -759,10 +793,9 @@ fn add_mask(
 fn writable_symlink_error(path: &Path, symlink: &Path) -> LinuxBackendError {
     LinuxBackendError::FilesystemLoweringFailed {
         path: path.to_path_buf(),
-        reason: format!(
-            "protected path crosses writable symbolic link {}",
-            symlink.display()
-        ),
+        source: FilesystemLoweringError::WritableSymlink {
+            symlink: symlink.to_path_buf(),
+        },
     }
 }
 
@@ -778,7 +811,10 @@ fn descendant_mount_directories(
         let metadata =
             fs::metadata(path).map_err(|source| LinuxBackendError::FilesystemLoweringFailed {
                 path: path.clone(),
-                reason: source.to_string(),
+                source: FilesystemLoweringError::Metadata {
+                    operation: FilesystemMetadataOperation::DescendantMount,
+                    source,
+                },
             })?;
         let target = if metadata.is_dir() {
             path.as_path()

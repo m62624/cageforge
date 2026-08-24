@@ -28,5 +28,9 @@ pub use config::{
     BubblewrapSource, HardeningHelperSource, LinuxBackendConfig, LinuxBackendConfigError,
     ProcMountPolicy, ResourceDirectorySource,
 };
-pub use error::LinuxBackendError;
+pub use error::{
+    FilesystemLoweringError, FilesystemMetadataOperation, LinuxBackendError,
+    NetworkCombinationError, NetworkGatewayRuntimeError, NetworkLoweringError,
+    PolicyLoweringExpectation,
+};
 pub use process::LinuxChild;

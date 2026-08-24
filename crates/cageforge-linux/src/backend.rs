@@ -26,7 +26,7 @@ use crate::bwrap::{
 };
 use crate::config::LinuxBackendConfig;
 use crate::environment_transport::write_environment;
-use crate::error::LinuxBackendError;
+use crate::error::{LinuxBackendError, NetworkCombinationError, NetworkLoweringError};
 use crate::filesystem::FilesystemPlan;
 use crate::filesystem::protected_create::ProtectedCreateMonitor;
 use crate::helper_protocol::{
@@ -138,9 +138,7 @@ impl LinuxBackend {
         let network_mode = network_mode(sandbox)?;
         match (network_mode, gateway_mount) {
             (LinuxNetworkMode::ProxyRouted, None) => {
-                return Err(LinuxBackendError::NetworkLoweringFailed {
-                    reason: "proxy-routed policy has no authenticated gateway mount".to_string(),
-                });
+                return Err(NetworkLoweringError::MissingGatewayMount.into());
             }
             (
                 LinuxNetworkMode::Direct
@@ -148,10 +146,7 @@ impl LinuxBackend {
                 | LinuxNetworkMode::Disabled,
                 Some(_),
             ) => {
-                return Err(LinuxBackendError::NetworkLoweringFailed {
-                    reason: "gateway mount was supplied for a policy that must not use it"
-                        .to_string(),
-                });
+                return Err(NetworkLoweringError::UnexpectedGatewayMount.into());
             }
             (LinuxNetworkMode::ProxyRouted, Some(_))
             | (
@@ -475,9 +470,7 @@ fn validate_network_lowering<'a>(
     if network_mode(sandbox)? == LinuxNetworkMode::ProxyRouted
         && !requirements.unix_socket_isolation()
     {
-        return Err(LinuxBackendError::UnsupportedNetworkCombination {
-            reason: "proxy-routed Linux networking cannot preserve unrestricted pathname Unix socket access",
-        });
+        return Err(NetworkCombinationError::ProxyRequiresUnixSocketIsolation.into());
     }
     Ok(())
 }

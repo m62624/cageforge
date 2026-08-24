@@ -23,7 +23,7 @@ use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
-use crate::error::LinuxBackendError;
+use crate::error::{LinuxBackendError, NetworkGatewayRuntimeError};
 use crate::helper_protocol::BRIDGE_TOKEN_BYTES;
 
 pub(crate) const IN_SANDBOX_GATEWAY_SOCKET: &str = "/dev/.cageforge-runtime/network/gateway.sock";
@@ -143,13 +143,14 @@ impl GatewayRuntime {
             }),
             Ok(Err(reason)) => {
                 let _ = thread.join();
-                Err(LinuxBackendError::NetworkGatewayRuntimeFailed { reason })
+                Err(NetworkGatewayRuntimeError::Failed { reason }.into())
             }
             Err(source) => {
                 let _ = thread.join();
-                Err(LinuxBackendError::NetworkGatewayRuntimeFailed {
-                    reason: format!("gateway startup channel closed: {source}"),
-                })
+                Err(NetworkGatewayRuntimeError::StartupChannelClosed {
+                    message: source.to_string(),
+                }
+                .into())
             }
         }
     }
@@ -170,7 +171,9 @@ impl GatewayRuntime {
             return Ok(());
         }
         self.shutdown.take();
-        let thread = self.thread.take().expect("thread was present");
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
         Err(thread_failure(
             thread,
             "gateway stopped before the sandboxed process",
@@ -186,10 +189,8 @@ impl GatewayRuntime {
         };
         match thread.join() {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(reason)) => Err(LinuxBackendError::NetworkGatewayRuntimeFailed { reason }),
-            Err(_) => Err(LinuxBackendError::NetworkGatewayRuntimeFailed {
-                reason: "gateway runtime thread panicked".to_string(),
-            }),
+            Ok(Err(reason)) => Err(NetworkGatewayRuntimeError::Failed { reason }.into()),
+            Err(_) => Err(NetworkGatewayRuntimeError::Panicked.into()),
         }
     }
 }
@@ -209,7 +210,7 @@ fn thread_failure(
         Ok(Err(reason)) => reason,
         Err(_) => "gateway runtime thread panicked".to_string(),
     };
-    LinuxBackendError::NetworkGatewayRuntimeFailed { reason }
+    NetworkGatewayRuntimeError::Failed { reason }.into()
 }
 
 fn create_socket_directory() -> io::Result<TempDir> {

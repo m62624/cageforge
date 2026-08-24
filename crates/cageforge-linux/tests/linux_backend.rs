@@ -18,14 +18,15 @@ use cageforge_backend_api::{
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioSpec};
 use cageforge_config::Config;
 use cageforge_linux::{
-    HardeningHelperSource, LinuxBackend, LinuxBackendConfig, LinuxBackendConfigError,
-    LinuxBackendError,
+    FilesystemLoweringError, HardeningHelperSource, LinuxBackend, LinuxBackendConfig,
+    LinuxBackendConfigError, LinuxBackendError, NetworkCombinationError,
 };
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
     NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
+use command_fds::CommandFdExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -713,6 +714,35 @@ fn hardening_helper_rejects_an_invalid_authentication_descriptor() {
 }
 
 #[test]
+fn hardening_helper_rejects_a_forged_authentication_protocol_from_a_visible_peer() {
+    let (mut peer, helper_socket) = UnixStream::pair().expect("authentication socket");
+    peer.set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("authentication read timeout");
+    let helper_fd = helper_socket.as_raw_fd();
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_cageforge-linux-helper"));
+    command
+        .args(["--apply-hardening", "/bin/true"])
+        .env("CAGEFORGE_LINUX_HELPER_AUTH_FD", helper_fd.to_string())
+        .stderr(Stdio::piped())
+        .preserved_fds(vec![helper_socket.into()]);
+    let child = command.spawn().expect("helper");
+    drop(command);
+    peer.write_all(b"cageforge-linux-helper-v1CFENV\x01\x00\x00\x00\x00\x00\x00\x00\x00")
+        .expect("forged authentication frame");
+    let mut ready = [0; 4];
+    let helper_replied = peer.read_exact(&mut ready).is_ok();
+    if helper_replied {
+        peer.write_all(b"run").expect("forged release frame");
+    }
+    drop(peer);
+    let output = child.wait_with_output().expect("helper");
+
+    assert!(!output.status.success());
+    assert!(!helper_replied, "a visible peer must not complete setup");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid Linux hardening helper"));
+}
+
+#[test]
 fn user_dynamic_loader_environment_reaches_only_the_sandboxed_command() {
     let workspace = TempDir::new().expect("temporary workspace");
     let outside = TempDir::new_in("/var/tmp").expect("outside directory");
@@ -831,8 +861,10 @@ fn missing_protected_path_rejects_writable_symlink_before_host_creation() {
     assert!(
         matches!(
             &error,
-            LinuxBackendError::FilesystemLoweringFailed { reason, .. }
-                if reason.contains("writable symbolic link")
+            LinuxBackendError::FilesystemLoweringFailed {
+                source: FilesystemLoweringError::WritableSymlink { .. },
+                ..
+            }
         ),
         "symlink must be rejected before host creation, got: {error:?}"
     );
@@ -1635,7 +1667,9 @@ fn proxy_routing_rejects_unrestricted_pathname_unix_socket_access() {
 
     assert!(matches!(
         error,
-        LinuxBackendError::UnsupportedNetworkCombination { .. }
+        LinuxBackendError::UnsupportedNetworkCombination(
+            NetworkCombinationError::ProxyRequiresUnixSocketIsolation
+        )
     ));
 }
 

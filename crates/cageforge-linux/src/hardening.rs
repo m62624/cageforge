@@ -7,7 +7,8 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::mem::size_of;
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -197,6 +198,7 @@ fn verify_helper_authentication() -> io::Result<File> {
             "auth fd must be above the standard streams",
         ));
     }
+    verify_authentication_peer(fd)?;
     #[allow(unsafe_code)]
     let mut auth = unsafe { File::from_raw_fd(fd) };
     let mut token = vec![0; AUTH_TOKEN.len()];
@@ -209,6 +211,67 @@ fn verify_helper_authentication() -> io::Result<File> {
             "auth token mismatch",
         ))
     }
+}
+
+/// Verifies that the authentication channel came from the host side of the
+/// Bubblewrap PID namespace. The protocol marker below is deliberately not a
+/// secret: a process inside the namespace can know it, so the Unix peer
+/// credentials are the actual boundary authentication.
+#[allow(unsafe_code)]
+fn verify_authentication_peer(fd: RawFd) -> io::Result<()> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = size_of::<libc::ucred>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "authentication descriptor is not a Unix socket: {}",
+                io::Error::last_os_error()
+            ),
+        ));
+    }
+    if length < size_of::<libc::ucred>() as libc::socklen_t {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "authentication peer credentials were truncated",
+        ));
+    }
+
+    // A valid backend peer lives outside the helper's PID namespace. Its PID
+    // is therefore not visible to the helper. A socket made by the untrusted
+    // command instead has a visible peer and must not authenticate.
+    if credentials.pid <= 0 {
+        return Ok(());
+    }
+    let probe = unsafe { libc::kill(credentials.pid, 0) };
+    if probe == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "authentication peer is inside the sandbox namespace",
+        ));
+    }
+    let error = io::Error::last_os_error();
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            "authentication peer is not a live host-side peer"
+        } else {
+            "authentication peer is visible to the sandbox"
+        },
+    ))
 }
 
 fn complete_setup_handshake(authentication: &mut File) -> io::Result<()> {

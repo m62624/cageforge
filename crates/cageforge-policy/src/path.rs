@@ -328,7 +328,10 @@ impl PathPattern {
                 Component::Prefix(value) => prefix.push(value.as_os_str()),
                 Component::RootDir => prefix.push(Path::new("/")),
                 Component::CurDir => {}
-                Component::ParentDir => unreachable!("validated patterns cannot traverse parents"),
+                // Parent traversal is rejected during construction. Keep the
+                // prefix calculation defensive if a future constructor adds a
+                // new path source without reusing that validation.
+                Component::ParentDir => break,
                 Component::Normal(value) => {
                     let value = value.to_string_lossy();
                     if contains_glob_meta(&value) {

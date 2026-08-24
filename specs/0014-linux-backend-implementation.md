@@ -356,8 +356,14 @@ minimum taxonomy is:
 - `ChildTerminatedByPolicy`.
 
 Errors must retain the underlying OS error where one exists, but they must not
-expose a generic string in place of a typed security decision. Every error
-variant that can be produced before launch must have a black-box negative test.
+expose a generic string in place of a typed security decision. Filesystem
+lowering therefore carries a `FilesystemLoweringError` sub-error rather than a
+free-form `reason`; network mount relationships, unsupported combinations,
+policy-lowering expectations, and gateway lifecycle failures use the same
+typed sub-error approach. Dynamic diagnostics from Bubblewrap or the host
+gateway may remain strings because they are external observations, not
+security decisions. Every error variant that can be produced before launch
+must have a black-box negative test.
 
 ## 7. Linux enforcement architecture
 

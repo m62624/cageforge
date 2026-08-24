@@ -27,9 +27,10 @@ fn main() {
     }
 
     if let Err(error) = build_bwrap(&source_dir) {
-        panic!(
-            "failed to build upstream Bubblewrap {UPSTREAM_VERSION} ({UPSTREAM_COMMIT}): {error}"
+        eprintln!(
+            "error: failed to build upstream Bubblewrap {UPSTREAM_VERSION} ({UPSTREAM_COMMIT}): {error}"
         );
+        std::process::exit(1);
     }
 }
 

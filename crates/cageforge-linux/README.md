@@ -188,3 +188,12 @@ the Bubblewrap PID namespace boundary and clean up per-run resources.
 Use `LinuxBackendError` for typed construction, preflight, lowering, setup,
 gateway, process, timeout, and cleanup failures. Capability errors identify the
 exact portable requirement that the configured backend cannot enforce.
+
+Native lowering failures do not require callers to parse a repeated reason
+string. For example, `LinuxBackendError::FilesystemLoweringFailed` contains a
+`FilesystemLoweringError` identifying metadata inspection, a writable symlink,
+an invalid mount target, a pinned-source failure, or another exact lowering
+case. Network mount mismatches and gateway lifecycle failures use the same
+typed sub-error pattern. This lets an application decide whether to retry,
+report a configuration problem, or fail closed without depending on display
+text.

@@ -3,6 +3,8 @@
 //! Private parent/helper protocol constants shared by the library and helper binary.
 
 pub(crate) const AUTH_FD_ENV: &str = "CAGEFORGE_LINUX_HELPER_AUTH_FD";
+// This is a protocol marker, not a secret. The helper authenticates the
+// backend through SO_PEERCRED and the PID-namespace boundary before reading it.
 pub(crate) const AUTH_TOKEN: &[u8] = b"cageforge-linux-helper-v1";
 pub(crate) const READY: &[u8] = b"ready";
 pub(crate) const RELEASE: &[u8] = b"run";

@@ -14,7 +14,12 @@ pub(crate) fn read_status(reader: &mut impl Read) -> io::Result<Option<ExitStatu
         match reader.read(&mut magic[..1]) {
             Ok(0) => return Ok(None),
             Ok(1) => break,
-            Ok(_) => unreachable!("one-byte status prefix buffer"),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "status transport returned an invalid prefix length",
+                ));
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
         }

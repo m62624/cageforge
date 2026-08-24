@@ -37,10 +37,10 @@ impl Default for GatewayConfig {
             connect_timeout: Duration::from_secs(10),
             response_header_timeout: Duration::from_secs(30),
             relay_idle_timeout: Duration::from_secs(300),
-            max_concurrent_connections: NonZeroUsize::new(128).expect("non-zero constant"),
-            max_requests_per_connection: NonZeroUsize::new(64).expect("non-zero constant"),
-            max_resolved_addresses: NonZeroUsize::new(64).expect("non-zero constant"),
-            http_header_bytes: NonZeroUsize::new(32 * 1024).expect("non-zero constant"),
+            max_concurrent_connections: NonZeroUsize::new(128).unwrap_or(NonZeroUsize::MIN),
+            max_requests_per_connection: NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN),
+            max_resolved_addresses: NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN),
+            http_header_bytes: NonZeroUsize::new(32 * 1024).unwrap_or(NonZeroUsize::MIN),
             relay_byte_limit: NonZeroU64::new(DEFAULT_RELAY_BYTE_LIMIT),
         }
     }

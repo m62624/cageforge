@@ -150,7 +150,11 @@ impl Config {
                 continue;
             }
 
-            let frame = frames.pop().expect("resolution frame exists");
+            let Some(frame) = frames.pop() else {
+                return Err(ConfigError::ResolutionInvariant {
+                    message: "resolution stack was empty while completing a profile",
+                });
+            };
             active.remove(&frame.name);
             active_names.pop();
             completed.insert(frame.name.clone());
@@ -162,11 +166,9 @@ impl Config {
 
         let mut merger = ProfileMerger::default();
         for profile_name in order {
-            let profile = self
-                .raw
-                .profiles
-                .get(&profile_name)
-                .expect("ordered profile exists");
+            let Some(profile) = self.raw.profiles.get(&profile_name) else {
+                return Err(ConfigError::UnknownProfile { name: profile_name });
+            };
             merger.apply(profile);
         }
         Ok(merger.finish())

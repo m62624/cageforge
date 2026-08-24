@@ -371,7 +371,10 @@ fn effective_network_mode(left: NetworkMode, right: NetworkMode) -> NetworkMode 
         (NetworkMode::Disabled, _) | (_, NetworkMode::Disabled) => NetworkMode::Disabled,
         (NetworkMode::Enabled, NetworkMode::Enabled) => NetworkMode::Enabled,
         (NetworkMode::External, _) | (_, NetworkMode::External) => {
-            unreachable!("mixed network ownership is rejected during composition")
+            // `compose` rejects mixed ownership before constructing this
+            // model. If that invariant changes, fail closed rather than
+            // turning an external boundary into a local permission.
+            NetworkMode::Disabled
         }
     }
 }
