@@ -127,6 +127,7 @@ pub(crate) fn lower<'a>(
             &mut protected_paths,
         )?;
     }
+    reject_unsafe_bind_symlinks(&mounts)?;
     let mut protected_create_paths = BTreeSet::new();
     apply_protected_paths(
         backend,
@@ -366,6 +367,47 @@ fn apply_protected_paths<'a>(
         }
     }
     Ok(())
+}
+
+fn reject_unsafe_bind_symlinks(mounts: &BTreeMap<PathBuf, Mount>) -> Result<(), LinuxBackendError> {
+    let writable_roots = mounts
+        .iter()
+        .filter(|(_, mount)| **mount == Mount::Write)
+        .map(|(path, _)| path.as_path())
+        .collect::<Vec<_>>();
+    if writable_roots.iter().any(|root| *root == Path::new("/")) {
+        return Ok(());
+    }
+
+    for (path, mount) in mounts.iter().filter(|(_, mount)| mount.is_bind()) {
+        let under_writable_root = writable_roots
+            .iter()
+            .any(|root| path == *root || path.starts_with(root));
+        if (*mount == Mount::Write || under_writable_root)
+            && let Some(symlink) = first_symlink_component(path)
+        {
+            return Err(LinuxBackendError::FilesystemLoweringFailed {
+                path: path.clone(),
+                source: FilesystemLoweringError::WritableSymlinkMount { symlink },
+            });
+        }
+    }
+    Ok(())
+}
+
+fn first_symlink_component(path: &Path) -> Option<PathBuf> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if fs::symlink_metadata(&current)
+            .ok()?
+            .file_type()
+            .is_symlink()
+        {
+            return Some(current);
+        }
+    }
+    None
 }
 
 fn should_monitor_missing_git(root: &Path, protected: &Path, path: &Path) -> bool {

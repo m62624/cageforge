@@ -2015,3 +2015,75 @@ fn symlink_inside_workspace_cannot_escape_the_mounted_root() {
     assert_eq!(status.code(), Some(0), "stderr: {stderr:?}");
     assert!(!escaped.exists(), "symlink escaped the workspace mount");
 }
+
+#[test]
+fn explicit_workspace_symlink_scope_cannot_bind_an_external_directory() {
+    let temp = TempDir::new().expect("temporary workspace");
+    let outside = TempDir::new_in("/var/tmp").expect("outside directory");
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "outside-secret").expect("secret");
+    let link = temp.path().join("expose");
+    std::os::unix::fs::symlink(outside.path(), &link).expect("symlink");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+            FilesystemRule::new(
+                PathSelector::workspace("expose").expect("workspace symlink selector"),
+                AccessMode::Write,
+            ),
+        ])
+        .dangerously_allow_git_write(),
+        NetworkPolicy::disabled(),
+    );
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args([
+            "-c",
+            &format!(
+                "if cat {} >/dev/null; then exit 17; else exit 0; fi",
+                link.join("secret.txt").display()
+            ),
+        ])
+        .expect("arguments");
+    let (command, effective, runtime) = request(temp.path(), policy, command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    assert!(matches!(
+        backend.spawn(prepared),
+        Err(LinuxBackendError::FilesystemLoweringFailed {
+            source: FilesystemLoweringError::WritableSymlinkMount { .. },
+            ..
+        })
+    ));
+    assert_eq!(
+        std::fs::read_to_string(secret).expect("host secret"),
+        "outside-secret"
+    );
+}
+
+#[test]
+fn symlinked_workspace_root_is_rejected_before_bubblewrap() {
+    let temp = TempDir::new().expect("temporary workspace");
+    let real_workspace = temp.path().join("real");
+    std::fs::create_dir(&real_workspace).expect("real workspace");
+    let workspace_alias = temp.path().join("alias");
+    std::os::unix::fs::symlink(&real_workspace, &workspace_alias).expect("workspace symlink");
+    let command = CommandSpec::new("/bin/true").expect("command");
+    let (command, effective, runtime) =
+        request(&workspace_alias, SandboxPolicy::workspace(), command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+
+    assert!(matches!(
+        backend.spawn(prepared),
+        Err(LinuxBackendError::FilesystemLoweringFailed {
+            source: FilesystemLoweringError::WritableSymlinkMount { .. },
+            ..
+        })
+    ));
+}

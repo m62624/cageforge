@@ -58,6 +58,10 @@ concurrency:
 # 7. Configure branch protection to require the stable `CI passed` check. Do not
 #    require mode-specific jobs, because skipped jobs are intentional for other
 #    change classes.
+# 8. Keep the feature-surface job unconditional: it checks each native library
+#    and helper binary in every declared feature mode, plus the proxy's
+#    runtime/configuration-only modes and cross-target compilation. This catches
+#    feature unification and lib/bin drift before a native backend is selected.
 
 jobs:
   changes:
@@ -329,6 +333,43 @@ jobs:
       - run: cargo clippy -p cageforge-core -p cageforge-windows --all-targets -- -D warnings
       - run: cargo test -p cageforge-core -p cageforge-windows
 
+  feature-surface:
+    name: feature and lib/bin surface (Linux)
+    needs: changes
+    if: needs.changes.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      # Keep these explicit. Workspace feature unification means that a
+      # workspace-wide --no-default-features run can still enable the proxy's
+      # runtime through cageforge-linux's target dependency.
+      - name: Check Linux library and helper binary in both feature modes
+        run: |
+          cargo check -p cageforge-linux --lib --all-features
+          cargo check -p cageforge-linux --lib --no-default-features
+          cargo check -p cageforge-linux --bin cageforge-linux-helper --all-features
+          cargo check -p cageforge-linux --bin cageforge-linux-helper --no-default-features
+          cargo test -p cageforge-linux --lib --all-features
+          cargo test -p cageforge-linux --lib --no-default-features
+      - name: Check network proxy runtime and configuration-only modes
+        run: |
+          cargo check -p cageforge-network-proxy --all-features --all-targets
+          cargo check -p cageforge-network-proxy --no-default-features --all-targets
+          cargo clippy -p cageforge-network-proxy --all-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-network-proxy --no-default-features --all-targets -- -D warnings
+          cargo test -p cageforge-network-proxy --all-features --all-targets
+          cargo test -p cageforge-network-proxy --no-default-features --all-targets
+      - name: Cross-check Windows library, helper, and proxy surfaces
+        run: |
+          cargo check -p cageforge-linux --target x86_64-pc-windows-msvc --lib --all-targets
+          cargo check -p cageforge-linux --target x86_64-pc-windows-msvc --bin cageforge-linux-helper
+          cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --all-features --all-targets
+          cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --no-default-features --all-targets
+
   coverage-portable:
     name: portable coverage (Linux)
     needs: [changes, portable-default, full-matrix]
@@ -389,7 +430,7 @@ jobs:
     name: CI passed
     if: always()
     needs:
-      [changes, portable-default, full-matrix, native-linux, native-macos, native-windows, coverage-portable]
+      [changes, portable-default, full-matrix, native-linux, native-macos, native-windows, feature-surface, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

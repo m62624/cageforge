@@ -443,6 +443,12 @@ mounts. A lexical `Allow` from the portable policy is not permission to call a
 host filesystem operation directly. Missing paths must follow the effective
 `MissingPathBehavior`; they must not silently become writable.
 
+Any bind mount whose logical source or destination crosses a symlink below a
+writable scope must be rejected before Bubblewrap starts. This prevents an
+explicit child scope from turning a mutable workspace symlink into a bind of
+an unrelated host directory; the failure must be a typed lowering error, not a
+late Bubblewrap handshake failure.
+
 Protected paths must be mounted read-only or otherwise blocked before the
 command can create or replace them. The implementation must cover both
 existing protected paths and protected paths that do not yet exist.

@@ -101,6 +101,12 @@ pub enum FilesystemLoweringError {
         /// Symbolic link that would make the mask escape its writable root.
         symlink: PathBuf,
     },
+    /// A bind mount source or destination crosses a writable symbolic link.
+    #[error("bind mount crosses writable symbolic link {symlink:?}")]
+    WritableSymlinkMount {
+        /// Symbolic link that would make the bind mount escape its writable root.
+        symlink: PathBuf,
+    },
     /// The shared empty mask source could not be opened.
     #[error("cannot open the empty mask source: {source}")]
     EmptyMaskSource {
