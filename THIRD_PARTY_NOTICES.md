@@ -9,7 +9,6 @@ At minimum, the first source-derived release must account for:
 - OpenAI Codex source-derived portions under the applicable Apache-2.0 terms;
 - `crates/cageforge-bwrap/vendor/bubblewrap/` and binaries built from it under
   LGPL-2.0-or-later;
-- Ratatui-derived portions under MIT only if any are actually retained;
 - all other bundled or vendored dependencies and their license texts.
 
 Full third-party license texts should be stored under `licenses/` when they

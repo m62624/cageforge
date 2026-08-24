@@ -138,7 +138,6 @@ Third-party components must remain separately identified. In particular:
 
 - bundled bubblewrap code is LGPL-2.0-or-later and must retain its own
   license, copyright, source, and distribution obligations;
-- Ratatui-derived code is MIT-licensed and must retain its attribution;
 - transitive dependencies must be inventoried before producing binary
   distributions or vendored source archives.
 
