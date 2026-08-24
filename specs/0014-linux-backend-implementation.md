@@ -388,6 +388,12 @@ executes the pinned file descriptor, so a later replacement of the resource
 path cannot change the binary used for a spawn. The hardening helper is pinned
 by the same descriptor-based handoff.
 
+The pinning contract includes the regular-file identity captured during
+compatibility validation. If the Bubblewrap path names a different device or
+inode when the backend is constructed, construction fails closed instead of
+launching an unprobed replacement. The helper is opened once during discovery
+and that same descriptor is used for every launch.
+
 The generated Bubblewrap plan must establish, as applicable:
 
 - a new user namespace;
@@ -455,6 +461,17 @@ and hardening-helper descriptors follow the same rule. This is required for
 threaded applications: temporarily clearing close-on-exec in the parent would
 allow an unrelated concurrent process spawn to inherit another sandbox
 instance's host mount descriptors.
+
+The protected-create monitor must not remove a path through an unchecked host
+pathname. It opens every parent component with `openat(..., O_NOFOLLOW)`,
+reserves the final directory entry relative to that descriptor, and removes
+the reserved entry without following a replacement parent or child symlink.
+Protected-path monitoring also rejects a writable symlink in the parent chain
+before registering the monitor. Cross-process synthetic-mount owner markers
+include the process start time as well as the PID, so PID reuse cannot keep a
+stale owner alive indefinitely. Bridge readiness has a finite deadline and a
+startup timeout is returned as a typed error; no setup phase may wait forever
+for a child that failed before publishing its port.
 
 ### 7.3 Process hardening
 

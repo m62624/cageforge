@@ -355,6 +355,9 @@ fn apply_protected_paths<'a>(
     for root in writable_roots {
         for protected in protected_paths {
             let path = root.join(protected);
+            if let Some(symlink) = first_writable_symlink(&path, std::slice::from_ref(&root)) {
+                return Err(writable_symlink_error(&path, &symlink));
+            }
             if should_monitor_missing_git(&root, protected, &path) {
                 protected_create_paths.insert(path);
             } else {

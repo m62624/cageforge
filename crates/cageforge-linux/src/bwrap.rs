@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
@@ -48,6 +48,19 @@ const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 pub(crate) struct BubblewrapSelection {
     pub(crate) path: PathBuf,
     pub(crate) bundled: bool,
+    pub(crate) identity: FileIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct PinnedExecutable {
+    pub(crate) path: PathBuf,
+    pub(crate) file: File,
 }
 
 #[derive(Debug)]
@@ -68,7 +81,7 @@ enum ProbeError {
 pub(crate) fn discover_hardening_helper(
     source: &HardeningHelperSource,
     resource_directory: Option<&Path>,
-) -> Result<PathBuf, LinuxBackendError> {
+) -> Result<PinnedExecutable, LinuxBackendError> {
     let sibling = || {
         std::env::current_exe()
             .ok()
@@ -87,7 +100,10 @@ pub(crate) fn discover_hardening_helper(
         .flatten()
         .find_map(|path| {
             let path = fs::canonicalize(path).ok()?;
-            validate_executable(&path).ok().map(|()| path)
+            let file = File::open(&path).ok()?;
+            validate_executable_file(&file)
+                .ok()
+                .map(|()| PinnedExecutable { path, file })
         })
         .ok_or(LinuxBackendError::HardeningHelperUnavailable)
 }
@@ -134,6 +150,14 @@ fn can_fall_back_to_bundled(error: &LinuxBackendError) -> bool {
 
 pub(crate) fn open_pinned(selection: &BubblewrapSelection) -> Result<File, LinuxBackendError> {
     let file = File::open(&selection.path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    if file_identity(&file).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?
+        != selection.identity
+    {
+        return Err(LinuxBackendError::BubblewrapChanged {
+            path: selection.path.clone(),
+        });
+    }
+    validate_executable_file(&file)?;
     if selection.bundled {
         verify_bundled_digest_file(&file, &selection.path)?;
     }
@@ -173,7 +197,9 @@ fn discover_and_probe_one(
     bundled: bool,
 ) -> Result<BubblewrapSelection, LinuxBackendError> {
     let path = fs::canonicalize(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
-    validate_executable(&path)?;
+    let file = File::open(&path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    validate_executable_file(&file)?;
+    let identity = file_identity(&file).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
     if bundled {
         verify_bundled_digest(&path)?;
     }
@@ -182,7 +208,11 @@ fn discover_and_probe_one(
     if proc_mount == ProcMountPolicy::Required {
         probe_proc_mount(&path)?;
     }
-    Ok(BubblewrapSelection { path, bundled })
+    Ok(BubblewrapSelection {
+        path,
+        bundled,
+        identity,
+    })
 }
 
 fn verify_bundled_digest(path: &Path) -> Result<(), LinuxBackendError> {
@@ -263,11 +293,26 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 }
 
 fn validate_executable(path: &Path) -> Result<(), LinuxBackendError> {
-    let metadata = fs::metadata(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    let file = File::open(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    validate_executable_file(&file)
+}
+
+fn validate_executable_file(file: &File) -> Result<(), LinuxBackendError> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
     if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
         return Err(LinuxBackendError::BubblewrapUnavailable);
     }
     Ok(())
+}
+
+pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
+    let metadata = file.metadata()?;
+    Ok(FileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
 }
 
 fn probe_help(path: &Path) -> Result<(), LinuxBackendError> {

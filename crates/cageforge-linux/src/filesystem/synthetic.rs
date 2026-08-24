@@ -377,9 +377,16 @@ fn verify_existing_registry_path(marker_dir: &Path, path: &Path) -> Result<(), L
 }
 
 fn register_owner(marker_dir: &Path) -> Result<PathBuf, LinuxBackendError> {
+    let pid = std::process::id();
+    let start_time = process_start_time(pid).map_err(|source| {
+        LinuxBackendError::SyntheticMountTargetFailed {
+            path: marker_dir.to_path_buf(),
+            source,
+        }
+    })?;
     let sequence = OWNER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let marker_file = marker_dir.join(format!("owner-{}-{sequence}", std::process::id()));
-    write_private_new(&marker_file, b"active")?;
+    let marker_file = marker_dir.join(format!("owner-{pid}-{sequence}"));
+    write_private_new(&marker_file, format!("{pid}:{start_time}").as_bytes())?;
     Ok(marker_file)
 }
 
@@ -416,12 +423,20 @@ fn cleanup_stale_markers(marker_dir: &Path) -> Result<(), LinuxBackendError> {
             .file_name()
             .to_str()
             .and_then(|name| name.strip_prefix("owner-"))
-            .and_then(|value| value.split('-').next())
-            .and_then(|value| value.parse::<libc::pid_t>().ok())
+            .and_then(parse_owner_name)
         else {
             continue;
         };
-        if !process_is_active(pid) {
+        let Ok(marker) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Some((marker_pid, start_time)) = parse_owner_marker(&marker) else {
+            continue;
+        };
+        if marker_pid != pid {
+            continue;
+        }
+        if owner_is_stale(pid, start_time) {
             remove_if_exists(&entry.path())?;
         }
     }
@@ -523,8 +538,36 @@ fn remove_if_exists(path: &Path) -> Result<(), LinuxBackendError> {
     }
 }
 
-fn process_is_active(pid: libc::pid_t) -> bool {
-    #[allow(unsafe_code)]
-    let result = unsafe { libc::kill(pid, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+fn parse_owner_name(value: &str) -> Option<u32> {
+    let (pid, _sequence) = value.split_once('-')?;
+    pid.parse().ok()
 }
+
+fn parse_owner_marker(value: &str) -> Option<(u32, u64)> {
+    let (pid, start_time) = value.trim().split_once(':')?;
+    Some((pid.parse().ok()?, start_time.parse().ok()?))
+}
+
+fn owner_is_stale(pid: u32, start_time: u64) -> bool {
+    match process_start_time(pid) {
+        Ok(current) => current != start_time,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
+fn process_start_time(pid: u32) -> std::io::Result<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let (_, fields) = stat.rsplit_once(')').ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid process stat")
+    })?;
+    fields
+        .split_whitespace()
+        .nth(19)
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid start time"))
+}
+
+#[cfg(test)]
+#[path = "synthetic_tests.rs"]
+mod tests;

@@ -161,6 +161,47 @@ The opt-out affects only the built-in `.git` entry. Additional protected paths
 remain protected, and a stricter `PolicyCeiling` may retain `.git` protection
 or cause preparation to reject the requested weakening.
 
+## Protection matrix
+
+The backend combines these protections according to the effective policy. A
+feature being available on Linux does not widen a request that did not ask for
+it, and an unsupported combination is rejected before launch.
+
+| Protection | When it is active | What it enforces |
+|---|---|---|
+| Bubblewrap user and mount namespaces | Restricted filesystem or isolated network mode | Separates the child filesystem/network view from the host |
+| New session and parent-lifetime binding | Every Bubblewrap launch | Uses `--new-session`, `--die-with-parent`, and the native parent-death signal so the boundary cannot outlive its owner |
+| PID namespace and fresh `/proc` | Default `ProcMountPolicy::Required` | Gives the child an isolated process view and prevents host `/proc` exposure |
+| Private device and runtime view | Every restricted filesystem launch | Builds the child `/dev` view, hides Cageforge runtime paths from the command, and exposes only the deliberately mounted helper/gateway endpoints |
+| Empty-root or layered bind mounts | Restricted filesystem | Allows only effective read/write scopes and masks denied paths |
+| Read-only carve-outs | A writable scope with read-only subpaths | Keeps narrower paths read-only inside writable parents |
+| Deny-glob expansion | A deny glob | Expands bounded matches, accounts for symlinks, and masks every authorized match |
+| Protected metadata paths | `.git` by default plus configured additional paths | Blocks existing paths and monitors missing paths against creation/replacement with inotify and fail-closed cleanup |
+| Symlink and mount-boundary checks | Any native filesystem lowering | Rejects writable symlink escapes and unsafe path/mount relationships |
+| Descriptor pinning | Mount sources, Bubblewrap, and hardening helper | Prevents path replacement from changing the file handed to Bubblewrap |
+| Close-on-exec and FD inheritance | Every launch | Keeps mount, authentication, gateway, and coordination descriptors out of unrelated child processes |
+| Helper authentication | Every hardened launch | Requires the backend-owned descriptor, peer-namespace check, and authentication token before the helper runs |
+| Bridge token authentication | Restricted gateway routing | Prevents another same-user process from using the per-run TCP-to-gateway bridge |
+| Private gateway socket permissions | Restricted gateway routing | Uses a per-run private directory and mode `0600` socket before accepting ingress |
+| Synthetic-target lock and identity | Missing protected masks shared by launches | Serializes registry changes and checks device/inode ownership before cleanup |
+| Protected-owner identity | Synthetic-target registry | Uses PID plus Linux process start time, so PID reuse cannot preserve stale ownership |
+| Framed setup/status protocol | Every helper launch | Validates magic, lengths, entry limits, names, values, duplicates, and typed command status |
+| Seccomp and `no_new_privs` | Restricted filesystem, disabled/direct-isolated network, or proxy routing | Blocks ptrace, `process_vm_*`, `io_uring`, forbidden Unix-socket operations, and disallowed network families or socket operations in the child boundary |
+| Core-dump and dumpability hardening | Hardened launches | Prevents core dumps and keeps the restricted process non-dumpable |
+| Disabled network namespace | `NetworkMode::Disabled` | Removes direct network access from the child |
+| Restricted gateway routing | Domain-restricted network | Uses one DNS snapshot, exact resolved-address authorization, authenticated proxy ingress, and bounded relay timeouts |
+| Unix-socket isolation | Proxy routing or direct mode without Unix sockets | Blocks pathname Unix-socket escapes while preserving only the explicitly supported IPC behavior |
+| Environment frame limits | Every helper launch | Bounds entry count, per-value size, and aggregate setup memory |
+| Timeout and parent-death handling | Backend-default or limited timeout, plus every boundary | Uses PIDFD-based timeout termination, Bubblewrap parent binding, and cleanup to terminate the complete sandbox boundary when the command expires or its owner disappears |
+| Setup and readiness deadlines | Helper, bridge, and gateway startup | Bounds authentication, environment transfer, status exchange, bridge port publication, and gateway handshakes so startup cannot hang indefinitely |
+
+`External` filesystem or network ownership is not treated as local Linux
+enforcement. The backend returns a typed unsupported result unless a future
+trusted integration supplies the required enforcement boundary. Likewise,
+`Unrestricted` modes intentionally disable only the corresponding local
+restriction; they do not bypass the helper, lifecycle, descriptor, or setup
+integrity protections needed to start the process safely.
+
 ## Network behavior
 
 Disabled networking receives an isolated network namespace. Restricted domain

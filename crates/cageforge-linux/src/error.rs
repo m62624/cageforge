@@ -422,6 +422,9 @@ pub enum LinuxBridgeError {
     /// The bridge child exited before publishing a usable parent relationship.
     #[error("gateway bridge parent exited before startup")]
     ParentExited,
+    /// The bridge child did not publish a listening port before the deadline.
+    #[error("gateway bridge startup timed out")]
+    StartupTimedOut,
     /// The child published port zero.
     #[error("gateway bridge returned port zero")]
     ZeroPort,
@@ -715,6 +718,13 @@ pub enum LinuxBackendError {
         expected: String,
         /// Digest calculated from the executable.
         actual: String,
+    },
+    /// The Bubblewrap path changed after compatibility probing and before the
+    /// backend pinned the executable used for launch.
+    #[error("Bubblewrap executable changed after validation: {path:?}")]
+    BubblewrapChanged {
+        /// Path whose file identity no longer matches the probed executable.
+        path: PathBuf,
     },
     /// The in-sandbox hardening helper was not found.
     #[error("Cageforge Linux hardening helper was not found")]

@@ -88,15 +88,13 @@ impl LinuxBackend {
         let bubblewrap_file = Arc::new(open_pinned(&bubblewrap)?);
         let hardening_helper =
             discover_hardening_helper(config.hardening_helper(), resource_directory.as_deref())?;
-        let hardening_helper_file = Arc::new(
-            File::open(&hardening_helper)
-                .map_err(|_| LinuxBackendError::HardeningHelperUnavailable)?,
-        );
+        let hardening_helper_path = hardening_helper.path;
+        let hardening_helper_file = Arc::new(hardening_helper.file);
         Ok(Self {
             config,
             bubblewrap: bubblewrap.path,
             bubblewrap_file,
-            hardening_helper,
+            hardening_helper: hardening_helper_path,
             hardening_helper_file,
             timeout_supported: TimeoutWatchdog::is_supported(),
             identity: BackendIdentity::new(),

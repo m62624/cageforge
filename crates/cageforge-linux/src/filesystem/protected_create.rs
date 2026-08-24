@@ -2,9 +2,10 @@
 
 //! Per-launch monitoring for protected paths that must remain absent.
 
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
 use std::fs;
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,6 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+const REMOVE_RENAME_ATTEMPTS: usize = 8;
+static REMOVE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 use crate::error::LinuxBackendError;
 
@@ -136,28 +140,182 @@ fn monitor_paths(
 }
 
 fn remove_if_created(path: &Path) -> Result<bool, LinuxBackendError> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(source) => {
-            return Err(LinuxBackendError::ProtectedPathMonitorFailed {
-                path: path.to_path_buf(),
-                source,
-            });
+    let parent = path.parent().ok_or_else(|| {
+        protected_path_monitor_error(
+            path,
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "protected path has no parent directory",
+            ),
+        )
+    })?;
+    let name = path.file_name().ok_or_else(|| {
+        protected_path_monitor_error(
+            path,
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "protected path has no final component",
+            ),
+        )
+    })?;
+    let parent_fd = open_directory_without_symlinks(parent)
+        .map_err(|source| protected_path_monitor_error(path, source))?;
+    let name = CString::new(name.as_bytes()).map_err(|_| {
+        protected_path_monitor_error(
+            path,
+            io::Error::new(io::ErrorKind::InvalidInput, "protected path contains NUL"),
+        )
+    })?;
+
+    match open_directory_entry(parent_fd.as_raw_fd(), &name) {
+        Ok(directory_fd) => {
+            remove_directory_entry(parent_fd.as_raw_fd(), &name, directory_fd, path)
         }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source)
+            if matches!(
+                source.raw_os_error(),
+                Some(errno) if errno == libc::ELOOP || errno == libc::ENOTDIR
+            ) =>
+        {
+            unlink_entry(parent_fd.as_raw_fd(), &name, path)
+        }
+        Err(source) => Err(protected_path_monitor_error(path, source)),
+    }
+}
+
+fn protected_path_monitor_error(path: &Path, source: io::Error) -> LinuxBackendError {
+    LinuxBackendError::ProtectedPathMonitorFailed {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+fn open_directory_without_symlinks(path: &Path) -> io::Result<OwnedFd> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "protected path parent must be absolute",
+        ));
+    }
+    let root = CString::new("/")
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "root path contains NUL"))?;
+    let descriptor = open_directory_at(libc::AT_FDCWD, &root)?;
+    let mut descriptor = descriptor;
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::Normal(component) => {
+                let component = CString::new(component.as_bytes()).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "directory path contains NUL")
+                })?;
+                descriptor = open_directory_at(descriptor.as_raw_fd(), &component)?;
+            }
+            std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "protected path parent is not normalized",
+                ));
+            }
+        }
+    }
+    Ok(descriptor)
+}
+
+fn open_directory_at(parent: libc::c_int, name: &CString) -> io::Result<OwnedFd> {
+    #[allow(unsafe_code)]
+    let descriptor = unsafe {
+        libc::openat(
+            parent,
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
     };
-    let result = if metadata.file_type().is_dir() {
-        fs::remove_dir_all(path)
+    if descriptor < 0 {
+        Err(io::Error::last_os_error())
     } else {
-        fs::remove_file(path)
-    };
-    match result {
+        #[allow(unsafe_code)]
+        Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+    }
+}
+
+fn open_directory_entry(parent: libc::c_int, name: &CString) -> io::Result<OwnedFd> {
+    open_directory_at(parent, name)
+}
+
+fn remove_directory_entry(
+    parent: libc::c_int,
+    name: &CString,
+    // Keep the O_NOFOLLOW descriptor alive while the parent-relative
+    // rename/removal sequence runs; its Drop closes the pinned directory.
+    _directory: OwnedFd,
+    path: &Path,
+) -> Result<bool, LinuxBackendError> {
+    let sequence = REMOVE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary_name = OsString::from(format!(
+        ".cageforge-protected-remove-{}-{sequence}",
+        std::process::id()
+    ));
+    let temporary_name = CString::new(temporary_name.as_os_str().as_bytes()).map_err(|_| {
+        protected_path_monitor_error(
+            path,
+            io::Error::new(io::ErrorKind::InvalidInput, "temporary path contains NUL"),
+        )
+    })?;
+    let mut renamed = false;
+    for _ in 0..REMOVE_RENAME_ATTEMPTS {
+        #[allow(unsafe_code)]
+        let result =
+            unsafe { libc::renameat(parent, name.as_ptr(), parent, temporary_name.as_ptr()) };
+        if result == 0 {
+            renamed = true;
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.raw_os_error() != Some(libc::EEXIST) {
+            if source.kind() == io::ErrorKind::NotFound {
+                return Ok(false);
+            }
+            return Err(protected_path_monitor_error(path, source));
+        }
+    }
+    if !renamed {
+        return Err(protected_path_monitor_error(
+            path,
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "could not reserve a protected-path removal name",
+            ),
+        ));
+    }
+    let directory_path = PathBuf::from(format!(
+        "/proc/self/fd/{}/{}",
+        parent,
+        temporary_name.to_string_lossy()
+    ));
+    match fs::remove_dir_all(&directory_path) {
         Ok(()) => Ok(true),
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(true),
-        Err(source) => Err(LinuxBackendError::ProtectedPathMonitorFailed {
-            path: path.to_path_buf(),
-            source,
-        }),
+        Err(source) => Err(protected_path_monitor_error(path, source)),
+    }
+}
+
+fn unlink_entry(
+    parent: libc::c_int,
+    name: &CString,
+    path: &Path,
+) -> Result<bool, LinuxBackendError> {
+    #[allow(unsafe_code)]
+    let result = unsafe { libc::unlinkat(parent, name.as_ptr(), 0) };
+    if result == 0 {
+        Ok(true)
+    } else {
+        let source = io::Error::last_os_error();
+        if source.kind() == io::ErrorKind::NotFound {
+            Ok(true)
+        } else {
+            Err(protected_path_monitor_error(path, source))
+        }
     }
 }
 
@@ -248,5 +406,52 @@ impl Drop for ProtectedCreateWatcher {
         unsafe {
             libc::close(self.descriptor);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::remove_if_created;
+
+    #[test]
+    fn protected_removal_rejects_a_symlinked_parent() {
+        let workspace = TempDir::new().expect("workspace");
+        let outside = TempDir::new().expect("outside");
+        let outside_metadata = outside.path().join(".git");
+        fs::create_dir(&outside_metadata).expect("outside metadata");
+        fs::write(outside_metadata.join("marker"), "keep").expect("outside marker");
+        std::os::unix::fs::symlink(outside.path(), workspace.path().join("link"))
+            .expect("parent symlink");
+
+        let result = remove_if_created(&workspace.path().join("link/.git"));
+
+        assert!(result.is_err(), "symlinked parent must fail closed");
+        assert!(outside_metadata.join("marker").exists());
+    }
+
+    #[test]
+    fn protected_removal_does_not_follow_symlinks_inside_the_removed_directory() {
+        let workspace = TempDir::new().expect("workspace");
+        let outside = TempDir::new().expect("outside");
+        let protected = workspace.path().join(".git");
+        fs::create_dir(&protected).expect("protected directory");
+        let outside_file = outside.path().join("keep");
+        fs::write(&outside_file, "keep").expect("outside file");
+        std::os::unix::fs::symlink(&outside_file, protected.join("escape")).expect("child symlink");
+
+        assert!(remove_if_created(&protected).expect("safe removal"));
+        assert!(!protected.exists());
+        assert_eq!(
+            fs::read_dir(workspace.path()).expect("workspace").count(),
+            0
+        );
+        assert_eq!(
+            fs::read_to_string(outside_file).expect("outside file"),
+            "keep"
+        );
     }
 }

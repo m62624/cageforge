@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs;
+use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
@@ -87,6 +87,7 @@ fn bundled_bubblewrap_requires_a_matching_digest_manifest() {
     let temporary = tempfile::tempdir().expect("temporary root");
     let binary = temporary.path().join("bwrap");
     fs::write(&binary, b"trusted fixture").expect("write fixture");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("set executable mode");
     let digest = super::sha256_file(&binary).expect("hash fixture");
     fs::write(temporary.path().join("bwrap.sha256"), format!("{digest}\n"))
         .expect("write digest manifest");
@@ -104,13 +105,16 @@ fn pinned_bubblewrap_keeps_the_validated_file_after_path_replacement() {
     let temporary = tempfile::tempdir().expect("temporary root");
     let binary = temporary.path().join("bwrap");
     fs::write(&binary, b"trusted fixture").expect("write fixture");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("set executable mode");
     let digest = super::sha256_file(&binary).expect("hash fixture");
     fs::write(temporary.path().join("bwrap.sha256"), format!("{digest}\n"))
         .expect("write digest manifest");
 
+    let selected_file = File::open(&binary).expect("open selected executable");
     let selection = super::BubblewrapSelection {
         path: binary.clone(),
         bundled: true,
+        identity: super::file_identity(&selected_file).expect("selected executable identity"),
     };
     let pinned = super::open_pinned(&selection).expect("pin bundled executable");
     fs::remove_file(&binary).expect("remove replaced path");
@@ -120,6 +124,26 @@ fn pinned_bubblewrap_keeps_the_validated_file_after_path_replacement() {
         super::sha256_file_handle(&pinned).expect("hash pinned file"),
         digest
     );
+}
+
+#[test]
+fn pinned_bubblewrap_rejects_a_replaced_path_before_launch() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let binary = temporary.path().join("bwrap");
+    fs::write(&binary, b"trusted fixture").expect("write fixture");
+    let selected_file = File::open(&binary).expect("open selected executable");
+    let selection = super::BubblewrapSelection {
+        path: binary.clone(),
+        bundled: false,
+        identity: super::file_identity(&selected_file).expect("selected executable identity"),
+    };
+    fs::remove_file(&binary).expect("remove selected path");
+    fs::write(&binary, b"replacement fixture").expect("replace selected path");
+
+    assert!(matches!(
+        super::open_pinned(&selection),
+        Err(LinuxBackendError::BubblewrapChanged { .. })
+    ));
 }
 
 #[test]

@@ -5,17 +5,19 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::error::{LinuxBridgeError, LinuxBridgeOperation};
 use crate::helper_protocol::BRIDGE_TOKEN_BYTES;
 
 const LOOPBACK_INTERFACE_NAME: &[u8] = b"lo";
+const BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) struct LocalGatewayBridge {
     port: u16,
@@ -56,17 +58,15 @@ impl LocalGatewayBridge {
         }
 
         close_fd(write_fd)?;
-        let mut port = [0; 2];
         #[allow(unsafe_code)]
         let mut ready = unsafe { File::from_raw_fd(read_fd) };
-        if let Err(source) = ready.read_exact(&mut port) {
-            terminate_bridge(pid);
-            return Err(LinuxBridgeError::Operation {
-                operation: LinuxBridgeOperation::ReadReadyPort,
-                source,
-            });
-        }
-        let port = u16::from_be_bytes(port);
+        let port = match read_ready_port(&mut ready, BRIDGE_STARTUP_TIMEOUT) {
+            Ok(port) => port,
+            Err(error) => {
+                terminate_bridge(pid);
+                return Err(error);
+            }
+        };
         if port == 0 {
             terminate_bridge(pid);
             return Err(LinuxBridgeError::ZeroPort);
@@ -91,6 +91,86 @@ impl LocalGatewayBridge {
 impl Drop for LocalGatewayBridge {
     fn drop(&mut self) {
         terminate_bridge(self.pid);
+    }
+}
+
+fn read_ready_port(ready: &mut File, timeout: Duration) -> Result<u16, LinuxBridgeError> {
+    set_nonblocking(ready)?;
+    let deadline = Instant::now() + timeout;
+    let mut bytes = [0_u8; 2];
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match ready.read(&mut bytes[offset..]) {
+            Ok(0) => {
+                return Err(LinuxBridgeError::Operation {
+                    operation: LinuxBridgeOperation::ReadReadyPort,
+                    source: io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "bridge child closed the readiness pipe",
+                    ),
+                });
+            }
+            Ok(read) => offset += read,
+            Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(LinuxBridgeError::StartupTimedOut);
+                }
+                wait_for_readable(ready, remaining)?;
+            }
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
+            Err(source) => {
+                return Err(LinuxBridgeError::Operation {
+                    operation: LinuxBridgeOperation::ReadReadyPort,
+                    source,
+                });
+            }
+        }
+    }
+    Ok(u16::from_be_bytes(bytes))
+}
+
+fn set_nonblocking(file: &File) -> Result<(), LinuxBridgeError> {
+    #[allow(unsafe_code)]
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::ReadReadyPort,
+            source: io::Error::last_os_error(),
+        });
+    }
+    #[allow(unsafe_code)]
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::ReadReadyPort,
+            source: io::Error::last_os_error(),
+        });
+    }
+    Ok(())
+}
+
+fn wait_for_readable(file: &File, timeout: Duration) -> Result<(), LinuxBridgeError> {
+    let milliseconds = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
+    let mut poll_fd = libc::pollfd {
+        fd: file.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        #[allow(unsafe_code)]
+        let result = unsafe { libc::poll(&mut poll_fd, 1, milliseconds) };
+        if result > 0 {
+            return Ok(());
+        }
+        if result == 0 {
+            return Err(LinuxBridgeError::StartupTimedOut);
+        }
+        if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return Err(LinuxBridgeError::Operation {
+                operation: LinuxBridgeOperation::ReadReadyPort,
+                source: io::Error::last_os_error(),
+            });
+        }
     }
 }
 
@@ -447,3 +527,7 @@ fn terminate_bridge(pid: libc::pid_t) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bridge_tests.rs"]
+mod tests;
