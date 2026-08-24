@@ -34,6 +34,7 @@ const SYNTHETIC_FIXTURE_WORKSPACE: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_WORKSPACE
 const SYNTHETIC_FIXTURE_READY: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_READY";
 const SYNTHETIC_FIXTURE_RELEASE: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_RELEASE";
 const COMMON_SECCOMP_FIXTURE: &str = "CAGEFORGE_COMMON_SECCOMP_FIXTURE";
+const CORE_LIMIT_FIXTURE: &str = "CAGEFORGE_CORE_LIMIT_FIXTURE";
 
 fn backend() -> LinuxBackend {
     LinuxBackend::new(test_backend_config())
@@ -360,6 +361,28 @@ fn common_seccomp_fixture() {
         libc::close(socket_pair[0]);
         libc::close(socket_pair[1]);
     }
+}
+
+#[test]
+fn core_limit_fixture() {
+    if std::env::var_os(CORE_LIMIT_FIXTURE).is_none() {
+        return;
+    }
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    #[allow(unsafe_code)]
+    let result = unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut limit) };
+    assert_eq!(result, 0);
+    assert_eq!(
+        limit.rlim_cur, 0,
+        "restricted child must not create core dumps"
+    );
+    assert_eq!(
+        limit.rlim_max, 0,
+        "restricted child must not raise core limit"
+    );
 }
 
 fn wait_for_marker(path: &Path) {
@@ -1736,6 +1759,46 @@ fn restricted_child_has_no_new_privs() {
         "stdout: {stdout:?}, stderr: {stderr:?}"
     );
     assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn restricted_child_cannot_create_core_dumps() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let filesystem = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::root(), AccessMode::Read),
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+    ]);
+    let policy = SandboxPolicy::new(filesystem, NetworkPolicy::disabled());
+    let environment = EnvironmentSpec::inherit_all()
+        .with_var(CORE_LIMIT_FIXTURE, "1")
+        .expect("fixture environment");
+    let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+        .expect("fixture command")
+        .with_args(["--exact", "core_limit_fixture", "--nocapture"])
+        .expect("fixture arguments");
+    let (command, effective, runtime) =
+        request_with_environment(workspace.path(), policy, command, environment);
+    let command = command.with_stdio(StdioSpec::captured());
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout()
+        .expect("captured stdout")
+        .read_to_string(&mut stdout)
+        .expect("read stdout");
+    child
+        .stderr()
+        .expect("captured stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0), "stdout={stdout}\nstderr={stderr}");
 }
 
 #[test]

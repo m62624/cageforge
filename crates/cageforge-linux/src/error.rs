@@ -139,21 +139,51 @@ impl fmt::Display for PolicyLoweringExpectation {
     }
 }
 
+/// A typed failure produced by the per-launch gateway runtime.
+#[derive(Debug, Error)]
+pub enum NetworkGatewayRuntimeFailure {
+    /// Tokio could not construct the runtime used by the gateway thread.
+    #[error("failed to construct the gateway runtime: {source}")]
+    RuntimeConstruction {
+        /// Runtime construction failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The host gateway listener could not be registered with Tokio.
+    #[error("failed to register the gateway listener: {source}")]
+    ListenerRegistration {
+        /// Listener registration failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The gateway startup acknowledgement could not reach its owner.
+    #[error("gateway startup receiver closed")]
+    StartupReceiverClosed,
+    /// The gateway listener failed after startup.
+    #[error("gateway listener failed: {source}")]
+    Listener {
+        /// Listener failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The runtime stopped normally even though its sandbox still depended on it.
+    #[error("gateway stopped before the sandboxed process")]
+    StoppedBeforeProcess,
+}
+
 /// A failure returned by the per-launch gateway thread.
 #[derive(Debug, Error)]
 pub enum NetworkGatewayRuntimeError {
-    /// The runtime reported a concrete failure.
-    #[error("{reason}")]
+    /// The runtime reported a concrete typed failure.
+    #[error("gateway runtime failed: {source}")]
     Failed {
-        /// Runtime diagnostic.
-        reason: String,
+        /// Runtime failure category and source.
+        #[source]
+        source: NetworkGatewayRuntimeFailure,
     },
     /// The startup readiness channel closed before reporting a result.
-    #[error("gateway startup channel closed: {message}")]
-    StartupChannelClosed {
-        /// Channel diagnostic.
-        message: String,
-    },
+    #[error("gateway startup channel closed")]
+    StartupChannelClosed,
     /// The gateway thread terminated by panic.
     #[error("gateway runtime thread panicked")]
     Panicked,
@@ -236,6 +266,12 @@ pub enum LinuxBackendError {
     /// The backend configuration cannot provide the requested proc boundary.
     #[error("the requested proc mount is unavailable")]
     ProcMountUnavailable,
+    /// This build does not contain a seccomp filter lowering for the host CPU.
+    #[error("Linux seccomp hardening is unsupported on architecture {architecture}")]
+    UnsupportedSeccompArchitecture {
+        /// Target architecture reported by Rust.
+        architecture: String,
+    },
     /// The policy requires a capability this implementation cannot enforce.
     #[error("Linux backend cannot safely enforce {capability}")]
     UnsupportedCapability {

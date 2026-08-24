@@ -30,7 +30,7 @@ pub use config::{
 };
 pub use error::{
     FilesystemLoweringError, FilesystemMetadataOperation, LinuxBackendError,
-    NetworkCombinationError, NetworkGatewayRuntimeError, NetworkLoweringError,
-    PolicyLoweringExpectation,
+    NetworkCombinationError, NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure,
+    NetworkLoweringError, PolicyLoweringExpectation,
 };
 pub use process::LinuxChild;

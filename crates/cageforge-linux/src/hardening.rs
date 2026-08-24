@@ -9,6 +9,7 @@ use std::io;
 use std::io::{Read, Write};
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -45,6 +46,8 @@ fn apply(hardening_required: bool, network_mode: NetworkHardeningMode) -> io::Re
         return Ok(());
     }
     set_parent_death_signal()?;
+    set_dumpable(false)?;
+    set_core_dump_limit_zero()?;
     set_no_new_privs()?;
     let filter = build_filter(network_mode).map_err(io::Error::other)?;
     apply_filter(&filter).map_err(io::Error::other)?;
@@ -112,6 +115,16 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         .env_remove(AUTH_FD_ENV);
     if let Some(bridge) = &bridge {
         bridge.configure_command(&mut command);
+    }
+    // Re-apply process hardening in the forked command child immediately
+    // before exec. This keeps the invariant true even if the target executable
+    // causes Linux to recalculate dumpability during exec.
+    #[allow(unsafe_code)]
+    unsafe {
+        command.pre_exec(|| {
+            set_dumpable(false)?;
+            set_core_dump_limit_zero()
+        });
     }
     let status = match command.status() {
         Ok(status) => status,
@@ -291,6 +304,31 @@ fn complete_setup_handshake(authentication: &mut File) -> io::Result<()> {
 #[allow(unsafe_code)]
 fn set_no_new_privs() -> io::Result<()> {
     let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[allow(unsafe_code)]
+fn set_dumpable(dumpable: bool) -> io::Result<()> {
+    let value = libc::c_ulong::from(dumpable);
+    let result = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, value, 0, 0, 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[allow(unsafe_code)]
+fn set_core_dump_limit_zero() -> io::Result<()> {
+    let limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let result = unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) };
     if result == 0 {
         Ok(())
     } else {

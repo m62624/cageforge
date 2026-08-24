@@ -347,6 +347,7 @@ minimum taxonomy is:
 - `BubblewrapIncompatible`;
 - `UserNamespaceUnavailable`;
 - `ProcMountUnavailable`;
+- `UnsupportedSeccompArchitecture`;
 - `InvalidRuntimeContext`;
 - `FilesystemLoweringFailed`;
 - `NetworkLoweringFailed`;
@@ -456,6 +457,8 @@ command can run:
 
 - enable `PR_SET_NO_NEW_PRIVS` whenever seccomp or another restricted policy
   requires it;
+- set `PR_SET_DUMPABLE` to zero and set `RLIMIT_CORE` to zero for the hardened
+  process boundary;
 - install a narrowly defined seccomp policy for the selected network and
   process restrictions;
 - apply hardening to the child boundary, not to the long-lived parent process;

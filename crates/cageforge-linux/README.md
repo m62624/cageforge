@@ -197,3 +197,13 @@ case. Network mount mismatches and gateway lifecycle failures use the same
 typed sub-error pattern. This lets an application decide whether to retry,
 report a configuration problem, or fail closed without depending on display
 text.
+
+`NetworkGatewayRuntimeError::Failed` carries a
+`NetworkGatewayRuntimeFailure` such as runtime construction, listener
+registration, listener I/O, or an unexpected early stop. Gateway lifecycle
+callers therefore do not need to classify a free-form diagnostic string.
+
+For restricted launches, the helper also disables Linux core dumps and marks
+the hardened process non-dumpable before starting the command. These are
+process-boundary safeguards, not settings that modify the long-lived parent
+application.

@@ -23,7 +23,7 @@ use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
-use crate::error::{LinuxBackendError, NetworkGatewayRuntimeError};
+use crate::error::{LinuxBackendError, NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure};
 use crate::helper_protocol::BRIDGE_TOKEN_BYTES;
 
 pub(crate) const IN_SANDBOX_GATEWAY_SOCKET: &str = "/dev/.cageforge-runtime/network/gateway.sock";
@@ -73,7 +73,7 @@ pub(crate) struct GatewayRuntime {
     socket_directory: PathBuf,
     bridge_token: BridgeIngressToken,
     shutdown: Option<oneshot::Sender<()>>,
-    thread: Option<JoinHandle<Result<(), String>>>,
+    thread: Option<JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>>,
 }
 
 struct GatewayServer {
@@ -141,16 +141,13 @@ impl GatewayRuntime {
                 shutdown: Some(shutdown),
                 thread: Some(thread),
             }),
-            Ok(Err(reason)) => {
+            Ok(Err(source)) => {
                 let _ = thread.join();
-                Err(NetworkGatewayRuntimeError::Failed { reason }.into())
+                Err(NetworkGatewayRuntimeError::Failed { source }.into())
             }
-            Err(source) => {
+            Err(_) => {
                 let _ = thread.join();
-                Err(NetworkGatewayRuntimeError::StartupChannelClosed {
-                    message: source.to_string(),
-                }
-                .into())
+                Err(NetworkGatewayRuntimeError::StartupChannelClosed.into())
             }
         }
     }
@@ -174,10 +171,7 @@ impl GatewayRuntime {
         let Some(thread) = self.thread.take() else {
             return Ok(());
         };
-        Err(thread_failure(
-            thread,
-            "gateway stopped before the sandboxed process",
-        ))
+        Err(thread_failure(thread))
     }
 
     pub(crate) fn shutdown(&mut self) -> Result<(), LinuxBackendError> {
@@ -189,7 +183,7 @@ impl GatewayRuntime {
         };
         match thread.join() {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(reason)) => Err(NetworkGatewayRuntimeError::Failed { reason }.into()),
+            Ok(Err(source)) => Err(NetworkGatewayRuntimeError::Failed { source }.into()),
             Err(_) => Err(NetworkGatewayRuntimeError::Panicked.into()),
         }
     }
@@ -202,15 +196,16 @@ impl Drop for GatewayRuntime {
 }
 
 fn thread_failure(
-    thread: JoinHandle<Result<(), String>>,
-    stopped_reason: &'static str,
+    thread: JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>,
 ) -> LinuxBackendError {
-    let reason = match thread.join() {
-        Ok(Ok(())) => stopped_reason.to_string(),
-        Ok(Err(reason)) => reason,
-        Err(_) => "gateway runtime thread panicked".to_string(),
+    let error = match thread.join() {
+        Ok(Ok(())) => NetworkGatewayRuntimeError::Failed {
+            source: NetworkGatewayRuntimeFailure::StoppedBeforeProcess,
+        },
+        Ok(Err(source)) => NetworkGatewayRuntimeError::Failed { source },
+        Err(_) => NetworkGatewayRuntimeError::Panicked,
     };
-    NetworkGatewayRuntimeError::Failed { reason }.into()
+    error.into()
 }
 
 fn create_socket_directory() -> io::Result<TempDir> {
@@ -252,25 +247,18 @@ fn create_socket_directory() -> io::Result<TempDir> {
 fn run_gateway(
     server: GatewayServer,
     shutdown: oneshot::Receiver<()>,
-    ready: mpsc::SyncSender<Result<(), String>>,
-) -> Result<(), String> {
+    ready: mpsc::SyncSender<Result<(), NetworkGatewayRuntimeFailure>>,
+) -> Result<(), NetworkGatewayRuntimeFailure> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|error| {
-            let reason = format!("failed to construct gateway runtime: {error}");
-            let _ = ready.send(Err(reason.clone()));
-            reason
-        })?;
+        .map_err(|source| NetworkGatewayRuntimeFailure::RuntimeConstruction { source })?;
     runtime.block_on(async move {
-        let listener = UnixListener::from_std(server.listener).map_err(|error| {
-            let reason = format!("failed to register gateway listener: {error}");
-            let _ = ready.send(Err(reason.clone()));
-            reason
-        })?;
+        let listener = UnixListener::from_std(server.listener)
+            .map_err(|source| NetworkGatewayRuntimeFailure::ListenerRegistration { source })?;
         ready
             .send(Ok(()))
-            .map_err(|error| format!("gateway startup receiver closed: {error}"))?;
+            .map_err(|_| NetworkGatewayRuntimeFailure::StartupReceiverClosed)?;
         serve_gateway(
             listener,
             server.gateway,
@@ -292,7 +280,7 @@ async fn serve_gateway(
     handshake_timeout: Duration,
     pre_authentication_limit: usize,
     mut shutdown: oneshot::Receiver<()>,
-) -> Result<(), String> {
+) -> Result<(), NetworkGatewayRuntimeFailure> {
     let mut connections = JoinSet::new();
     let pre_authentication = Arc::new(Semaphore::new(pre_authentication_limit));
     loop {
@@ -300,7 +288,7 @@ async fn serve_gateway(
             _ = &mut shutdown => break,
             accepted = listener.accept() => {
                 let (stream, _) = accepted
-                    .map_err(|error| format!("gateway listener failed: {error}"))?;
+                    .map_err(|source| NetworkGatewayRuntimeFailure::Listener { source })?;
                 let Ok(permit) = Arc::clone(&pre_authentication).try_acquire_owned() else {
                     drop(stream);
                     continue;

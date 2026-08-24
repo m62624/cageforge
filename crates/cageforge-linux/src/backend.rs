@@ -73,6 +73,11 @@ pub struct LinuxBackend {
 impl LinuxBackend {
     /// Constructs a backend and verifies Bubblewrap's required namespace API.
     pub fn new(config: LinuxBackendConfig) -> Result<Self, LinuxBackendError> {
+        if !cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
+            return Err(LinuxBackendError::UnsupportedSeccompArchitecture {
+                architecture: std::env::consts::ARCH.to_string(),
+            });
+        }
         let resource_directory = resource_directory(config.resource_directory_source())?;
         let bubblewrap = discover_and_probe(
             config.bubblewrap(),
