@@ -228,7 +228,8 @@ jobs:
     name: Linux core + native sandbox
     needs: changes
     if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.linux_native == 'true'
-    # TODO: use the dedicated Linux runner when cageforge-linux is introduced.
+    # TODO: move this implemented backend to dedicated x64/ARM64 Linux runners,
+    # install and verify Bubblewrap, and make the native status a required gate.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
