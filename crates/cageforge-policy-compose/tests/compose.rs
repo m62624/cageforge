@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use cageforge_command::{EnvironmentFilterAction, EnvironmentSpec};
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, NetworkPolicy,
-    PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
+    PathPattern, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{
     CompositionError, CompositionRequest, CoreEnvironment, EnvironmentInput, ExternalOwner,
@@ -433,6 +433,51 @@ fn default_git_protection_survives_composition() {
 }
 
 #[test]
+fn git_write_opt_out_is_effective_only_below_a_permissive_ceiling() {
+    let requested_filesystem = SandboxPolicy::workspace()
+        .filesystem()
+        .clone()
+        .dangerously_allow_git_write();
+    let requested = SandboxPolicy::new(requested_filesystem, NetworkPolicy::disabled());
+    let environment = EnvironmentSpec::empty();
+    let runtime_context = PathResolutionContext::new()
+        .with_workspace_root(absolute_root("project"))
+        .expect("valid workspace root");
+
+    let permissive = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective = compose(CompositionRequest::new(
+        &requested,
+        &environment,
+        &permissive,
+    ))
+    .expect("opt-out composes below a permissive ceiling");
+    let context = effective
+        .path_context(&runtime_context)
+        .expect("effective context");
+    assert_eq!(
+        effective
+            .filesystem()
+            .access_for_path(absolute_root("project/.git/config").as_path(), &context)
+            .expect("valid path"),
+        cageforge_policy::FilesystemDecision::Write
+    );
+
+    let strict = PolicyCeiling::new(SandboxPolicy::workspace(), environment.clone());
+    let effective = compose(CompositionRequest::new(&requested, &environment, &strict))
+        .expect("opt-out composes below a strict ceiling");
+    let context = effective
+        .path_context(&runtime_context)
+        .expect("effective context");
+    assert_eq!(
+        effective
+            .filesystem()
+            .access_for_path(absolute_root("project/.git/config").as_path(), &context)
+            .expect("valid path"),
+        cageforge_policy::FilesystemDecision::Read
+    );
+}
+
+#[test]
 fn effective_context_restricts_workspace_roots_and_preserves_other_scopes() {
     let requested = requested_policy();
     let safe_root = absolute_root("safe");
@@ -707,6 +752,36 @@ fn preserves_glob_denials_and_uses_the_widest_required_scan_depth() {
 }
 
 #[test]
+fn effective_context_resolves_and_matches_workspace_globs_without_broadening_roots() {
+    let allowed = absolute_root("allowed-glob-root");
+    let excluded = absolute_root("excluded-glob-root");
+    let requested = SandboxPolicy::workspace();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::workspace(), EnvironmentSpec::empty())
+        .with_workspace_roots([allowed.clone()])
+        .expect("valid ceiling root");
+    let effective = compose(CompositionRequest::new(
+        &requested,
+        &EnvironmentSpec::empty(),
+        &ceiling,
+    ))
+    .expect("valid composition");
+    let runtime = PathResolutionContext::new()
+        .with_workspace_root(allowed.clone())
+        .expect("allowed root")
+        .with_workspace_root(excluded.clone())
+        .expect("excluded root");
+    let context = effective.path_context(&runtime).expect("effective context");
+    let pattern = PathPattern::workspace("private/**/*.token").expect("valid pattern");
+
+    assert_eq!(
+        context.glob_search_roots(&pattern),
+        vec![allowed.join("private")]
+    );
+    assert!(context.pattern_matches(&pattern, &allowed.join("private/a/b.token")));
+    assert!(!context.pattern_matches(&pattern, &excluded.join("private/a/b.token")));
+}
+
+#[test]
 fn custom_protected_paths_remain_read_only_after_composition() {
     let requested = SandboxPolicy::workspace();
     let ceiling_filesystem = FilesystemPolicy::restricted([FilesystemRule::new(
@@ -764,7 +839,8 @@ fn composes_unix_socket_allowlists_without_exposing_component_policies() {
         effective.network().requirements().mode(),
         cageforge_policy::NetworkMode::Enabled
     );
-    assert!(effective.network().requirements().unix_sockets());
+    assert!(effective.network().requirements().unix_socket_rules());
+    assert!(!effective.network().requirements().unix_socket_isolation());
     assert_eq!(
         effective
             .network()

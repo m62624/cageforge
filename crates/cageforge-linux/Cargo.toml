@@ -12,20 +12,24 @@ readme = "README.md"
 name = "cageforge_linux"
 path = "src/lib.rs"
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 cageforge-backend-api.workspace = true
 cageforge-command.workspace = true
+cageforge-network-proxy = { workspace = true, features = ["runtime"] }
+cageforge-path.workspace = true
 cageforge-policy.workspace = true
 cageforge-policy-compose.workspace = true
-thiserror.workspace = true
-
-[target.'cfg(target_os = "linux")'.dependencies]
+command-fds.workspace = true
+getrandom.workspace = true
 libc.workspace = true
 seccompiler.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync"] }
 
 [dev-dependencies]
+cageforge-config.workspace = true
 pretty_assertions.workspace = true
-tempfile = "3.23.0"
 
 [lints]
 workspace = true

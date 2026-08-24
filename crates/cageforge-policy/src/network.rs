@@ -351,12 +351,16 @@ impl NetworkPolicy {
         }
     }
 
-    /// Creates a policy with command networking enabled.
+    /// Creates a policy with IP networking enabled and pathname Unix sockets
+    /// disabled.
+    ///
+    /// Call [`Self::with_unix_socket_mode`] explicitly when pathname Unix
+    /// sockets should use an allowlist or be unrestricted.
     pub const fn enabled() -> Self {
         Self {
             mode: NetworkMode::Enabled,
             domain_mode: DomainMode::Enabled,
-            unix_socket_mode: UnixSocketMode::Enabled,
+            unix_socket_mode: UnixSocketMode::Disabled,
             local_network_access: LocalNetworkAccess::Deny,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
@@ -451,6 +455,10 @@ impl NetworkPolicy {
     }
 
     /// Adds a Unix socket rule.
+    ///
+    /// Rules are evaluated according to [`Self::unix_socket_mode`]. In
+    /// particular, a policy whose socket mode is [`UnixSocketMode::Disabled`]
+    /// remains deny-all even when it carries rules.
     pub fn with_unix_socket(
         mut self,
         path: impl Into<PathBuf>,

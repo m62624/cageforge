@@ -313,6 +313,43 @@ impl PathPattern {
         self.absolute
     }
 
+    /// Returns the static path prefix before the first glob component.
+    ///
+    /// Absolute patterns return an absolute prefix. Workspace patterns return
+    /// a relative prefix that must be resolved through the effective runtime
+    /// workspace roots. An empty workspace prefix means the workspace root;
+    /// an absolute root-only prefix must be rejected by backends that cannot
+    /// safely scan the complete filesystem.
+    pub fn literal_prefix(&self) -> PathBuf {
+        let normalized = normalize_lexical_path(Path::new(&self.raw));
+        let mut prefix = PathBuf::new();
+        for component in normalized.components() {
+            match component {
+                Component::Prefix(value) => prefix.push(value.as_os_str()),
+                Component::RootDir => prefix.push(Path::new("/")),
+                Component::CurDir => {}
+                Component::ParentDir => unreachable!("validated patterns cannot traverse parents"),
+                Component::Normal(value) => {
+                    let value = value.to_string_lossy();
+                    if contains_glob_meta(&value) {
+                        break;
+                    }
+                    prefix.push(value.as_ref());
+                }
+            }
+        }
+        prefix
+    }
+
+    /// Tests this pattern against one path in a validated runtime context.
+    ///
+    /// This is pattern matching only, not a filesystem authorization result.
+    /// Callers enforcing an effective sandbox must still evaluate the complete
+    /// filesystem policy after expansion.
+    pub fn matches_path(&self, path: &Path, context: &PathResolutionContext) -> bool {
+        self.matches(path, context)
+    }
+
     pub(crate) fn matches(&self, path: &Path, context: &PathResolutionContext) -> bool {
         if self.absolute {
             let (prefix, components) = path_components(path);

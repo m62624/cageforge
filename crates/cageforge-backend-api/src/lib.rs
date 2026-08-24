@@ -110,8 +110,10 @@ pub enum BackendCapability {
     NetworkLocalAddressRestrictions,
     /// Resolve once and authorize the exact address used for a connection.
     NetworkResolvedTargets,
-    /// Enforce Unix socket rules.
-    NetworkUnixSockets,
+    /// Prevent pathname Unix socket access while retaining process-local IPC.
+    NetworkUnixSocketIsolation,
+    /// Enforce per-path Unix socket allow and deny rules.
+    NetworkUnixSocketRules,
     /// Start from all inherited environment variables.
     EnvironmentAll,
     /// Start from a backend-selected core environment.

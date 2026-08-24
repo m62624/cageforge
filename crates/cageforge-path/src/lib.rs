@@ -19,16 +19,11 @@
 #![deny(missing_docs)]
 
 use std::borrow::Cow;
-use std::path::{Component, Path};
+use std::ffi::{OsStr, OsString};
+use std::path::{Component, Path, PathBuf};
 
-#[cfg(not(windows))]
-use std::ffi::{OsStr, OsString};
-#[cfg(windows)]
-use std::ffi::{OsStr, OsString};
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-#[cfg(windows)]
-use std::path::PathBuf;
 
 /// A hashable and orderable lexical path identity using native case rules.
 ///
@@ -78,18 +73,24 @@ pub fn contains_parent_traversal(path: &Path) -> bool {
 
 /// Normalizes lexical aliases that the target platform treats as the same path.
 ///
-/// On Windows this converts supported verbatim/device drive and UNC prefixes
-/// to their ordinary spelling. Other paths, including unsupported device
-/// namespaces, are returned unchanged. POSIX paths are always borrowed
-/// unchanged. The function performs no filesystem I/O.
+/// This removes current-directory components without resolving parent
+/// traversal. On Windows it also converts supported verbatim/device drive and
+/// UNC prefixes to their ordinary spelling. Unsupported device namespaces are
+/// otherwise preserved. The function performs no filesystem I/O.
 pub fn normalize_lexical_path(path: &Path) -> Cow<'_, Path> {
     #[cfg(windows)]
-    {
-        normalize_windows_device_path(path)
-    }
+    let path = normalize_windows_device_path(path);
     #[cfg(not(windows))]
-    {
-        Cow::Borrowed(path)
+    let path = Cow::Borrowed(path);
+
+    let normalized = path
+        .components()
+        .filter(|component| *component != Component::CurDir)
+        .collect::<PathBuf>();
+    if normalized.as_os_str() == path.as_os_str() {
+        path
+    } else {
+        Cow::Owned(normalized)
     }
 }
 

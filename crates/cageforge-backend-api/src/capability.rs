@@ -42,7 +42,8 @@ impl fmt::Display for BackendCapability {
                 "network private, loopback, and link-local address restrictions"
             }
             Self::NetworkResolvedTargets => "exact resolved network targets",
-            Self::NetworkUnixSockets => "Unix socket network rules",
+            Self::NetworkUnixSocketIsolation => "pathname Unix socket isolation",
+            Self::NetworkUnixSocketRules => "per-path Unix socket rules",
             Self::EnvironmentAll => "all inherited environment variables",
             Self::EnvironmentCore => "backend-selected core environment variables",
             Self::EnvironmentNone => "an empty inherited environment",

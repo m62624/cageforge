@@ -167,7 +167,8 @@ fn all_capabilities() -> BackendCapabilities {
         BackendCapability::NetworkLocalAddressRestrictions,
         BackendCapability::NetworkResolvedTargets,
         BackendCapability::NetworkDomainRules,
-        BackendCapability::NetworkUnixSockets,
+        BackendCapability::NetworkUnixSocketIsolation,
+        BackendCapability::NetworkUnixSocketRules,
         BackendCapability::EnvironmentCore,
         BackendCapability::EnvironmentFilters,
         BackendCapability::EnvironmentOverrides,
@@ -376,7 +377,8 @@ fn every_capability_has_a_human_readable_description() {
         BackendCapability::NetworkDomainRules,
         BackendCapability::NetworkLocalAddressRestrictions,
         BackendCapability::NetworkResolvedTargets,
-        BackendCapability::NetworkUnixSockets,
+        BackendCapability::NetworkUnixSocketIsolation,
+        BackendCapability::NetworkUnixSocketRules,
         BackendCapability::EnvironmentAll,
         BackendCapability::EnvironmentCore,
         BackendCapability::EnvironmentNone,
@@ -413,7 +415,7 @@ fn required_capabilities_are_stable_and_complete_for_the_fixture() {
             BackendCapability::NetworkDomainRules,
             BackendCapability::NetworkLocalAddressRestrictions,
             BackendCapability::NetworkResolvedTargets,
-            BackendCapability::NetworkUnixSockets,
+            BackendCapability::NetworkUnixSocketRules,
             BackendCapability::EnvironmentCore,
             BackendCapability::EnvironmentFilters,
             BackendCapability::EnvironmentOverrides,
@@ -455,7 +457,8 @@ fn required_capabilities_cover_unrestricted_default_modes() {
     assert!(required.supports(BackendCapability::NetworkEnabled));
     assert!(!required.supports(BackendCapability::NetworkLocalAddressRestrictions));
     assert!(!required.supports(BackendCapability::NetworkResolvedTargets));
-    assert!(!required.supports(BackendCapability::NetworkUnixSockets));
+    assert!(!required.supports(BackendCapability::NetworkUnixSocketIsolation));
+    assert!(!required.supports(BackendCapability::NetworkUnixSocketRules));
     assert!(required.supports(BackendCapability::EnvironmentAll));
 
     let collected: BackendCapabilities = required.iter().copied().collect();
@@ -478,7 +481,31 @@ fn enabled_network_socket_restrictions_require_socket_capability() {
         CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
     let required = BackendRequest::new(&command, &sandbox).required_capabilities();
 
-    assert!(required.supports(BackendCapability::NetworkUnixSockets));
+    assert!(required.supports(BackendCapability::NetworkUnixSocketIsolation));
+    assert!(!required.supports(BackendCapability::NetworkUnixSocketRules));
+}
+
+#[test]
+fn empty_unix_socket_allowlist_requires_isolation_not_per_path_rules() {
+    let requested = cageforge_policy::SandboxPolicy::new(
+        FilesystemPolicy::unrestricted(),
+        NetworkPolicy::enabled()
+            .with_unix_socket_mode(UnixSocketMode::Restricted)
+            .with_unix_socket(native_path("/tmp/denied.sock"), DomainAccess::Deny)
+            .unwrap(),
+    );
+    let environment = EnvironmentSpec::inherit_all();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
+    let command =
+        CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
+    let required = BackendRequest::new(&command, &sandbox).required_capabilities();
+
+    assert!(required.supports(BackendCapability::NetworkUnixSocketIsolation));
+    assert!(!required.supports(BackendCapability::NetworkUnixSocketRules));
 }
 
 #[test]
@@ -731,7 +758,8 @@ fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
             if effective_network_mode == NetworkMode::Enabled {
                 expected = expected
                     .with(BackendCapability::NetworkLocalAddressRestrictions)
-                    .with(BackendCapability::NetworkResolvedTargets);
+                    .with(BackendCapability::NetworkResolvedTargets)
+                    .with(BackendCapability::NetworkUnixSocketIsolation);
             }
 
             assert_eq!(

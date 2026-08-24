@@ -285,6 +285,22 @@ async fn private_dns_result_is_denied_before_connect() {
 }
 
 #[tokio::test]
+async fn denied_hostname_never_reaches_the_resolver() {
+    let resolver = StaticResolver::one("denied.test", SocketAddr::from(([203, 0, 113, 10], 8080)));
+    let requested = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_domain("allowed.test", DomainAccess::Allow)
+        .expect("valid domain");
+    let policy = effective_network(requested, NetworkPolicy::unrestricted());
+    let gateway =
+        NetworkGateway::new(policy, resolver.clone(), GatewayConfig::new()).expect("gateway");
+
+    let response = raw_http_status(gateway, "denied.test", 8080).await;
+    assert!(response.starts_with("HTTP/1.1 403"));
+    assert_eq!(resolver.calls(), 0);
+}
+
+#[tokio::test]
 async fn absolute_uri_and_host_header_must_name_the_same_endpoint() {
     let address = SocketAddr::from(([127, 0, 0, 1], 8080));
     let (gateway, resolver) = gateway("allowed.test", address);

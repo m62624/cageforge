@@ -781,6 +781,49 @@ dangerously_allow_git_write = true
 }
 
 #[test]
+fn child_profile_can_restore_default_git_protection_after_parent_opt_out() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "restored"
+
+[profiles.permissive.filesystem]
+rules = [{ target = "workspace-root", access = "write" }]
+
+[profiles.permissive.filesystem.security]
+dangerously_allow_git_write = true
+
+[profiles.inherited]
+inherits = ["permissive"]
+
+[profiles.restored]
+inherits = ["permissive"]
+
+[profiles.restored.filesystem.security]
+dangerously_allow_git_write = false
+"#,
+    )
+    .expect("metadata inheritance config should parse");
+
+    let inherited = config
+        .resolve("inherited")
+        .expect("inherited opt-out should resolve");
+    assert!(
+        inherited
+            .policy()
+            .filesystem()
+            .protected_relative_paths()
+            .is_empty()
+    );
+    let restored = config
+        .resolve_default()
+        .expect("restored protection should resolve");
+    assert_eq!(
+        restored.policy().filesystem().protected_relative_paths(),
+        [PathBuf::from(".git")]
+    );
+}
+
+#[test]
 fn inherited_protected_paths_use_native_case_semantics() {
     let config = Config::from_toml(
         r#"

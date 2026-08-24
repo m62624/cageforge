@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use cageforge_command::EnvironmentSpec;
 use cageforge_path::{NativePathKey, contains_parent_traversal, is_within};
 use cageforge_policy::{
-    DomainMode, LocalNetworkAccess, NetworkMode, NetworkPolicy, PathResolutionContext,
-    SandboxPolicy, UnixSocketMode,
+    DomainAccess, DomainMode, LocalNetworkAccess, NetworkMode, NetworkPolicy,
+    PathResolutionContext, SandboxPolicy, UnixSocketMode,
 };
 
 use crate::CompositionError;
@@ -263,7 +263,8 @@ pub struct EffectiveNetworkRequirements {
     domain_rules: bool,
     local_address_restrictions: bool,
     resolved_targets: bool,
-    unix_sockets: bool,
+    unix_socket_isolation: bool,
+    unix_socket_rules: bool,
 }
 
 impl EffectiveNetworkRequirements {
@@ -287,9 +288,14 @@ impl EffectiveNetworkRequirements {
         self.resolved_targets
     }
 
-    /// Returns whether Unix socket rules or a non-default socket mode are present.
-    pub const fn unix_sockets(self) -> bool {
-        self.unix_sockets
+    /// Returns whether pathname Unix sockets must be fully unavailable.
+    pub const fn unix_socket_isolation(self) -> bool {
+        self.unix_socket_isolation
+    }
+
+    /// Returns whether per-path Unix socket rules must be enforced.
+    pub const fn unix_socket_rules(self) -> bool {
+        self.unix_socket_rules
     }
 }
 
@@ -318,16 +324,24 @@ impl EffectiveNetworkPolicy {
             && [&self.requested, &self.ceiling]
                 .iter()
                 .any(|policy| policy.local_network_access() == LocalNetworkAccess::Deny);
+        let policies = [&self.requested, &self.ceiling];
+        let unix_socket_isolation = enabled
+            && policies
+                .iter()
+                .any(|policy| denies_all_unix_sockets(policy));
+        let unix_socket_rules = enabled
+            && !unix_socket_isolation
+            && policies.iter().any(|policy| {
+                !policy.unix_sockets().is_empty()
+                    || policy.unix_socket_mode() == UnixSocketMode::Restricted
+            });
         EffectiveNetworkRequirements {
             mode,
             domain_rules,
             local_address_restrictions,
             resolved_targets: domain_rules || local_address_restrictions,
-            unix_sockets: enabled
-                && [&self.requested, &self.ceiling].iter().any(|policy| {
-                    !policy.unix_sockets().is_empty()
-                        || policy.unix_socket_mode() != UnixSocketMode::Enabled
-                }),
+            unix_socket_isolation,
+            unix_socket_rules,
         }
     }
 
@@ -340,6 +354,15 @@ impl EffectiveNetworkPolicy {
     pub fn lowering(&self) -> EffectiveNetworkLowering<'_> {
         EffectiveNetworkLowering::new(&self.requested, &self.ceiling)
     }
+}
+
+fn denies_all_unix_sockets(policy: &NetworkPolicy) -> bool {
+    policy.unix_socket_mode() == UnixSocketMode::Disabled
+        || (policy.unix_socket_mode() == UnixSocketMode::Restricted
+            && !policy
+                .unix_sockets()
+                .iter()
+                .any(|rule| rule.access() == DomainAccess::Allow))
 }
 
 fn effective_network_mode(left: NetworkMode, right: NetworkMode) -> NetworkMode {

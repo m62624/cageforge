@@ -2,7 +2,10 @@
 
 #[cfg(windows)]
 use cageforge_path::NativePathKey;
-use cageforge_path::{contains_component_path, contains_parent_traversal, is_within, paths_equal};
+use cageforge_path::{
+    contains_component_path, contains_parent_traversal, is_within, normalize_lexical_path,
+    paths_equal,
+};
 use proptest::prelude::*;
 use std::path::Path;
 use std::path::PathBuf;
@@ -32,6 +35,18 @@ fn complete_paths_compare_components() {
         Path::new("/workspace/src"),
         Path::new("/workspace/src2")
     ));
+}
+
+#[test]
+fn lexical_normalization_removes_current_directory_without_resolving_parent_traversal() {
+    assert_eq!(
+        normalize_lexical_path(Path::new("/workspace/./src//lib.rs")).as_ref(),
+        Path::new("/workspace/src/lib.rs")
+    );
+    assert_eq!(
+        normalize_lexical_path(Path::new("/workspace/src/../secret")).as_ref(),
+        Path::new("/workspace/src/../secret")
+    );
 }
 
 #[test]

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #[cfg(target_os = "linux")]
+#[path = "../helper_protocol.rs"]
+mod helper_protocol;
+
+#[cfg(target_os = "linux")]
 #[path = "../hardening.rs"]
 mod hardening;
 

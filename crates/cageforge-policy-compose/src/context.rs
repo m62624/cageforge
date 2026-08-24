@@ -5,10 +5,10 @@
 //! The private constructor is intentional: callers should obtain this context
 //! from the effective result rather than rebuilding a broader context by hand.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cageforge_policy::{PathResolutionContext, PathSelector};
+use cageforge_policy::{PathPattern, PathResolutionContext, PathSelector};
 
 /// Identity shared by one effective sandbox and the contexts it creates.
 ///
@@ -79,6 +79,33 @@ impl EffectivePathContext {
     /// Resolves a symbolic selector through this bound effective context.
     pub fn resolve(&self, selector: &PathSelector) -> Vec<PathBuf> {
         selector.resolve(&self.context)
+    }
+
+    /// Returns the concrete scan roots for one validated filesystem pattern.
+    ///
+    /// Workspace patterns are resolved only through the roots retained by this
+    /// effective context. Absolute patterns produce their own static prefix.
+    /// The roots are lexical scan anchors, not filesystem authorization.
+    pub fn glob_search_roots(&self, pattern: &PathPattern) -> Vec<PathBuf> {
+        let prefix = pattern.literal_prefix();
+        if pattern.is_absolute() {
+            vec![prefix]
+        } else {
+            self.context
+                .workspace_roots()
+                .iter()
+                .map(|root| root.join(&prefix))
+                .collect()
+        }
+    }
+
+    /// Tests a path pattern through this composition-bound runtime context.
+    ///
+    /// This method preserves workspace-root narrowing. It is a matcher used by
+    /// native lowering and is not an authorization result; the final path must
+    /// still be checked against the complete effective filesystem policy.
+    pub fn pattern_matches(&self, pattern: &PathPattern, path: &Path) -> bool {
+        pattern.matches_path(path, &self.context)
     }
 
     pub(crate) fn belongs_to(&self, identity: &ContextIdentity) -> bool {

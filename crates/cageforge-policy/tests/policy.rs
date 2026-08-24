@@ -540,6 +540,35 @@ fn path_patterns_validate_and_match_absolute_and_workspace_paths() {
 }
 
 #[test]
+fn path_patterns_expose_static_prefixes_without_changing_match_semantics() {
+    let workspace_root = native_path("/workspace");
+    let context = PathResolutionContext::new()
+        .with_workspace_root(&workspace_root)
+        .expect("workspace root");
+    let workspace = PathPattern::workspace("secrets/**/[a-z].token").expect("workspace glob");
+    let absolute =
+        PathPattern::absolute(native_path("/var/lib/**/config.?oml")).expect("absolute glob");
+
+    assert_eq!(workspace.literal_prefix(), Path::new("secrets"));
+    assert_eq!(
+        absolute.literal_prefix(),
+        Path::new(&native_path("/var/lib"))
+    );
+    assert!(
+        workspace.matches_path(
+            Path::new(&workspace_root)
+                .join("secrets/nested/a.token")
+                .as_path(),
+            &context
+        )
+    );
+    assert!(!workspace.matches_path(
+        Path::new(&workspace_root).join("public/a.token").as_path(),
+        &context
+    ));
+}
+
+#[test]
 fn filesystem_globs_support_character_classes_and_ranges() {
     let context = PathResolutionContext::new()
         .with_workspace_root("/workspace")
@@ -1026,7 +1055,13 @@ fn domain_rules_normalize_and_apply_deny_precedence() {
         .expect("deny rule");
     assert_eq!(policy.mode(), NetworkMode::Enabled);
     assert_eq!(policy.domain_mode(), DomainMode::Enabled);
-    assert_eq!(policy.unix_socket_mode(), UnixSocketMode::Enabled);
+    assert_eq!(policy.unix_socket_mode(), UnixSocketMode::Disabled);
+    assert_eq!(
+        policy
+            .decision_for_unix_socket(Path::new(&native_path("/run/default-deny.sock")))
+            .expect("socket lookup"),
+        NetworkDecision::Deny
+    );
     assert_eq!(policy.domains()[0].pattern(), "api.example.com");
     assert_eq!(
         policy
@@ -1282,6 +1317,7 @@ fn network_rules_expose_accessors_and_validate_local_modes() {
         NetworkDecision::Deny
     );
     let enabled = NetworkPolicy::enabled()
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
         .with_unix_socket(socket_path, DomainAccess::Deny)
         .expect("socket rule")
         .with_unix_socket(

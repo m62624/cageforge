@@ -303,8 +303,8 @@ impl FilesystemPolicy {
         &self.protected_relative_paths
     }
 
-    /// Adds a protected relative path without removing the mandatory `.git`
-    /// protection.
+    /// Adds a protected relative path without changing the default `.git`
+    /// protection setting.
     pub fn with_additional_protected_relative_path(
         mut self,
         path: impl Into<PathBuf>,

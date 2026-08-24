@@ -150,10 +150,15 @@ pub(super) fn add_network_capabilities(
             .capabilities
             .insert(BackendCapability::NetworkLocalAddressRestrictions);
     }
-    if requirements.unix_sockets() {
+    if requirements.unix_socket_isolation() {
         required
             .capabilities
-            .insert(BackendCapability::NetworkUnixSockets);
+            .insert(BackendCapability::NetworkUnixSocketIsolation);
+    }
+    if requirements.unix_socket_rules() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkUnixSocketRules);
     }
 }
 

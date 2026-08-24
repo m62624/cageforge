@@ -5,7 +5,7 @@
 use std::io;
 use std::net::SocketAddr;
 
-use cageforge_policy::{ConnectionAuthorization, ResolvedNetworkTarget};
+use cageforge_policy::{ConnectionAuthorization, NetworkDecision, ResolvedNetworkTarget};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -15,6 +15,25 @@ use crate::{GatewayError, NetworkResolver};
 
 impl<R: NetworkResolver> GatewayInner<R> {
     pub(crate) async fn connect(&self, authority: &Authority) -> Result<TcpStream, GatewayError> {
+        match self
+            .policy
+            .decision_for_domain(authority.host())
+            .map_err(|source| GatewayError::PolicyEvaluation { source })?
+        {
+            NetworkDecision::Allow => {}
+            NetworkDecision::Deny => {
+                return Err(GatewayError::PolicyDenied {
+                    host: authority.host().to_string(),
+                    port: authority.port(),
+                });
+            }
+            NetworkDecision::ExternallyEnforced => {
+                return Err(GatewayError::ExternallyEnforced {
+                    host: authority.host().to_string(),
+                    port: authority.port(),
+                });
+            }
+        }
         let addresses = self.resolve(authority).await?;
         let target = ResolvedNetworkTarget::new(authority.host(), addresses)
             .map_err(|source| GatewayError::InvalidResolvedTarget { source })?;

@@ -15,10 +15,18 @@
 mod backend;
 mod bwrap;
 mod config;
+mod environment_transport;
 mod error;
+mod filesystem;
+mod helper_protocol;
+mod network;
 mod process;
+mod status_transport;
 
 pub use backend::LinuxBackend;
-pub use config::{BubblewrapSource, HardeningHelperSource, LinuxBackendConfig, ProcMountPolicy};
+pub use config::{
+    BubblewrapSource, HardeningHelperSource, LinuxBackendConfig, LinuxBackendConfigError,
+    ProcMountPolicy,
+};
 pub use error::LinuxBackendError;
 pub use process::LinuxChild;
