@@ -27,6 +27,9 @@ These rules are mandatory:
 4. Cageforge-authored code is Apache-2.0. Third-party code keeps its own
    license: bundled bubblewrap is LGPL-2.0-or-later; do not relabel it as
    Apache-2.0.
+   `cageforge-bwrap` is the only crate that builds the bundled Bubblewrap
+   source. `cageforge-linux` consumes a staged resource and must not compile
+   or download third-party source during runtime.
 5. Do not import source-derived implementation code until provenance and
    license records are prepared. Do not create the first Git commit until the
    licensing scaffold has been reviewed.
@@ -126,6 +129,9 @@ These rules are mandatory:
     then add tests for each retained behavior before considering the backend
     complete. Codex comparison is mandatory for every backend revision, not a
     one-time design review.
+    For Bubblewrap, compare behavior with Codex but obtain bundled source from
+    the official Bubblewrap repository and record its exact tag, commit, and
+    license separately.
 15. Configuration files are trusted application input, not an untrusted wire
     format. Keep resolution efficient for large files and shared inheritance
     graphs through one iterative inheritance linearization and indexed

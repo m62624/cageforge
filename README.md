@@ -33,7 +33,8 @@ Choose the smallest entry point that matches your application:
 | Load named profiles from TOML | [`cageforge-config`](https://docs.rs/cageforge-config/latest/cageforge_config/) | Strict parsing, inheritance, diagnostics, schema, and resolved policy/command values |
 | Apply an outer safety limit | [`cageforge-policy-compose`](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/) | Monotonic intersection of requested permissions and a policy ceiling |
 | Check a request against a backend contract | [`cageforge-backend-api`](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/) | Typed capability negotiation and side-effect-free preflight for a native backend |
-| Integrate a native process sandbox | Future backend integration | OS-specific enforcement and safe process/file/network operations |
+| Build the bundled Linux Bubblewrap resource | `cageforge-bwrap` | Builds the pinned upstream Bubblewrap source and stages `bwrap` plus its digest manifest |
+| Integrate a native Linux process sandbox | [`cageforge-linux`](https://docs.rs/cageforge-linux/latest/cageforge_linux/) | Bubblewrap namespaces, filesystem lowering, process hardening, and network enforcement |
 
 Most applications use the crates in this order:
 
@@ -54,7 +55,7 @@ configuration source       Rust builders
        cageforge-backend-api (capability preflight)
                    │
                    ▼
-       native backend / application-owned executor
+       cageforge-linux or another native backend / application-owned executor
 ```
 
 `cageforge-path` is the shared path-semantics layer used by the other crates.
@@ -154,6 +155,7 @@ The legal, provenance, and upstream-review rules are maintained in:
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - [`UPSTREAM.md`](UPSTREAM.md)
 
-The current workspace contains the portable layers described above. Native
-backend crates and the ergonomic facade are separate architectural layers and
-should consume these APIs rather than move platform enforcement into them.
+The current workspace contains the portable layers and the Linux backend
+described above. The macOS and Windows backends and the ergonomic facade are
+separate architectural layers and should consume these APIs rather than move
+platform enforcement into the portable crates.

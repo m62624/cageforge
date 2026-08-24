@@ -28,8 +28,8 @@ concurrency:
   cancel-in-progress: true
 
 # Native-only checks intentionally select exactly cageforge-core and the
-# changed native crate. The package names and runner labels are placeholders
-# until those native crates are added to the workspace.
+# changed Linux backend/build crate. The macOS and Windows package names remain
+# placeholders until those native crates are added to the workspace.
 #
 # TODO: when a native crate is introduced, keep this mapping synchronized with
 # .github/workflows/ci.yml and labeler.yml. A native-only pull request must not
@@ -48,9 +48,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # TODO: replace cageforge-linux with the concrete changed native crate
-      # when this workflow is split into per-native-crate jobs.
-      - run: cargo test -p cageforge-core -p cageforge-linux
+      - name: Build bundled Bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libcap-dev pkg-config
+          cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
+          echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
+      - run: cargo test -p cageforge-bwrap -p cageforge-core -p cageforge-linux
 
   linux-quality:
     name: Linux core + native fmt + clippy + test
@@ -66,9 +70,15 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --package cageforge-core --package cageforge-linux -- --check
-      - run: cargo clippy -p cageforge-core -p cageforge-linux --all-targets -- -D warnings
-      - run: cargo test -p cageforge-core -p cageforge-linux
+      - name: Build bundled Bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libcap-dev pkg-config
+          cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
+          echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
+      - run: cargo fmt --package cageforge-bwrap --package cageforge-core --package cageforge-linux -- --check
+      - run: cargo clippy -p cageforge-bwrap -p cageforge-core -p cageforge-linux --all-targets -- -D warnings
+      - run: cargo test -p cageforge-bwrap -p cageforge-core -p cageforge-linux
 
   macos-test:
     name: macOS core + native test

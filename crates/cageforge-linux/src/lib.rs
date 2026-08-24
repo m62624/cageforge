@@ -26,7 +26,7 @@ mod status_transport;
 pub use backend::LinuxBackend;
 pub use config::{
     BubblewrapSource, HardeningHelperSource, LinuxBackendConfig, LinuxBackendConfigError,
-    ProcMountPolicy,
+    ProcMountPolicy, ResourceDirectorySource,
 };
 pub use error::LinuxBackendError;
 pub use process::LinuxChild;

@@ -23,6 +23,7 @@ command-fds.workspace = true
 getrandom.workspace = true
 libc.workspace = true
 seccompiler.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt", "sync"] }

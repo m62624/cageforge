@@ -19,7 +19,9 @@ use cageforge_policy::NetworkMode;
 use cageforge_policy_compose::EffectiveSandbox;
 use command_fds::CommandFdExt;
 
-use crate::bwrap::{discover_and_probe, discover_hardening_helper, namespace_args};
+use crate::bwrap::{
+    discover_and_probe, discover_hardening_helper, namespace_args, resource_directory,
+};
 use crate::config::LinuxBackendConfig;
 use crate::environment_transport::write_environment;
 use crate::error::LinuxBackendError;
@@ -67,8 +69,14 @@ pub struct LinuxBackend {
 impl LinuxBackend {
     /// Constructs a backend and verifies Bubblewrap's required namespace API.
     pub fn new(config: LinuxBackendConfig) -> Result<Self, LinuxBackendError> {
-        let bubblewrap = discover_and_probe(config.bubblewrap(), config.proc_mount())?;
-        let hardening_helper = discover_hardening_helper(config.hardening_helper())?;
+        let resource_directory = resource_directory(config.resource_directory_source())?;
+        let bubblewrap = discover_and_probe(
+            config.bubblewrap(),
+            resource_directory.as_deref(),
+            config.proc_mount(),
+        )?;
+        let hardening_helper =
+            discover_hardening_helper(config.hardening_helper(), resource_directory.as_deref())?;
         Ok(Self {
             config,
             bubblewrap,

@@ -49,11 +49,34 @@ command + requested policy + PolicyCeiling + runtime paths
 
 ## Linux requirements
 
-The current backend uses a system Bubblewrap executable and the
-`cageforge-linux-helper` binary. Construction validates both executables and
-probes the Bubblewrap options required by the backend. `LinuxBackendConfig`
-uses `bwrap` from `PATH` and a helper next to the application executable by
-default; applications may provide explicit trusted paths for either one.
+The backend prefers a compatible system Bubblewrap executable and falls back to
+the validated `cageforge-resources/bwrap` resource produced by
+`cageforge-bwrap`. Construction validates both executables, checks the bundled
+SHA-256 manifest when applicable, and probes the Bubblewrap options required by
+the backend. `LinuxBackendConfig` also supports explicit executable and
+resource-directory paths for applications with a custom package layout.
+
+A release package can use this layout:
+
+```text
+application/
+├── bin/application
+└── cageforge-resources/
+    ├── bwrap
+    ├── bwrap.sha256
+    └── cageforge-linux-helper
+```
+
+Build and stage the bundled Bubblewrap with:
+
+```text
+cargo run -p cageforge-bwrap -- --output cageforge-resources/bwrap
+```
+
+The source build needs a Linux C compiler, `pkg-config`, and `libcap`
+development files. The system executable remains the first choice so Linux
+distributions can provide their maintained package; the bundled executable is
+the reproducible fallback for application distributions.
 
 The host kernel must permit the user, mount, PID, and—when requested—network
 namespaces used by Bubblewrap. A missing prerequisite is reported as a typed

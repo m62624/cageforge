@@ -70,6 +70,7 @@ jobs:
             const changedPaths = files.map(({ filename }) => filename);
 
             const nativeCrates = [
+              ['crates/cageforge-bwrap/', 'ci-linux-quality'],
               ['crates/cageforge-linux/', 'ci-linux-quality'],
               ['crates/cageforge-macos/', 'ci-macos-quality'],
               ['crates/cageforge-windows/', 'ci-windows-quality'],

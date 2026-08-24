@@ -104,6 +104,9 @@ jobs:
                 crates/cageforge-linux/*)
                   linux_native=true
                   ;;
+                crates/cageforge-bwrap/*)
+                  linux_native=true
+                  ;;
                 crates/cageforge-macos/*)
                   macos_native=true
                   ;;
@@ -148,6 +151,13 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Build bundled Bubblewrap
+        if: matrix.os_name == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libcap-dev pkg-config
+          cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
+          echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
       - name: Check formatting
         # Keep this list limited to the current portable packages. Add a new
         # portable package here when it becomes part of the default surface.
@@ -228,8 +238,8 @@ jobs:
     name: Linux core + native sandbox
     needs: changes
     if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.linux_native == 'true'
-    # TODO: move this implemented backend to dedicated x64/ARM64 Linux runners,
-    # install and verify Bubblewrap, and make the native status a required gate.
+    # TODO: move this implemented backend to dedicated x64/ARM64 Linux runners
+    # when those runners are available and make the native status a required gate.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -237,9 +247,15 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --package cageforge-core --package cageforge-linux -- --check
-      - run: cargo clippy -p cageforge-core -p cageforge-linux --all-targets -- -D warnings
-      - run: cargo test -p cageforge-core -p cageforge-linux
+      - name: Build bundled Bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libcap-dev pkg-config
+          cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
+          echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
+      - run: cargo fmt --package cageforge-bwrap --package cageforge-core --package cageforge-linux -- --check
+      - run: cargo clippy -p cageforge-bwrap -p cageforge-core -p cageforge-linux --all-targets -- -D warnings
+      - run: cargo test -p cageforge-bwrap -p cageforge-core -p cageforge-linux
 
   native-macos:
     name: macOS core + native sandbox

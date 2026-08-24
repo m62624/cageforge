@@ -7,7 +7,12 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 
-use super::{ProbeError, find_in_search_paths, missing_help_flags, run_probe};
+use super::{
+    ProbeError, can_fall_back_to_bundled, find_in_search_paths, missing_help_flags,
+    resource_directory, run_probe, verify_bundled_digest,
+};
+use crate::config::ResourceDirectorySource;
+use crate::error::LinuxBackendError;
 
 #[test]
 fn executable_discovery_skips_workspace_local_and_non_executable_candidates() {
@@ -72,6 +77,49 @@ fn help_capabilities_are_matched_as_complete_flags() {
 
     assert!(missing.iter().any(|flag| flag == "--bind"));
     assert!(missing.iter().any(|flag| flag == "--ro-bind"));
+}
+
+#[test]
+fn bundled_bubblewrap_requires_a_matching_digest_manifest() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let binary = temporary.path().join("bwrap");
+    fs::write(&binary, b"trusted fixture").expect("write fixture");
+    let digest = super::sha256_file(&binary).expect("hash fixture");
+    fs::write(temporary.path().join("bwrap.sha256"), format!("{digest}\n"))
+        .expect("write digest manifest");
+
+    verify_bundled_digest(&binary).expect("matching digest should pass");
+    fs::write(&binary, b"modified fixture").expect("modify fixture");
+    assert!(matches!(
+        verify_bundled_digest(&binary),
+        Err(LinuxBackendError::BubblewrapDigestMismatch { .. })
+    ));
+}
+
+#[test]
+fn explicit_missing_resource_directory_fails_closed() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    assert!(matches!(
+        resource_directory(&ResourceDirectorySource::Explicit(
+            temporary.path().join("missing")
+        )),
+        Err(LinuxBackendError::ResourceDirectoryUnavailable)
+    ));
+}
+
+#[test]
+fn only_system_executable_compatibility_failures_use_the_bundled_fallback() {
+    assert!(can_fall_back_to_bundled(
+        &LinuxBackendError::BubblewrapIncompatible { missing: vec![] }
+    ));
+    assert!(can_fall_back_to_bundled(
+        &LinuxBackendError::BubblewrapProbeTimedOut { stage: "help" }
+    ));
+    assert!(!can_fall_back_to_bundled(
+        &LinuxBackendError::UserNamespaceUnavailable {
+            message: String::new()
+        }
+    ));
 }
 
 fn write_program(path: &Path, mode: u32, contents: &str) {

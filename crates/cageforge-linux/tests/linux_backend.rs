@@ -35,11 +35,19 @@ const SYNTHETIC_FIXTURE_RELEASE: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_RELEASE";
 const COMMON_SECCOMP_FIXTURE: &str = "CAGEFORGE_COMMON_SECCOMP_FIXTURE";
 
 fn backend() -> LinuxBackend {
-    LinuxBackend::new(
-        LinuxBackendConfig::new()
-            .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper")),
-    )
-    .expect("Linux CI requires usable Bubblewrap and hardening helper")
+    LinuxBackend::new(test_backend_config())
+        .expect("Linux CI requires usable Bubblewrap and hardening helper")
+}
+
+fn test_backend_config() -> LinuxBackendConfig {
+    let config = LinuxBackendConfig::new()
+        .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper"));
+    match std::env::var_os("CAGEFORGE_BWRAP_TEST_RESOURCE_DIR") {
+        Some(path) => config
+            .with_resource_directory(path)
+            .with_bundled_bubblewrap(),
+        None => config,
+    }
 }
 
 fn context(workspace: &Path) -> PathResolutionContext {
@@ -635,7 +643,7 @@ fn ordinary_bin_true_is_not_reserved_by_the_backend() {
 fn backend_configuration_rejects_a_zero_default_timeout() {
     assert_eq!(
         LinuxBackendConfig::new().hardening_helper_source(),
-        &HardeningHelperSource::Sibling
+        &HardeningHelperSource::SiblingThenResource
     );
     assert_eq!(
         LinuxBackendConfig::new().with_default_timeout(Duration::ZERO),
@@ -1434,9 +1442,7 @@ fn disabling_proc_mount_masks_host_procfs() {
     let (command, effective, runtime) =
         request(workspace.path(), SandboxPolicy::workspace(), command);
     let backend = LinuxBackend::new(
-        LinuxBackendConfig::new()
-            .with_proc_mount(cageforge_linux::ProcMountPolicy::Disabled)
-            .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper")),
+        test_backend_config().with_proc_mount(cageforge_linux::ProcMountPolicy::Disabled),
     )
     .expect("backend without procfs");
     let prepared = backend

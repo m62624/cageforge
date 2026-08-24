@@ -21,7 +21,20 @@ pub enum LinuxBackendConfigError {
 pub enum BubblewrapSource {
     /// Discover `bwrap` on the construction process's `PATH`.
     System,
+    /// Use the validated `bwrap` in the configured Cageforge resource directory.
+    Bundled,
+    /// Prefer a compatible system executable and fall back to the bundled resource.
+    SystemThenBundled,
     /// Use this explicitly selected executable after validation and probing.
+    Explicit(PathBuf),
+}
+
+/// How the backend locates its packaged resource directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceDirectorySource {
+    /// Use `cageforge-resources` next to the current application executable.
+    Sibling,
+    /// Use this explicitly selected resource directory.
     Explicit(PathBuf),
 }
 
@@ -30,6 +43,10 @@ pub enum BubblewrapSource {
 pub enum HardeningHelperSource {
     /// Use `cageforge-linux-helper` next to the current executable.
     Sibling,
+    /// Use `cageforge-linux-helper` from the resource directory.
+    Resource,
+    /// Prefer the helper next to the executable and then the resource directory.
+    SiblingThenResource,
     /// Use this explicitly selected helper executable.
     Explicit(PathBuf),
 }
@@ -47,6 +64,7 @@ pub enum ProcMountPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxBackendConfig {
     bubblewrap: BubblewrapSource,
+    resource_directory: ResourceDirectorySource,
     hardening_helper: HardeningHelperSource,
     proc_mount: ProcMountPolicy,
     default_timeout: Duration,
@@ -56,8 +74,9 @@ pub struct LinuxBackendConfig {
 impl Default for LinuxBackendConfig {
     fn default() -> Self {
         Self {
-            bubblewrap: BubblewrapSource::System,
-            hardening_helper: HardeningHelperSource::Sibling,
+            bubblewrap: BubblewrapSource::SystemThenBundled,
+            resource_directory: ResourceDirectorySource::Sibling,
+            hardening_helper: HardeningHelperSource::SiblingThenResource,
             proc_mount: ProcMountPolicy::Required,
             default_timeout: Duration::from_secs(300),
             network_gateway: GatewayConfig::new(),
@@ -77,9 +96,39 @@ impl LinuxBackendConfig {
         self
     }
 
+    /// Uses the bundled Bubblewrap resource without consulting `PATH`.
+    pub fn with_bundled_bubblewrap(mut self) -> Self {
+        self.bubblewrap = BubblewrapSource::Bundled;
+        self
+    }
+
+    /// Prefers a compatible system Bubblewrap and falls back to the bundled resource.
+    pub fn with_system_then_bundled_bubblewrap(mut self) -> Self {
+        self.bubblewrap = BubblewrapSource::SystemThenBundled;
+        self
+    }
+
     /// Uses the hardening helper next to the current executable.
     pub fn with_sibling_hardening_helper(mut self) -> Self {
         self.hardening_helper = HardeningHelperSource::Sibling;
+        self
+    }
+
+    /// Uses the hardening helper from the resource directory.
+    pub fn with_resource_hardening_helper(mut self) -> Self {
+        self.hardening_helper = HardeningHelperSource::Resource;
+        self
+    }
+
+    /// Prefers the sibling hardening helper and then the resource directory.
+    pub fn with_sibling_then_resource_hardening_helper(mut self) -> Self {
+        self.hardening_helper = HardeningHelperSource::SiblingThenResource;
+        self
+    }
+
+    /// Uses a specific resource directory for bundled executables.
+    pub fn with_resource_directory(mut self, path: impl Into<PathBuf>) -> Self {
+        self.resource_directory = ResourceDirectorySource::Explicit(path.into());
         self
     }
 
@@ -141,7 +190,9 @@ impl LinuxBackendConfig {
     /// Returns an explicit Bubblewrap path, if configured.
     pub fn bubblewrap_path(&self) -> Option<&Path> {
         match &self.bubblewrap {
-            BubblewrapSource::System => None,
+            BubblewrapSource::System
+            | BubblewrapSource::Bundled
+            | BubblewrapSource::SystemThenBundled => None,
             BubblewrapSource::Explicit(path) => Some(path),
         }
     }
@@ -151,10 +202,17 @@ impl LinuxBackendConfig {
         &self.bubblewrap
     }
 
+    /// Returns how the bundled resource directory is located.
+    pub const fn resource_directory_source(&self) -> &ResourceDirectorySource {
+        &self.resource_directory
+    }
+
     /// Returns an explicit hardening-helper path, if configured.
     pub fn hardening_helper_path(&self) -> Option<&Path> {
         match &self.hardening_helper {
-            HardeningHelperSource::Sibling => None,
+            HardeningHelperSource::Sibling
+            | HardeningHelperSource::Resource
+            | HardeningHelperSource::SiblingThenResource => None,
             HardeningHelperSource::Explicit(path) => Some(path),
         }
     }

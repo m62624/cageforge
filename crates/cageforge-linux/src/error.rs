@@ -19,9 +19,28 @@ pub enum LinuxBackendError {
     /// The configured Bubblewrap executable was not found.
     #[error("Bubblewrap executable was not found")]
     BubblewrapUnavailable,
+    /// A bundled Bubblewrap resource had no trusted digest manifest.
+    #[error("bundled Bubblewrap digest manifest was not found: {path:?}")]
+    BubblewrapDigestUnavailable {
+        /// Bundled executable whose digest manifest is missing.
+        path: PathBuf,
+    },
+    /// A bundled Bubblewrap resource did not match its digest manifest.
+    #[error("bundled Bubblewrap digest mismatch for {path:?}: expected {expected}, got {actual}")]
+    BubblewrapDigestMismatch {
+        /// Bundled executable whose digest was checked.
+        path: PathBuf,
+        /// Digest declared by the resource manifest.
+        expected: String,
+        /// Digest calculated from the executable.
+        actual: String,
+    },
     /// The in-sandbox hardening helper was not found.
     #[error("Cageforge Linux hardening helper was not found")]
     HardeningHelperUnavailable,
+    /// The configured packaged-resource directory was not available.
+    #[error("Cageforge Linux resource directory was not found")]
+    ResourceDirectoryUnavailable,
     /// The command path collides with the reserved in-sandbox helper path.
     #[error("command path is reserved by the Linux backend hardening helper: {path:?}")]
     HardeningHelperPathCollision {

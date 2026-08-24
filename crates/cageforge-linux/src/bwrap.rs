@@ -12,7 +12,11 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{BubblewrapSource, HardeningHelperSource, ProcMountPolicy};
+use sha2::{Digest, Sha256};
+
+use crate::config::{
+    BubblewrapSource, HardeningHelperSource, ProcMountPolicy, ResourceDirectorySource,
+};
 use crate::error::LinuxBackendError;
 
 const REQUIRED_HELP_FLAGS: &[&str] = &[
@@ -54,38 +58,156 @@ enum ProbeError {
 
 pub(crate) fn discover_hardening_helper(
     source: &HardeningHelperSource,
+    resource_directory: Option<&Path>,
 ) -> Result<PathBuf, LinuxBackendError> {
-    let path = match source {
-        HardeningHelperSource::Sibling => std::env::current_exe()
+    let sibling = || {
+        std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf))
             .map(|directory| directory.join("cageforge-linux-helper"))
-            .ok_or(LinuxBackendError::HardeningHelperUnavailable)?,
-        HardeningHelperSource::Explicit(path) => path.clone(),
     };
-    let path = fs::canonicalize(path).map_err(|_| LinuxBackendError::HardeningHelperUnavailable)?;
-    validate_executable(&path).map_err(|_| LinuxBackendError::HardeningHelperUnavailable)?;
-    Ok(path)
+    let resource = || resource_directory.map(|directory| directory.join("cageforge-linux-helper"));
+    let paths = match source {
+        HardeningHelperSource::Sibling => vec![sibling()],
+        HardeningHelperSource::Resource => vec![resource()],
+        HardeningHelperSource::SiblingThenResource => vec![sibling(), resource()],
+        HardeningHelperSource::Explicit(path) => vec![Some(path.clone())],
+    };
+    paths
+        .into_iter()
+        .flatten()
+        .find_map(|path| {
+            let path = fs::canonicalize(path).ok()?;
+            validate_executable(&path).ok().map(|()| path)
+        })
+        .ok_or(LinuxBackendError::HardeningHelperUnavailable)
 }
 
 pub(crate) fn discover_and_probe(
     source: &BubblewrapSource,
+    resource_directory: Option<&Path>,
     proc_mount: ProcMountPolicy,
 ) -> Result<PathBuf, LinuxBackendError> {
-    let path = match source {
+    match source {
         BubblewrapSource::System => {
-            find_on_path("bwrap").ok_or(LinuxBackendError::BubblewrapUnavailable)?
+            let path = find_on_path("bwrap").ok_or(LinuxBackendError::BubblewrapUnavailable)?;
+            discover_and_probe_one(&path, proc_mount, false)
         }
-        BubblewrapSource::Explicit(path) => path.clone(),
+        BubblewrapSource::Bundled => {
+            let path = bundled_path(resource_directory)?;
+            discover_and_probe_one(&path, proc_mount, true)
+        }
+        BubblewrapSource::SystemThenBundled => {
+            if let Some(path) = find_on_path("bwrap") {
+                match discover_and_probe_one(&path, proc_mount, false) {
+                    Ok(path) => return Ok(path),
+                    Err(error) if can_fall_back_to_bundled(&error) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            let path = bundled_path(resource_directory)?;
+            discover_and_probe_one(&path, proc_mount, true)
+        }
+        BubblewrapSource::Explicit(path) => discover_and_probe_one(path, proc_mount, false),
+    }
+}
+
+fn can_fall_back_to_bundled(error: &LinuxBackendError) -> bool {
+    matches!(
+        error,
+        LinuxBackendError::BubblewrapUnavailable
+            | LinuxBackendError::BubblewrapIncompatible { .. }
+            | LinuxBackendError::BubblewrapProbeFailed { stage: "help", .. }
+            | LinuxBackendError::BubblewrapProbeTimedOut { stage: "help" }
+            | LinuxBackendError::BubblewrapProbeOutputLimitExceeded { stage: "help", .. }
+    )
+}
+
+pub(crate) fn resource_directory(
+    source: &ResourceDirectorySource,
+) -> Result<Option<PathBuf>, LinuxBackendError> {
+    let path = match source {
+        ResourceDirectorySource::Sibling => {
+            return Ok(std::env::current_exe()
+                .ok()
+                .and_then(|executable| executable.parent().map(Path::to_path_buf))
+                .map(|directory| directory.join("cageforge-resources"))
+                .filter(|path| path.is_dir()));
+        }
+        ResourceDirectorySource::Explicit(path) => path.clone(),
     };
-    let path = fs::canonicalize(&path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    let path =
+        fs::canonicalize(path).map_err(|_| LinuxBackendError::ResourceDirectoryUnavailable)?;
+    if !path.is_dir() {
+        return Err(LinuxBackendError::ResourceDirectoryUnavailable);
+    }
+    Ok(Some(path))
+}
+
+fn bundled_path(resource_directory: Option<&Path>) -> Result<PathBuf, LinuxBackendError> {
+    resource_directory
+        .map(|directory| directory.join("bwrap"))
+        .ok_or(LinuxBackendError::BubblewrapUnavailable)
+}
+
+fn discover_and_probe_one(
+    path: &Path,
+    proc_mount: ProcMountPolicy,
+    bundled: bool,
+) -> Result<PathBuf, LinuxBackendError> {
+    let path = fs::canonicalize(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
     validate_executable(&path)?;
+    if bundled {
+        verify_bundled_digest(&path)?;
+    }
     probe_help(&path)?;
     probe_namespaces(&path)?;
     if proc_mount == ProcMountPolicy::Required {
         probe_proc_mount(&path)?;
     }
     Ok(path)
+}
+
+fn verify_bundled_digest(path: &Path) -> Result<(), LinuxBackendError> {
+    let manifest = path.with_file_name("bwrap.sha256");
+    let expected = fs::read_to_string(&manifest)
+        .map_err(|_| LinuxBackendError::BubblewrapDigestUnavailable {
+            path: path.to_path_buf(),
+        })?
+        .split_whitespace()
+        .next()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| LinuxBackendError::BubblewrapDigestUnavailable {
+            path: path.to_path_buf(),
+        })?;
+    let actual = sha256_file(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    if actual != expected {
+        return Err(LinuxBackendError::BubblewrapDigestMismatch {
+            path: path.to_path_buf(),
+            expected,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn find_on_path(program: &str) -> Option<PathBuf> {

@@ -56,7 +56,16 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/exec-server/src/process_sandbox.rs` | `crates/cageforge-backend-api` | Prepared sandbox request flow audited; JSON-RPC and Codex protocol types excluded |
 | `codex-rs/exec-server/src/local_process.rs` | `crates/cageforge-backend-api` | Local process lifecycle consumer audited; PTY, telemetry, and session state excluded |
 | `codex-rs/sandboxing`, `codex-rs/linux-sandbox`, `codex-rs/windows-sandbox-rs`, `codex-rs/bwrap` | Future native backend crates | Planned; not imported |
-| `codex-rs/vendor/bubblewrap` | Future Linux third-party component | Planned; not imported |
+| `codex-rs/vendor/bubblewrap` | `crates/cageforge-bwrap/vendor/bubblewrap` | Behavior comparison only; not the source of the bundled component |
+
+## Bundled third-party source
+
+The bundled Bubblewrap source is taken directly from the upstream project, not
+from the Codex repository:
+
+| Component | Repository | Tag | Commit | License |
+| --- | --- | --- | --- | --- |
+| Bubblewrap | <https://github.com/containers/bubblewrap> | `v0.11.2` | `1b80120ef26a28e065e67f89bfef873f13bdd317` | LGPL-2.0-or-later |
 
 The current Cageforge crates are candidates for future upstream review, not
 source imports. Their APIs and implementations were written independently in

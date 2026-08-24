@@ -3,14 +3,22 @@ Cageforge
 Cageforge is an independent project. It is not affiliated with, sponsored by,
 or endorsed by OpenAI.
 
-The current Cageforge implementation is independently authored. Its portable
-sandbox design was reviewed against relevant open-source sandboxing code from
-OpenAI Codex:
+The current Cageforge Rust implementation is independently authored. Its
+portable sandbox design was reviewed against relevant open-source sandboxing
+code from OpenAI Codex:
 https://github.com/openai/codex
 
-The current crates contain no copied Codex source. If a future release includes
-copied or substantially adapted Codex files, the applicable copyright, license,
-and file-level provenance notices will be added for those exact files.
+The current Rust crates contain no copied Codex source. If a future release
+includes copied or substantially adapted Codex files, the applicable
+copyright, license, and file-level provenance notices will be added for those
+exact files.
+
+The Linux distribution includes the original Bubblewrap `v0.11.2` source and
+may produce a bundled `bwrap` executable from it. Bubblewrap is licensed under
+the LGPL-2.0-or-later; its original source, copyright headers, `COPYING`, and
+provenance record are retained under
+`crates/cageforge-bwrap/vendor/bubblewrap/`. The full license text is also
+available at `licenses/bubblewrap-COPYING`.
 
 This attribution is informational and does not grant permission to use OpenAI
 or Codex as the name or branding of this project.

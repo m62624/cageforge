@@ -28,7 +28,8 @@ The behavioral reference areas include:
 - `codex-rs/linux-sandbox`
 - `codex-rs/windows-sandbox-rs`
 - `codex-rs/bwrap`
-- `codex-rs/vendor/bubblewrap` for a possible future bundled Linux component
+- `codex-rs/vendor/bubblewrap` for behavior comparison; the bundled source is
+  taken directly from the Bubblewrap upstream project
 
 **Cageforge is not a fork of the Codex product and must not expose Codex as a
 runtime dependency or as part of its public API. The current crates are
@@ -141,11 +142,11 @@ Third-party components must remain separately identified. In particular:
 - transitive dependencies must be inventoried before producing binary
   distributions or vendored source archives.
 
-The Linux backend should prefer a system bubblewrap when practical. If
-Cageforge ships a bundled bubblewrap binary or compiles bubblewrap sources
-into a helper, the release process must include the corresponding LGPL source
-and notices. Cageforge must never represent bundled bubblewrap as wholly
-Apache-2.0 code.
+The Linux backend prefers a system bubblewrap when practical and falls back to
+the separately built `cageforge-bwrap` resource. If Cageforge ships a bundled
+bubblewrap binary or compiles bubblewrap sources into a helper, the release
+process must include the corresponding LGPL source and notices. Cageforge must
+never represent bundled bubblewrap as wholly Apache-2.0 code.
 
 ## 7. Architecture boundary
 
