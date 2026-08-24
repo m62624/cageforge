@@ -26,6 +26,11 @@ use support::{
     read_header,
 };
 
+#[cfg(unix)]
+const ALLOWED_SOCKET_PATH: &str = "/run/allowed.sock";
+#[cfg(windows)]
+const ALLOWED_SOCKET_PATH: &str = r"C:\run\allowed.sock";
+
 #[derive(Clone, Copy)]
 struct PendingResolver;
 
@@ -150,7 +155,7 @@ fn externally_owned_policy_does_not_create_a_local_gateway() {
 fn unix_socket_rules_do_not_disable_the_independent_tcp_gateway() {
     let requested = local_policy("allowed.test")
         .with_unix_socket_mode(UnixSocketMode::Restricted)
-        .with_unix_socket("/run/allowed.sock", DomainAccess::Allow)
+        .with_unix_socket(ALLOWED_SOCKET_PATH, DomainAccess::Allow)
         .expect("valid Unix socket rule");
     let policy = effective_network(requested, NetworkPolicy::unrestricted());
     NetworkGateway::new(policy, StaticResolver::default(), GatewayConfig::new())

@@ -633,7 +633,10 @@ Each Linux backend job must:
 1. install `pkg-config`, `libcap` development files, and any native build
    packages required by the selected Rust dependencies;
 2. enable unprivileged user namespaces and verify that the setting took
-   effect;
+   effect; on Ubuntu runners that expose
+   `kernel.apparmor_restrict_unprivileged_userns`, disable that CI-only
+   restriction before probing `uid_map`, because `kernel.unprivileged_userns_clone`
+   alone does not guarantee that the runner permits the mapping;
 3. build `cageforge-bwrap`, stage its `bwrap` and `bwrap.sha256` resources,
    build the backend and runtime helper, and run the tests against the staged
    Bubblewrap;

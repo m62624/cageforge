@@ -248,6 +248,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes libcap-dev pkg-config
           sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
           test "$(sysctl -n kernel.unprivileged_userns_clone)" = "1"
           unshare --user --map-root-user --mount-proc true
           cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
@@ -284,6 +287,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes libcap-dev pkg-config
           sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
           test "$(sysctl -n kernel.unprivileged_userns_clone)" = "1"
           unshare --user --map-root-user --mount-proc true
           cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
