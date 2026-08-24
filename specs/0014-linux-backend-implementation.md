@@ -360,11 +360,17 @@ Errors must retain the underlying OS error where one exists, but they must not
 expose a generic string in place of a typed security decision. Filesystem
 lowering therefore carries a `FilesystemLoweringError` sub-error rather than a
 free-form `reason`; network mount relationships, unsupported combinations,
-policy-lowering expectations, and gateway lifecycle failures use the same
+policy-lowering expectations, gateway setup, hardening, bridge, framed
+environment/status transport, and gateway lifecycle failures use the same
 typed sub-error approach. Dynamic diagnostics from Bubblewrap or the host
 gateway may remain strings because they are external observations, not
 security decisions. Every error variant that can be produced before launch
 must have a black-box negative test.
+
+The helper protocol also has explicit resource bounds: 4,096 environment
+entries, 1 MiB per entry, and 16 MiB per complete environment frame. The
+writer and reader enforce the same bounds. This prevents a malformed setup
+frame from turning the authenticated transport into an unbounded allocator.
 
 ## 7. Linux enforcement architecture
 

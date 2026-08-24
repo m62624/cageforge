@@ -29,8 +29,11 @@ pub use config::{
     ProcMountPolicy, ResourceDirectorySource,
 };
 pub use error::{
-    FilesystemLoweringError, FilesystemMetadataOperation, LinuxBackendError,
-    NetworkCombinationError, NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure,
-    NetworkLoweringError, PolicyLoweringExpectation,
+    EnvironmentFrameError, FilesystemLoweringError, FilesystemMetadataOperation, LinuxBackendError,
+    LinuxBridgeError, LinuxBridgeOperation, LinuxHardeningError, LinuxHardeningOperation,
+    NetworkCombinationError, NetworkGatewayIngressError, NetworkGatewayRuntimeError,
+    NetworkGatewayRuntimeFailure, NetworkGatewaySetupError, NetworkGatewayTransportError,
+    NetworkLoweringError, PolicyLoweringExpectation, SeccompBuildError, SetupHandshakeError,
+    StatusFrameError,
 };
 pub use process::LinuxChild;

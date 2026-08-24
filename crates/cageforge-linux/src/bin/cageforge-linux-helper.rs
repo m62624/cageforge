@@ -5,6 +5,16 @@
 mod helper_protocol;
 
 #[cfg(target_os = "linux")]
+#[path = "../error.rs"]
+#[allow(dead_code)]
+mod error;
+
+#[cfg(target_os = "linux")]
+#[path = "../environment_transport.rs"]
+#[allow(dead_code)]
+mod environment_transport;
+
+#[cfg(target_os = "linux")]
 #[path = "../hardening.rs"]
 mod hardening;
 

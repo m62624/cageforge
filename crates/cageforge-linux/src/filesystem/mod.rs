@@ -623,7 +623,7 @@ fn add_bind(
                 AccessMode::Deny => {
                     return Err(LinuxBackendError::FilesystemLoweringFailed {
                         path: path.to_path_buf(),
-                        source: FilesystemLoweringError::DenyBind,
+                        source: FilesystemLoweringError::DenyCanonicalBind,
                     });
                 }
             },
@@ -650,7 +650,7 @@ fn add_bind_fd(
             AccessMode::Deny => {
                 return Err(LinuxBackendError::FilesystemLoweringFailed {
                     path: destination.to_path_buf(),
-                    source: FilesystemLoweringError::DenyBind,
+                    source: FilesystemLoweringError::DenyDescriptorBind,
                 });
             }
         },
@@ -683,7 +683,7 @@ fn add_bind_file(
             AccessMode::Deny => {
                 return Err(LinuxBackendError::FilesystemLoweringFailed {
                     path: destination.to_path_buf(),
-                    source: FilesystemLoweringError::DenyBind,
+                    source: FilesystemLoweringError::DenyPinnedFileBind,
                 });
             }
         },

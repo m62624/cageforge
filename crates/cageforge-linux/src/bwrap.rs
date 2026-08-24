@@ -60,6 +60,7 @@ struct ProbeOutput {
 #[derive(Debug)]
 enum ProbeError {
     Io(io::Error),
+    MissingPipe(&'static str),
     TimedOut,
     OutputLimitExceeded,
 }
@@ -371,18 +372,14 @@ fn run_probe(path: &Path, args: &[&str], timeout: Duration) -> Result<ProbeOutpu
         .spawn()
         .map_err(ProbeError::Io)?;
     let result = (|| {
-        let mut stdout = child.stdout.take().ok_or_else(|| {
-            ProbeError::Io(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "bubblewrap probe stdout pipe is missing",
-            ))
-        })?;
-        let mut stderr = child.stderr.take().ok_or_else(|| {
-            ProbeError::Io(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "bubblewrap probe stderr pipe is missing",
-            ))
-        })?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or(ProbeError::MissingPipe("stdout"))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or(ProbeError::MissingPipe("stderr"))?;
         set_nonblocking(stdout.as_raw_fd()).map_err(ProbeError::Io)?;
         set_nonblocking(stderr.as_raw_fd()).map_err(ProbeError::Io)?;
         let deadline = Instant::now() + timeout;
@@ -445,6 +442,9 @@ fn terminate_probe(child: &mut std::process::Child) {
 fn probe_error(stage: &'static str, error: ProbeError) -> LinuxBackendError {
     match error {
         ProbeError::Io(source) => LinuxBackendError::BubblewrapProbeFailed { stage, source },
+        ProbeError::MissingPipe(stream) => {
+            LinuxBackendError::BubblewrapProbePipeMissing { stage, stream }
+        }
         ProbeError::TimedOut => LinuxBackendError::BubblewrapProbeTimedOut { stage },
         ProbeError::OutputLimitExceeded => LinuxBackendError::BubblewrapProbeOutputLimitExceeded {
             stage,

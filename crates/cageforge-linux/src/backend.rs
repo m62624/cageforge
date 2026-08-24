@@ -26,6 +26,7 @@ use crate::bwrap::{
 };
 use crate::config::LinuxBackendConfig;
 use crate::environment_transport::write_environment;
+use crate::error::SetupHandshakeError;
 use crate::error::{LinuxBackendError, NetworkCombinationError, NetworkLoweringError};
 use crate::filesystem::FilesystemPlan;
 use crate::filesystem::protected_create::ProtectedCreateMonitor;
@@ -306,10 +307,7 @@ impl LinuxBackend {
         if ready != READY {
             return Err(setup_handshake_error(
                 &mut child,
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "hardening helper returned an invalid setup acknowledgement",
-                ),
+                SetupHandshakeError::InvalidReady,
             ));
         }
         let timeout_watchdog = match timeout {
@@ -429,7 +427,7 @@ fn terminate_failed_setup(child: &mut std::process::Child) {
 
 fn setup_handshake_error(
     child: &mut std::process::Child,
-    source: std::io::Error,
+    source: impl Into<crate::error::SetupHandshakeError>,
 ) -> LinuxBackendError {
     terminate_failed_setup(child);
     let mut diagnostic = String::new();
@@ -438,7 +436,10 @@ fn setup_handshake_error(
             .take(SETUP_DIAGNOSTIC_LIMIT_BYTES)
             .read_to_string(&mut diagnostic);
     }
-    LinuxBackendError::SetupHandshakeFailed { source, diagnostic }
+    LinuxBackendError::SetupHandshakeFailed {
+        source: source.into(),
+        diagnostic,
+    }
 }
 
 fn configure_stdio(process: &mut std::process::Command, stdio: cageforge_command::StdioSpec) {

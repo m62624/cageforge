@@ -23,7 +23,10 @@ use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
-use crate::error::{LinuxBackendError, NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure};
+use crate::error::{
+    LinuxBackendError, NetworkGatewayIngressError, NetworkGatewayRuntimeError,
+    NetworkGatewayRuntimeFailure, NetworkGatewaySetupError, NetworkGatewayTransportError,
+};
 use crate::helper_protocol::BRIDGE_TOKEN_BYTES;
 
 pub(crate) const IN_SANDBOX_GATEWAY_SOCKET: &str = "/dev/.cageforge-runtime/network/gateway.sock";
@@ -46,9 +49,15 @@ impl BridgeIngressToken {
         writer.write_all(self.0.as_slice())
     }
 
-    async fn verify<S: AsyncRead + Unpin>(&self, stream: &mut S) -> io::Result<()> {
+    async fn verify<S: AsyncRead + Unpin>(
+        &self,
+        stream: &mut S,
+    ) -> Result<(), NetworkGatewayIngressError> {
         let mut supplied = [0; BRIDGE_TOKEN_BYTES];
-        stream.read_exact(&mut supplied).await?;
+        stream
+            .read_exact(&mut supplied)
+            .await
+            .map_err(|source| NetworkGatewayIngressError::TokenRead { source })?;
         let difference = self
             .0
             .iter()
@@ -59,10 +68,7 @@ impl BridgeIngressToken {
         if difference == 0 {
             Ok(())
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "gateway bridge authentication failed",
-            ))
+            Err(NetworkGatewayIngressError::TokenMismatch)
         }
     }
 }
@@ -109,13 +115,30 @@ impl GatewayRuntime {
             .map_err(|source| LinuxBackendError::NetworkGatewaySetup { source })?;
         let socket_directory = directory.path().to_path_buf();
         let socket_path = socket_directory.join(HOST_GATEWAY_SOCKET);
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
-            .map_err(|source| LinuxBackendError::NetworkGatewaySetup { source })?;
-        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
-            .map_err(|source| LinuxBackendError::NetworkGatewaySetup { source })?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|source| LinuxBackendError::NetworkGatewaySetup { source })?;
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).map_err(|source| {
+            LinuxBackendError::NetworkGatewaySetup {
+                source: NetworkGatewaySetupError::SocketBind {
+                    path: socket_path.clone(),
+                    source,
+                },
+            }
+        })?;
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600)).map_err(|source| {
+            LinuxBackendError::NetworkGatewaySetup {
+                source: NetworkGatewaySetupError::DirectoryPermissions {
+                    path: socket_path.clone(),
+                    source,
+                },
+            }
+        })?;
+        listener.set_nonblocking(true).map_err(|source| {
+            LinuxBackendError::NetworkGatewaySetup {
+                source: NetworkGatewaySetupError::SocketNonblocking {
+                    path: socket_path.clone(),
+                    source,
+                },
+            }
+        })?;
 
         let (shutdown, shutdown_rx) = oneshot::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -132,7 +155,9 @@ impl GatewayRuntime {
                 };
                 move || run_gateway(server, shutdown_rx, ready_tx)
             })
-            .map_err(|source| LinuxBackendError::NetworkGatewaySetup { source })?;
+            .map_err(|source| LinuxBackendError::NetworkGatewaySetup {
+                source: NetworkGatewaySetupError::ThreadSpawn { source },
+            })?;
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self {
                 _directory: directory,
@@ -156,8 +181,13 @@ impl GatewayRuntime {
         &self.socket_directory
     }
 
-    pub(crate) fn write_bridge_token(&self, writer: &mut impl Write) -> io::Result<()> {
-        self.bridge_token.write_to(writer)
+    pub(crate) fn write_bridge_token(
+        &self,
+        writer: &mut impl Write,
+    ) -> Result<(), NetworkGatewayTransportError> {
+        self.bridge_token
+            .write_to(writer)
+            .map_err(|source| NetworkGatewayTransportError::BridgeTokenWrite { source })
     }
 
     pub(crate) fn check_health(&mut self) -> Result<(), LinuxBackendError> {
@@ -208,7 +238,7 @@ fn thread_failure(
     error.into()
 }
 
-fn create_socket_directory() -> io::Result<TempDir> {
+fn create_socket_directory() -> Result<TempDir, NetworkGatewaySetupError> {
     let preferred = std::env::temp_dir();
     let fallback = Path::new("/tmp");
     let mut last_error = None;
@@ -226,22 +256,31 @@ fn create_socket_directory() -> io::Result<TempDir> {
                     .len()
                     <= UNIX_SOCKET_PATH_MAX_BYTES =>
             {
-                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).map_err(
+                    |source| NetworkGatewaySetupError::DirectoryPermissions {
+                        path: directory.path().to_path_buf(),
+                        source,
+                    },
+                )?;
                 return Ok(directory);
             }
-            Ok(_) => {
-                last_error = Some(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "temporary directory produces an overlong Unix socket path",
-                ));
+            Ok(directory) => {
+                last_error = Some(NetworkGatewaySetupError::SocketPathTooLong {
+                    path: directory.path().join(HOST_GATEWAY_SOCKET),
+                });
             }
-            Err(error) => last_error = Some(error),
+            Err(source) => {
+                last_error = Some(NetworkGatewaySetupError::TemporaryDirectory {
+                    parent: parent.to_path_buf(),
+                    source,
+                });
+            }
         }
         if parent == fallback {
             break;
         }
     }
-    Err(last_error.unwrap_or_else(|| io::Error::other("no gateway temporary directory")))
+    Err(last_error.unwrap_or(NetworkGatewaySetupError::NoTemporaryDirectory))
 }
 
 fn run_gateway(

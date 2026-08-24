@@ -203,6 +203,20 @@ text.
 registration, listener I/O, or an unexpected early stop. Gateway lifecycle
 callers therefore do not need to classify a free-form diagnostic string.
 
+The same rule applies to the native helper boundary. `LinuxHardeningError`,
+`LinuxBridgeError`, `SeccompBuildError`, `EnvironmentFrameError`, and
+`StatusFrameError` identify the failing operation as typed `thiserror`
+variants. `SetupHandshakeError` preserves whether the failure came from the
+authenticated channel, the environment frame, or the gateway token. Display
+text is for humans; callers should match the enum and its nested source rather
+than parse a message such as `reason` or `message`.
+
+The helper environment frame is bounded before allocation: at most 4,096
+entries, 1 MiB per variable, and 16 MiB in aggregate. These are protocol
+integrity limits that prevent a malformed or hostile authenticated frame from
+causing unbounded memory allocation; they are not a replacement for the
+portable environment policy.
+
 For restricted launches, the helper also disables Linux core dumps and marks
 the hardened process non-dumpable before starting the command. These are
 process-boundary safeguards, not settings that modify the long-lived parent

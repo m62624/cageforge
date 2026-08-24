@@ -12,6 +12,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::error::{LinuxBridgeError, LinuxBridgeOperation};
 use crate::helper_protocol::BRIDGE_TOKEN_BYTES;
 
 const LOOPBACK_INTERFACE_NAME: &[u8] = b"lo";
@@ -27,7 +28,7 @@ impl LocalGatewayBridge {
         max_connections: usize,
         inherited_auth_fd: libc::c_int,
         bridge_token: [u8; BRIDGE_TOKEN_BYTES],
-    ) -> io::Result<Self> {
+    ) -> Result<Self, LinuxBridgeError> {
         let (read_fd, write_fd) = create_ready_pipe()?;
         let parent_pid = process_id();
         #[allow(unsafe_code)]
@@ -36,7 +37,7 @@ impl LocalGatewayBridge {
             let error = io::Error::last_os_error();
             close_fd(read_fd)?;
             close_fd(write_fd)?;
-            return Err(error);
+            return Err(LinuxBridgeError::Fork { source: error });
         }
         if pid == 0 {
             let _ = close_fd(read_fd);
@@ -58,14 +59,17 @@ impl LocalGatewayBridge {
         let mut port = [0; 2];
         #[allow(unsafe_code)]
         let mut ready = unsafe { File::from_raw_fd(read_fd) };
-        if let Err(error) = ready.read_exact(&mut port) {
+        if let Err(source) = ready.read_exact(&mut port) {
             terminate_bridge(pid);
-            return Err(error);
+            return Err(LinuxBridgeError::Operation {
+                operation: LinuxBridgeOperation::ReadReadyPort,
+                source,
+            });
         }
         let port = u16::from_be_bytes(port);
         if port == 0 {
             terminate_bridge(pid);
-            return Err(io::Error::other("local gateway bridge returned port zero"));
+            return Err(LinuxBridgeError::ZeroPort);
         }
         Ok(Self { port, pid })
     }
@@ -114,19 +118,35 @@ fn run_bridge(
     parent_pid: libc::pid_t,
     max_connections: usize,
     bridge_token: [u8; BRIDGE_TOKEN_BYTES],
-) -> io::Result<()> {
+) -> Result<(), LinuxBridgeError> {
     harden_bridge_process(parent_pid)?;
     let listener = bind_local_loopback_listener()?;
-    let port = listener.local_addr()?.port();
+    let port = listener
+        .local_addr()
+        .map_err(|source| LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::ReadListenerAddress,
+            source,
+        })?
+        .port();
     #[allow(unsafe_code)]
     let mut ready = unsafe { File::from_raw_fd(ready_fd) };
-    ready.write_all(&port.to_be_bytes())?;
+    ready
+        .write_all(&port.to_be_bytes())
+        .map_err(|source| LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::WriteReadyPort,
+            source,
+        })?;
     drop(ready);
 
     let active = Arc::new(AtomicUsize::new(0));
     let bridge_token = Arc::new(bridge_token);
     loop {
-        let (tcp_stream, _) = listener.accept()?;
+        let (tcp_stream, _) = listener
+            .accept()
+            .map_err(|source| LinuxBridgeError::Operation {
+                operation: LinuxBridgeOperation::AcceptConnection,
+                source,
+            })?;
         if active.fetch_add(1, Ordering::AcqRel) >= max_connections {
             active.fetch_sub(1, Ordering::AcqRel);
             drop(tcp_stream);
@@ -150,7 +170,7 @@ fn run_bridge(
     }
 }
 
-fn bind_local_loopback_listener() -> io::Result<TcpListener> {
+fn bind_local_loopback_listener() -> Result<TcpListener, LinuxBridgeError> {
     match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
         Ok(listener) => Ok(listener),
         Err(error)
@@ -160,17 +180,28 @@ fn bind_local_loopback_listener() -> io::Result<TcpListener> {
             ) =>
         {
             ensure_loopback_interface_up()?;
-            TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|source| {
+                LinuxBridgeError::Operation {
+                    operation: LinuxBridgeOperation::BindListener,
+                    source,
+                }
+            })
         }
-        Err(error) => Err(error),
+        Err(source) => Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::BindListener,
+            source,
+        }),
     }
 }
 
 #[allow(unsafe_code)]
-fn ensure_loopback_interface_up() -> io::Result<()> {
+fn ensure_loopback_interface_up() -> Result<(), LinuxBridgeError> {
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::HardenProcess,
+            source: io::Error::last_os_error(),
+        });
     }
     let result = configure_loopback_interface(fd);
     let close_result = close_fd(fd);
@@ -178,18 +209,24 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
 }
 
 #[allow(unsafe_code)]
-fn configure_loopback_interface(fd: libc::c_int) -> io::Result<()> {
+fn configure_loopback_interface(fd: libc::c_int) -> Result<(), LinuxBridgeError> {
     let mut flags_request = unsafe { std::mem::zeroed::<libc::ifreq>() };
     set_interface_name(&mut flags_request);
     if unsafe { libc::ioctl(fd, libc::SIOCGIFFLAGS as libc::Ioctl, &mut flags_request) } < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::BindListener,
+            source: io::Error::last_os_error(),
+        });
     }
     let current_flags = unsafe { flags_request.ifr_ifru.ifru_flags };
     let up = libc::IFF_UP as libc::c_short;
     if current_flags & up != up {
         flags_request.ifr_ifru.ifru_flags = current_flags | up;
         if unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS as libc::Ioctl, &flags_request) } < 0 {
-            return Err(io::Error::last_os_error());
+            return Err(LinuxBridgeError::Operation {
+                operation: LinuxBridgeOperation::BindListener,
+                source: io::Error::last_os_error(),
+            });
         }
     }
 
@@ -208,7 +245,10 @@ fn configure_loopback_interface(fd: libc::c_int) -> io::Result<()> {
     if unsafe { libc::ioctl(fd, libc::SIOCSIFADDR as libc::Ioctl, &address_request) } < 0 {
         let error = io::Error::last_os_error();
         if !matches!(error.raw_os_error(), Some(libc::EEXIST | libc::EPERM)) {
-            return Err(error);
+            return Err(LinuxBridgeError::Operation {
+                operation: LinuxBridgeOperation::BindListener,
+                source: error,
+            });
         }
     }
     Ok(())
@@ -224,38 +264,71 @@ fn relay(
     mut tcp_stream: TcpStream,
     mut unix_stream: UnixStream,
     bridge_token: &[u8; BRIDGE_TOKEN_BYTES],
-) -> io::Result<()> {
-    unix_stream.write_all(bridge_token)?;
-    let mut tcp_reader = tcp_stream.try_clone()?;
-    let mut unix_writer = unix_stream.try_clone()?;
+) -> Result<(), LinuxBridgeError> {
+    unix_stream
+        .write_all(bridge_token)
+        .map_err(|source| LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::ConnectGateway,
+            source,
+        })?;
+    let mut tcp_reader = tcp_stream
+        .try_clone()
+        .map_err(|source| LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::RelayToGateway,
+            source,
+        })?;
+    let mut unix_writer =
+        unix_stream
+            .try_clone()
+            .map_err(|source| LinuxBridgeError::Operation {
+                operation: LinuxBridgeOperation::RelayToGateway,
+                source,
+            })?;
     let tcp_to_unix = std::thread::spawn(move || {
         let result = io::copy(&mut tcp_reader, &mut unix_writer);
         let _ = unix_writer.shutdown(Shutdown::Write);
         result
     });
-    let unix_to_tcp = io::copy(&mut unix_stream, &mut tcp_stream);
+    let unix_to_tcp =
+        io::copy(&mut unix_stream, &mut tcp_stream).map_err(|source| LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::RelayToClient,
+            source,
+        });
     let _ = tcp_stream.shutdown(Shutdown::Write);
     tcp_to_unix
         .join()
-        .map_err(|_| io::Error::other("gateway bridge relay thread panicked"))??;
+        .map_err(|_| LinuxBridgeError::RelayPanicked)?
+        .map_err(|source| LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::RelayToGateway,
+            source,
+        })?;
     unix_to_tcp?;
     Ok(())
 }
 
 #[allow(unsafe_code)]
-fn harden_bridge_process(expected_parent: libc::pid_t) -> io::Result<()> {
+fn harden_bridge_process(expected_parent: libc::pid_t) -> Result<(), LinuxBridgeError> {
     detach_standard_streams()?;
     if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } != 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::HardenProcess,
+            source: io::Error::last_os_error(),
+        });
     }
     if unsafe { libc::getppid() } != expected_parent {
-        return Err(io::Error::other("gateway bridge parent already exited"));
+        return Err(LinuxBridgeError::ParentExited);
     }
     if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::HardenProcess,
+            source: io::Error::last_os_error(),
+        });
     }
     if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::HardenProcess,
+            source: io::Error::last_os_error(),
+        });
     }
     Ok(())
 }
@@ -266,16 +339,22 @@ fn process_id() -> libc::pid_t {
 }
 
 #[allow(unsafe_code)]
-fn detach_standard_streams() -> io::Result<()> {
+fn detach_standard_streams() -> Result<(), LinuxBridgeError> {
     let read_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
     if read_fd < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::DetachStandardStreams,
+            source: io::Error::last_os_error(),
+        });
     }
     let write_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
     if write_fd < 0 {
         let error = io::Error::last_os_error();
         let _ = close_fd(read_fd);
-        return Err(error);
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::DetachStandardStreams,
+            source: error,
+        });
     }
     for (source, target) in [
         (read_fd, libc::STDIN_FILENO),
@@ -286,7 +365,10 @@ fn detach_standard_streams() -> io::Result<()> {
             let error = io::Error::last_os_error();
             let _ = close_fd(read_fd);
             let _ = close_fd(write_fd);
-            return Err(error);
+            return Err(LinuxBridgeError::Operation {
+                operation: LinuxBridgeOperation::DetachStandardStreams,
+                source: error,
+            });
         }
     }
     close_fd(read_fd)?;
@@ -294,10 +376,13 @@ fn detach_standard_streams() -> io::Result<()> {
 }
 
 #[allow(unsafe_code)]
-fn create_ready_pipe() -> io::Result<(libc::c_int, libc::c_int)> {
+fn create_ready_pipe() -> Result<(libc::c_int, libc::c_int), LinuxBridgeError> {
     let mut descriptors = [0; 2];
     if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::CreateReadyPipe,
+            source: io::Error::last_os_error(),
+        });
     }
     let read_fd = match move_fd_above_standard_streams(descriptors[0]) {
         Ok(fd) => fd,
@@ -319,13 +404,16 @@ fn create_ready_pipe() -> io::Result<(libc::c_int, libc::c_int)> {
 }
 
 #[allow(unsafe_code)]
-fn move_fd_above_standard_streams(fd: libc::c_int) -> io::Result<libc::c_int> {
+fn move_fd_above_standard_streams(fd: libc::c_int) -> Result<libc::c_int, LinuxBridgeError> {
     if fd > libc::STDERR_FILENO {
         return Ok(fd);
     }
     let relocated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, libc::STDERR_FILENO + 1) };
     if relocated < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::MoveDescriptor,
+            source: io::Error::last_os_error(),
+        });
     }
     if let Err(error) = close_fd(fd) {
         let _ = close_fd(relocated);
@@ -335,11 +423,14 @@ fn move_fd_above_standard_streams(fd: libc::c_int) -> io::Result<libc::c_int> {
 }
 
 #[allow(unsafe_code)]
-fn close_fd(fd: libc::c_int) -> io::Result<()> {
+fn close_fd(fd: libc::c_int) -> Result<(), LinuxBridgeError> {
     if unsafe { libc::close(fd) } == 0 {
         Ok(())
     } else {
-        Err(io::Error::last_os_error())
+        Err(LinuxBridgeError::Operation {
+            operation: LinuxBridgeOperation::CloseDescriptor,
+            source: io::Error::last_os_error(),
+        })
     }
 }
 

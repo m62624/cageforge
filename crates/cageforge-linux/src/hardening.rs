@@ -24,6 +24,7 @@ mod bridge;
 #[path = "hardening/environment.rs"]
 mod environment;
 
+use crate::error::{LinuxHardeningError, LinuxHardeningOperation, SeccompBuildError};
 use crate::helper_protocol::{
     AUTH_FD_ENV, AUTH_TOKEN, BRIDGE_TOKEN_BYTES, GATEWAY_CONNECTION_LIMIT_ENV, GATEWAY_SOCKET_ENV,
     HARDENING_REQUIRED_ENV, NETWORK_MODE_DIRECT_WITHOUT_UNIX, NETWORK_MODE_DISABLED,
@@ -41,16 +42,29 @@ enum NetworkHardeningMode {
 }
 
 /// Applies process hardening inside the Bubblewrap namespace.
-fn apply(hardening_required: bool, network_mode: NetworkHardeningMode) -> io::Result<()> {
+fn apply(
+    hardening_required: bool,
+    network_mode: NetworkHardeningMode,
+) -> Result<(), LinuxHardeningError> {
     if !hardening_required && network_mode == NetworkHardeningMode::None {
         return Ok(());
     }
     set_parent_death_signal()?;
-    set_dumpable(false)?;
-    set_core_dump_limit_zero()?;
-    set_no_new_privs()?;
-    let filter = build_filter(network_mode).map_err(io::Error::other)?;
-    apply_filter(&filter).map_err(io::Error::other)?;
+    set_dumpable(false).map_err(|source| LinuxHardeningError::Operation {
+        operation: LinuxHardeningOperation::Dumpability,
+        source,
+    })?;
+    set_core_dump_limit_zero().map_err(|source| LinuxHardeningError::Operation {
+        operation: LinuxHardeningOperation::CoreDumpLimit,
+        source,
+    })?;
+    set_no_new_privs().map_err(|source| LinuxHardeningError::Operation {
+        operation: LinuxHardeningOperation::NoNewPrivileges,
+        source,
+    })?;
+    let filter = build_filter(network_mode)
+        .map_err(|source| LinuxHardeningError::SeccompBuild { source })?;
+    apply_filter(&filter).map_err(|source| LinuxHardeningError::SeccompInstallation { source })?;
     Ok(())
 }
 
@@ -129,7 +143,8 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     let status = match command.status() {
         Ok(status) => status,
         Err(error) => {
-            eprintln!("failed to start hardened command: {error}");
+            let error = LinuxHardeningError::CommandStart { source: error };
+            eprintln!("{error}");
             return ExitCode::from(126);
         }
     };
@@ -143,12 +158,16 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
 fn write_command_status(
     writer: &mut impl Write,
     status: std::process::ExitStatus,
-) -> io::Result<()> {
-    writer.write_all(STATUS_MAGIC)?;
-    writer.write_all(&status.into_raw().to_ne_bytes())
+) -> Result<(), LinuxHardeningError> {
+    writer
+        .write_all(STATUS_MAGIC)
+        .map_err(|source| LinuxHardeningError::StatusWrite { source })?;
+    writer
+        .write_all(&status.into_raw().to_ne_bytes())
+        .map_err(|source| LinuxHardeningError::StatusWrite { source })
 }
 
-fn network_hardening_mode() -> io::Result<NetworkHardeningMode> {
+fn network_hardening_mode() -> Result<NetworkHardeningMode, LinuxHardeningError> {
     match std::env::var_os(NETWORK_MODE_ENV).as_deref() {
         None => Ok(NetworkHardeningMode::None),
         Some(value) if value == NETWORK_MODE_DIRECT_WITHOUT_UNIX => {
@@ -156,41 +175,39 @@ fn network_hardening_mode() -> io::Result<NetworkHardeningMode> {
         }
         Some(value) if value == NETWORK_MODE_DISABLED => Ok(NetworkHardeningMode::Disabled),
         Some(value) if value == NETWORK_MODE_PROXY => Ok(NetworkHardeningMode::ProxyRouted),
-        Some(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "unknown network hardening mode",
-        )),
+        Some(value) => Err(LinuxHardeningError::UnknownNetworkMode {
+            value: value.to_string_lossy().into_owned(),
+        }),
     }
 }
 
 fn start_gateway_bridge(
     mode: NetworkHardeningMode,
     authentication: &mut File,
-) -> io::Result<Option<LocalGatewayBridge>> {
+) -> Result<Option<LocalGatewayBridge>, LinuxHardeningError> {
     if mode != NetworkHardeningMode::ProxyRouted {
         return Ok(None);
     }
     let socket = std::env::var_os(GATEWAY_SOCKET_ENV)
         .map(PathBuf::from)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing gateway socket"))?;
+        .ok_or(LinuxHardeningError::MissingGatewaySocket)?;
     if !socket.is_absolute() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "gateway socket must be absolute",
-        ));
+        return Err(LinuxHardeningError::RelativeGatewaySocket { path: socket });
     }
     let max_connections = std::env::var(GATEWAY_CONNECTION_LIMIT_ENV)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "missing gateway limit"))?
+        .map_err(|_| LinuxHardeningError::MissingGatewayConnectionLimit)?
         .parse::<usize>()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid gateway limit"))?;
+        .map_err(|source| LinuxHardeningError::InvalidGatewayConnectionLimit { source })?;
     if max_connections == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "gateway limit must be non-zero",
-        ));
+        return Err(LinuxHardeningError::ZeroGatewayConnectionLimit);
     }
     let mut bridge_token = [0; BRIDGE_TOKEN_BYTES];
-    authentication.read_exact(&mut bridge_token)?;
+    authentication
+        .read_exact(&mut bridge_token)
+        .map_err(|source| LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::BridgeTokenRead,
+            source,
+        })?;
     LocalGatewayBridge::start(
         &socket,
         max_connections,
@@ -198,31 +215,33 @@ fn start_gateway_bridge(
         bridge_token,
     )
     .map(Some)
+    .map_err(|source| LinuxHardeningError::GatewayBridge { source })
 }
 
-fn verify_helper_authentication() -> io::Result<File> {
+fn verify_helper_authentication() -> Result<File, LinuxHardeningError> {
     let fd: libc::c_int = std::env::var(AUTH_FD_ENV)
-        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "missing auth fd"))?
+        .map_err(|_| LinuxHardeningError::MissingEnvironment { name: AUTH_FD_ENV })?
         .parse()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid auth fd"))?;
+        .map_err(|source| LinuxHardeningError::InvalidEnvironment {
+            name: AUTH_FD_ENV,
+            source,
+        })?;
     if fd <= libc::STDERR_FILENO {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "auth fd must be above the standard streams",
-        ));
+        return Err(LinuxHardeningError::AuthenticationDescriptorTooLow { fd });
     }
     verify_authentication_peer(fd)?;
     #[allow(unsafe_code)]
     let mut auth = unsafe { File::from_raw_fd(fd) };
     let mut token = vec![0; AUTH_TOKEN.len()];
-    auth.read_exact(&mut token)?;
+    auth.read_exact(&mut token)
+        .map_err(|source| LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::AuthenticationTokenRead,
+            source,
+        })?;
     if token == AUTH_TOKEN {
         Ok(auth)
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "auth token mismatch",
-        ))
+        Err(LinuxHardeningError::AuthenticationTokenMismatch)
     }
 }
 
@@ -231,7 +250,7 @@ fn verify_helper_authentication() -> io::Result<File> {
 /// secret: a process inside the namespace can know it, so the Unix peer
 /// credentials are the actual boundary authentication.
 #[allow(unsafe_code)]
-fn verify_authentication_peer(fd: RawFd) -> io::Result<()> {
+fn verify_authentication_peer(fd: RawFd) -> Result<(), LinuxHardeningError> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
@@ -248,19 +267,12 @@ fn verify_authentication_peer(fd: RawFd) -> io::Result<()> {
         )
     };
     if result != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "authentication descriptor is not a Unix socket: {}",
-                io::Error::last_os_error()
-            ),
-        ));
+        return Err(LinuxHardeningError::AuthenticationPeerQuery {
+            source: io::Error::last_os_error(),
+        });
     }
     if length < size_of::<libc::ucred>() as libc::socklen_t {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "authentication peer credentials were truncated",
-        ));
+        return Err(LinuxHardeningError::AuthenticationPeerCredentialsTruncated);
     }
 
     // A valid backend peer lives outside the helper's PID namespace. Its PID
@@ -271,33 +283,34 @@ fn verify_authentication_peer(fd: RawFd) -> io::Result<()> {
     }
     let probe = unsafe { libc::kill(credentials.pid, 0) };
     if probe == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "authentication peer is inside the sandbox namespace",
-        ));
+        return Err(LinuxHardeningError::AuthenticationPeerInsideNamespace);
     }
     let error = io::Error::last_os_error();
-    Err(io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            "authentication peer is not a live host-side peer"
-        } else {
-            "authentication peer is visible to the sandbox"
-        },
-    ))
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Err(LinuxHardeningError::AuthenticationPeerNotLive)
+    } else {
+        Err(LinuxHardeningError::AuthenticationPeerInsideNamespace)
+    }
 }
 
-fn complete_setup_handshake(authentication: &mut File) -> io::Result<()> {
-    authentication.write_all(READY)?;
+fn complete_setup_handshake(authentication: &mut File) -> Result<(), LinuxHardeningError> {
+    authentication
+        .write_all(READY)
+        .map_err(|source| LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::SetupReady,
+            source,
+        })?;
     let mut release = vec![0; RELEASE.len()];
-    authentication.read_exact(&mut release)?;
+    authentication
+        .read_exact(&mut release)
+        .map_err(|source| LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::SetupRelease,
+            source,
+        })?;
     if release == RELEASE {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid setup release token",
-        ))
+        Err(LinuxHardeningError::InvalidSetupRelease)
     }
 }
 
@@ -337,23 +350,32 @@ fn set_core_dump_limit_zero() -> io::Result<()> {
 }
 
 #[allow(unsafe_code)]
-fn set_parent_death_signal() -> io::Result<()> {
+fn set_parent_death_signal() -> Result<(), LinuxHardeningError> {
     let expected_parent = unsafe { libc::getppid() };
     let result = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) };
     if result != 0 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::ParentDeathSignal,
+            source: io::Error::last_os_error(),
+        });
     }
     if unsafe { libc::getppid() } != expected_parent {
-        return Err(io::Error::other("sandbox parent exited during hardening"));
+        return Err(LinuxHardeningError::ParentExitedDuringHardening);
     }
     Ok(())
 }
 
 #[allow(unsafe_code)]
-fn set_close_on_exec(fd: std::os::fd::RawFd, close_on_exec: bool) -> io::Result<()> {
+fn set_close_on_exec(
+    fd: std::os::fd::RawFd,
+    close_on_exec: bool,
+) -> Result<(), LinuxHardeningError> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if flags == -1 {
-        return Err(io::Error::last_os_error());
+        return Err(LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::CloseOnExec,
+            source: io::Error::last_os_error(),
+        });
     }
     let updated = if close_on_exec {
         flags | libc::FD_CLOEXEC
@@ -361,13 +383,16 @@ fn set_close_on_exec(fd: std::os::fd::RawFd, close_on_exec: bool) -> io::Result<
         flags & !libc::FD_CLOEXEC
     };
     if unsafe { libc::fcntl(fd, libc::F_SETFD, updated) } == -1 {
-        Err(io::Error::last_os_error())
+        Err(LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::CloseOnExec,
+            source: io::Error::last_os_error(),
+        })
     } else {
         Ok(())
     }
 }
 
-fn build_filter(mode: NetworkHardeningMode) -> Result<BpfProgram, String> {
+fn build_filter(mode: NetworkHardeningMode) -> Result<BpfProgram, SeccompBuildError> {
     fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, syscall: i64) {
         rules.insert(syscall, Vec::new());
     }
@@ -398,16 +423,16 @@ fn build_filter(mode: NetworkHardeningMode) -> Result<BpfProgram, String> {
         SeccompAction::Errno(libc::EPERM as u32),
         target_architecture()?,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|source| SeccompBuildError::Filter { source })?;
     let program: BpfProgram = filter
         .try_into()
-        .map_err(|error: seccompiler::BackendError| error.to_string())?;
+        .map_err(|source: seccompiler::BackendError| SeccompBuildError::BpfConversion { source })?;
     Ok(program)
 }
 
 fn add_unix_socket_isolation_rules(
     rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
-) -> Result<(), String> {
+) -> Result<(), SeccompBuildError> {
     let unix_socket = SeccompRule::new(vec![
         SeccompCondition::new(
             0,
@@ -415,9 +440,9 @@ fn add_unix_socket_isolation_rules(
             SeccompCmpOp::Eq,
             libc::AF_UNIX as u64,
         )
-        .map_err(|error| error.to_string())?,
+        .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
-    .map_err(|error| error.to_string())?;
+    .map_err(|source| SeccompBuildError::Rule { source })?;
     rules.insert(libc::SYS_socket, vec![unix_socket]);
 
     let non_unix_socketpair = SeccompRule::new(vec![
@@ -427,14 +452,16 @@ fn add_unix_socket_isolation_rules(
             SeccompCmpOp::Ne,
             libc::AF_UNIX as u64,
         )
-        .map_err(|error| error.to_string())?,
+        .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
-    .map_err(|error| error.to_string())?;
+    .map_err(|source| SeccompBuildError::Rule { source })?;
     rules.insert(libc::SYS_socketpair, vec![non_unix_socketpair]);
     Ok(())
 }
 
-fn add_disabled_network_rules(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) -> Result<(), String> {
+fn add_disabled_network_rules(
+    rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
+) -> Result<(), SeccompBuildError> {
     for syscall in [
         libc::SYS_connect,
         libc::SYS_accept,
@@ -459,15 +486,17 @@ fn add_disabled_network_rules(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) -> Re
             SeccompCmpOp::Ne,
             libc::AF_UNIX as u64,
         )
-        .map_err(|error| error.to_string())?,
+        .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
-    .map_err(|error| error.to_string())?;
+    .map_err(|source| SeccompBuildError::Rule { source })?;
     rules.insert(libc::SYS_socket, vec![unix_only.clone()]);
     rules.insert(libc::SYS_socketpair, vec![unix_only]);
     Ok(())
 }
 
-fn add_proxy_network_rules(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) -> Result<(), String> {
+fn add_proxy_network_rules(
+    rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
+) -> Result<(), SeccompBuildError> {
     let ip_only = SeccompRule::new(vec![
         SeccompCondition::new(
             0,
@@ -475,16 +504,16 @@ fn add_proxy_network_rules(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) -> Resul
             SeccompCmpOp::Ne,
             libc::AF_INET as u64,
         )
-        .map_err(|error| error.to_string())?,
+        .map_err(|source| SeccompBuildError::Condition { source })?,
         SeccompCondition::new(
             0,
             SeccompCmpArgLen::Dword,
             SeccompCmpOp::Ne,
             libc::AF_INET6 as u64,
         )
-        .map_err(|error| error.to_string())?,
+        .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
-    .map_err(|error| error.to_string())?;
+    .map_err(|source| SeccompBuildError::Rule { source })?;
     let unix_socketpair_only = SeccompRule::new(vec![
         SeccompCondition::new(
             0,
@@ -492,23 +521,22 @@ fn add_proxy_network_rules(rules: &mut BTreeMap<i64, Vec<SeccompRule>>) -> Resul
             SeccompCmpOp::Ne,
             libc::AF_UNIX as u64,
         )
-        .map_err(|error| error.to_string())?,
+        .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
-    .map_err(|error| error.to_string())?;
+    .map_err(|source| SeccompBuildError::Rule { source })?;
     rules.insert(libc::SYS_socket, vec![ip_only]);
     rules.insert(libc::SYS_socketpair, vec![unix_socketpair_only]);
     Ok(())
 }
 
-fn target_architecture() -> Result<seccompiler::TargetArch, String> {
+fn target_architecture() -> Result<seccompiler::TargetArch, SeccompBuildError> {
     if cfg!(target_arch = "x86_64") {
         Ok(seccompiler::TargetArch::x86_64)
     } else if cfg!(target_arch = "aarch64") {
         Ok(seccompiler::TargetArch::aarch64)
     } else {
-        Err(format!(
-            "unsupported Linux seccomp architecture: {}",
-            std::env::consts::ARCH
-        ))
+        Err(SeccompBuildError::UnsupportedArchitecture {
+            architecture: std::env::consts::ARCH.to_string(),
+        })
     }
 }

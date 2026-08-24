@@ -31,11 +31,8 @@ impl TimeoutWatchdog {
     }
 
     pub(crate) fn start(pid: u32, timeout: Duration) -> Result<Self, LinuxBackendError> {
-        let pid = libc::pid_t::try_from(pid).map_err(|_| {
-            LinuxBackendError::TimeoutWatchdogSetupFailed {
-                source: io::Error::new(io::ErrorKind::InvalidInput, "child PID is out of range"),
-            }
-        })?;
+        let pid = libc::pid_t::try_from(pid)
+            .map_err(|_| LinuxBackendError::TimeoutPidOutOfRange { pid })?;
         let pidfd = open_pidfd(pid)
             .map_err(|source| LinuxBackendError::TimeoutWatchdogSetupFailed { source })?;
         let (cancel, control) = mpsc::channel();

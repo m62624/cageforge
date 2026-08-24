@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::io;
+use std::num::ParseIntError;
 use std::path::PathBuf;
 
 use cageforge_backend_api::{BackendCapability, BackendContractError};
@@ -65,9 +66,15 @@ pub enum FilesystemLoweringError {
         #[source]
         source: io::Error,
     },
-    /// A deny target was incorrectly passed to a bind-mount operation.
-    #[error("deny access cannot be lowered as a bind mount")]
-    DenyBind,
+    /// A deny target was incorrectly passed to a canonical bind-mount operation.
+    #[error("deny access cannot be lowered as a canonical bind mount")]
+    DenyCanonicalBind,
+    /// A deny target was incorrectly passed to a descriptor bind-mount operation.
+    #[error("deny access cannot be lowered as a descriptor bind mount")]
+    DenyDescriptorBind,
+    /// A deny target was incorrectly passed to a pinned-file bind operation.
+    #[error("deny access cannot be lowered as a pinned-file bind")]
+    DenyPinnedFileBind,
     /// A pinned mount source descriptor could not be cloned.
     #[error("cannot clone the pinned mount source: {source}")]
     CloneSource {
@@ -137,6 +144,499 @@ impl fmt::Display for PolicyLoweringExpectation {
             Self::DenyGlobMatch => formatter.write_str("deny-glob match"),
         }
     }
+}
+
+/// A native operation performed while hardening a Linux process boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxHardeningOperation {
+    /// Setting the parent-death signal.
+    ParentDeathSignal,
+    /// Setting the dumpability flag.
+    Dumpability,
+    /// Setting the core-dump resource limit.
+    CoreDumpLimit,
+    /// Setting `PR_SET_NO_NEW_PRIVS`.
+    NoNewPrivileges,
+    /// Writing the setup-ready marker.
+    SetupReady,
+    /// Reading the authenticated bridge token.
+    BridgeTokenRead,
+    /// Reading the authentication token.
+    AuthenticationTokenRead,
+    /// Reading the setup-release marker.
+    SetupRelease,
+    /// Setting close-on-exec on the helper channel.
+    CloseOnExec,
+}
+
+impl fmt::Display for LinuxHardeningOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let operation = match self {
+            Self::ParentDeathSignal => "parent-death signal",
+            Self::Dumpability => "dumpability",
+            Self::CoreDumpLimit => "core-dump limit",
+            Self::NoNewPrivileges => "no-new-privileges",
+            Self::SetupReady => "setup-ready marker",
+            Self::BridgeTokenRead => "bridge token",
+            Self::AuthenticationTokenRead => "authentication token",
+            Self::SetupRelease => "setup-release marker",
+            Self::CloseOnExec => "close-on-exec",
+        };
+        formatter.write_str(operation)
+    }
+}
+
+/// A typed seccomp construction failure.
+#[derive(Debug, Error)]
+pub enum SeccompBuildError {
+    /// A seccomp condition could not be created.
+    #[error("seccomp condition construction failed: {source}")]
+    Condition {
+        /// Underlying seccompiler validation failure.
+        #[source]
+        source: seccompiler::BackendError,
+    },
+    /// A seccomp rule could not be created.
+    #[error("seccomp rule construction failed: {source}")]
+    Rule {
+        /// Underlying seccompiler validation failure.
+        #[source]
+        source: seccompiler::BackendError,
+    },
+    /// The filter could not be assembled.
+    #[error("seccomp filter construction failed: {source}")]
+    Filter {
+        /// Underlying seccompiler validation failure.
+        #[source]
+        source: seccompiler::BackendError,
+    },
+    /// The filter could not be converted to a BPF program.
+    #[error("seccomp BPF conversion failed: {source}")]
+    BpfConversion {
+        /// Underlying seccompiler backend failure.
+        #[source]
+        source: seccompiler::BackendError,
+    },
+    /// The target architecture has no supported seccomp lowering.
+    #[error("unsupported Linux seccomp architecture {architecture}")]
+    UnsupportedArchitecture {
+        /// Architecture reported by Rust.
+        architecture: String,
+    },
+}
+
+/// A native hardening-helper failure.
+#[derive(Debug, Error)]
+pub enum LinuxHardeningError {
+    /// A required helper environment variable was absent.
+    #[error("missing helper environment variable {name}")]
+    MissingEnvironment {
+        /// Missing variable name.
+        name: &'static str,
+    },
+    /// A helper environment variable could not be parsed.
+    #[error("invalid helper environment variable {name}: {source}")]
+    InvalidEnvironment {
+        /// Invalid variable name.
+        name: &'static str,
+        /// Parsing failure.
+        #[source]
+        source: ParseIntError,
+    },
+    /// A helper authentication descriptor was a standard stream.
+    #[error("authentication descriptor {fd} must be above the standard streams")]
+    AuthenticationDescriptorTooLow {
+        /// Rejected descriptor number.
+        fd: libc::c_int,
+    },
+    /// The authentication descriptor was not a Unix socket.
+    #[error("authentication descriptor is not a Unix socket: {source}")]
+    AuthenticationPeerQuery {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The peer credentials structure was truncated.
+    #[error("authentication peer credentials were truncated")]
+    AuthenticationPeerCredentialsTruncated,
+    /// The peer was visible from inside the sandbox namespace.
+    #[error("authentication peer is inside the sandbox namespace")]
+    AuthenticationPeerInsideNamespace,
+    /// The peer was not a live host-side process.
+    #[error("authentication peer is not a live host-side peer")]
+    AuthenticationPeerNotLive,
+    /// The helper's parent changed while the boundary was being hardened.
+    #[error("sandbox parent exited during hardening")]
+    ParentExitedDuringHardening,
+    /// The authentication marker did not match.
+    #[error("authentication token mismatch")]
+    AuthenticationTokenMismatch,
+    /// The network hardening mode was not recognized.
+    #[error("unknown network hardening mode {value:?}")]
+    UnknownNetworkMode {
+        /// Unrecognized environment value.
+        value: String,
+    },
+    /// The proxy gateway socket was not configured.
+    #[error("missing gateway socket")]
+    MissingGatewaySocket,
+    /// The proxy gateway socket was not absolute.
+    #[error("gateway socket must be absolute: {path:?}")]
+    RelativeGatewaySocket {
+        /// Rejected socket path.
+        path: PathBuf,
+    },
+    /// The proxy gateway connection limit was not configured.
+    #[error("missing gateway connection limit")]
+    MissingGatewayConnectionLimit,
+    /// The proxy gateway connection limit was invalid.
+    #[error("invalid gateway connection limit: {source}")]
+    InvalidGatewayConnectionLimit {
+        /// Parsing failure.
+        #[source]
+        source: ParseIntError,
+    },
+    /// The proxy gateway connection limit was zero.
+    #[error("gateway connection limit must be non-zero")]
+    ZeroGatewayConnectionLimit,
+    /// A bridge could not be created.
+    #[error("gateway bridge failed: {source}")]
+    GatewayBridge {
+        /// Bridge-specific failure.
+        #[source]
+        source: LinuxBridgeError,
+    },
+    /// The command environment frame was invalid or unreadable.
+    #[error("sandbox environment frame failed: {source}")]
+    EnvironmentFrame {
+        /// Environment-frame failure.
+        #[source]
+        source: EnvironmentFrameError,
+    },
+    /// A hardening syscall failed.
+    #[error("Linux {operation} failed: {source}")]
+    Operation {
+        /// Native operation that failed.
+        operation: LinuxHardeningOperation,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The seccomp filter could not be built.
+    #[error("Linux seccomp filter build failed: {source}")]
+    SeccompBuild {
+        /// Typed seccomp construction failure.
+        #[source]
+        source: SeccompBuildError,
+    },
+    /// Installing the seccomp filter failed.
+    #[error("Linux seccomp installation failed: {source}")]
+    SeccompInstallation {
+        /// Underlying seccompiler failure.
+        #[source]
+        source: seccompiler::Error,
+    },
+    /// The setup release marker was invalid.
+    #[error("invalid setup release token")]
+    InvalidSetupRelease,
+    /// Reporting the command status failed.
+    #[error("sandbox command status write failed: {source}")]
+    StatusWrite {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Starting the final command failed inside the helper.
+    #[error("sandbox command start failed: {source}")]
+    CommandStart {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// A distinct operation in the host-to-helper bridge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxBridgeOperation {
+    /// Creating the readiness pipe.
+    CreateReadyPipe,
+    /// Moving a descriptor out of the standard stream range.
+    MoveDescriptor,
+    /// Closing a descriptor.
+    CloseDescriptor,
+    /// Binding the loopback listener.
+    BindListener,
+    /// Reading the listener address.
+    ReadListenerAddress,
+    /// Reading the bridge readiness port.
+    ReadReadyPort,
+    /// Writing the readiness port.
+    WriteReadyPort,
+    /// Accepting a loopback connection.
+    AcceptConnection,
+    /// Connecting to the private gateway socket.
+    ConnectGateway,
+    /// Relaying TCP data into the gateway.
+    RelayToGateway,
+    /// Relaying gateway data to TCP.
+    RelayToClient,
+    /// Detaching bridge standard streams.
+    DetachStandardStreams,
+    /// Hardening the bridge process.
+    HardenProcess,
+}
+
+impl fmt::Display for LinuxBridgeOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let operation = match self {
+            Self::CreateReadyPipe => "create ready pipe",
+            Self::MoveDescriptor => "move descriptor",
+            Self::CloseDescriptor => "close descriptor",
+            Self::BindListener => "bind loopback listener",
+            Self::ReadListenerAddress => "read listener address",
+            Self::ReadReadyPort => "read ready port",
+            Self::WriteReadyPort => "write ready port",
+            Self::AcceptConnection => "accept bridge connection",
+            Self::ConnectGateway => "connect gateway",
+            Self::RelayToGateway => "relay to gateway",
+            Self::RelayToClient => "relay to client",
+            Self::DetachStandardStreams => "detach standard streams",
+            Self::HardenProcess => "harden bridge process",
+        };
+        formatter.write_str(operation)
+    }
+}
+
+/// A host-to-helper bridge failure.
+#[derive(Debug, Error)]
+pub enum LinuxBridgeError {
+    /// A bridge operation failed at the operating-system boundary.
+    #[error("{operation} failed: {source}")]
+    Operation {
+        /// Operation that failed.
+        operation: LinuxBridgeOperation,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The bridge child exited before publishing a usable parent relationship.
+    #[error("gateway bridge parent exited before startup")]
+    ParentExited,
+    /// The child published port zero.
+    #[error("gateway bridge returned port zero")]
+    ZeroPort,
+    /// The relay worker panicked.
+    #[error("gateway bridge relay worker panicked")]
+    RelayPanicked,
+    /// The bridge fork failed.
+    #[error("gateway bridge fork failed: {source}")]
+    Fork {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// A framed command-environment failure.
+#[derive(Debug, Error)]
+pub enum EnvironmentFrameError {
+    /// Reading or writing a frame component failed.
+    #[error("environment frame {operation} failed: {source}")]
+    Io {
+        /// Frame component that could not be transferred.
+        operation: &'static str,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+    /// A frame length exceeded the representable platform size.
+    #[error("environment frame length is too large")]
+    LengthTooLarge,
+    /// A frame length exceeded the helper's memory-safety bound.
+    #[error("environment frame length {length} exceeds the {maximum}-byte limit")]
+    LengthLimitExceeded {
+        /// Rejected frame length.
+        length: usize,
+        /// Maximum accepted frame length.
+        maximum: usize,
+    },
+    /// The aggregate environment frame exceeded the helper's memory bound.
+    #[error("environment frame exceeds the {maximum}-byte limit")]
+    FrameLimitExceeded {
+        /// Maximum accepted frame size.
+        maximum: usize,
+    },
+    /// A frame contained too many environment entries.
+    #[error("environment frame contains {count} entries, exceeding the {maximum}-entry limit")]
+    EntryLimitExceeded {
+        /// Rejected entry count.
+        count: usize,
+        /// Maximum accepted entry count.
+        maximum: usize,
+    },
+    /// The frame contained an invalid variable name.
+    #[error("environment frame contains an invalid variable name")]
+    InvalidName,
+    /// The frame contained an invalid variable value.
+    #[error("environment frame contains an invalid variable value")]
+    InvalidValue,
+    /// The frame repeated a variable name.
+    #[error("environment frame contains a duplicate variable")]
+    DuplicateVariable,
+    /// The frame magic did not match.
+    #[error("environment frame magic did not match")]
+    InvalidMagic,
+}
+
+/// A framed command-status failure.
+#[derive(Debug, Error)]
+pub enum StatusFrameError {
+    /// Reading a status frame component failed.
+    #[error("command status frame {operation} failed: {source}")]
+    Io {
+        /// Frame component that could not be read.
+        operation: &'static str,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+    /// The status frame had an invalid magic prefix.
+    #[error("command status frame magic did not match")]
+    InvalidMagic,
+    /// The reader returned an invalid prefix length.
+    #[error("command status frame returned an invalid prefix length")]
+    InvalidPrefixLength,
+}
+
+/// A failure while completing the authenticated Bubblewrap setup handshake.
+#[derive(Debug, Error)]
+pub enum SetupHandshakeError {
+    /// An authenticated channel operation failed.
+    #[error("setup handshake I/O failed: {source}")]
+    Io {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The environment frame could not be sent.
+    #[error("setup handshake environment frame failed: {source}")]
+    EnvironmentFrame {
+        /// Framing failure.
+        #[source]
+        source: EnvironmentFrameError,
+    },
+    /// The per-run gateway bridge token could not be sent.
+    #[error("setup handshake gateway token failed: {source}")]
+    GatewayToken {
+        /// Transport failure.
+        #[source]
+        source: NetworkGatewayTransportError,
+    },
+    /// The helper returned a wrong ready marker.
+    #[error("setup handshake ready marker did not match")]
+    InvalidReady,
+}
+
+impl From<io::Error> for SetupHandshakeError {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<EnvironmentFrameError> for SetupHandshakeError {
+    fn from(source: EnvironmentFrameError) -> Self {
+        Self::EnvironmentFrame { source }
+    }
+}
+
+impl From<NetworkGatewayTransportError> for SetupHandshakeError {
+    fn from(source: NetworkGatewayTransportError) -> Self {
+        Self::GatewayToken { source }
+    }
+}
+
+/// A per-run gateway token transport failure.
+#[derive(Debug, Error)]
+pub enum NetworkGatewayTransportError {
+    /// Writing the bridge token to the authenticated helper channel failed.
+    #[error("writing the gateway bridge token failed: {source}")]
+    BridgeTokenWrite {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// A host gateway setup failure.
+#[derive(Debug, Error)]
+pub enum NetworkGatewaySetupError {
+    /// Creating a private temporary directory failed.
+    #[error("cannot create gateway temporary directory {parent:?}: {source}")]
+    TemporaryDirectory {
+        /// Parent directory selected for the temporary directory.
+        parent: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// No candidate temporary directory was available.
+    #[error("no usable temporary directory exists for the gateway")]
+    NoTemporaryDirectory,
+    /// The candidate Unix socket path exceeded Linux's address limit.
+    #[error("gateway Unix socket path is too long: {path:?}")]
+    SocketPathTooLong {
+        /// Rejected socket path.
+        path: PathBuf,
+    },
+    /// Setting the private directory permissions failed.
+    #[error("cannot secure gateway directory {path:?}: {source}")]
+    DirectoryPermissions {
+        /// Directory whose mode could not be set.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Binding the private gateway socket failed.
+    #[error("cannot bind gateway socket {path:?}: {source}")]
+    SocketBind {
+        /// Socket path.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Switching the gateway socket to nonblocking mode failed.
+    #[error("cannot configure gateway socket {path:?}: {source}")]
+    SocketNonblocking {
+        /// Socket path.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Starting the gateway thread failed.
+    #[error("cannot start gateway thread: {source}")]
+    ThreadSpawn {
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// A private gateway ingress authentication failure.
+#[derive(Debug, Error)]
+pub enum NetworkGatewayIngressError {
+    /// Reading the per-connection bridge token failed.
+    #[error("reading gateway bridge authentication token failed: {source}")]
+    TokenRead {
+        /// Underlying asynchronous I/O failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The bridge token did not match this launch's token.
+    #[error("gateway bridge authentication token mismatch")]
+    TokenMismatch,
 }
 
 /// A typed failure produced by the per-launch gateway runtime.
@@ -257,6 +757,14 @@ pub enum LinuxBackendError {
         /// Per-stream byte limit.
         limit: usize,
     },
+    /// A required Bubblewrap probe stream was not piped.
+    #[error("Bubblewrap {stage} probe did not provide its {stream} pipe")]
+    BubblewrapProbePipeMissing {
+        /// Probe operation that omitted the pipe.
+        stage: &'static str,
+        /// Missing stream name.
+        stream: &'static str,
+    },
     /// A Bubblewrap user-namespace probe failed.
     #[error("Bubblewrap cannot create the required user/network namespace: {message}")]
     UserNamespaceUnavailable {
@@ -312,7 +820,7 @@ pub enum LinuxBackendError {
     NetworkGatewaySetup {
         /// Host runtime setup failure.
         #[source]
-        source: std::io::Error,
+        source: NetworkGatewaySetupError,
     },
     /// The host gateway stopped while its sandboxed process still depended on it.
     #[error("Linux network gateway runtime failed: {0}")]
@@ -426,7 +934,7 @@ pub enum LinuxBackendError {
     SetupHandshakeFailed {
         /// Authentication-channel failure.
         #[source]
-        source: std::io::Error,
+        source: SetupHandshakeError,
         /// Captured Bubblewrap/helper diagnostic, when stderr was piped.
         diagnostic: String,
     },
@@ -435,7 +943,7 @@ pub enum LinuxBackendError {
     CommandStatusFailed {
         /// Status-channel failure.
         #[source]
-        source: std::io::Error,
+        source: StatusFrameError,
     },
     /// A process failed to spawn.
     #[error("failed to spawn sandboxed process: {source}")]
@@ -456,6 +964,12 @@ pub enum LinuxBackendError {
         /// Linux pidfd or watchdog-thread setup failure.
         #[source]
         source: std::io::Error,
+    },
+    /// The child PID could not be represented by the Linux pidfd API.
+    #[error("child PID {pid} is outside the Linux pidfd range")]
+    TimeoutPidOutOfRange {
+        /// Rejected child PID.
+        pid: u32,
     },
     /// The automatic timeout watchdog could not terminate its exact child.
     #[error("Linux timeout watchdog failed: {source}")]
