@@ -208,7 +208,7 @@ jobs:
       matrix:
         include:
           - os_name: Linux
-            os: ubuntu-latest
+            os: ubuntu-24.04
           - os_name: macOS
             os: macos-latest
           - os_name: Windows
@@ -225,7 +225,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes libcap-dev pkg-config
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          test "$(sysctl -n kernel.unprivileged_userns_clone)" = "1"
+          unshare --user --map-root-user --mount-proc true
           cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
+          "$RUNNER_TEMP/cageforge-resources/bwrap" \
+            --die-with-parent \
+            --unshare-user \
+            --unshare-pid \
+            --unshare-net \
+            --ro-bind / / \
+            --proc /proc \
+            --dev /dev \
+            /usr/bin/true
           echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
       - name: Check formatting
         run: cargo fmt --all --check
@@ -238,9 +250,7 @@ jobs:
     name: Linux core + native sandbox
     needs: changes
     if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.linux_native == 'true'
-    # TODO: move this implemented backend to dedicated x64/ARM64 Linux runners
-    # when those runners are available and make the native status a required gate.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -251,7 +261,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes libcap-dev pkg-config
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          test "$(sysctl -n kernel.unprivileged_userns_clone)" = "1"
+          unshare --user --map-root-user --mount-proc true
           cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
+          "$RUNNER_TEMP/cageforge-resources/bwrap" \
+            --die-with-parent \
+            --unshare-user \
+            --unshare-pid \
+            --unshare-net \
+            --ro-bind / / \
+            --proc /proc \
+            --dev /dev \
+            /usr/bin/true
           echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
       - run: cargo fmt --package cageforge-bwrap --package cageforge-core --package cageforge-linux -- --check
       - run: cargo clippy -p cageforge-bwrap -p cageforge-core -p cageforge-linux --all-targets -- -D warnings

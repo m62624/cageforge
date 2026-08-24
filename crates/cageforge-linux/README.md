@@ -81,7 +81,9 @@ the reproducible fallback for application distributions.
 The host kernel must permit the user, mount, PID, and—when requested—network
 namespaces used by Bubblewrap. A missing prerequisite is reported as a typed
 `LinuxBackendError`; restricted requests are never widened into an ordinary
-host process.
+host process. After construction, the validated Bubblewrap executable and
+hardening helper are pinned by open file descriptors; each spawn uses those
+validated objects rather than reopening their paths.
 
 ## Basic use
 
@@ -140,7 +142,9 @@ supports absolute, workspace, system-root, minimal-runtime, temporary, and
 `/tmp` scopes; read/write/deny precedence; read-only carve-outs; bounded deny
 globs; missing-path behavior; and protected metadata paths. Existing mount
 sources are pinned for the Bubblewrap handoff, and native lowering accounts for
-symlinks before launch.
+symlinks before launch. The Bubblewrap executable and hardening helper are also
+kept pinned for the lifetime of the backend, closing replacement races between
+construction and a later spawn.
 
 Writable scopes protect `.git` by default. Trusted applications may explicitly
 request `.git` writes through

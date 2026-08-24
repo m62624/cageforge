@@ -57,6 +57,9 @@ explicit executable paths.
 
 - A bundled executable without a valid digest manifest is rejected.
 - A digest mismatch is rejected before Bubblewrap is executed.
+- The validated binary is opened and pinned before backend construction
+  completes; later spawns execute that descriptor rather than reopening the
+  resource path.
 - A system executable is never accepted merely because it exists; its help
   flags and namespace behavior are probed.
 - The resource fallback cannot widen a policy: it only supplies the native

@@ -367,11 +367,13 @@ The first Linux implementation uses a system Bubblewrap executable discovered
 outside the current working directory. The backend must validate the selected
 executable before use and must reject a missing or incompatible executable.
 
-The initial implementation should not bundle a Bubblewrap binary. Bundling is
-a later release decision because Bubblewrap is LGPL-2.0-or-later and requires
-separate source, license, copyright, and distribution records. If bundling is
-approved later, it must be implemented as a separately identified third-party
-component, never as Apache-2.0 Cageforge code.
+Bundled Bubblewrap is implemented as the separately identified
+`cageforge-bwrap` component described in Specification 0015. Bubblewrap keeps
+its own upstream license and notices; it is never treated as Apache-2.0
+Cageforge code. The backend verifies a bundled digest on the opened file and
+executes the pinned file descriptor, so a later replacement of the resource
+path cannot change the binary used for a spawn. The hardening helper is pinned
+by the same descriptor-based handoff.
 
 The generated Bubblewrap plan must establish, as applicable:
 
@@ -435,7 +437,8 @@ request. Native tests must cover the default, opt-out, restored ceiling, and
 additional-path cases.
 
 Bubblewrap mount-source descriptors remain close-on-exec in the parent and are
-made inheritable only in the child-side spawn hook. This is required for
+made inheritable only in the child-side spawn hook. The validated Bubblewrap
+and hardening-helper descriptors follow the same rule. This is required for
 threaded applications: temporarily clearing close-on-exec in the parent would
 allow an unrelated concurrent process spawn to inherit another sandbox
 instance's host mount descriptors.

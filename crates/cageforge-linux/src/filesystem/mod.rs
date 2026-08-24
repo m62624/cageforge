@@ -74,7 +74,6 @@ pub(crate) fn lower<'a>(
     backend: &LinuxBackend,
     prepared: &PreparedBackendRequest<'a, LinuxBackend>,
     sandbox: &EffectiveSandbox,
-    helper: &Path,
     gateway_mount: Option<&Path>,
 ) -> Result<FilesystemPlan, LinuxBackendError> {
     let mode = sandbox.filesystem().requirements().mode();
@@ -96,7 +95,12 @@ pub(crate) fn lower<'a>(
         )?;
         append_dev(&mut args, true);
         append_shared_state_mask(&mut args);
-        append_private_runtime(&mut args, helper, gateway_mount, &mut preserved_files)?;
+        append_private_runtime(
+            &mut args,
+            backend.hardening_helper_file(),
+            gateway_mount,
+            &mut preserved_files,
+        )?;
         return Ok(FilesystemPlan {
             args,
             preserved_files,
@@ -193,7 +197,12 @@ pub(crate) fn lower<'a>(
             )?;
         }
     }
-    append_private_runtime(&mut args, helper, gateway_mount, &mut preserved_files)?;
+    append_private_runtime(
+        &mut args,
+        backend.hardening_helper_file(),
+        gateway_mount,
+        &mut preserved_files,
+    )?;
     Ok(FilesystemPlan {
         args,
         preserved_files,
@@ -540,7 +549,7 @@ fn append_shared_state_mask(args: &mut Vec<OsString>) {
 
 fn append_private_runtime(
     args: &mut Vec<OsString>,
-    helper: &Path,
+    helper: &File,
     gateway_mount: Option<&Path>,
     preserved_files: &mut Vec<File>,
 ) -> Result<(), LinuxBackendError> {
@@ -550,7 +559,7 @@ fn append_private_runtime(
         "--tmpfs".into(),
         PRIVATE_RUNTIME_ROOT.into(),
     ]);
-    add_bind_fd(
+    add_bind_file(
         args,
         helper,
         Path::new(IN_SANDBOX_HELPER_PATH),
@@ -588,6 +597,11 @@ fn add_bind(
     if canonical == path {
         add_bind_fd(args, path, path, access, preserved_files)
     } else {
+        // Bubblewrap must resolve a symlink destination such as `/bin` while
+        // constructing the namespace; its `--*-bind-fd` race check compares
+        // the source inode with the destination and therefore rejects that
+        // legitimate layout.  Keep the canonical source explicit here, as
+        // Codex does for the same runtime roots.
         args.extend([
             match access {
                 AccessMode::Read => "--ro-bind".into(),
@@ -609,6 +623,34 @@ fn add_bind_fd(
     preserved_files: &mut Vec<File>,
 ) -> Result<(), LinuxBackendError> {
     let file = open_mount_source(source)?;
+    let descriptor = file.as_raw_fd();
+    args.extend([
+        match access {
+            AccessMode::Read => "--ro-bind-fd".into(),
+            AccessMode::Write => "--bind-fd".into(),
+            AccessMode::Deny => unreachable!(),
+        },
+        descriptor.to_string().into(),
+        destination.as_os_str().into(),
+    ]);
+    preserved_files.push(file);
+    Ok(())
+}
+
+fn add_bind_file(
+    args: &mut Vec<OsString>,
+    source: &File,
+    destination: &Path,
+    access: AccessMode,
+    preserved_files: &mut Vec<File>,
+) -> Result<(), LinuxBackendError> {
+    let file =
+        source
+            .try_clone()
+            .map_err(|source| LinuxBackendError::FilesystemLoweringFailed {
+                path: destination.to_path_buf(),
+                reason: source.to_string(),
+            })?;
     let descriptor = file.as_raw_fd();
     args.extend([
         match access {

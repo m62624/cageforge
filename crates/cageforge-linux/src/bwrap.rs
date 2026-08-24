@@ -3,8 +3,8 @@
 //! Bubblewrap discovery, probing, and common namespace arguments.
 
 use std::ffi::OsString;
-use std::fs;
-use std::io::{self, Read};
+use std::fs::{self, File};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -44,12 +44,20 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROBE_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
+#[derive(Debug)]
+pub(crate) struct BubblewrapSelection {
+    pub(crate) path: PathBuf,
+    pub(crate) bundled: bool,
+}
+
+#[derive(Debug)]
 struct ProbeOutput {
     status: ExitStatus,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
 }
 
+#[derive(Debug)]
 enum ProbeError {
     Io(io::Error),
     TimedOut,
@@ -87,7 +95,7 @@ pub(crate) fn discover_and_probe(
     source: &BubblewrapSource,
     resource_directory: Option<&Path>,
     proc_mount: ProcMountPolicy,
-) -> Result<PathBuf, LinuxBackendError> {
+) -> Result<BubblewrapSelection, LinuxBackendError> {
     match source {
         BubblewrapSource::System => {
             let path = find_on_path("bwrap").ok_or(LinuxBackendError::BubblewrapUnavailable)?;
@@ -123,6 +131,14 @@ fn can_fall_back_to_bundled(error: &LinuxBackendError) -> bool {
     )
 }
 
+pub(crate) fn open_pinned(selection: &BubblewrapSelection) -> Result<File, LinuxBackendError> {
+    let file = File::open(&selection.path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    if selection.bundled {
+        verify_bundled_digest_file(&file, &selection.path)?;
+    }
+    Ok(file)
+}
+
 pub(crate) fn resource_directory(
     source: &ResourceDirectorySource,
 ) -> Result<Option<PathBuf>, LinuxBackendError> {
@@ -154,7 +170,7 @@ fn discover_and_probe_one(
     path: &Path,
     proc_mount: ProcMountPolicy,
     bundled: bool,
-) -> Result<PathBuf, LinuxBackendError> {
+) -> Result<BubblewrapSelection, LinuxBackendError> {
     let path = fs::canonicalize(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
     validate_executable(&path)?;
     if bundled {
@@ -165,7 +181,7 @@ fn discover_and_probe_one(
     if proc_mount == ProcMountPolicy::Required {
         probe_proc_mount(&path)?;
     }
-    Ok(path)
+    Ok(BubblewrapSelection { path, bundled })
 }
 
 fn verify_bundled_digest(path: &Path) -> Result<(), LinuxBackendError> {
@@ -192,8 +208,37 @@ fn verify_bundled_digest(path: &Path) -> Result<(), LinuxBackendError> {
     Ok(())
 }
 
+fn verify_bundled_digest_file(file: &File, path: &Path) -> Result<(), LinuxBackendError> {
+    let manifest = path.with_file_name("bwrap.sha256");
+    let expected = fs::read_to_string(&manifest)
+        .map_err(|_| LinuxBackendError::BubblewrapDigestUnavailable {
+            path: path.to_path_buf(),
+        })?
+        .split_whitespace()
+        .next()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| LinuxBackendError::BubblewrapDigestUnavailable {
+            path: path.to_path_buf(),
+        })?;
+    let actual = sha256_file_handle(file).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    if actual != expected {
+        return Err(LinuxBackendError::BubblewrapDigestMismatch {
+            path: path.to_path_buf(),
+            expected,
+            actual,
+        });
+    }
+    Ok(())
+}
+
 fn sha256_file(path: &Path) -> io::Result<String> {
-    let mut file = fs::File::open(path)?;
+    sha256_file_handle(&fs::File::open(path)?)
+}
+
+fn sha256_file_handle(file: &File) -> io::Result<String> {
+    let mut file = file.try_clone()?;
+    file.seek(SeekFrom::Start(0))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -325,40 +370,53 @@ fn run_probe(path: &Path, args: &[&str], timeout: Duration) -> Result<ProbeOutpu
         .stderr(Stdio::piped())
         .spawn()
         .map_err(ProbeError::Io)?;
-    let mut stdout = child.stdout.take().expect("piped stdout is present");
-    let mut stderr = child.stderr.take().expect("piped stderr is present");
-    set_nonblocking(stdout.as_raw_fd()).map_err(ProbeError::Io)?;
-    set_nonblocking(stderr.as_raw_fd()).map_err(ProbeError::Io)?;
-    let deadline = Instant::now() + timeout;
-    let mut stdout_bytes = Vec::new();
-    let mut stderr_bytes = Vec::new();
-    loop {
-        if drain_probe_output(&mut stdout, &mut stdout_bytes).map_err(ProbeError::Io)?
-            || drain_probe_output(&mut stderr, &mut stderr_bytes).map_err(ProbeError::Io)?
-        {
-            terminate_probe(&mut child);
-            return Err(ProbeError::OutputLimitExceeded);
-        }
-        match child.try_wait().map_err(ProbeError::Io)? {
-            Some(status) => {
-                if drain_probe_output(&mut stdout, &mut stdout_bytes).map_err(ProbeError::Io)?
-                    || drain_probe_output(&mut stderr, &mut stderr_bytes).map_err(ProbeError::Io)?
-                {
-                    return Err(ProbeError::OutputLimitExceeded);
+    let result = (|| {
+        let mut stdout = child.stdout.take().ok_or_else(|| {
+            ProbeError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "bubblewrap probe stdout pipe is missing",
+            ))
+        })?;
+        let mut stderr = child.stderr.take().ok_or_else(|| {
+            ProbeError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "bubblewrap probe stderr pipe is missing",
+            ))
+        })?;
+        set_nonblocking(stdout.as_raw_fd()).map_err(ProbeError::Io)?;
+        set_nonblocking(stderr.as_raw_fd()).map_err(ProbeError::Io)?;
+        let deadline = Instant::now() + timeout;
+        let mut stdout_bytes = Vec::new();
+        let mut stderr_bytes = Vec::new();
+        loop {
+            if drain_probe_output(&mut stdout, &mut stdout_bytes).map_err(ProbeError::Io)?
+                || drain_probe_output(&mut stderr, &mut stderr_bytes).map_err(ProbeError::Io)?
+            {
+                return Err(ProbeError::OutputLimitExceeded);
+            }
+            match child.try_wait().map_err(ProbeError::Io)? {
+                Some(status) => {
+                    if drain_probe_output(&mut stdout, &mut stdout_bytes).map_err(ProbeError::Io)?
+                        || drain_probe_output(&mut stderr, &mut stderr_bytes)
+                            .map_err(ProbeError::Io)?
+                    {
+                        return Err(ProbeError::OutputLimitExceeded);
+                    }
+                    return Ok(ProbeOutput {
+                        status,
+                        stdout: stdout_bytes,
+                        stderr: stderr_bytes,
+                    });
                 }
-                return Ok(ProbeOutput {
-                    status,
-                    stdout: stdout_bytes,
-                    stderr: stderr_bytes,
-                });
+                None if Instant::now() >= deadline => return Err(ProbeError::TimedOut),
+                None => thread::sleep(PROBE_POLL_INTERVAL),
             }
-            None if Instant::now() >= deadline => {
-                terminate_probe(&mut child);
-                return Err(ProbeError::TimedOut);
-            }
-            None => thread::sleep(PROBE_POLL_INTERVAL),
         }
+    })();
+    if result.is_err() {
+        terminate_probe(&mut child);
     }
+    result
 }
 
 fn drain_probe_output(reader: &mut impl Read, output: &mut Vec<u8>) -> io::Result<bool> {

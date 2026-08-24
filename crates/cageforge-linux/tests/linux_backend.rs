@@ -342,6 +342,23 @@ fn common_seccomp_fixture() {
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::EPERM)
     );
+    #[allow(unsafe_code)]
+    let mut socket_pair = [-1; 2];
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        libc::socketpair(
+            libc::AF_UNIX,
+            libc::SOCK_STREAM,
+            0,
+            socket_pair.as_mut_ptr(),
+        )
+    };
+    assert_eq!(result, 0, "local socketpair IPC must remain available");
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::close(socket_pair[0]);
+        libc::close(socket_pair[1]);
+    }
 }
 
 fn wait_for_marker(path: &Path) {

@@ -3,11 +3,13 @@
 //! Linux backend construction, capability declaration, and policy lowering.
 
 use std::ffi::OsString;
+use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use cageforge_backend_api::{
@@ -20,7 +22,7 @@ use cageforge_policy_compose::EffectiveSandbox;
 use command_fds::CommandFdExt;
 
 use crate::bwrap::{
-    discover_and_probe, discover_hardening_helper, namespace_args, resource_directory,
+    discover_and_probe, discover_hardening_helper, namespace_args, open_pinned, resource_directory,
 };
 use crate::config::LinuxBackendConfig;
 use crate::environment_transport::write_environment;
@@ -61,7 +63,9 @@ pub(crate) struct LinuxLaunchPlan {
 pub struct LinuxBackend {
     config: LinuxBackendConfig,
     bubblewrap: PathBuf,
+    bubblewrap_file: Arc<File>,
     hardening_helper: PathBuf,
+    hardening_helper_file: Arc<File>,
     timeout_supported: bool,
     identity: BackendIdentity,
 }
@@ -75,12 +79,19 @@ impl LinuxBackend {
             resource_directory.as_deref(),
             config.proc_mount(),
         )?;
+        let bubblewrap_file = Arc::new(open_pinned(&bubblewrap)?);
         let hardening_helper =
             discover_hardening_helper(config.hardening_helper(), resource_directory.as_deref())?;
+        let hardening_helper_file = Arc::new(
+            File::open(&hardening_helper)
+                .map_err(|_| LinuxBackendError::HardeningHelperUnavailable)?,
+        );
         Ok(Self {
             config,
-            bubblewrap,
+            bubblewrap: bubblewrap.path,
+            bubblewrap_file,
             hardening_helper,
+            hardening_helper_file,
             timeout_supported: TimeoutWatchdog::is_supported(),
             identity: BackendIdentity::new(),
         })
@@ -94,6 +105,10 @@ impl LinuxBackend {
     /// Returns the validated hardening-helper executable path.
     pub fn hardening_helper_path(&self) -> &Path {
         &self.hardening_helper
+    }
+
+    pub(crate) fn hardening_helper_file(&self) -> &File {
+        &self.hardening_helper_file
     }
 
     /// Returns the immutable settings used to construct this backend.
@@ -154,13 +169,7 @@ impl LinuxBackend {
             ),
         );
         validate_network_lowering(self, prepared, sandbox)?;
-        let mut filesystem = crate::filesystem::lower(
-            self,
-            prepared,
-            sandbox,
-            &self.hardening_helper,
-            gateway_mount,
-        )?;
+        let mut filesystem = crate::filesystem::lower(self, prepared, sandbox, gateway_mount)?;
         args.append(&mut filesystem.args);
         match self.config.proc_mount() {
             crate::config::ProcMountPolicy::Required => {
@@ -211,7 +220,12 @@ impl LinuxBackend {
         }
         let environment = self.environment_input(sandbox.environment().base())?;
         let environment = prepared.apply_environment(self, environment)?;
-        let mut process = std::process::Command::new(&self.bubblewrap);
+        let bubblewrap_file = self
+            .bubblewrap_file
+            .try_clone()
+            .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
+        let bubblewrap_program = format!("/proc/self/fd/{}", bubblewrap_file.as_raw_fd());
+        let mut process = std::process::Command::new(bubblewrap_program);
         process.args(&plan.args);
         process.arg("--");
         process.arg(IN_SANDBOX_HELPER_PATH);
@@ -262,6 +276,7 @@ impl LinuxBackend {
             .into_iter()
             .map(Into::into)
             .collect::<Vec<_>>();
+        inherited_fds.push(bubblewrap_file.into());
         inherited_fds.push(auth_reader.into());
         process.preserved_fds(inherited_fds);
         let mut child = process

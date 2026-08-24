@@ -68,7 +68,10 @@ fn executable_probe_rejects_unbounded_output() {
 
     let result = run_probe(&program, &[], Duration::from_secs(2));
 
-    assert!(matches!(result, Err(ProbeError::OutputLimitExceeded)));
+    assert!(
+        matches!(&result, Err(ProbeError::OutputLimitExceeded)),
+        "unexpected probe result: {result:?}"
+    );
 }
 
 #[test]
@@ -94,6 +97,29 @@ fn bundled_bubblewrap_requires_a_matching_digest_manifest() {
         verify_bundled_digest(&binary),
         Err(LinuxBackendError::BubblewrapDigestMismatch { .. })
     ));
+}
+
+#[test]
+fn pinned_bubblewrap_keeps_the_validated_file_after_path_replacement() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let binary = temporary.path().join("bwrap");
+    fs::write(&binary, b"trusted fixture").expect("write fixture");
+    let digest = super::sha256_file(&binary).expect("hash fixture");
+    fs::write(temporary.path().join("bwrap.sha256"), format!("{digest}\n"))
+        .expect("write digest manifest");
+
+    let selection = super::BubblewrapSelection {
+        path: binary.clone(),
+        bundled: true,
+    };
+    let pinned = super::open_pinned(&selection).expect("pin bundled executable");
+    fs::remove_file(&binary).expect("remove replaced path");
+    fs::write(&binary, b"replacement fixture").expect("replace path contents");
+
+    assert_eq!(
+        super::sha256_file_handle(&pinned).expect("hash pinned file"),
+        digest
+    );
 }
 
 #[test]

@@ -1225,7 +1225,11 @@ inherits = ["left", "right"]
 
     let resolved = config.resolve("child").expect("diamond should resolve");
     let context = cageforge_policy::PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(
+            std::env::current_dir()
+                .expect("test working directory")
+                .join("workspace"),
+        )
         .expect("workspace root");
     assert_eq!(
         resolved

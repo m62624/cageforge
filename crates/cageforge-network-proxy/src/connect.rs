@@ -6,6 +6,7 @@ use std::io;
 use std::net::SocketAddr;
 
 use cageforge_policy::{ConnectionAuthorization, NetworkDecision, ResolvedNetworkTarget};
+use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -60,7 +61,9 @@ impl<R: NetworkResolver> GatewayInner<R> {
         target: &ResolvedNetworkTarget,
     ) -> Result<TcpStream, GatewayError> {
         let mut last_failure = None;
-        for candidate in target.addresses().iter().copied() {
+        let deadline = Instant::now() + self.config.connect_timeout();
+        let mut timed_out = false;
+        for (index, candidate) in target.addresses().iter().copied().enumerate() {
             let authorization = self
                 .policy
                 .authorize_connection(target, candidate)
@@ -81,10 +84,24 @@ impl<R: NetworkResolver> GatewayInner<R> {
                 }
             };
             let exact = authorized.into_socket_addr();
-            match TcpStream::connect(exact).await {
-                Ok(stream) => return Ok(stream),
-                Err(source) => last_failure = Some(source),
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                timed_out = true;
+                break;
             }
+            let candidates_left = target.addresses().len() - index;
+            let candidate_timeout = remaining / u32::try_from(candidates_left).unwrap_or(u32::MAX);
+            match timeout(candidate_timeout, TcpStream::connect(exact)).await {
+                Ok(Ok(stream)) => return Ok(stream),
+                Ok(Err(source)) => last_failure = Some(source),
+                Err(_) => timed_out = true,
+            }
+        }
+        if timed_out {
+            return Err(GatewayError::ConnectTimedOut {
+                host: authority.host().to_string(),
+                port: authority.port(),
+            });
         }
         Err(GatewayError::ConnectFailed {
             host: authority.host().to_string(),

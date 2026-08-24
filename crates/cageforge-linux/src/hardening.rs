@@ -318,6 +318,18 @@ fn add_unix_socket_isolation_rules(
     ])
     .map_err(|error| error.to_string())?;
     rules.insert(libc::SYS_socket, vec![unix_socket]);
+
+    let non_unix_socketpair = SeccompRule::new(vec![
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_UNIX as u64,
+        )
+        .map_err(|error| error.to_string())?,
+    ])
+    .map_err(|error| error.to_string())?;
+    rules.insert(libc::SYS_socketpair, vec![non_unix_socketpair]);
     Ok(())
 }
 
