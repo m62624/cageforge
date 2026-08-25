@@ -162,6 +162,16 @@ print_guest_logs() {
     cat "${log_file}.stderr" >&2 || true
 }
 
+print_guest_bootstrap_diagnostics() {
+    echo "--- guest cloud-init status ---" >&2
+    ssh_guest 'sudo cloud-init status --long || true
+sudo systemctl status cloud-final.service --no-pager --full || true
+sudo journalctl -u cloud-final.service -n 160 --no-pager || true
+sudo tail -n 160 /var/log/cloud-init-output.log || true
+sudo tail -n 160 /var/log/cloud-init.log || true
+sudo dpkg --audit || true' >&2 || true
+}
+
 wait_for_ssh() {
     local log_file=$1
     for _ in {1..120}; do
@@ -190,7 +200,7 @@ wait_for_bootstrap() {
         fi
         if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
             print_guest_logs "$log_file"
-            ssh_guest 'sudo test -f /var/log/cageforge-bootstrap.log && sudo cat /var/log/cageforge-bootstrap.log' >&2 || true
+            print_guest_bootstrap_diagnostics
             echo "guest bootstrap failed" >&2
             exit 70
         fi
@@ -207,6 +217,7 @@ wait_for_bootstrap() {
         sleep 2
     done
     print_guest_logs "$log_file"
+    print_guest_bootstrap_diagnostics
     echo "guest bootstrap timed out" >&2
     exit 70
 }
