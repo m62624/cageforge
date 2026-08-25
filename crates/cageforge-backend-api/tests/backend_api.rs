@@ -39,6 +39,16 @@ struct TestBackend {
     capabilities: BackendCapabilities,
 }
 
+struct InstanceBackend {
+    capabilities: BackendCapabilities,
+    identity: BackendIdentity,
+}
+
+struct MutableBackend {
+    capabilities: RwLock<BackendCapabilities>,
+    identity: BackendIdentity,
+}
+
 impl SandboxBackend for TestBackend {
     fn identity(&self) -> &BackendIdentity {
         static IDENTITY: OnceLock<BackendIdentity> = OnceLock::new();
@@ -48,11 +58,6 @@ impl SandboxBackend for TestBackend {
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities.clone()
     }
-}
-
-struct InstanceBackend {
-    capabilities: BackendCapabilities,
-    identity: BackendIdentity,
 }
 
 impl InstanceBackend {
@@ -72,11 +77,6 @@ impl SandboxBackend for InstanceBackend {
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities.clone()
     }
-}
-
-struct MutableBackend {
-    capabilities: RwLock<BackendCapabilities>,
-    identity: BackendIdentity,
 }
 
 impl MutableBackend {
