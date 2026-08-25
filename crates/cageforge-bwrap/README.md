@@ -7,8 +7,8 @@ the `bwrap` binary for the target Linux architecture.
 
 The source snapshot is Bubblewrap `0.11.2` at commit
 `1b80120ef26a28e065e67f89bfef873f13bdd317`. Its original LGPL-2.0-or-later
-notices are retained under `vendor/bubblewrap/` and the project license text is
-available at `vendor/bubblewrap/COPYING`.
+notices are retained under `vendor/bubblewrap/`. The standalone license text
+is also available at `licenses/bubblewrap-COPYING` in this crate.
 
 On Linux, the build requires a C compiler, `pkg-config`, and the development
 files for `libcap`. Set `CAGEFORGE_BWRAP_SOURCE_DIR` to build from another
