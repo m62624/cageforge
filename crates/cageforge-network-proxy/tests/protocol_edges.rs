@@ -253,6 +253,55 @@ async fn upstream_response_header_timeout_becomes_gateway_timeout() {
 }
 
 #[tokio::test]
+async fn stalled_http_response_consumer_releases_the_ingress_deadline() {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = read_header(&mut stream).await;
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let chunk = [b'x'; 16 * 1024];
+        while stream.write_all(&chunk).await.is_ok() {}
+    });
+    let policy = effective_network(
+        restricted("allowed.test", LocalNetworkAccess::Allow),
+        NetworkPolicy::unrestricted(),
+    );
+    let config = GatewayConfig::new()
+        .with_relay_idle_timeout(Duration::from_millis(20))
+        .unwrap();
+    let gateway =
+        NetworkGateway::new(policy, StaticResolver::one("allowed.test", address), config).unwrap();
+    let key = gateway.ingress_key();
+    let (mut client, ingress) = tokio::io::duplex(1024);
+    let task = tokio::spawn(async move { gateway.serve_connection(ingress).await });
+    key.authenticate(&mut client).await.unwrap();
+    client
+        .write_all(
+            format!(
+                "GET http://allowed.test:{0}/ HTTP/1.1\r\nHost: allowed.test:{0}\r\n\r\n",
+                address.port()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_header(&mut client).await.starts_with(b"HTTP/1.1 200"));
+
+    let result = tokio::time::timeout(Duration::from_millis(500), task)
+        .await
+        .expect("stalled downstream must not retain the ingress permit")
+        .expect("gateway task must not panic");
+    assert!(matches!(result, Err(GatewayError::RelayTimedOut)));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn unsupported_http_forms_and_connect_bodies_fail_before_dns() {
     let address = SocketAddr::from(([127, 0, 0, 1], 80));
     for request in [

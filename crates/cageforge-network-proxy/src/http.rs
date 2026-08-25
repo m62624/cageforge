@@ -4,9 +4,13 @@
 
 use std::convert::Infallible;
 use std::future::Future;
+use std::io::IoSlice;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 
 use hyper::body::Incoming;
 use hyper::header::{
@@ -17,9 +21,10 @@ use hyper::http::uri::PathAndQuery;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri, Version};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout};
 
 use crate::authority::Authority;
 use crate::body::{self, ProxyBody, TransferBudget};
@@ -37,21 +42,41 @@ struct ProtocolTasksInner {
     handles: Mutex<Vec<JoinHandle<Result<(), GatewayError>>>>,
 }
 
+#[derive(Clone)]
+struct HttpActivity {
+    inner: Arc<HttpActivityInner>,
+}
+
+struct HttpActivityInner {
+    armed: AtomicBool,
+    last_transfer: Mutex<Instant>,
+    changed: Notify,
+}
+
+struct TrackedIo<T> {
+    inner: T,
+    activity: HttpActivity,
+}
+
 pub(crate) async fn serve<R, S>(gateway: &NetworkGateway<R>, stream: S) -> Result<(), GatewayError>
 where
     R: NetworkResolver,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let activity = HttpActivity::new();
     let request_count = Arc::new(AtomicUsize::new(0));
     let tasks = ProtocolTasks::new();
     let service_gateway = gateway.clone();
     let service_tasks = tasks.clone();
+    let service_activity = activity.clone();
     let service = service_fn(move |request| {
         let gateway = service_gateway.clone();
         let request_count = Arc::clone(&request_count);
         let tasks = service_tasks.clone();
+        let activity = service_activity.clone();
         async move {
-            let response = handle_request(&gateway, request, &request_count, &tasks).await;
+            let response =
+                handle_request(&gateway, request, &request_count, &tasks, &activity).await;
             Ok::<_, Infallible>(response)
         }
     });
@@ -61,13 +86,29 @@ where
         .timer(TokioTimer::new())
         .header_read_timeout(gateway.inner.config.handshake_timeout())
         .max_buf_size(gateway.inner.config.http_header_bytes().get());
-    let connection_result = builder
-        .serve_connection(TokioIo::new(stream), service)
-        .with_upgrades()
-        .await;
-    let task_result = tasks.finish().await;
-    connection_result.map_err(|source| GatewayError::HttpConnection { source })?;
-    task_result
+    let idle_timeout = gateway.inner.config.relay_idle_timeout();
+    let cancellation_tasks = tasks.clone();
+    let protocol_activity = activity.clone();
+    let protocol = async move {
+        let connection_result = builder
+            .serve_connection(
+                TokioIo::new(TrackedIo::new(stream, protocol_activity)),
+                service,
+            )
+            .with_upgrades()
+            .await;
+        let task_result = tasks.finish().await;
+        connection_result.map_err(|source| GatewayError::HttpConnection { source })?;
+        task_result
+    };
+    tokio::pin!(protocol);
+    tokio::select! {
+        result = &mut protocol => result,
+        () = activity.wait_until_idle(idle_timeout) => {
+            cancellation_tasks.abort();
+            Err(GatewayError::RelayTimedOut)
+        }
+    }
 }
 
 async fn handle_request<R>(
@@ -75,6 +116,7 @@ async fn handle_request<R>(
     request: Request<Incoming>,
     request_count: &AtomicUsize,
     tasks: &ProtocolTasks,
+    activity: &HttpActivity,
 ) -> Response<ProxyBody>
 where
     R: NetworkResolver,
@@ -90,12 +132,12 @@ where
         );
     }
     if request.method() == Method::CONNECT {
-        return match handle_connect(gateway, request, tasks).await {
+        return match handle_connect(gateway, request, tasks, activity).await {
             Ok(response) => response,
             Err(error) => response_for_error(&error),
         };
     }
-    match forward(gateway, request, tasks).await {
+    match forward(gateway, request, tasks, activity).await {
         Ok(response) => response,
         Err(error) => response_for_error(&error),
     }
@@ -105,6 +147,7 @@ async fn forward<R>(
     gateway: &NetworkGateway<R>,
     request: Request<Incoming>,
     tasks: &ProtocolTasks,
+    activity: &HttpActivity,
 ) -> Result<Response<ProxyBody>, GatewayError>
 where
     R: NetworkResolver,
@@ -130,7 +173,7 @@ where
     client.max_buf_size(gateway.inner.config.http_header_bytes().get());
     let (mut sender, connection) = timeout(
         gateway.inner.config.handshake_timeout(),
-        client.handshake(TokioIo::new(upstream)),
+        client.handshake(TokioIo::new(TrackedIo::new(upstream, activity.clone()))),
     )
     .await
     .map_err(|_| GatewayError::HandshakeTimedOut)?
@@ -140,6 +183,7 @@ where
             .await
             .map_err(|source| GatewayError::HttpConnection { source })
     });
+    activity.arm();
     let response = timeout(
         gateway.inner.config.response_header_timeout(),
         sender.send_request(request),
@@ -162,6 +206,7 @@ async fn handle_connect<R>(
     gateway: &NetworkGateway<R>,
     mut request: Request<Incoming>,
     tasks: &ProtocolTasks,
+    activity: &HttpActivity,
 ) -> Result<Response<ProxyBody>, GatewayError>
 where
     R: NetworkResolver,
@@ -178,6 +223,8 @@ where
     let on_upgrade = hyper::upgrade::on(&mut request);
     let idle_timeout = gateway.inner.config.relay_idle_timeout();
     let byte_limit = gateway.inner.config.relay_byte_limit();
+    let upstream = TrackedIo::new(upstream, activity.clone());
+    activity.arm();
     tasks.spawn(async move {
         let upgraded = on_upgrade
             .await
@@ -401,6 +448,141 @@ impl ProtocolTasks {
                 .map_err(|source| GatewayError::ProtocolTask { source })??;
         }
         Ok(())
+    }
+
+    fn abort(&self) {
+        let mut handles = self
+            .inner
+            .handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for handle in handles.drain(..) {
+            handle.abort();
+        }
+    }
+}
+
+impl HttpActivity {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(HttpActivityInner {
+                armed: AtomicBool::new(false),
+                last_transfer: Mutex::new(Instant::now()),
+                changed: Notify::new(),
+            }),
+        }
+    }
+
+    fn arm(&self) {
+        if !self.inner.armed.swap(true, Ordering::AcqRel) {
+            self.record();
+        }
+    }
+
+    fn record(&self) {
+        *self
+            .inner
+            .last_transfer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+        self.inner.changed.notify_one();
+    }
+
+    async fn wait_until_idle(&self, idle_timeout: std::time::Duration) {
+        loop {
+            let changed = self.inner.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if !self.inner.armed.load(Ordering::Acquire) {
+                changed.await;
+                continue;
+            }
+            let deadline = *self
+                .inner
+                .last_transfer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                + idle_timeout;
+            tokio::select! {
+                () = tokio::time::sleep_until(deadline) => {
+                    let current_deadline = *self
+                        .inner
+                        .last_transfer
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        + idle_timeout;
+                    if current_deadline <= Instant::now() {
+                        return;
+                    }
+                },
+                () = &mut changed => {}
+            }
+        }
+    }
+}
+
+impl<T> TrackedIo<T> {
+    fn new(inner: T, activity: HttpActivity) -> Self {
+        Self { inner, activity }
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for TrackedIo<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let filled = buffer.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(context, buffer);
+        if matches!(result, Poll::Ready(Ok(()))) && buffer.filled().len() > filled {
+            self.activity.record();
+        }
+        result
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for TrackedIo<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let result = Pin::new(&mut self.inner).poll_write(context, buffer);
+        if matches!(result, Poll::Ready(Ok(written)) if written > 0) {
+            self.activity.record();
+        }
+        result
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffers: &[IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        let result = Pin::new(&mut self.inner).poll_write_vectored(context, buffers);
+        if matches!(result, Poll::Ready(Ok(written)) if written > 0) {
+            self.activity.record();
+        }
+        result
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(context)
     }
 }
 

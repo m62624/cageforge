@@ -185,7 +185,11 @@ bytes. Disabling the default relay-byte ceiling uses a named method rather than
 an ambiguous `None` argument. A tunnel's idle deadline resets when a byte is
 successfully transferred in either direction and expires after one complete
 configured period without another transfer; periodic sampling must not extend
-that bound to a second interval.
+that bound to a second interval. HTTP request and response relays must enforce
+the same deadline at the complete connection boundary. A pull-based body timer
+alone is insufficient because downstream or upstream backpressure can stop the
+HTTP runtime from polling that body; expiry must cancel the ingress and its
+gateway-owned upstream tasks so a stalled peer releases its connection permit.
 
 Connection handlers must be cancellation-safe. Dropping the future closes its
 ingress and outbound streams. Native backend shutdown must stop accepting new
@@ -224,6 +228,7 @@ Black-box integration tests must cover:
 - malformed HTTP, authority, SOCKS version, command, and address input;
 - missing, malformed, and cross-instance ingress authentication;
 - DNS, connect, handshake, and relay timeout paths;
+- HTTP request and response backpressure that stops body polling;
 - connection, request, and optional byte limits;
 - concurrent gateway instances with different policies do not share state;
 - dropping a handler closes resources; and
