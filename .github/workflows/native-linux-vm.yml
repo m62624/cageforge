@@ -29,6 +29,10 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  CAGEFORGE_VM_IMAGE_URL: https://cloud-images.ubuntu.com/noble/20260814/noble-server-cloudimg-amd64.img
+  CAGEFORGE_VM_IMAGE_SHA256: 6e40c07ae715f744f84af0bec76415cc1987dd115b4b8de437818561f01a3733
+
 concurrency:
   group: cageforge-native-linux-vm-${{ inputs.pr_number || github.ref }}
   cancel-in-progress: true
@@ -136,10 +140,11 @@ jobs:
         run: |
           set -euo pipefail
           image="$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
-          image_url="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-          image_sha256="6e40c07ae715f744f84af0bec76415cc1987dd115b4b8de437818561f01a3733"
-          curl --fail --silent --show-error --location --retry 3 "$image_url" --output "$image"
-          printf '%s  %s\n' "$image_sha256" "$image" | sha256sum --check --status
+          curl --fail --silent --show-error --location --retry 3 \
+            --max-filesize 1073741824 --max-time 900 \
+            "$CAGEFORGE_VM_IMAGE_URL" --output "$image"
+          printf '%s  %s\n' "$CAGEFORGE_VM_IMAGE_SHA256" "$image" | \
+            sha256sum --check --status
           echo "CAGEFORGE_VM_IMAGE=$image" >>"$GITHUB_ENV"
 
       - name: Run native tests inside the guest

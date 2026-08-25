@@ -813,6 +813,25 @@ Each Linux backend job must:
 9. fail the required status when native prerequisites or enforcement tests
    fail.
 
+Pull-request native tests use a trusted launcher from the default branch. The
+host may use its read-only workflow token to resolve and download the exact PR
+archive, but that token must never be passed into the guest. The archive must
+remain unextracted on the host. Guest bootstrap runs before the archive is
+attached; dependency fetching may attach and extract it only inside the guest.
+Because Cargo consults configuration relative to its invocation directory,
+the network-enabled fetch must run from a newly created trusted empty
+directory with `--manifest-path`, after clearing compiler-wrapper environment
+variables. The test boot then runs with QEMU user networking in restricted
+mode. The Ubuntu guest image uses a dated immutable URL and a separately
+verified SHA-256 digest rather than combining a moving `current` URL with a
+fixed digest.
+
+The labeler may use `pull_request_target` only while it neither checks out nor
+executes pull-request content. Other PR jobs receive no repository secrets and
+use read-only permissions. These controls reduce unreviewed-code exposure;
+they do not claim protection against a vulnerability in the VM or hypervisor
+itself.
+
 The portable default job must continue to test all portable crates on one
 Linux runner. A change to a portable crate, `cageforge-core`, workspace
 metadata, or CI configuration must run the complete OS matrix. A change only

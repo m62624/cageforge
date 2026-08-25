@@ -312,8 +312,16 @@ mkdir -p "$source_dir"
 tar --extract --file="$source_mount/source_archive" --directory="$source_dir" --no-same-owner
 root_dir=$(find "$source_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)
 [[ -n "$root_dir" ]]
-cd "$root_dir"
-cargo fetch --locked
+# Cargo discovers `.cargo/config.toml` from its invocation directory, not from
+# `--manifest-path`. Fetch from a trusted empty directory so pull-request
+# configuration cannot install a compiler wrapper or credential process during
+# the only phase in which the guest has unrestricted outbound networking.
+fetch_dir=$(mktemp -d /tmp/cageforge-cargo-fetch.XXXXXX)
+trap 'rm -rf "$fetch_dir"' EXIT
+cd "$fetch_dir"
+unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
+unset CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER
+cargo fetch --locked --manifest-path "$root_dir/Cargo.toml"
 printf '%s\n' "$root_dir" | sudo tee /var/lib/cageforge-source-root >/dev/null
 sudo umount "$source_mount"
 EOF
