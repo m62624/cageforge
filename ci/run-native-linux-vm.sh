@@ -83,6 +83,8 @@ write_files:
       export HOME=/home/ubuntu
       export PATH=/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       echo '[cageforge] bootstrap: configuring user namespaces'
+      sysctl_config=/etc/sysctl.d/99-cageforge-native-vm.conf
+      printf '%s\n' 'kernel.unprivileged_userns_clone=1' >"\$sysctl_config"
       sysctl -w kernel.unprivileged_userns_clone=1
       for apparmor_sysctl in \
         kernel.apparmor_restrict_unprivileged_userns \
@@ -90,10 +92,12 @@ write_files:
         apparmor_sysctl_path=/proc/sys/\${apparmor_sysctl//./\\/}
         if [[ -w "\$apparmor_sysctl_path" ]]; then
           sysctl -w "\$apparmor_sysctl=0"
+          printf '%s=0\n' "\$apparmor_sysctl" >>"\$sysctl_config"
         else
           echo "[cageforge] bootstrap: \$apparmor_sysctl=sysctl-unavailable"
         fi
       done
+      sysctl --system
       echo '[cageforge] bootstrap: probing Bubblewrap user and network namespaces'
       echo "[cageforge] bootstrap: userns=\$(sysctl -n kernel.unprivileged_userns_clone)"
       if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
