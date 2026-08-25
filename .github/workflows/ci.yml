@@ -49,9 +49,8 @@ concurrency:
 # 1. Main is the full quality gate: all common components, every Linux feature
 #    combination, and every platform target lane always run.
 # 2. PRs always run the common Linux components and Linux feature combinations.
-# 3. A PR selects the Linux sandbox when cageforge-linux itself, Bubblewrap, a
-#    direct/transitive workspace dependency, a Linux test dev-dependency, or a
-#    workspace/CI input changes.
+# 3. A PR selects every target lane when a common component, workspace input,
+#    or CI input changes. An OS-specific crate selects only its own target.
 # 4. Manual PR labels sandbox-linux, sandbox-macos, and sandbox-windows force
 #    the requested lane. Labels are never applied automatically by the labeler.
 # 5. macOS/Windows target lanes run their host checks now and report the missing
@@ -124,7 +123,12 @@ jobs:
             mode=main
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
-              full) linux_native=true; mode=manual-full ;;
+              full)
+                linux_native=true
+                macos_native=true
+                windows_native=true
+                mode=manual-full
+                ;;
               default|auto) ;;
               *) echo "Unknown scope: ${MANUAL_SCOPE}" >&2; exit 1 ;;
             esac
@@ -141,11 +145,15 @@ jobs:
               crates/cageforge-linux/*|crates/cageforge-bwrap/*)
                 linux_native=true
                 ;;
-              crates/cageforge-backend-api/*|crates/cageforge-command/*|crates/cageforge-config/*|crates/cageforge-network-proxy/*|crates/cageforge-path/*|crates/cageforge-policy/*|crates/cageforge-policy-compose/*)
-                linux_native=true
+              crates/cageforge-backend-api/*|crates/cageforge-command/*|crates/cageforge-config/*|crates/cageforge-core/*|crates/cageforge-network-proxy/*|crates/cageforge-path/*|crates/cageforge-policy/*|crates/cageforge-policy-compose/*)
+                shared_change=true
                 ;;
-              crates/cageforge-macos/*) ;;
-              crates/cageforge-windows/*) ;;
+              crates/cageforge-macos/*)
+                macos_native=true
+                ;;
+              crates/cageforge-windows/*)
+                windows_native=true
+                ;;
               Cargo.toml|Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|.github/workflows/*|ci/*)
                 shared_change=true
                 ;;
@@ -155,6 +163,8 @@ jobs:
 
           if [[ "$shared_change" == true ]]; then
             linux_native=true
+            macos_native=true
+            windows_native=true
             mode=shared
           elif [[ "$mode" == default && ("$linux_native" == true || "$macos_native" == true || "$windows_native" == true) ]]; then
             mode=native
