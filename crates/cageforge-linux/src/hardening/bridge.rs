@@ -374,7 +374,10 @@ fn relay(
             operation: LinuxBridgeOperation::RelayToClient,
             source,
         });
-    let _ = tcp_stream.shutdown(Shutdown::Write);
+    // EOF from the host gateway is final for this proxy connection. Closing
+    // both TCP halves also wakes the cloned reader when a client deliberately
+    // keeps its request half open after a rejected or timed-out handshake.
+    let _ = tcp_stream.shutdown(Shutdown::Both);
     tcp_to_unix
         .join()
         .map_err(|_| LinuxBridgeError::RelayPanicked)?

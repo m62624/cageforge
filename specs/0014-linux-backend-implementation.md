@@ -552,6 +552,17 @@ resolution, bridge failure, or unsupported protocol fails closed. Product
 features such as MITM, credential injection, audit upload, and remote policy
 reload remain outside this backend.
 
+The host-side authenticated relay must release its local bridge slot when the
+gateway handler completes or either transport direction closes. After gateway
+completion it may drain already-produced gateway output only within the
+configured relay-idle bound; a sandbox process that keeps its request half open
+after a handshake timeout or protocol rejection must not retain that slot.
+The frozen Codex `linux-sandbox/src/proxy_routing.rs` bridge joins its cloned
+TCP reader after closing only the write half. Cageforge intentionally closes
+both TCP halves after final gateway EOF and bounds host-side output draining,
+because its per-sandbox bridge exposes a finite connection budget to arbitrary
+third-party commands.
+
 Every launch owns a distinct gateway socket directory, ingress token,
 connection semaphore, timeout state, and cleanup handle. Concurrent instances
 must not authenticate to, consume the budget of, or clean up another

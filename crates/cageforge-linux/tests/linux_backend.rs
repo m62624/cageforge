@@ -5,6 +5,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::num::NonZeroUsize;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
@@ -23,6 +24,7 @@ use cageforge_linux::{
     FilesystemLoweringError, HardeningHelperSource, LinuxBackend, LinuxBackendConfig,
     LinuxBackendConfigError, LinuxBackendError, NetworkCombinationError,
 };
+use cageforge_network_proxy::GatewayConfig;
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
     NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
@@ -156,11 +158,20 @@ fn spawn_network_client(
     mode: &str,
     target: SocketAddr,
 ) -> Result<std::process::ExitStatus, LinuxBackendError> {
+    let backend = backend();
+    spawn_network_client_with_backend(&backend, policy, mode, target)
+}
+
+fn spawn_network_client_with_backend(
+    backend: &LinuxBackend,
+    policy: SandboxPolicy,
+    mode: &str,
+    target: SocketAddr,
+) -> Result<std::process::ExitStatus, LinuxBackendError> {
     let temp = TempDir::new().expect("temporary workspace");
     let environment = network_environment(mode, target);
     let (command, effective, runtime) =
         request_with_environment(temp.path(), policy, network_client_command(), environment);
-    let backend = backend();
     let prepared = backend.prepare(BackendRequest::new(&command, &effective), &runtime)?;
     let mut child = backend.spawn(prepared)?;
     let status = child.wait()?;
@@ -232,21 +243,20 @@ fn proxy_endpoint(variable: &str) -> SocketAddr {
 }
 
 fn send_http_proxy_request(target: SocketAddr) -> Vec<u8> {
-    let mut stream = TcpStream::connect(proxy_endpoint("HTTP_PROXY")).expect("HTTP proxy");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(3)))
-        .expect("write timeout");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .expect("read timeout");
+    try_send_http_proxy_request(target).expect("proxy response")
+}
+
+fn try_send_http_proxy_request(target: SocketAddr) -> io::Result<Vec<u8>> {
+    let mut stream = TcpStream::connect(proxy_endpoint("HTTP_PROXY"))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     write!(
         stream,
         "GET http://{target}/ HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"
-    )
-    .expect("proxy request");
+    )?;
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("proxy response");
-    response
+    stream.read_to_end(&mut response)?;
+    Ok(response)
 }
 
 fn send_socks_request(target: SocketAddr) -> Vec<u8> {
@@ -320,6 +330,29 @@ fn network_client_fixture() {
         "unix-denied" => {
             assert!(UnixStream::connect("/dev/.cageforge-runtime/network/gateway.sock").is_err());
             assert!(UnixStream::pair().is_ok());
+        }
+        "stalled-proxy-slot" => {
+            let mut stalled =
+                TcpStream::connect(proxy_endpoint("HTTP_PROXY")).expect("first proxy connection");
+            stalled
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .expect("stalled proxy read timeout");
+            let mut end = [0; 1];
+            assert_eq!(
+                stalled.read(&mut end).expect("stalled proxy closure"),
+                0,
+                "gateway timeout did not close its response half"
+            );
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                match try_send_http_proxy_request(target) {
+                    Ok(response) if response.starts_with(b"HTTP/1.1 200") => break,
+                    Ok(_) | Err(_) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    result => panic!("local bridge slot was not released: {result:?}"),
+                }
+            }
         }
         other => panic!("unknown network fixture mode: {other}"),
     }
@@ -1740,6 +1773,34 @@ fn socks_proxy_reaches_only_an_exactly_authorized_loopback_target() {
     let status = spawn_network_client(restricted_loopback_policy(), "socks", target)
         .expect("restricted SOCKS execution");
     let server_result = server.join().expect("HTTP server");
+    assert_eq!(status.code(), Some(0));
+    server_result.expect("HTTP server I/O");
+}
+
+#[test]
+fn timed_out_protocol_handshake_releases_the_local_bridge_slot() {
+    let (target, server) = start_http_server();
+    let gateway = GatewayConfig::new()
+        .with_handshake_timeout(Duration::from_millis(20))
+        .expect("handshake timeout")
+        .with_relay_idle_timeout(Duration::from_millis(20))
+        .expect("relay idle timeout")
+        .with_max_concurrent_connections(NonZeroUsize::new(1).expect("non-zero"))
+        .expect("connection limit");
+    let backend = LinuxBackend::new(test_backend_config().with_network_gateway(gateway))
+        .expect("limited Linux backend");
+    let status = spawn_network_client_with_backend(
+        &backend,
+        restricted_loopback_policy(),
+        "stalled-proxy-slot",
+        target,
+    )
+    .expect("restricted execution");
+    if !status.success() {
+        let _ = send_direct_request(target);
+    }
+    let server_result = server.join().expect("HTTP server");
+
     assert_eq!(status.code(), Some(0));
     server_result.expect("HTTP server I/O");
 }

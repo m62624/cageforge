@@ -16,8 +16,7 @@ use std::time::Duration;
 use cageforge_network_proxy::{GatewayConfig, GatewayIngressKey, NetworkGateway, SystemResolver};
 use cageforge_policy_compose::EffectiveNetworkPolicy;
 use tempfile::{Builder, TempDir};
-use tokio::io::AsyncReadExt;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinSet;
@@ -51,8 +50,14 @@ struct GatewayServer {
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
     bridge_token: BridgeIngressToken,
-    handshake_timeout: Duration,
+    timeouts: GatewayTimeouts,
     pre_authentication_limit: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GatewayTimeouts {
+    handshake: Duration,
+    relay_idle: Duration,
 }
 
 impl BridgeIngressToken {
@@ -105,7 +110,10 @@ impl GatewayRuntime {
         policy: EffectiveNetworkPolicy,
         config: GatewayConfig,
     ) -> Result<Self, LinuxBackendError> {
-        let handshake_timeout = config.handshake_timeout();
+        let timeouts = GatewayTimeouts {
+            handshake: config.handshake_timeout(),
+            relay_idle: config.relay_idle_timeout(),
+        };
         let pre_authentication_limit = config.max_concurrent_connections().get();
         let gateway = NetworkGateway::with_system_resolver(policy, config)
             .map_err(|source| LinuxBackendError::NetworkGatewayInitialization { source })?;
@@ -150,7 +158,7 @@ impl GatewayRuntime {
                     gateway,
                     ingress_key,
                     bridge_token: bridge_token.clone(),
-                    handshake_timeout,
+                    timeouts,
                     pre_authentication_limit,
                 };
                 move || run_gateway(server, shutdown_rx, ready_tx)
@@ -303,7 +311,7 @@ fn run_gateway(
             server.gateway,
             server.ingress_key,
             server.bridge_token,
-            server.handshake_timeout,
+            server.timeouts,
             server.pre_authentication_limit,
             shutdown,
         )
@@ -316,7 +324,7 @@ async fn serve_gateway(
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
     bridge_token: BridgeIngressToken,
-    handshake_timeout: Duration,
+    timeouts: GatewayTimeouts,
     pre_authentication_limit: usize,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<(), NetworkGatewayRuntimeFailure> {
@@ -336,7 +344,8 @@ async fn serve_gateway(
                     gateway.clone(),
                     ingress_key.clone(),
                     bridge_token.clone(),
-                    handshake_timeout,
+                    timeouts.handshake,
+                    timeouts.relay_idle,
                     permit,
                     stream,
                 ));
@@ -354,6 +363,7 @@ async fn serve_private_stream<S>(
     ingress_key: GatewayIngressKey,
     bridge_token: BridgeIngressToken,
     handshake_timeout: Duration,
+    relay_idle_timeout: Duration,
     pre_authentication_permit: tokio::sync::OwnedSemaphorePermit,
     mut private_stream: S,
 ) where
@@ -370,9 +380,34 @@ async fn serve_private_stream<S>(
     if ingress_key.authenticate(&mut trusted_bridge).await.is_err() {
         return;
     }
+    let (private_reader, private_writer) = tokio::io::split(private_stream);
+    let (trusted_reader, trusted_writer) = tokio::io::split(trusted_bridge);
     let gateway_future = gateway.serve_connection(gateway_stream);
-    let relay_future = tokio::io::copy_bidirectional(&mut private_stream, &mut trusted_bridge);
-    let _ = tokio::join!(gateway_future, relay_future);
+    let to_gateway = relay_direction(private_reader, trusted_writer);
+    let to_client = relay_direction(trusted_reader, private_writer);
+    tokio::pin!(gateway_future, to_gateway, to_client);
+
+    tokio::select! {
+        _ = &mut gateway_future => {}
+        _ = &mut to_client => return,
+        _ = &mut to_gateway => {
+            tokio::select! {
+                _ = &mut gateway_future => {}
+                _ = &mut to_client => return,
+            }
+        }
+    }
+    let _ = timeout(relay_idle_timeout, &mut to_client).await;
+}
+
+async fn relay_direction<R, W>(mut reader: R, mut writer: W) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let copied = tokio::io::copy(&mut reader, &mut writer).await;
+    let shutdown = writer.shutdown().await;
+    copied.and(shutdown).map(|_| ())
 }
 
 #[cfg(test)]
