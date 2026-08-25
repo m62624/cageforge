@@ -39,19 +39,7 @@ jobs:
               ['style', 'style', '2c61f6'],
             ];
 
-            const ciLabels = [
-              ['ci-linux-test', '1d76db'],
-              ['ci-linux-quality', '5319e7'],
-              ['ci-macos-test', '1d76db'],
-              ['ci-macos-quality', '5319e7'],
-              ['ci-windows-test', '1d76db'],
-              ['ci-windows-quality', '5319e7'],
-            ];
-
-            const labelsToCreate = [
-              ...conventional.map(([, name, color]) => ({ name, color })),
-              ...ciLabels.map(([name, color]) => ({ name, color })),
-            ];
+            const labelsToCreate = conventional.map(([, name, color]) => ({ name, color }));
 
             for (const { name, color } of labelsToCreate) {
               try {
@@ -62,73 +50,10 @@ jobs:
               }
             }
 
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              ...repository,
-              pull_number: pullRequest,
-              per_page: 100,
-            });
-            const changedPaths = files.map(({ filename }) => filename);
-
-            const nativeCrates = [
-              ['crates/cageforge-bwrap/', 'ci-linux-quality'],
-              ['crates/cageforge-linux/', 'ci-linux-quality'],
-              ['crates/cageforge-macos/', 'ci-macos-quality'],
-              ['crates/cageforge-windows/', 'ci-windows-quality'],
-            ];
-
-            const nativeLabelFor = (path) => {
-              const nativeCrate = nativeCrates.find(([prefix]) => path.startsWith(prefix));
-              return nativeCrate?.[1];
-            };
-
-            const isSharedChange = (path) => {
-              if (path.startsWith('crates/')) return nativeLabelFor(path) === undefined;
-              // Files outside crates/ can change build, policy, CI, docs, or
-              // release behavior, so they require the complete OS matrix.
-              return true;
-            };
-
-            // Remove stale routing labels before applying the current path
-            // classification. This prevents a previous native-only commit
-            // from selecting the wrong crate after the PR changes again.
-            const existingLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
-              ...repository,
-              issue_number: pullRequest,
-              per_page: 100,
-            });
-            for (const label of existingLabels) {
-              if (!ciLabels.some(([name]) => name === label.name)) continue;
-              await github.rest.issues.removeLabel({
-                ...repository,
-                issue_number: pullRequest,
-                name: label.name,
-              });
-            }
-
             const labelsToApply = [];
             for (const [prefix, name] of conventional) {
               if (title.startsWith(`${prefix}:`) || title.startsWith(`${prefix}(`)) {
                 labelsToApply.push(name);
-              }
-            }
-
-            const selectivePrefixes = [
-              ['test(linux):', 'ci-linux-test'],
-              ['quality(linux):', 'ci-linux-quality'],
-              ['test(macos):', 'ci-macos-test'],
-              ['quality(macos):', 'ci-macos-quality'],
-              ['test(windows):', 'ci-windows-test'],
-              ['quality(windows):', 'ci-windows-quality'],
-            ];
-            for (const [prefix, name] of selectivePrefixes) {
-              if (title.startsWith(prefix)) labelsToApply.push(name);
-            }
-
-            const hasSharedChange = changedPaths.some(isSharedChange);
-            if (!hasSharedChange) {
-              for (const path of changedPaths) {
-                const label = nativeLabelFor(path);
-                if (label) labelsToApply.push(label);
               }
             }
 

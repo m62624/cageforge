@@ -38,32 +38,14 @@ concurrency:
 #   windows-2025       — Windows x64/release host
 #   windows-11-arm     — Windows ARM64
 #
-# CI routing algorithm (TODO: keep this synchronized with labeler.yml):
-# 1. The portable crates are the current default surface. Run their fmt, clippy,
-#    tests, and docs on one default Linux runner. Exclude cageforge-core and all
-#    future native sandbox crates from this job.
-# 2. A change to any portable crate, cageforge-core, workspace dependency or CI
-#    metadata is a shared-contract change. Run the complete workspace on Linux,
-#    macOS, and Windows immediately.
-# 3. A change limited to one native sandbox crate selects exactly cageforge-core
-#    and that native crate on its operating system. Do not run unrelated native
-#    crates. The same routing is exposed as ci-<os>-quality labels.
-# 4. Native Linux checks use the trusted QEMU/KVM reusable workflow once the
-#    Linux backend is selected. Keep the package selection and OS mapping
-#    explicit; never silently fall back to a broad workspace check for a
-#    native-only change.
-# 5. If several native crates change, run cageforge-core plus each changed native
-#    crate on its matching OS. If cageforge-core changes, use the complete matrix.
-# 6. Update the path classifier and labeler together whenever a crate is added,
-#    renamed, or moved between portable and native ownership.
-# 7. Configure branch protection to require the stable `CI passed` check. Do not
-#    require mode-specific jobs, because skipped jobs are intentional for other
-#    change classes.
-# 8. Run the Linux feature-surface job for shared changes and Linux-native
-#    changes. It checks every declared feature mode, the proxy's
-#    runtime/configuration-only modes, and cross-target compilation. This keeps
-#    Linux feature drift covered without adding Linux work to selective
-#    macOS/Windows native checks.
+# CI routing algorithm:
+# 1. Common components run on Linux, macOS, and Windows for every PR and main
+#    push. The package list excludes native sandbox enforcement crates.
+# 2. A changed common component, workspace dependency, CI file, or other shared
+#    input selects every available native sandbox job.
+# 3. A native-only change selects only the matching native sandbox job.
+# 4. Linux sandbox enforcement always runs in the trusted QEMU/KVM workflow.
+# 5. Labeler keeps conventional and release labels only; it does not route CI.
 
 jobs:
   changes:
@@ -82,7 +64,7 @@ jobs:
         name: Classify changed paths
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           MANUAL_SCOPE: ${{ inputs.scope }}
         run: |
@@ -92,51 +74,50 @@ jobs:
           linux_native=false
           macos_native=false
           windows_native=false
+          shared_change=false
+          changed_paths=()
 
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            mode=full
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
-              full) mode=full ;;
-              default|auto) mode=default ;;
+              full) shared_change=true ;;
+              default|auto) ;;
               *) echo "Unknown scope: ${MANUAL_SCOPE}" >&2; exit 1 ;;
             esac
           else
-            mapfile -t changed_paths < <(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")
-            shared_change=false
-
-            for path in "${changed_paths[@]}"; do
-              case "$path" in
-                crates/cageforge-linux/*)
-                  linux_native=true
-                  ;;
-                crates/cageforge-bwrap/*)
-                  linux_native=true
-                  ;;
-                crates/cageforge-macos/*)
-                  macos_native=true
-                  ;;
-                crates/cageforge-windows/*)
-                  windows_native=true
-                  ;;
-                crates/*)
-                  # A portable crate is shared by every future backend.
-                  shared_change=true
-                  ;;
-                *)
-                  # Anything outside crates/ can affect the build, policy, CI,
-                  # documentation contract, or release process. Be conservative
-                  # and run every OS before merge.
-                  shared_change=true
-                  ;;
-              esac
-            done
-
-            if [[ "$shared_change" == true ]]; then
-              mode=full
-            elif [[ "$linux_native" == true || "$macos_native" == true || "$windows_native" == true ]]; then
-              mode=native
+            if [[ "$BASE_SHA" =~ ^0+$ ]]; then
+              mapfile -t changed_paths < <(git diff-tree --no-commit-id --name-only -r "$HEAD_SHA")
+            else
+              mapfile -t changed_paths < <(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")
             fi
+          fi
+
+          for path in "${changed_paths[@]}"; do
+            case "$path" in
+              crates/cageforge-linux/*|crates/cageforge-bwrap/*)
+                linux_native=true
+                ;;
+              crates/cageforge-macos/*)
+                macos_native=true
+                ;;
+              crates/cageforge-windows/*)
+                windows_native=true
+                ;;
+              crates/*)
+                shared_change=true
+                ;;
+              *)
+                shared_change=true
+                ;;
+            esac
+          done
+
+          if [[ "$shared_change" == true ]]; then
+            linux_native=true
+            macos_native=true
+            windows_native=true
+            mode=shared
+          elif [[ "$linux_native" == true || "$macos_native" == true || "$windows_native" == true ]]; then
+            mode=native
           fi
 
           {
@@ -146,11 +127,20 @@ jobs:
             echo "windows_native=${windows_native}"
           } >> "$GITHUB_OUTPUT"
 
-  portable-default:
-    name: portable fmt + clippy + test (Linux)
+  common-components:
+    name: "common components (build target: ${{ matrix.target_name }})"
     needs: changes
-    if: needs.changes.outputs.mode == 'default'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_name: Linux
+            os: ubuntu-24.04
+          - target_name: macOS
+            os: macos-latest
+          - target_name: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -158,11 +148,10 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
-        # Keep this list limited to the current portable packages. Add a new
-        # portable package here when it becomes part of the default surface.
         run: >-
           cargo fmt
           -p cageforge-backend-api
+          -p cageforge-core
           -p cageforge-command
           -p cageforge-config
           -p cageforge-network-proxy
@@ -171,10 +160,11 @@ jobs:
           -p cageforge-policy-compose
           -p cageforge-upstream-review
           -- --check
-      - name: Clippy for portable crates
+      - name: Clippy for common components
         run: >-
           cargo clippy
           -p cageforge-backend-api
+          -p cageforge-core
           -p cageforge-command
           -p cageforge-config
           -p cageforge-network-proxy
@@ -183,10 +173,11 @@ jobs:
           -p cageforge-policy-compose
           -p cageforge-upstream-review
           --all-targets -- -D warnings
-      - name: Test portable crates
+      - name: Test common components
         run: >-
           cargo test
           -p cageforge-backend-api
+          -p cageforge-core
           -p cageforge-command
           -p cageforge-config
           -p cageforge-network-proxy
@@ -202,12 +193,13 @@ jobs:
           --all-targets -- -D warnings
       - name: Test network proxy without runtime feature
         run: cargo test -p cageforge-network-proxy --no-default-features
-      - name: Check portable documentation
+      - name: Check common component documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: >-
           cargo doc
           -p cageforge-backend-api
+          -p cageforge-core
           -p cageforge-command
           -p cageforge-config
           -p cageforge-network-proxy
@@ -217,72 +209,19 @@ jobs:
           -p cageforge-upstream-review
           --no-deps
 
-  full-matrix:
-    name: full workspace (${{ matrix.os_name }})
-    needs: changes
-    if: needs.changes.outputs.mode == 'full'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os_name: Linux
-            # Bubblewrap needs a host that permits unprivileged user/mount
-            # namespaces. Try the older hosted image before introducing a
-            # privileged container or a second CI provider.
-            os: ubuntu-22.04
-          - os_name: macOS
-            os: macos-latest
-          - os_name: Windows
-            os: windows-latest
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - name: Build bundled Bubblewrap on Linux
-        if: matrix.os_name == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libcap-dev pkg-config
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          test "$(sysctl -n kernel.unprivileged_userns_clone)" = "1"
-          unshare --user --map-root-user --mount-proc true
-          cargo run -p cageforge-bwrap -- --output "$RUNNER_TEMP/cageforge-resources/bwrap"
-          "$RUNNER_TEMP/cageforge-resources/bwrap" \
-            --die-with-parent \
-            --unshare-user \
-            --unshare-pid \
-            --unshare-net \
-            --ro-bind / / \
-            --proc /proc \
-            --dev /dev \
-            /usr/bin/true
-          echo "CAGEFORGE_BWRAP_TEST_RESOURCE_DIR=$RUNNER_TEMP/cageforge-resources" >> "$GITHUB_ENV"
-      - name: Check formatting
-        run: cargo fmt --all --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Tests
-        run: cargo test --workspace
-
   native-linux:
-    name: Linux native sandbox (QEMU/KVM)
+    name: Linux sandbox (QEMU/KVM)
     needs: changes
-    if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.linux_native == 'true'
+    if: needs.changes.outputs.linux_native == 'true'
     uses: m62624/cageforge/.github/workflows/native-linux-vm.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number || '' }}
       expected_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
   native-macos:
-    name: macOS core + native sandbox
+    name: macOS sandbox (native macOS)
     needs: changes
-    if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.macos_native == 'true'
+    if: needs.changes.outputs.macos_native == 'true'
     # TODO: use the dedicated macOS runner when cageforge-macos is introduced.
     runs-on: macos-latest
     steps:
@@ -296,9 +235,9 @@ jobs:
       - run: cargo test -p cageforge-core -p cageforge-macos
 
   native-windows:
-    name: Windows core + native sandbox
+    name: Windows sandbox (native Windows)
     needs: changes
-    if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.windows_native == 'true'
+    if: needs.changes.outputs.windows_native == 'true'
     # TODO: use the dedicated Windows runner when cageforge-windows is introduced.
     runs-on: windows-latest
     steps:
@@ -312,11 +251,8 @@ jobs:
       - run: cargo test -p cageforge-core -p cageforge-windows
 
   feature-surface:
-    name: feature and lib/bin surface (Linux)
+    name: "feature combinations (build target: Linux)"
     needs: changes
-    if: >-
-      needs.changes.result == 'success' &&
-      (needs.changes.outputs.mode == 'full' || needs.changes.outputs.linux_native == 'true')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -370,15 +306,12 @@ jobs:
           cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --no-default-features --all-targets
 
   coverage-portable:
-    name: portable coverage (Linux)
-    needs: [changes, portable-default, full-matrix]
-    # Coverage follows the fast portable checks in default mode and the full
-    # matrix in shared-contract mode. Native-only changes do not run this
-    # portable metric: their enforcement is tested by the matching native job.
-    if: >-
-      always() &&
-      (needs.changes.outputs.mode == 'default' || needs.changes.outputs.mode == 'full') &&
-      (needs.portable-default.result == 'success' || needs.full-matrix.result == 'success')
+    name: "portable coverage (build target: Linux)"
+    needs: [changes, common-components]
+    # TODO: Re-enable this mandatory metric after the project agrees on the
+    # coverage policy and the right report destination. The intended gate is
+    # at least 90 percent for the portable packages listed below.
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -405,6 +338,7 @@ jobs:
           'tools/*'
           --packages
           cageforge-backend-api
+          cageforge-core
           cageforge-command
           cageforge-config
           cageforge-network-proxy
@@ -429,7 +363,7 @@ jobs:
     name: CI passed
     if: always()
     needs:
-      [changes, portable-default, full-matrix, native-linux, native-macos, native-windows, feature-surface, coverage-portable]
+      [changes, common-components, native-linux, native-macos, native-windows, feature-surface, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

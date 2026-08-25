@@ -2,11 +2,8 @@ name: Native Linux VM
 
 on:
   # The workflow is defined on the trusted default branch and never checks out
-  # the pull-request tree. A push tests the commit that reached main; the
-  # manual mode can test an open pull request before it is merged.
-  push:
-    branches:
-      - main
+  # the pull-request tree. CI calls it for PRs and main pushes; manual mode
+  # remains available for an explicit rerun.
   workflow_call:
     inputs:
       pr_number:
