@@ -5,5 +5,5 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Cageforge orchestration facade (planned)"
-repository = "https://github.com/YOUR_USER/cageforge"
+repository.workspace = true
 readme = "README.md"

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendIdentity, BackendRequest, SandboxBackend,
 };
