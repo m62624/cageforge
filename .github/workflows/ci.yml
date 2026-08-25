@@ -230,7 +230,10 @@ jobs:
       matrix:
         include:
           - os_name: Linux
-            os: ubuntu-24.04
+            # Bubblewrap needs a host that permits unprivileged user/mount
+            # namespaces. Try the older hosted image before introducing a
+            # privileged container or a second CI provider.
+            os: ubuntu-22.04
           - os_name: macOS
             os: macos-latest
           - os_name: Windows
@@ -275,7 +278,9 @@ jobs:
     name: Linux core + native sandbox
     needs: changes
     if: needs.changes.outputs.mode == 'native' && needs.changes.outputs.linux_native == 'true'
-    runs-on: ubuntu-24.04
+    # Keep native Bubblewrap tests on the same namespace-compatible candidate
+    # as the Linux leg of the full matrix.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
