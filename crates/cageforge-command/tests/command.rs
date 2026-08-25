@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -179,6 +179,31 @@ fn environment_input_deduplicates_case_variants_before_backend_handoff() {
 }
 
 #[test]
+fn environment_names_preserve_unicode_character_boundaries() {
+    let input = EnvironmentInput::all([
+        (OsString::from("İ"), OsString::from("single")),
+        (OsString::from("i\u{307}"), OsString::from("decomposed")),
+    ])
+    .expect("valid environment input");
+    assert_eq!(input.variables().len(), 2);
+
+    let environment = EnvironmentSpec::empty()
+        .with_var("İ", "single")
+        .expect("single-character name")
+        .with_var("i\u{307}", "decomposed")
+        .expect("decomposed name");
+    assert_eq!(environment.overrides().len(), 2);
+    assert_eq!(
+        environment.override_for(OsStr::new("İ")),
+        Some(&EnvironmentOverride::Set(OsString::from("single")))
+    );
+    assert_eq!(
+        environment.override_for(OsStr::new("i\u{307}")),
+        Some(&EnvironmentOverride::Set(OsString::from("decomposed")))
+    );
+}
+
+#[test]
 fn environment_spec_equality_uses_logical_override_identity() {
     let upper = EnvironmentSpec::inherit_all()
         .with_var("PATH", "/custom/bin")
@@ -313,6 +338,21 @@ fn environment_pattern_traits_follow_case_insensitive_matching() {
     assert_eq!(upper, lower);
     assert_eq!(HashSet::from([upper.clone(), lower.clone()]).len(), 1);
     assert_eq!(BTreeSet::from([upper, lower]).len(), 1);
+
+    let single_character = EnvironmentPattern::new("İ").expect("single character");
+    let decomposed = EnvironmentPattern::new("i\u{307}").expect("decomposed characters");
+    assert_ne!(
+        single_character, decomposed,
+        "pattern identity must preserve the character boundaries used by matching"
+    );
+    assert!(!single_character.matches("i\u{307}"));
+    assert!(decomposed.matches("i\u{307}"));
+
+    assert_ne!(
+        EnvironmentNameKey::new(OsStr::new("İ")),
+        EnvironmentNameKey::new(OsStr::new("i\u{307}")),
+        "environment-name identity must preserve matching character boundaries"
+    );
 }
 
 #[test]

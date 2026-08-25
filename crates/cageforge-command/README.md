@@ -125,9 +125,12 @@ and `?` wildcards. The convenience methods `with_include_pattern` and
 is case-insensitive, including explicit variable names and duplicate filter
 patterns. `EnvironmentPattern` equality, hashing, and ordering use that same
 case-insensitive identity; `as_str()` preserves the declared spelling for
-diagnostics and serialization. A later case variant replaces the same logical override. Excludes
-have precedence when a variable matches both actions. `apply_to` applies the
-portable stages in this order: `inherit → exclude → set/remove → include`. A
+diagnostics and serialization. Canonical identity preserves Unicode-scalar
+boundaries because wildcard matching folds each scalar separately; a
+single-scalar lowercase expansion cannot collide with several input scalars.
+A later case variant replaces the same logical override. Excludes have
+precedence when a variable matches both actions. `apply_to` applies the portable
+stages in this order: `inherit → exclude → set/remove → include`. A
 variable removed by an exclude is not restored by an include, while an explicit
 set can intentionally restore it at the later set stage. The backend still
 selects the platform-specific `Core` variables

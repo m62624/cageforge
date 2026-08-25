@@ -5,6 +5,9 @@ use std::ffi::OsString;
 
 use wildmatch::WildMatch;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(super) struct CaseFoldedText(pub(super) Vec<Vec<char>>);
+
 /// Environment construction rules for a command.
 ///
 /// Overrides are kept in a sorted map for deterministic inspection and are
@@ -54,7 +57,7 @@ pub enum EnvironmentOverride {
 #[derive(Debug, Clone)]
 pub struct EnvironmentPattern {
     pub(super) original: String,
-    pub(super) canonical: String,
+    pub(super) canonical: CaseFoldedText,
     pub(super) matcher: WildMatch,
 }
 
@@ -70,7 +73,7 @@ pub struct EnvironmentNameKey(pub(super) EnvironmentNameIdentity);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum EnvironmentNameIdentity {
-    Folded(String),
+    Folded(CaseFoldedText),
     #[cfg(unix)]
     NativeBytes(Vec<u8>),
     #[cfg(windows)]

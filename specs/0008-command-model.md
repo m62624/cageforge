@@ -73,8 +73,11 @@ restore its named variable at the later set stage. Explicit names and filter
 patterns are canonicalized case-insensitively, so case variants cannot create
 two logical variables. `EnvironmentPattern` uses that same canonical identity
 for equality, hashing, and ordering, while `as_str()` preserves declaration
-spelling for diagnostics and serialization. Conflicting set/remove requests are rejected by the
-config layer. The portable crate does not define the contents of `Core`;
+spelling for diagnostics and serialization. Canonical identity folds each
+Unicode scalar independently, exactly as the matcher does, so one scalar whose
+lowercase form expands cannot collide with several separately matched scalars.
+Conflicting set/remove requests are rejected by the config layer. The portable
+crate does not define the contents of `Core`;
 each native backend supplies that platform's conservative base map before
 calling `apply_to`.
 

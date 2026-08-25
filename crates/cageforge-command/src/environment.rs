@@ -23,7 +23,7 @@ use crate::command::contains_nul;
 
 mod model;
 
-use model::EnvironmentNameIdentity;
+use model::{CaseFoldedText, EnvironmentNameIdentity};
 pub use model::{
     CoreEnvironment, EnvironmentBase, EnvironmentFilterAction, EnvironmentInput,
     EnvironmentNameKey, EnvironmentOverride, EnvironmentPattern, EnvironmentSpec,
@@ -69,7 +69,7 @@ impl EnvironmentPattern {
             return Err(CommandError::EnvironmentPatternContainsEquals);
         }
         Ok(Self {
-            canonical: pattern.to_lowercase(),
+            canonical: case_folded_text(&pattern),
             matcher: WildMatch::new_case_insensitive(&pattern),
             original: pattern,
         })
@@ -425,7 +425,7 @@ fn remove_environment_name<V>(
 
 fn environment_name_identity(name: &OsStr) -> EnvironmentNameIdentity {
     if let Some(name) = name.to_str() {
-        return EnvironmentNameIdentity::Folded(name.to_lowercase());
+        return EnvironmentNameIdentity::Folded(case_folded_text(name));
     }
     #[cfg(unix)]
     {
@@ -435,6 +435,15 @@ fn environment_name_identity(name: &OsStr) -> EnvironmentNameIdentity {
     {
         EnvironmentNameIdentity::NativeWide(name.encode_wide().collect())
     }
+}
+
+fn case_folded_text(value: &str) -> CaseFoldedText {
+    CaseFoldedText(
+        value
+            .chars()
+            .map(|character| character.to_lowercase().collect())
+            .collect(),
+    )
 }
 
 fn base_is_at_most(supplied: EnvironmentBase, required: EnvironmentBase) -> bool {
