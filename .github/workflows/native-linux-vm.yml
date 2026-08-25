@@ -1,0 +1,117 @@
+name: Native Linux VM experiment
+
+on:
+  # Manual-only until nested KVM is proven stable. The workflow is defined on
+  # the trusted default branch and never checks out the pull-request tree.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open GitHub pull request number to test
+        required: true
+        type: string
+      expected_sha:
+        description: Optional 40-character head SHA; fail if the PR moved
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: cageforge-native-linux-vm-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  native-linux-vm:
+    name: Linux native tests in disposable QEMU/KVM VM
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout trusted launcher from main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install VM tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes genisoimage jq qemu-system-x86 qemu-utils
+
+      - name: Resolve immutable pull-request head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::pr_number must be a positive decimal number"
+            exit 64
+          }
+          if [[ -n "$EXPECTED_SHA" && ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::expected_sha must be a lowercase 40-character commit SHA"
+            exit 64
+          fi
+
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" >"${RUNNER_TEMP}/pr.json"
+          state=$(jq -er '.state' "$RUNNER_TEMP/pr.json")
+          [[ "$state" == open ]] || {
+            echo "::error::pull request is not open"
+            exit 65
+          }
+
+          head_sha=$(jq -er '.head.sha' "$RUNNER_TEMP/pr.json")
+          head_repo=$(jq -er '.head.repo.full_name' "$RUNNER_TEMP/pr.json")
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::GitHub returned an invalid head SHA"
+            exit 65
+          }
+          [[ "$head_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+            echo "::error::GitHub returned an invalid head repository"
+            exit 65
+          }
+          if [[ -n "$EXPECTED_SHA" && "$EXPECTED_SHA" != "$head_sha" ]]; then
+            echo "::error::the pull request changed after expected_sha was recorded"
+            exit 78
+          fi
+
+          {
+            echo "HEAD_SHA=$head_sha"
+            echo "HEAD_REPO=$head_repo"
+          } >>"${GITHUB_ENV}"
+
+      - name: Download pull-request archive without extracting it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 \
+            --max-filesize 536870912 --max-time 300 \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${HEAD_REPO}/tarball/${HEAD_SHA}" \
+            --output "$RUNNER_TEMP/cageforge-pr.tar.gz"
+          test -s "$RUNNER_TEMP/cageforge-pr.tar.gz"
+
+      - name: Download and verify pinned Ubuntu guest image
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
+          image_url="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+          image_sha256="6e40c07ae715f744f84af0bec76415cc1987dd115b4b8de437818561f01a3733"
+          curl --fail --silent --show-error --location --retry 3 "$image_url" --output "$image"
+          printf '%s  %s\n' "$image_sha256" "$image" | sha256sum --check --status
+          echo "CAGEFORGE_VM_IMAGE=$image" >>"$GITHUB_ENV"
+
+      - name: Run native tests inside the guest
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ./ci/run-native-linux-vm.sh \
+            --image "$CAGEFORGE_VM_IMAGE" \
+            --source-archive "$RUNNER_TEMP/cageforge-pr.tar.gz"
