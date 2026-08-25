@@ -76,6 +76,12 @@ impl EffectivePathContext {
         self.context.slash_tmp()
     }
 
+    /// Returns the absolute runtime directory used to resolve or inherit a
+    /// command working directory.
+    pub fn current_directory(&self) -> Option<&Path> {
+        self.context.current_directory()
+    }
+
     /// Resolves a symbolic selector through this bound effective context.
     pub fn resolve(&self, selector: &PathSelector) -> Vec<PathBuf> {
         selector.resolve(&self.context)

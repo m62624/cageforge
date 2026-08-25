@@ -133,8 +133,10 @@ boundary. Cloning an owner preserves its identity.
   `EffectivePathContext` created by `EffectiveSandbox::path_context`; its raw
   `PathResolutionContext` is not exposed. The context is bound to that
   composed result and cannot be reused with another one. Use its safe accessors
-  or `resolve` method when a backend needs the narrowed runtime paths. A
-  selector with no effective runtime paths is denied.
+  or `resolve` method when a backend needs the narrowed runtime paths. These
+  accessors retain the runtime roots, minimal paths, temporary paths, and
+  current directory while workspace roots remain constrained by composition.
+  A selector with no effective runtime paths is denied.
   `glob_scan_max_depth`
   returns the widest depth required by all effective deny-glob rules.
   `EffectiveNetworkPolicy::authorize_connection` applies both policies to one

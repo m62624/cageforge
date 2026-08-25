@@ -52,12 +52,14 @@ and concatenating it with another policy could accidentally grant access.
   is inside one of the optional ceiling roots. A ceiling filters explicit and
   runtime roots but never creates a root absent from the request or context.
   Composition accepts only runtime-resolved absolute roots.
-  `EffectiveSandbox::path_context` creates an
-opaque context whose workspace roots cannot be replaced by a broader caller
-context; symlink behavior remains at the backend boundary. The resulting
-`EffectivePathContext` exposes only narrowed path accessors and selector
-resolution. Its raw `PathResolutionContext` cannot be extracted and reused
-with a different policy.
+  `EffectiveSandbox::path_context` creates an opaque context whose workspace
+  roots cannot be replaced by a broader caller context; symlink behavior
+  remains at the backend boundary. The resulting `EffectivePathContext`
+  preserves the supplied runtime roots, minimal paths, temporary paths, and
+  current directory while narrowing only workspace roots. It exposes those
+  paths through read-only accessors plus selector resolution. Its raw
+  `PathResolutionContext` cannot be extracted and reused with a different
+  policy.
 - Environment composition chooses the least permissive base (`None`,
   `Core`, or `All`), applies the requested transformation, then applies the
   ceiling transformation. The caller must pass an `EnvironmentInput` whose

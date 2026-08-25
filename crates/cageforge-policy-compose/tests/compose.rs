@@ -793,6 +793,45 @@ fn effective_context_resolves_and_matches_workspace_globs_without_broadening_roo
 }
 
 #[test]
+fn effective_context_preserves_runtime_current_directory_identity() {
+    let requested = SandboxPolicy::workspace();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), EnvironmentSpec::empty());
+    let effective = compose(CompositionRequest::new(
+        &requested,
+        &EnvironmentSpec::empty(),
+        &ceiling,
+    ))
+    .expect("valid composition");
+    let first = effective
+        .path_context(
+            &PathResolutionContext::new()
+                .with_current_directory(absolute_root("first-cwd"))
+                .expect("first cwd"),
+        )
+        .expect("first context");
+    let second = effective
+        .path_context(
+            &PathResolutionContext::new()
+                .with_current_directory(absolute_root("second-cwd"))
+                .expect("second cwd"),
+        )
+        .expect("second context");
+
+    assert_ne!(
+        first, second,
+        "effective contexts must not discard the runtime current directory"
+    );
+    assert_eq!(
+        first.current_directory(),
+        Some(absolute_root("first-cwd").as_path())
+    );
+    assert_eq!(
+        second.current_directory(),
+        Some(absolute_root("second-cwd").as_path())
+    );
+}
+
+#[test]
 fn custom_protected_paths_remain_read_only_after_composition() {
     let requested = SandboxPolicy::workspace();
     let ceiling_filesystem = FilesystemPolicy::restricted([FilesystemRule::new(

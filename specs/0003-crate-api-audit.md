@@ -179,6 +179,10 @@ The workspace keeps a single owner for each reusable semantic operation:
 - `cageforge-policy-compose` owns narrowing between two already validated
   policies. It must not be folded into `cageforge-policy`, and it must not
   materialize a third mutable rule list that could widen access.
+  `EffectivePathContext` preserves the runtime current directory and every
+  non-workspace runtime path while replacing or filtering only workspace roots;
+  its read-only accessors let a backend consume the complete narrowed context
+  without exposing the underlying mutable `PathResolutionContext`.
 - No additional shared `text`, `merge`, or `sandbox-core` crate is justified
   by the current code. Adding one would spread small boundary-specific rules
   without removing a real implementation or dependency.
