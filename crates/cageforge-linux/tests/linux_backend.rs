@@ -49,10 +49,20 @@ const UNIX_SOCKET_BYPASS_TARGET: &str = "CAGEFORGE_UNIX_SOCKET_BYPASS_TARGET";
 const SYSV_SHARED_MEMORY_FIXTURE: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_FIXTURE";
 const SYSV_SHARED_MEMORY_ID: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_ID";
 const NAMESPACE_ROOT_CAPABILITY_FIXTURE: &str = "CAGEFORGE_NAMESPACE_ROOT_CAPABILITY_FIXTURE";
+const KEYRING_FIXTURE: &str = "CAGEFORGE_KEYRING_FIXTURE";
+const KEYRING_ID: &str = "CAGEFORGE_KEYRING_ID";
 const SYSV_SHARED_MEMORY_SECRET: &[u8] = b"host-ipc-secret";
+const KEYRING_SECRET: &[u8] = b"host-keyring-secret";
+const KEY_SPEC_SESSION_KEYRING: libc::c_long = -3;
+const KEYCTL_UNLINK: libc::c_long = 9;
+const KEYCTL_READ: libc::c_long = 11;
 
 struct SysvSharedMemory {
     identifier: libc::c_int,
+}
+
+struct SessionKey {
+    identifier: libc::c_long,
 }
 
 impl SysvSharedMemory {
@@ -107,11 +117,51 @@ impl SysvSharedMemory {
     }
 }
 
+impl SessionKey {
+    fn new() -> Self {
+        #[allow(unsafe_code)]
+        let identifier = unsafe {
+            libc::syscall(
+                libc::SYS_add_key,
+                c"user".as_ptr(),
+                c"cageforge-keyring-fixture".as_ptr(),
+                KEYRING_SECRET.as_ptr(),
+                KEYRING_SECRET.len(),
+                KEY_SPEC_SESSION_KEYRING,
+            )
+        };
+        assert!(
+            identifier >= 0,
+            "create session key: {}",
+            io::Error::last_os_error()
+        );
+        Self { identifier }
+    }
+
+    fn identifier(&self) -> libc::c_long {
+        self.identifier
+    }
+}
+
 impl Drop for SysvSharedMemory {
     fn drop(&mut self) {
         #[allow(unsafe_code)]
         unsafe {
             libc::shmctl(self.identifier, libc::IPC_RMID, std::ptr::null_mut());
+        }
+    }
+}
+
+impl Drop for SessionKey {
+    fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::syscall(
+                libc::SYS_keyctl,
+                KEYCTL_UNLINK,
+                self.identifier,
+                KEY_SPEC_SESSION_KEYRING,
+            );
         }
     }
 }
@@ -734,6 +784,35 @@ fn sysv_shared_memory_fixture() {
         libc::shmdt(address);
     }
     panic!("sandbox attached to host SysV shared memory: {exposed:?}");
+}
+
+#[test]
+fn keyring_read_fixture() {
+    let Some(identifier) = std::env::var_os(KEYRING_ID) else {
+        return;
+    };
+    assert!(std::env::var_os(KEYRING_FIXTURE).is_some());
+    let identifier = identifier
+        .to_string_lossy()
+        .parse::<libc::c_long>()
+        .expect("key identifier");
+    let mut payload = [0_u8; 64];
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_keyctl,
+            KEYCTL_READ,
+            identifier,
+            payload.as_mut_ptr(),
+            payload.len(),
+        )
+    };
+    assert_eq!(
+        result,
+        -1,
+        "sandbox read inherited host keyring secret: {:?}",
+        &payload[..result.max(0) as usize]
+    );
 }
 
 fn wait_for_marker(path: &Path) {
@@ -1844,6 +1923,36 @@ fn sandboxed_commands_cannot_attach_to_host_sysv_shared_memory() {
             child.wait().expect("wait").code(),
             Some(0),
             "sandbox must enter an independent IPC namespace"
+        );
+    }
+}
+
+#[test]
+fn sandboxed_commands_cannot_read_inherited_host_keyrings() {
+    let key = SessionKey::new();
+    for policy in [SandboxPolicy::workspace(), SandboxPolicy::full_access()] {
+        let workspace = TempDir::new().expect("temporary workspace");
+        let environment = EnvironmentSpec::inherit_all()
+            .with_var(KEYRING_FIXTURE, "1")
+            .expect("fixture environment")
+            .with_var(KEYRING_ID, key.identifier().to_string())
+            .expect("key identifier environment");
+        let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+            .expect("fixture command")
+            .with_args(["--exact", "keyring_read_fixture", "--nocapture"])
+            .expect("fixture arguments");
+        let (command, effective, runtime) =
+            request_with_environment(workspace.path(), policy, command, environment);
+        let backend = backend();
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &runtime)
+            .expect("preflight");
+        let mut child = backend.spawn(prepared).expect("spawn");
+
+        assert_eq!(
+            child.wait().expect("wait").code(),
+            Some(0),
+            "sandbox must not read a host session keyring secret"
         );
     }
 }

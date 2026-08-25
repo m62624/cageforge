@@ -249,6 +249,7 @@ it, and an unsupported combination is rejected before launch.
 | IPC namespace | Every Bubblewrap launch | Prevents access to host System V shared-memory segments, semaphore sets, and message queues |
 | Empty Linux capability sets | Every Bubblewrap launch | Uses `--cap-drop ALL` so namespace-root and host-root callers cannot pass capabilities to the command |
 | Nested user-namespace lockdown | Every Bubblewrap launch | Uses `--disable-userns` so the command cannot reacquire namespace-local capabilities through `CLONE_NEWUSER` |
+| Anonymous session keyring | Every Bubblewrap launch | Replaces the inherited session keyring before the command starts so host keys cannot be read by serial number |
 | Private device and runtime view | Every restricted filesystem launch | Builds the child `/dev` view, hides Cageforge runtime paths from the command, and exposes only the deliberately mounted helper/gateway endpoints |
 | Empty-root or layered bind mounts | Restricted filesystem | Allows only effective read/write scopes and masks denied paths |
 | Read-only carve-outs | A writable scope with read-only subpaths | Keeps narrower paths read-only inside writable parents |
@@ -329,6 +330,11 @@ variants. `SetupHandshakeError` preserves whether the failure came from the
 authenticated channel, the environment frame, or the gateway token. Display
 text is for humans; callers should match the enum and its nested source rather
 than parse a message such as `reason` or `message`.
+
+Session-keyring isolation failures are reported as
+`LinuxHelperSetupFailureKind::KeyringIsolation` and retain the originating OS
+error number. Cageforge does not continue with the caller's inherited session
+keyring when the kernel rejects isolation.
 
 The helper environment frame is bounded before allocation: at most 4,096
 entries, 1 MiB per variable, and 16 MiB in aggregate. These are protocol

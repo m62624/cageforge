@@ -61,12 +61,17 @@ struct CommandSeccompFilter {
 }
 
 const LINUX_SOCKET_TYPE_MASK: u64 = 0x0f;
+const KEYCTL_JOIN_SESSION_KEYRING: libc::c_long = 1;
 
 /// Applies hardening to the trusted helper and prepares the command filter.
 fn prepare_hardening(
     hardening_required: bool,
     network_mode: NetworkHardeningMode,
 ) -> Result<Option<CommandSeccompFilter>, LinuxHardeningError> {
+    isolate_session_keyring().map_err(|source| LinuxHardeningError::Operation {
+        operation: LinuxHardeningOperation::KeyringIsolation,
+        source,
+    })?;
     if !hardening_required && network_mode == NetworkHardeningMode::None {
         return Ok(None);
     }
@@ -276,6 +281,10 @@ fn process_hardening_failure_kind(error: &LinuxHardeningError) -> LinuxHelperSet
             operation: LinuxHardeningOperation::NoNewPrivileges,
             ..
         } => LinuxHelperSetupFailureKind::NoNewPrivileges,
+        LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::KeyringIsolation,
+            ..
+        } => LinuxHelperSetupFailureKind::KeyringIsolation,
         LinuxHardeningError::SeccompBuild { .. } => LinuxHelperSetupFailureKind::SeccompBuild,
         _ => LinuxHelperSetupFailureKind::ProcessHardening,
     }
@@ -319,6 +328,25 @@ fn first_raw_os_error(error: &(dyn StdError + 'static)) -> Option<i32> {
         current = error.source();
     }
     None
+}
+
+fn isolate_session_keyring() -> io::Result<()> {
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_keyctl,
+            KEYCTL_JOIN_SESSION_KEYRING,
+            std::ptr::null::<libc::c_char>(),
+            0,
+            0,
+            0,
+        )
+    };
+    if result >= 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 fn write_setup_failure(

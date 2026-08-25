@@ -551,6 +551,8 @@ command can run:
   requires it;
 - set `PR_SET_DUMPABLE` to zero on the trusted helper and set `RLIMIT_CORE` to
   zero for both the helper and command;
+- replace the caller's inherited session keyring with a new anonymous session
+  keyring for every launch, including otherwise unrestricted policies;
 - establish the command as a traced child of the trusted helper before
   `execve`, then set `PTRACE_O_EXITKILL` and keep that trace relationship for
   the complete command lifetime, because Linux resets an ordinary executable's
@@ -578,6 +580,15 @@ pointer-based flags cannot be inspected by classic seccomp, so compatible
 runtimes fall back to inspectable `clone`. The helper forwards command signals
 and reports the original raw exit status through the authenticated status
 channel.
+
+The frozen Codex baseline and Bubblewrap leave the caller's session keyring
+attached to the sandboxed process. A user namespace does not revoke keys that
+the process possesses through that inherited keyring, so a command that learns
+a host key serial number can still read the key. Cageforge deliberately
+isolates this additional boundary in the authenticated helper with
+`keyctl(KEYCTL_JOIN_SESSION_KEYRING, NULL)`. A kernel rejection fails setup as
+the typed `KeyringIsolation` category instead of launching with the host
+keyring.
 
 The frozen Codex proxy-routed seccomp policy permits every AF_UNIX
 `socketpair()` type on the assumption that those descriptors cannot reach a
@@ -734,6 +745,8 @@ job is an enforcement gate.
   have zero effective, permitted, inheritable, bounding, and ambient Linux
   capabilities;
 - restricted and unrestricted commands cannot create nested user namespaces;
+- restricted and unrestricted commands cannot read keys possessed through the
+  caller's inherited session keyring;
 - `NoNewPrivs` is visible inside the restricted child; and
 - unsupported capabilities fail before the child is started.
 

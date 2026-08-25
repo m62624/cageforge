@@ -20,6 +20,8 @@ pub enum LinuxHardeningOperation {
     CoreDumpLimit,
     /// Setting `PR_SET_NO_NEW_PRIVS`.
     NoNewPrivileges,
+    /// Replacing the inherited session keyring with an anonymous keyring.
+    KeyringIsolation,
     /// Writing the setup-ready marker.
     SetupReady,
     /// Reading the authenticated bridge token.
@@ -234,6 +236,8 @@ pub enum LinuxHelperSetupFailureKind {
     CommandStart = 10,
     /// The trusted helper could not establish ptrace supervision.
     TraceSupervision = 11,
+    /// The helper could not replace the inherited host session keyring.
+    KeyringIsolation = 12,
 }
 
 /// Stable category sent by the private helper when execution fails after setup.
@@ -379,6 +383,7 @@ impl fmt::Display for LinuxHardeningOperation {
             Self::Dumpability => "dumpability",
             Self::CoreDumpLimit => "core-dump limit",
             Self::NoNewPrivileges => "no-new-privileges",
+            Self::KeyringIsolation => "session-keyring isolation",
             Self::SetupReady => "setup-ready marker",
             Self::BridgeTokenRead => "bridge token",
             Self::AuthenticationTokenRead => "authentication token",
@@ -492,6 +497,7 @@ impl TryFrom<u16> for LinuxHelperSetupFailureKind {
             9 => Ok(Self::ProcessHardening),
             10 => Ok(Self::CommandStart),
             11 => Ok(Self::TraceSupervision),
+            12 => Ok(Self::KeyringIsolation),
             _ => Err(()),
         }
     }
@@ -511,6 +517,7 @@ impl fmt::Display for LinuxHelperSetupFailureKind {
             Self::ProcessHardening => "process hardening",
             Self::CommandStart => "command start",
             Self::TraceSupervision => "trace supervision",
+            Self::KeyringIsolation => "session-keyring isolation",
         };
         formatter.write_str(description)
     }

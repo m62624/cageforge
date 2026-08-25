@@ -58,14 +58,19 @@ mod tests {
     fn typed_failure_retains_category_and_errno() {
         let mut frame = SETUP_RESULT_MAGIC.to_vec();
         frame.push(SETUP_RESULT_FAILURE);
-        frame.extend_from_slice(&u16::from(LinuxHelperSetupFailureKind::Dumpability).to_be_bytes());
+        frame.extend_from_slice(
+            &u16::from(LinuxHelperSetupFailureKind::KeyringIsolation).to_be_bytes(),
+        );
         frame.extend_from_slice(&libc::EPERM.to_be_bytes());
 
         let error = read_setup_result(&mut Cursor::new(frame)).expect_err("helper failure");
         let SetupHandshakeError::HelperRejected { failure } = error else {
             panic!("unexpected error: {error}");
         };
-        assert_eq!(failure.kind(), LinuxHelperSetupFailureKind::Dumpability);
+        assert_eq!(
+            failure.kind(),
+            LinuxHelperSetupFailureKind::KeyringIsolation
+        );
         assert_eq!(failure.raw_os_error(), Some(libc::EPERM));
     }
 
