@@ -35,6 +35,11 @@ pub struct ResolvedProfile {
     network_gateway: GatewayConfig,
 }
 
+struct ResolveFrame {
+    name: String,
+    next_parent: usize,
+}
+
 impl Config {
     /// Parses a strict Cageforge TOML document.
     pub fn from_toml(source: &str) -> Result<Self, ConfigError> {
@@ -204,11 +209,6 @@ impl ResolvedProfile {
     pub fn network_gateway(&self) -> &GatewayConfig {
         &self.network_gateway
     }
-}
-
-struct ResolveFrame {
-    name: String,
-    next_parent: usize,
 }
 
 impl ResolveFrame {
