@@ -3,7 +3,7 @@
 #![cfg(target_os = "linux")]
 
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
@@ -206,6 +206,9 @@ fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
         }
 
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")?;
+        stream.shutdown(Shutdown::Write)?;
+        let mut client_close = [0; 1];
+        while stream.read(&mut client_close)? != 0 {}
         Ok(())
     });
     ready_receiver.recv().expect("HTTP server readiness signal");
