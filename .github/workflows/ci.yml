@@ -58,10 +58,11 @@ concurrency:
 # 7. Configure branch protection to require the stable `CI passed` check. Do not
 #    require mode-specific jobs, because skipped jobs are intentional for other
 #    change classes.
-# 8. Keep the feature-surface job unconditional: it checks each native library
-#    and helper binary in every declared feature mode, plus the proxy's
-#    runtime/configuration-only modes and cross-target compilation. This catches
-#    feature unification and lib/bin drift before a native backend is selected.
+# 8. Run the Linux feature-surface job for shared changes and Linux-native
+#    changes. It checks every declared feature mode, the proxy's
+#    runtime/configuration-only modes, and cross-target compilation. This keeps
+#    Linux feature drift covered without adding Linux work to selective
+#    macOS/Windows native checks.
 
 jobs:
   changes:
@@ -341,7 +342,9 @@ jobs:
   feature-surface:
     name: feature and lib/bin surface (Linux)
     needs: changes
-    if: needs.changes.result == 'success'
+    if: >-
+      needs.changes.result == 'success' &&
+      (needs.changes.outputs.mode == 'full' || needs.changes.outputs.linux_native == 'true')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

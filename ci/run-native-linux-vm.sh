@@ -83,7 +83,7 @@ write_files:
       if sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
         sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       fi
-      runuser -u ubuntu -- bwrap --unshare-user --unshare-net --die-with-parent -- true
+      timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap --unshare-user --unshare-net --die-with-parent -- true
       runuser -u ubuntu -- env HOME=/home/ubuntu bash -c "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
       runuser -u ubuntu -- env HOME=/home/ubuntu PATH=/home/ubuntu/.cargo/bin:\$PATH rustup component add clippy rustfmt
       touch /var/lib/cageforge-bootstrap-complete
@@ -178,6 +178,10 @@ wait_for_bootstrap() {
     for _ in {1..180}; do
         if ssh_guest 'sudo test -f /var/lib/cageforge-bootstrap-complete' >/dev/null 2>&1; then
             return
+        fi
+        if (( _ % 15 == 0 )); then
+            echo "guest bootstrap still running (${_}/180)" >&2
+            tail -n 20 "$log_file" >&2 || true
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             print_guest_logs "$log_file"
