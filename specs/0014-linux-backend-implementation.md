@@ -325,7 +325,7 @@ restricted request to an unrestricted process.
 | domain rules | Enforce through an isolated namespace and backend-owned HTTP/SOCKS gateway that resolves once and applies both effective policy layers |
 | private/loopback/link-local restrictions | Enforce at the gateway using every resolved address before any exact connection attempt |
 | `ResolvedNetworkTarget` authorization | Require one captured target and immediate exact-address authorization; connect only with the consumed authorized address |
-| Unix socket rules | Match Codex Linux behavior: proxy-routed mode denies AF_UNIX connect while preserving AF_UNIX socketpair IPC; explicit allowlists remain typed unsupported on Linux |
+| Unix socket rules | Proxy-routed mode denies pathname-capable AF_UNIX sockets while preserving AF_UNIX stream socketpair IPC; explicit allowlists remain typed unsupported on Linux |
 | all/core/none environment bases | Apply the selected base; Linux `core` variables are selected by the backend |
 | environment filters | Apply include/exclude filters after selecting the base and preserve the portable ordering |
 | environment set/remove overrides | Apply after the selected base and filters according to `EnvironmentSpec` |
@@ -518,6 +518,15 @@ pointer-based flags cannot be inspected by classic seccomp, so compatible
 runtimes fall back to inspectable `clone`. The helper forwards command signals
 and reports the original raw exit status through the authenticated status
 channel.
+
+The frozen Codex proxy-routed seccomp policy permits every AF_UNIX
+`socketpair()` type on the assumption that those descriptors cannot reach a
+pathname socket. Linux datagram socketpair endpoints can instead be redirected
+with `connect` or `sendto`. Cageforge therefore permits AF_UNIX `SOCK_STREAM`
+socketpairs, including normal `CLOEXEC` and `NONBLOCK` flags, but denies
+`SOCK_DGRAM` and `SOCK_SEQPACKET` socketpairs whenever pathname Unix isolation
+is required. The base socket type is checked with the Linux UAPI type mask so
+creation flags cannot bypass or accidentally trigger the rule.
 
 Before the command is released, the authenticated helper channel carries a
 framed setup result. A rejected setup includes a stable typed failure category

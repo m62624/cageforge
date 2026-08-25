@@ -6,8 +6,8 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::num::NonZeroUsize;
-use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -43,6 +43,7 @@ const TRACER_GUARD_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_FIXTURE";
 const TRACER_GUARD_DESCENDANT_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_DESCENDANT_FIXTURE";
 const EXPECTED_TRACER_PID: &str = "CAGEFORGE_EXPECTED_TRACER_PID";
 const CLONE_UNTRACED_FIXTURE: &str = "CAGEFORGE_CLONE_UNTRACED_FIXTURE";
+const UNIX_SOCKET_BYPASS_TARGET: &str = "CAGEFORGE_UNIX_SOCKET_BYPASS_TARGET";
 
 fn backend() -> LinuxBackend {
     LinuxBackend::new(test_backend_config())
@@ -433,7 +434,7 @@ fn common_seccomp_fixture() {
     let result = unsafe {
         libc::socketpair(
             libc::AF_UNIX,
-            libc::SOCK_STREAM,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
             0,
             socket_pair.as_mut_ptr(),
         )
@@ -443,6 +444,57 @@ fn common_seccomp_fixture() {
     unsafe {
         libc::close(socket_pair[0]);
         libc::close(socket_pair[1]);
+    }
+
+    if let Some(target) = std::env::var_os(UNIX_SOCKET_BYPASS_TARGET) {
+        let mut datagram_pair = [-1; 2];
+        #[allow(unsafe_code)]
+        let result = unsafe {
+            libc::socketpair(
+                libc::AF_UNIX,
+                libc::SOCK_DGRAM | libc::SOCK_NONBLOCK,
+                0,
+                datagram_pair.as_mut_ptr(),
+            )
+        };
+        if result == -1 {
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPERM)
+            );
+        } else {
+            assert_eq!(result, 0, "unexpected datagram socketpair result");
+            #[allow(unsafe_code)]
+            let socket = unsafe { UnixDatagram::from_raw_fd(datagram_pair[0]) };
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::close(datagram_pair[1]);
+            }
+            match socket.connect(&target) {
+                Ok(()) => {
+                    socket
+                        .send(b"bypass")
+                        .expect("send through pathname Unix bypass");
+                }
+                Err(error) => assert_eq!(error.raw_os_error(), Some(libc::EPERM)),
+            }
+        }
+
+        let mut seqpacket_pair = [-1; 2];
+        #[allow(unsafe_code)]
+        let result = unsafe {
+            libc::socketpair(
+                libc::AF_UNIX,
+                libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+                0,
+                seqpacket_pair.as_mut_ptr(),
+            )
+        };
+        assert_eq!(result, -1, "seqpacket socketpair must be denied");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        );
     }
 }
 
@@ -1931,16 +1983,37 @@ fn proxy_routing_rejects_unrestricted_pathname_unix_socket_access() {
 
 #[test]
 fn restricted_filesystem_keeps_common_seccomp_with_direct_network() {
+    assert_common_seccomp_policy(
+        NetworkPolicy::enabled().with_local_network_access(LocalNetworkAccess::Allow),
+    );
+}
+
+#[test]
+fn proxy_routed_network_rejects_socketpair_pathname_reconnect() {
+    let network = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_domain("example.com", DomainAccess::Allow)
+        .expect("domain rule");
+    assert_common_seccomp_policy(network);
+}
+
+fn assert_common_seccomp_policy(network: NetworkPolicy) {
     let workspace = TempDir::new().expect("temporary workspace");
+    let unix_target = workspace.path().join("target.sock");
+    let unix_listener = UnixDatagram::bind(&unix_target).expect("Unix datagram target");
+    unix_listener
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("Unix target timeout");
     let filesystem = FilesystemPolicy::restricted([
         FilesystemRule::new(PathSelector::root(), AccessMode::Read),
         FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
     ]);
-    let network = NetworkPolicy::enabled().with_local_network_access(LocalNetworkAccess::Allow);
     let policy = SandboxPolicy::new(filesystem, network);
     let environment = EnvironmentSpec::inherit_all()
         .with_var(COMMON_SECCOMP_FIXTURE, "1")
-        .expect("fixture environment");
+        .expect("fixture environment")
+        .with_var(UNIX_SOCKET_BYPASS_TARGET, unix_target.as_os_str())
+        .expect("Unix target environment");
     let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
         .expect("fixture command")
         .with_args(["--exact", "common_seccomp_fixture", "--nocapture"])
@@ -1954,6 +2027,17 @@ fn restricted_filesystem_keeps_common_seccomp_with_direct_network() {
     let mut child = backend.spawn(prepared).expect("spawn");
 
     assert_eq!(child.wait().expect("wait").code(), Some(0));
+    let mut datagram = [0; 16];
+    match unix_listener.recv(&mut datagram) {
+        Ok(size) => panic!(
+            "socketpair endpoint reached pathname Unix target: {:?}",
+            &datagram[..size]
+        ),
+        Err(error) => assert!(matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        )),
+    }
 }
 
 #[test]

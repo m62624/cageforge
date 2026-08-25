@@ -58,6 +58,8 @@ struct CommandSeccompFilter {
     policy: BpfProgram,
 }
 
+const LINUX_SOCKET_TYPE_MASK: u64 = 0x0f;
+
 /// Applies hardening to the trusted helper and prepares the command filter.
 fn prepare_hardening(
     hardening_required: bool,
@@ -805,17 +807,7 @@ fn add_unix_socket_isolation_rules(
     .map_err(|source| SeccompBuildError::Rule { source })?;
     rules.insert(libc::SYS_socket, vec![unix_socket]);
 
-    let non_unix_socketpair = SeccompRule::new(vec![
-        SeccompCondition::new(
-            0,
-            SeccompCmpArgLen::Dword,
-            SeccompCmpOp::Ne,
-            libc::AF_UNIX as u64,
-        )
-        .map_err(|source| SeccompBuildError::Condition { source })?,
-    ])
-    .map_err(|source| SeccompBuildError::Rule { source })?;
-    rules.insert(libc::SYS_socketpair, vec![non_unix_socketpair]);
+    rules.insert(libc::SYS_socketpair, isolated_unix_socketpair_rules()?);
     Ok(())
 }
 
@@ -874,7 +866,13 @@ fn add_proxy_network_rules(
         .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
     .map_err(|source| SeccompBuildError::Rule { source })?;
-    let unix_socketpair_only = SeccompRule::new(vec![
+    rules.insert(libc::SYS_socket, vec![ip_only]);
+    rules.insert(libc::SYS_socketpair, isolated_unix_socketpair_rules()?);
+    Ok(())
+}
+
+fn isolated_unix_socketpair_rules() -> Result<Vec<SeccompRule>, SeccompBuildError> {
+    let non_unix = SeccompRule::new(vec![
         SeccompCondition::new(
             0,
             SeccompCmpArgLen::Dword,
@@ -884,9 +882,29 @@ fn add_proxy_network_rules(
         .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
     .map_err(|source| SeccompBuildError::Rule { source })?;
-    rules.insert(libc::SYS_socket, vec![ip_only]);
-    rules.insert(libc::SYS_socketpair, vec![unix_socketpair_only]);
-    Ok(())
+    let unix_datagram = unix_socketpair_type_rule(libc::SOCK_DGRAM)?;
+    let unix_seqpacket = unix_socketpair_type_rule(libc::SOCK_SEQPACKET)?;
+    Ok(vec![non_unix, unix_datagram, unix_seqpacket])
+}
+
+fn unix_socketpair_type_rule(socket_type: libc::c_int) -> Result<SeccompRule, SeccompBuildError> {
+    SeccompRule::new(vec![
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Eq,
+            libc::AF_UNIX as u64,
+        )
+        .map_err(|source| SeccompBuildError::Condition { source })?,
+        SeccompCondition::new(
+            1,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::MaskedEq(LINUX_SOCKET_TYPE_MASK),
+            socket_type as u64,
+        )
+        .map_err(|source| SeccompBuildError::Condition { source })?,
+    ])
+    .map_err(|source| SeccompBuildError::Rule { source })
 }
 
 fn target_architecture() -> Result<seccompiler::TargetArch, SeccompBuildError> {
