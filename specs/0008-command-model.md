@@ -16,8 +16,8 @@ composition layers.
 
 ## Upstream design inputs
 
-The design was checked against the current Codex checkout at
-`c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc`, especially:
+The design was checked against the frozen Codex baseline recorded in
+[UPSTREAM.md](../UPSTREAM.md), especially:
 
 - `codex-rs/sandboxing/src/spawn.rs` for argv, cwd, environment, stdio intent,
   and timeout-adjacent launch inputs;

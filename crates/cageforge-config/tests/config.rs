@@ -983,6 +983,78 @@ filters = {{ "CARGO_*" = "include", "PATH" = "include", "*TOKEN*" = "exclude" }}
 }
 
 #[test]
+fn inherited_environment_filters_preserve_matcher_distinct_unicode_patterns() {
+    let resolved = Config::from_toml(
+        r#"
+default_profile = "child"
+
+[profiles.parent.command]
+program = "runner"
+
+[profiles.parent.command.environment]
+inherit = "all"
+filters = { "İ" = "include" }
+
+[profiles.child]
+inherits = ["parent"]
+
+[profiles.child.command.environment]
+filters = { "i̇" = "exclude" }
+"#,
+    )
+    .expect("matcher-distinct patterns should parse")
+    .resolve_default()
+    .expect("matcher-distinct patterns should resolve");
+
+    let environment = resolved.command().expect("inherited command").environment();
+    assert_eq!(environment.filters().len(), 2);
+
+    let variables = environment
+        .apply_to(
+            EnvironmentInput::all([
+                (OsString::from("HOME"), OsString::from("/home/test")),
+                (OsString::from("İ"), OsString::from("included")),
+                (OsString::from("i̇"), OsString::from("excluded")),
+            ])
+            .expect("valid environment input"),
+        )
+        .expect("all-variable input matches the inherited base")
+        .into_variables();
+    assert_eq!(
+        variables,
+        [(OsString::from("İ"), OsString::from("included"))]
+            .into_iter()
+            .collect()
+    );
+}
+
+#[test]
+fn one_profile_accepts_matcher_distinct_unicode_environment_patterns() {
+    let resolved = Config::from_toml(
+        r#"
+[profiles.safe.command]
+program = "runner"
+
+[profiles.safe.command.environment]
+filters = { "İ" = "include", "i̇" = "exclude" }
+"#,
+    )
+    .expect("matcher-distinct patterns are not duplicate declarations")
+    .resolve("safe")
+    .expect("matcher-distinct patterns should resolve");
+
+    assert_eq!(
+        resolved
+            .command()
+            .expect("command")
+            .environment()
+            .filters()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn resolves_from_file_and_reports_read_errors() {
     let path = std::env::temp_dir().join(format!(
         "cageforge-config-{}-{}.toml",

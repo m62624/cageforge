@@ -172,8 +172,11 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   roots; config resolution never discovers system roots.
 - Environment inheritance is `all`, `core`, or `none`; omitted inheritance
   means `core`. The canonical `filters` table maps patterns to `include` or
-  `exclude`, rejects case-insensitive duplicate patterns, and merges exact
-  patterns by child override. Variable set/remove names use the same
+  `exclude`, rejects duplicate matcher identities, and merges those same
+  identities by child override. Pattern identity preserves Unicode scalar
+  boundaries exactly as `EnvironmentPattern` matching does, so one scalar
+  whose lowercase form expands is not collapsed with several separately
+  matched scalars. Variable set/remove names use the same
   case-insensitive identity during validation and inheritance merge. Excludes
   have precedence over includes; an explicit set is applied after exclusion
   and may intentionally restore its named variable. The backend defines the
@@ -208,6 +211,20 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
 All final values are constructed through `cageforge-policy`,
 `cageforge-command`, and `cageforge-network-proxy`, so their path, mode, NUL,
 environment, ownership, timeout, and resource invariants remain authoritative.
+
+## Frozen upstream comparison
+
+The frozen Codex baseline recorded in [UPSTREAM.md](../UPSTREAM.md) uses
+full-string `to_lowercase()` keys in
+`codex-rs/config/src/merge.rs::shell_environment_filter_entry` and in the
+filter-table deserializer. Cageforge intentionally does not retain that
+identity rule: a Unicode scalar whose lowercase mapping expands can otherwise
+collide with several separately matched scalars, removing an inherited include
+allowlist. Cageforge keys valid declarations by `EnvironmentPattern` itself,
+so configuration validation, inheritance replacement, collection identity,
+and runtime matching use one security contract. Invalid declarations retain a
+separate raw fallback key and still fail through the typed command validation
+path if they survive resolution.
 
 ## Public API
 

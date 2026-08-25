@@ -9,7 +9,9 @@
 use crate::build;
 use crate::error::{ConfigError, invalid_value};
 
-use crate::merge::{MergedProfile, ProfileMerger, domain_rule_key, filesystem_rule_key};
+use crate::merge::{
+    MergedProfile, ProfileMerger, domain_rule_key, environment_filter_key, filesystem_rule_key,
+};
 use crate::model::{RawConfig, RawProfile};
 use cageforge_command::{CommandRequest, EnvironmentNameKey};
 use cageforge_network_proxy::GatewayConfig;
@@ -257,9 +259,9 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
         if let Some(command) = &profile.command
             && let Some(environment) = &command.environment
         {
-            let mut filter_patterns = BTreeSet::new();
+            let mut filter_patterns = HashSet::new();
             for pattern in environment.filters.keys() {
-                if !filter_patterns.insert(pattern.to_lowercase()) {
+                if !filter_patterns.insert(environment_filter_key(pattern)) {
                     return Err(invalid_value(
                         name,
                         "command.environment.filters",

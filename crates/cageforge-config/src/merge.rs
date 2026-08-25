@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
-use cageforge_command::EnvironmentNameKey;
+use cageforge_command::{EnvironmentNameKey, EnvironmentPattern};
 use cageforge_path::{NativePathKey, case_fold, normalize_lexical_path};
 use cageforge_policy::{DomainAccess, DomainRule, PathPattern, PathSelector};
 
@@ -53,6 +53,12 @@ pub(crate) enum GlobKey {
     Missing,
 }
 
+#[derive(PartialEq, Eq, Hash)]
+pub(crate) enum EnvironmentFilterKey {
+    Valid(EnvironmentPattern),
+    Invalid(String),
+}
+
 #[derive(Default)]
 pub(crate) struct ProfileMerger {
     merged: MergedProfile,
@@ -61,7 +67,7 @@ pub(crate) struct ProfileMerger {
     filesystem_rules: HashMap<FilesystemRuleKey, usize>,
     domain_rules: HashMap<String, usize>,
     unix_sockets: HashMap<NativePathKey, usize>,
-    environment_filters: HashMap<String, String>,
+    environment_filters: HashMap<EnvironmentFilterKey, String>,
     environment_overrides: BTreeMap<EnvironmentNameKey, (String, Option<String>)>,
 }
 
@@ -328,17 +334,24 @@ pub(crate) fn domain_rule_key(pattern: &str) -> String {
     )
 }
 
+pub(crate) fn environment_filter_key(pattern: &str) -> EnvironmentFilterKey {
+    EnvironmentPattern::new(pattern.to_owned()).map_or_else(
+        |_| EnvironmentFilterKey::Invalid(pattern.to_lowercase()),
+        EnvironmentFilterKey::Valid,
+    )
+}
+
 fn merge_environment(
     merged: &mut RawEnvironment,
     child: &RawEnvironment,
-    filter_keys: &mut HashMap<String, String>,
+    filter_keys: &mut HashMap<EnvironmentFilterKey, String>,
     overrides: &mut BTreeMap<EnvironmentNameKey, (String, Option<String>)>,
 ) {
     if child.inherit.is_some() {
         merged.inherit = child.inherit;
     }
     for (pattern, action) in &child.filters {
-        let key = pattern.to_lowercase();
+        let key = environment_filter_key(pattern);
         if let Some(existing) = filter_keys.insert(key, pattern.clone()) {
             merged.filters.remove(&existing);
         }
