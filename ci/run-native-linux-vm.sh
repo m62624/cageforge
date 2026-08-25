@@ -79,6 +79,11 @@ write_files:
       set -euo pipefail
       export HOME=/home/ubuntu
       export PATH=/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      sysctl -w kernel.unprivileged_userns_clone=1
+      if sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+        sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      fi
+      runuser -u ubuntu -- bwrap --unshare-user --unshare-net --die-with-parent -- true
       runuser -u ubuntu -- env HOME=/home/ubuntu bash -c "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
       runuser -u ubuntu -- env HOME=/home/ubuntu PATH=/home/ubuntu/.cargo/bin:\$PATH rustup component add clippy rustfmt
       touch /var/lib/cageforge-bootstrap-complete
