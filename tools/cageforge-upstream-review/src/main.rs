@@ -90,6 +90,16 @@ struct Repository {
     upstream_path_override: Option<PathBuf>,
 }
 
+impl CommandKind {
+    fn execute(self, repository: &Repository) -> Result<(), String> {
+        match self {
+            Self::Status => status(repository),
+            Self::Check => check(repository),
+            Self::Diff { to, scopes } => diff(repository, to, scopes),
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -107,11 +117,7 @@ fn run(cli: Cli) -> Result<(), String> {
     validate_config(&repository.config)?;
     validate_local_paths(&repository)?;
 
-    match cli.command {
-        CommandKind::Status => status(&repository),
-        CommandKind::Check => check(&repository),
-        CommandKind::Diff { to, scopes } => diff(&repository, to, scopes),
-    }
+    cli.command.execute(&repository)
 }
 
 impl Repository {
