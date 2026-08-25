@@ -87,17 +87,17 @@ write_files:
       for apparmor_sysctl in \
         kernel.apparmor_restrict_unprivileged_userns \
         kernel.apparmor_restrict_unprivileged_unconfined; do
-        apparmor_sysctl_path=/proc/sys/${apparmor_sysctl//./\/}
-        if [[ -w "$apparmor_sysctl_path" ]]; then
-          sysctl -w "$apparmor_sysctl=0"
+        apparmor_sysctl_path=/proc/sys/\${apparmor_sysctl//./\\/}
+        if [[ -w "\$apparmor_sysctl_path" ]]; then
+          sysctl -w "\$apparmor_sysctl=0"
         else
-          echo "[cageforge] bootstrap: $apparmor_sysctl=sysctl-unavailable"
+          echo "[cageforge] bootstrap: \$apparmor_sysctl=sysctl-unavailable"
         fi
       done
       echo '[cageforge] bootstrap: probing Bubblewrap user and network namespaces'
-      echo "[cageforge] bootstrap: userns=$(sysctl -n kernel.unprivileged_userns_clone)"
+      echo "[cageforge] bootstrap: userns=\$(sysctl -n kernel.unprivileged_userns_clone)"
       if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
-        echo "[cageforge] bootstrap: apparmor_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
+        echo "[cageforge] bootstrap: apparmor_userns=\$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
       else
         echo '[cageforge] bootstrap: apparmor_userns=sysctl-unavailable'
       fi
