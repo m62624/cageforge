@@ -23,6 +23,15 @@ use crate::model::{
 };
 use crate::ownership::ExternalOwner;
 
+struct ComposedWorkspaceRoots {
+    selected: Option<Vec<PathBuf>>,
+    limit: Option<Vec<PathBuf>>,
+}
+
+trait EnforcementMode {
+    fn delegates_enforcement(self) -> bool;
+}
+
 /// Computes a safe effective sandbox from a requested policy and a ceiling.
 ///
 /// Every filesystem and network decision must be permitted by both inputs.
@@ -272,10 +281,6 @@ fn validate_external_owner(
     Ok(())
 }
 
-trait EnforcementMode {
-    fn delegates_enforcement(self) -> bool;
-}
-
 impl EnforcementMode for FilesystemMode {
     fn delegates_enforcement(self) -> bool {
         self == Self::External
@@ -373,9 +378,4 @@ fn compose_workspace_roots(
             limit: None,
         }),
     }
-}
-
-struct ComposedWorkspaceRoots {
-    selected: Option<Vec<PathBuf>>,
-    limit: Option<Vec<PathBuf>>,
 }
