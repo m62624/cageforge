@@ -77,15 +77,22 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
+      bootstrap_log=/var/log/cageforge-bootstrap.log
+      exec > >(tee -a "\$bootstrap_log") 2>&1
       export HOME=/home/ubuntu
       export PATH=/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      echo '[cageforge] bootstrap: configuring user namespaces'
       sysctl -w kernel.unprivileged_userns_clone=1
       if sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
         sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       fi
+      echo '[cageforge] bootstrap: probing Bubblewrap user and network namespaces'
       timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap --unshare-user --unshare-net --die-with-parent -- true
+      echo '[cageforge] bootstrap: Bubblewrap probe passed'
+      echo '[cageforge] bootstrap: installing Rust toolchain'
       runuser -u ubuntu -- env HOME=/home/ubuntu bash -c "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
       runuser -u ubuntu -- env HOME=/home/ubuntu PATH=/home/ubuntu/.cargo/bin:\$PATH rustup component add clippy rustfmt
+      echo '[cageforge] bootstrap: completed'
       touch /var/lib/cageforge-bootstrap-complete
 runcmd:
   - [bash, /etc/cageforge-bootstrap.sh]
@@ -175,13 +182,22 @@ wait_for_ssh() {
 
 wait_for_bootstrap() {
     local log_file=$1
+    echo "guest bootstrap log:" >&2
+    ssh_guest 'sudo tail -n 40 /var/log/cageforge-bootstrap.log' >&2 || true
     for _ in {1..180}; do
         if ssh_guest 'sudo test -f /var/lib/cageforge-bootstrap-complete' >/dev/null 2>&1; then
             return
         fi
-        if (( _ % 15 == 0 )); then
+        if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
+            print_guest_logs "$log_file"
+            ssh_guest 'sudo cat /var/log/cageforge-bootstrap.log' >&2 || true
+            echo "guest bootstrap failed" >&2
+            exit 70
+        fi
+        if (( _ % 5 == 0 )); then
             echo "guest bootstrap still running (${_}/180)" >&2
             tail -n 20 "$log_file" >&2 || true
+            ssh_guest 'sudo tail -n 40 /var/log/cageforge-bootstrap.log' >&2 || true
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             print_guest_logs "$log_file"
