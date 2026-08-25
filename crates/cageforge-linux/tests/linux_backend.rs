@@ -9,6 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -157,13 +158,27 @@ fn spawn_network_client(
     let backend = backend();
     let prepared = backend.prepare(BackendRequest::new(&command, &effective), &runtime)?;
     let mut child = backend.spawn(prepared)?;
-    child.wait()
+    let status = child.wait()?;
+    let mut stderr = String::new();
+    child
+        .stderr()
+        .expect("network fixture stderr")
+        .read_to_string(&mut stderr)
+        .expect("network fixture stderr read");
+    if !status.success() {
+        eprintln!("network fixture failed with {status}: {stderr}");
+    }
+    Ok(status)
 }
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<()>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("HTTP listener");
     let address = listener.local_addr().expect("HTTP address");
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let server = thread::spawn(move || {
+        ready_sender
+            .send(())
+            .expect("HTTP server readiness receiver");
         let (mut stream, _) = listener.accept().expect("gateway request");
         let mut request = [0; 4096];
         let _ = stream.read(&mut request).expect("HTTP request");
@@ -171,6 +186,7 @@ fn start_http_server() -> (SocketAddr, thread::JoinHandle<()>) {
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
             .expect("HTTP response");
     });
+    ready_receiver.recv().expect("HTTP server readiness signal");
     (address, server)
 }
 
@@ -752,12 +768,13 @@ fn hardening_helper_rejects_a_forged_authentication_protocol_from_a_visible_peer
         .preserved_fds(vec![helper_socket.into()]);
     let child = command.spawn().expect("helper");
     drop(command);
-    peer.write_all(b"cageforge-linux-helper-v1CFENV\x01\x00\x00\x00\x00\x00\x00\x00\x00")
-        .expect("forged authentication frame");
+    let frame_sent = peer
+        .write_all(b"cageforge-linux-helper-v1CFENV\x01\x00\x00\x00\x00\x00\x00\x00\x00")
+        .is_ok();
     let mut ready = [0; 4];
-    let helper_replied = peer.read_exact(&mut ready).is_ok();
+    let helper_replied = frame_sent && peer.read_exact(&mut ready).is_ok();
     if helper_replied {
-        peer.write_all(b"run").expect("forged release frame");
+        let _ = peer.write_all(b"run");
     }
     drop(peer);
     let output = child.wait_with_output().expect("helper");

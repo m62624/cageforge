@@ -49,26 +49,22 @@ fn executable_discovery_skips_workspace_local_and_non_executable_candidates() {
 
 #[test]
 fn executable_probe_has_a_hard_deadline() {
-    let temporary = tempfile::tempdir().expect("temporary root");
-    let program = temporary.path().join("busy");
-    write_program(&program, 0o755, "#!/bin/sh\nwhile :; do :; done\n");
-
-    let result = run_probe(&program, &[], Duration::from_millis(20));
+    let result = run_probe(
+        Path::new("/bin/sh"),
+        ["-c", "while :; do :; done"].as_slice(),
+        Duration::from_millis(20),
+    );
 
     assert!(matches!(result, Err(ProbeError::TimedOut)));
 }
 
 #[test]
 fn executable_probe_rejects_unbounded_output() {
-    let temporary = tempfile::tempdir().expect("temporary root");
-    let program = temporary.path().join("noisy");
-    write_program(
-        &program,
-        0o755,
-        "#!/bin/sh\nwhile :; do printf '0123456789abcdef'; done\n",
+    let result = run_probe(
+        Path::new("/bin/sh"),
+        ["-c", "while :; do printf '0123456789abcdef'; done"].as_slice(),
+        Duration::from_secs(2),
     );
-
-    let result = run_probe(&program, &[], Duration::from_secs(2));
 
     assert!(
         matches!(&result, Err(ProbeError::OutputLimitExceeded)),

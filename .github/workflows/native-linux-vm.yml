@@ -1,4 +1,4 @@
-name: Native Linux VM experiment
+name: Native Linux VM
 
 on:
   # The workflow is defined on the trusted default branch and never checks out
@@ -7,6 +7,16 @@ on:
   push:
     branches:
       - main
+  workflow_call:
+    inputs:
+      pr_number:
+        description: Open GitHub pull request number to test
+        required: false
+        type: string
+      expected_sha:
+        description: Optional 40-character head SHA; fail if the PR moved
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       pr_number:
@@ -23,19 +33,20 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: cageforge-native-linux-vm-${{ inputs.pr_number || github.sha }}
+  group: cageforge-native-linux-vm-${{ inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   native-linux-vm:
     name: Linux native tests in disposable QEMU/KVM VM
-    if: github.ref == 'refs/heads/main'
+    if: inputs.pr_number != '' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout trusted launcher from main
         uses: actions/checkout@v7
         with:
+          repository: m62624/cageforge
           ref: main
           fetch-depth: 1
           persist-credentials: false
@@ -55,7 +66,7 @@ jobs:
           sudo chmod 0666 /dev/kvm
 
       - name: Resolve immutable source revision
-        if: github.event_name == 'workflow_dispatch'
+        if: inputs.pr_number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -99,7 +110,7 @@ jobs:
           } >>"${GITHUB_ENV}"
 
       - name: Resolve pushed main revision
-        if: github.event_name == 'push'
+        if: inputs.pr_number == ''
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || {
