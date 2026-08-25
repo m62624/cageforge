@@ -9,6 +9,7 @@ pub(super) mod synthetic;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsString};
 use std::fs::{self, File};
+use std::num::NonZeroUsize;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,15 @@ enum Mount {
     Write,
     ReadOnly,
     Deny,
+}
+
+struct LayerMountCollector<'scope, 'request> {
+    backend: &'scope LinuxBackend,
+    prepared: &'scope PreparedBackendRequest<'request, LinuxBackend>,
+    context: &'scope cageforge_policy_compose::EffectivePathContext,
+    glob_scan_max_depth: Option<NonZeroUsize>,
+    mounts: &'scope mut BTreeMap<PathBuf, Mount>,
+    protected_paths: &'scope mut BTreeSet<PathBuf>,
 }
 
 impl FilesystemPlan {
@@ -117,15 +127,15 @@ pub(crate) fn lower<'a>(
     let mut mounts = BTreeMap::<PathBuf, Mount>::new();
     let mut protected_paths = BTreeSet::new();
     for layer in lowering.layers() {
-        collect_layer_mounts(
+        LayerMountCollector::new(
             backend,
             prepared,
             context,
-            layer,
             lowering.glob_scan_max_depth(),
             &mut mounts,
             &mut protected_paths,
-        )?;
+        )
+        .collect(layer)?;
     }
     reject_unsafe_bind_symlinks(&mounts)?;
     let mut protected_create_paths = BTreeSet::new();
@@ -215,55 +225,75 @@ pub(crate) fn lower<'a>(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn collect_layer_mounts<'a>(
-    backend: &LinuxBackend,
-    prepared: &PreparedBackendRequest<'a, LinuxBackend>,
-    context: &cageforge_policy_compose::EffectivePathContext,
-    layer: EffectiveFilesystemLayer<'_>,
-    glob_scan_max_depth: Option<std::num::NonZeroUsize>,
-    mounts: &mut BTreeMap<PathBuf, Mount>,
-    protected_paths: &mut BTreeSet<PathBuf>,
-) -> Result<(), LinuxBackendError> {
-    protected_paths.extend(layer.protected_relative_paths().iter().cloned());
-    for rule in layer.entries() {
-        match rule.target() {
-            FilesystemTarget::Scope(selector) => {
-                for path in context.resolve(selector) {
-                    add_scope_mount(
-                        backend,
-                        prepared,
-                        &path,
-                        rule.missing_path_behavior(),
-                        mounts,
-                    )?;
-                    for subpath in rule.read_only_subpaths() {
-                        for subpath in context.resolve(subpath) {
-                            if subpath.starts_with(&path) {
-                                add_read_only_path(backend, prepared, &subpath, mounts)?;
+impl<'scope, 'request> LayerMountCollector<'scope, 'request> {
+    fn new(
+        backend: &'scope LinuxBackend,
+        prepared: &'scope PreparedBackendRequest<'request, LinuxBackend>,
+        context: &'scope cageforge_policy_compose::EffectivePathContext,
+        glob_scan_max_depth: Option<NonZeroUsize>,
+        mounts: &'scope mut BTreeMap<PathBuf, Mount>,
+        protected_paths: &'scope mut BTreeSet<PathBuf>,
+    ) -> Self {
+        Self {
+            backend,
+            prepared,
+            context,
+            glob_scan_max_depth,
+            mounts,
+            protected_paths,
+        }
+    }
+
+    fn collect(&mut self, layer: EffectiveFilesystemLayer<'_>) -> Result<(), LinuxBackendError> {
+        self.protected_paths
+            .extend(layer.protected_relative_paths().iter().cloned());
+        for rule in layer.entries() {
+            match rule.target() {
+                FilesystemTarget::Scope(selector) => {
+                    for path in self.context.resolve(selector) {
+                        add_scope_mount(
+                            self.backend,
+                            self.prepared,
+                            &path,
+                            rule.missing_path_behavior(),
+                            self.mounts,
+                        )?;
+                        for subpath in rule.read_only_subpaths() {
+                            for subpath in self.context.resolve(subpath) {
+                                if subpath.starts_with(&path) {
+                                    add_read_only_path(
+                                        self.backend,
+                                        self.prepared,
+                                        &subpath,
+                                        self.mounts,
+                                    )?;
+                                }
                             }
                         }
                     }
                 }
-            }
-            FilesystemTarget::Glob(pattern) => {
-                for (path, directly_matched) in glob::expand(pattern, context, glob_scan_max_depth)?
-                {
-                    if directly_matched
-                        && prepared.filesystem_access_for_path(backend, &path)?
-                            != FilesystemDecision::Deny
+                FilesystemTarget::Glob(pattern) => {
+                    for (path, directly_matched) in
+                        glob::expand(pattern, self.context, self.glob_scan_max_depth)?
                     {
-                        return Err(LinuxBackendError::PolicyLoweringMismatch {
-                            path,
-                            expected: PolicyLoweringExpectation::DenyGlobMatch,
-                        });
+                        if directly_matched
+                            && self
+                                .prepared
+                                .filesystem_access_for_path(self.backend, &path)?
+                                != FilesystemDecision::Deny
+                        {
+                            return Err(LinuxBackendError::PolicyLoweringMismatch {
+                                path,
+                                expected: PolicyLoweringExpectation::DenyGlobMatch,
+                            });
+                        }
+                        insert_mount(self.mounts, path, Mount::Deny);
                     }
-                    insert_mount(mounts, path, Mount::Deny);
                 }
             }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 fn add_scope_mount<'a>(
