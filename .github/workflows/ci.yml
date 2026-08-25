@@ -192,12 +192,6 @@ jobs:
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
-      - name: Check network proxy without runtime feature
-        run: >-
-          cargo check
-          -p cageforge-network-proxy
-          --no-default-features
-          --all-targets
       - name: Lint network proxy without runtime feature
         run: >-
           cargo clippy
@@ -355,25 +349,44 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
+      - name: Install bundled Bubblewrap build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libcap-dev pkg-config
       # Keep these explicit. Workspace feature unification means that a
       # workspace-wide --no-default-features run can still enable the proxy's
       # runtime through cageforge-linux's target dependency.
-      - name: Check Linux library and helper binary in both feature modes
+      - name: Lint Linux library and helper binary in every feature mode
         run: |
-          cargo check -p cageforge-linux --lib --all-features
-          cargo check -p cageforge-linux --lib --no-default-features
-          cargo check -p cageforge-linux --bin cageforge-linux-helper --all-features
-          cargo check -p cageforge-linux --bin cageforge-linux-helper --no-default-features
+          cargo clippy -p cageforge-bwrap --all-targets -- -D warnings
+          cargo clippy -p cageforge-linux --lib --no-default-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-linux --lib --features bundled-bubblewrap --all-targets -- -D warnings
+          cargo clippy -p cageforge-linux --lib --all-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-linux --bin cageforge-linux-helper --no-default-features -- -D warnings
+          cargo clippy -p cageforge-linux --bin cageforge-linux-helper --features bundled-bubblewrap -- -D warnings
+          cargo clippy -p cageforge-linux --bin cageforge-linux-helper --all-features -- -D warnings
+      - name: Test Linux library and helper binary in every feature mode
+        run: |
+          cargo test -p cageforge-bwrap -p cageforge-linux --lib --no-default-features
+          cargo test -p cageforge-linux --lib --features bundled-bubblewrap
           cargo test -p cageforge-linux --lib --all-features
-          cargo test -p cageforge-linux --lib --no-default-features
-      - name: Check network proxy runtime and configuration-only modes
+      - name: Lint network proxy runtime and configuration-only modes
         run: |
-          cargo check -p cageforge-network-proxy --all-features --all-targets
-          cargo check -p cageforge-network-proxy --no-default-features --all-targets
-          cargo clippy -p cageforge-network-proxy --all-features --all-targets -- -D warnings
           cargo clippy -p cageforge-network-proxy --no-default-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-network-proxy --features runtime --all-targets -- -D warnings
+          cargo clippy -p cageforge-network-proxy --all-features --all-targets -- -D warnings
+      - name: Test network proxy runtime and configuration-only modes
+        run: |
           cargo test -p cageforge-network-proxy --all-features --all-targets
+          cargo test -p cageforge-network-proxy --features runtime --all-targets
           cargo test -p cageforge-network-proxy --no-default-features --all-targets
+      - name: Check Linux documentation in every public feature mode
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc -p cageforge-bwrap -p cageforge-linux --no-deps
+          cargo doc -p cageforge-linux --features bundled-bubblewrap --no-deps
+          cargo doc -p cageforge-linux --all-features --no-deps
       - name: Cross-check Windows library, helper, and proxy surfaces
         run: |
           cargo check -p cageforge-linux --target x86_64-pc-windows-msvc --lib --all-targets

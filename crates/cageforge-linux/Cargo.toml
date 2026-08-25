@@ -8,12 +8,20 @@ rust-version.workspace = true
 description = "Linux native backend for Cageforge process sandboxing"
 readme = "README.md"
 
+[package.metadata.docs.rs]
+targets = []
+
+[features]
+default = []
+bundled-bubblewrap = ["dep:cageforge-bwrap"]
+
 [lib]
 name = "cageforge_linux"
 path = "src/lib.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cageforge-backend-api.workspace = true
+cageforge-bwrap = { workspace = true, optional = true }
 cageforge-command.workspace = true
 cageforge-network-proxy = { workspace = true, features = ["runtime"] }
 cageforge-path.workspace = true

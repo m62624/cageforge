@@ -8,6 +8,12 @@ repository.workspace = true
 readme = "README.md"
 build = "build.rs"
 
+[package.metadata.docs.rs]
+targets = []
+
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "cageforge-bwrap"
 path = "src/main.rs"

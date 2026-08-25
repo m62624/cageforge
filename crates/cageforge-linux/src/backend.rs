@@ -21,6 +21,8 @@ use cageforge_policy::NetworkMode;
 use cageforge_policy_compose::EffectiveSandbox;
 use command_fds::CommandFdExt;
 
+#[cfg(feature = "bundled-bubblewrap")]
+use crate::bwrap::materialize_bundled_resource;
 use crate::bwrap::{
     discover_and_probe, discover_hardening_helper, namespace_args, open_pinned, resource_directory,
 };
@@ -69,6 +71,11 @@ pub struct LinuxBackend {
     hardening_helper_file: Arc<File>,
     timeout_supported: bool,
     identity: BackendIdentity,
+    /// Keeps an automatically materialized bundled resource alive for the
+    /// lifetime of the pinned executable.
+    #[cfg(feature = "bundled-bubblewrap")]
+    #[allow(dead_code)]
+    bundled_resource: Option<Arc<tempfile::TempDir>>,
 }
 
 impl LinuxBackend {
@@ -80,6 +87,22 @@ impl LinuxBackend {
             });
         }
         let resource_directory = resource_directory(config.resource_directory_source())?;
+        #[cfg(feature = "bundled-bubblewrap")]
+        let mut resource_directory = resource_directory;
+        #[cfg(feature = "bundled-bubblewrap")]
+        let mut bundled_resource: Option<Arc<tempfile::TempDir>> = None;
+        #[cfg(feature = "bundled-bubblewrap")]
+        if resource_directory.is_none()
+            && matches!(
+                config.bubblewrap(),
+                crate::config::BubblewrapSource::Bundled
+                    | crate::config::BubblewrapSource::SystemThenBundled
+            )
+        {
+            let resource = materialize_bundled_resource()?;
+            resource_directory = Some(resource.path().to_path_buf());
+            bundled_resource = Some(Arc::new(resource));
+        }
         let bubblewrap = discover_and_probe(
             config.bubblewrap(),
             resource_directory.as_deref(),
@@ -98,6 +121,8 @@ impl LinuxBackend {
             hardening_helper_file,
             timeout_supported: TimeoutWatchdog::is_supported(),
             identity: BackendIdentity::new(),
+            #[cfg(feature = "bundled-bubblewrap")]
+            bundled_resource,
         })
     }
 

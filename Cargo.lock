@@ -228,6 +228,7 @@ name = "cageforge-linux"
 version = "0.1.0"
 dependencies = [
  "cageforge-backend-api",
+ "cageforge-bwrap",
  "cageforge-command",
  "cageforge-config",
  "cageforge-network-proxy",

@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 
+#[cfg(feature = "bundled-bubblewrap")]
+use super::materialize_bundled_resource;
 use super::{
     ProbeError, can_fall_back_to_bundled, find_in_search_paths, missing_help_flags,
     resource_directory, run_probe, verify_bundled_digest,
@@ -98,6 +100,24 @@ fn bundled_bubblewrap_requires_a_matching_digest_manifest() {
         verify_bundled_digest(&binary),
         Err(LinuxBackendError::BubblewrapDigestMismatch { .. })
     ));
+}
+
+#[cfg(feature = "bundled-bubblewrap")]
+#[test]
+fn bundled_feature_materializes_a_private_verified_resource() {
+    let resource = materialize_bundled_resource().expect("materialize bundled Bubblewrap");
+    let binary = resource.path().join("bwrap");
+
+    assert!(binary.is_file());
+    verify_bundled_digest(&binary).expect("verify materialized Bubblewrap");
+    assert_eq!(
+        fs::metadata(resource.path())
+            .expect("resource metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
 }
 
 #[test]

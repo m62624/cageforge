@@ -63,6 +63,7 @@ packages:
   - ca-certificates
   - curl
   - git
+  - bubblewrap
   - libcap-dev
   - openssh-server
   - pkg-config
@@ -226,8 +227,22 @@ sudo mount -L CAGEFORGE_SOURCE -o ro "$source_mount"
 root_dir=$(sudo cat /var/lib/cageforge-source-root)
 cd "$root_dir"
 cargo fmt --all -- --check
-cargo clippy -p cageforge-bwrap -p cageforge-core -p cageforge-linux --all-targets -- -D warnings
-cargo test -p cageforge-bwrap -p cageforge-core -p cageforge-linux
+cargo clippy -p cageforge-bwrap -p cageforge-core --all-targets --locked -- -D warnings
+
+echo 'Running cageforge-linux Clippy without optional features.'
+cargo clippy -p cageforge-linux --no-default-features --all-targets --locked -- -D warnings
+echo 'Running cageforge-linux tests without optional features.'
+cargo test -p cageforge-linux --no-default-features --locked
+
+echo 'Running cageforge-linux Clippy with bundled-bubblewrap.'
+cargo clippy -p cageforge-linux --features bundled-bubblewrap --all-targets --locked -- -D warnings
+echo 'Running cageforge-linux tests with bundled-bubblewrap.'
+cargo test -p cageforge-linux --features bundled-bubblewrap --locked
+
+echo 'Running cageforge-linux Clippy with all features.'
+cargo clippy -p cageforge-linux --all-features --all-targets --locked -- -D warnings
+echo 'Running cageforge-linux tests with all features.'
+cargo test -p cageforge-linux --all-features --locked
 EOF
 result=$?
 set -e

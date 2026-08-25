@@ -19,3 +19,7 @@ The resulting binary is staged by an application release builder into
 `cageforge-resources/bwrap` next to the application. `cageforge-linux` then
 validates the resource before using it as a fallback for a compatible system
 Bubblewrap executable.
+
+The `cageforge-linux/bundled-bubblewrap` feature embeds the same reviewed
+build into the Linux backend and materializes it privately when needed, so an
+application does not need a separate staging step for that mode.

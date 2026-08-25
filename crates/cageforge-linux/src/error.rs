@@ -738,6 +738,15 @@ pub enum LinuxBackendError {
     /// The configured packaged-resource directory was not available.
     #[error("Cageforge Linux resource directory was not found")]
     ResourceDirectoryUnavailable,
+    /// The embedded Bubblewrap resource could not be materialized securely.
+    #[error("cannot materialize the bundled Bubblewrap resource during {operation}: {source}")]
+    BundledBubblewrapMaterialization {
+        /// Resource operation that failed.
+        operation: &'static str,
+        /// Operating-system failure.
+        #[source]
+        source: std::io::Error,
+    },
     /// The command path collides with the reserved in-sandbox helper path.
     #[error("command path is reserved by the Linux backend hardening helper: {path:?}")]
     HardeningHelperPathCollision {

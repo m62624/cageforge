@@ -78,6 +78,20 @@ development files. The system executable remains the first choice so Linux
 distributions can provide their maintained package; the bundled executable is
 the reproducible fallback for application distributions.
 
+Applications that want Cageforge to build and provide the fallback
+automatically can enable the Linux-only `bundled-bubblewrap` feature:
+
+```toml
+cageforge-linux = { version = "0.1", features = ["bundled-bubblewrap"] }
+```
+
+With that feature, the pinned Bubblewrap executable is embedded at build time
+and materialized into a private temporary resource directory when the backend
+needs a bundled fallback. Without the feature, Cageforge uses a compatible
+system executable or an explicitly packaged `cageforge-resources/bwrap`; it
+does not download or compile Bubblewrap implicitly. An explicit resource
+directory remains authoritative in both modes.
+
 The host kernel must permit the user, mount, PID, and—when requested—network
 namespaces used by Bubblewrap. A missing prerequisite is reported as a typed
 `LinuxBackendError`; restricted requests are never widened into an ordinary

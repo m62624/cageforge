@@ -44,6 +44,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROBE_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
+#[cfg(feature = "bundled-bubblewrap")]
+const BUNDLED_RESOURCE_PREFIX: &str = "cageforge-bwrap-";
+
 #[derive(Debug)]
 pub(crate) struct BubblewrapSelection {
     pub(crate) path: PathBuf,
@@ -61,6 +64,69 @@ pub(crate) struct FileIdentity {
 pub(crate) struct PinnedExecutable {
     pub(crate) path: PathBuf,
     pub(crate) file: File,
+}
+
+#[cfg(feature = "bundled-bubblewrap")]
+pub(crate) fn materialize_bundled_resource() -> Result<tempfile::TempDir, LinuxBackendError> {
+    let resource = tempfile::Builder::new()
+        .prefix(BUNDLED_RESOURCE_PREFIX)
+        .tempdir()
+        .map_err(
+            |source| LinuxBackendError::BundledBubblewrapMaterialization {
+                operation: "creating a private resource directory",
+                source,
+            },
+        )?;
+    let mut directory_permissions = fs::metadata(resource.path())
+        .map_err(
+            |source| LinuxBackendError::BundledBubblewrapMaterialization {
+                operation: "checking the private resource directory",
+                source,
+            },
+        )?
+        .permissions();
+    directory_permissions.set_mode(0o700);
+    fs::set_permissions(resource.path(), directory_permissions).map_err(|source| {
+        LinuxBackendError::BundledBubblewrapMaterialization {
+            operation: "restricting the private resource directory",
+            source,
+        }
+    })?;
+    let binary = resource.path().join("bwrap");
+    fs::write(&binary, cageforge_bwrap::bundled_bubblewrap()).map_err(|source| {
+        LinuxBackendError::BundledBubblewrapMaterialization {
+            operation: "writing the embedded executable",
+            source,
+        }
+    })?;
+    let mut permissions = fs::metadata(&binary)
+        .map_err(
+            |source| LinuxBackendError::BundledBubblewrapMaterialization {
+                operation: "reading the embedded executable metadata",
+                source,
+            },
+        )?
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&binary, permissions).map_err(|source| {
+        LinuxBackendError::BundledBubblewrapMaterialization {
+            operation: "securing the embedded executable",
+            source,
+        }
+    })?;
+    let digest = sha256_file(&binary).map_err(|source| {
+        LinuxBackendError::BundledBubblewrapMaterialization {
+            operation: "hashing the embedded executable",
+            source,
+        }
+    })?;
+    fs::write(resource.path().join("bwrap.sha256"), format!("{digest}\n")).map_err(|source| {
+        LinuxBackendError::BundledBubblewrapMaterialization {
+            operation: "writing the embedded executable digest",
+            source,
+        }
+    })?;
+    Ok(resource)
 }
 
 #[derive(Debug)]
