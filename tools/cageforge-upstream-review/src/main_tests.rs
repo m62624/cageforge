@@ -5,8 +5,20 @@ use super::*;
 #[test]
 fn repository_relative_paths_reject_empty_absolute_and_parent_paths() {
     assert!(validate_repo_relative_path("", "path").is_err());
-    assert!(validate_repo_relative_path("/absolute", "path").is_err());
-    assert!(validate_repo_relative_path("nested/../escape", "path").is_err());
+    for path in [
+        "/absolute",
+        "\\absolute",
+        "C:/absolute",
+        "C:\\absolute",
+        "C:relative",
+        "nested/../escape",
+        "nested\\..\\escape",
+    ] {
+        assert!(
+            validate_repo_relative_path(path, "path").is_err(),
+            "path should be rejected: {path}"
+        );
+    }
     assert!(validate_repo_relative_path("codex-rs/config/src", "path").is_ok());
 }
 

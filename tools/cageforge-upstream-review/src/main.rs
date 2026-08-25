@@ -222,10 +222,28 @@ fn validate_config(config: &Config) -> Result<(), String> {
 
 fn validate_repo_relative_path(path: &str, label: &str) -> Result<(), String> {
     let path = Path::new(path);
-    if path.as_os_str().is_empty() || path.is_absolute() || contains_parent_traversal(path) {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || has_cross_platform_absolute_prefix(path.to_string_lossy().as_ref())
+        || contains_cross_platform_parent_traversal(path.to_string_lossy().as_ref())
+        || contains_parent_traversal(path)
+    {
         return Err(format!("{label} must be repository-relative: {path:?}"));
     }
     Ok(())
+}
+
+fn has_cross_platform_absolute_prefix(path: &str) -> bool {
+    path.starts_with('/')
+        || path.starts_with('\\')
+        || path
+            .as_bytes()
+            .get(1)
+            .is_some_and(|separator| *separator == b':')
+}
+
+fn contains_cross_platform_parent_traversal(path: &str) -> bool {
+    path.split(['/', '\\']).any(|component| component == "..")
 }
 
 fn validate_local_paths(repository: &Repository) -> Result<(), String> {
