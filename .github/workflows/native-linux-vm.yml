@@ -45,6 +45,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes genisoimage jq qemu-system-x86 qemu-utils
 
+      - name: Verify KVM access
+        run: |
+          set -euo pipefail
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error title=CAGEFORGE_KVM_UNAVAILABLE::GitHub runner did not expose /dev/kvm"
+            exit 86
+          fi
+          sudo chmod 0666 /dev/kvm
+
       - name: Resolve immutable source revision
         if: github.event_name == 'workflow_dispatch'
         env:

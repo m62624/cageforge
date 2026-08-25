@@ -97,8 +97,11 @@ start_guest() {
     local network_mode=$1
     local log_file=$2
     local attach_source=$3
+    local stderr_log="${log_file}.stderr"
     local network_spec="user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22"
     local source_args=()
+    : >"$log_file"
+    : >"$stderr_log"
     if [[ "$network_mode" == restricted ]]; then
         network_spec="user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:${ssh_port}-:22"
     fi
@@ -119,7 +122,7 @@ start_guest() {
         -display none
         -serial "file:${log_file}"
     )
-    qemu-system-x86_64 "${qemu_args[@]}" >/dev/null 2>&1 &
+    qemu-system-x86_64 "${qemu_args[@]}" >/dev/null 2>"$stderr_log" &
     qemu_pid=$!
 }
 
@@ -138,49 +141,59 @@ stop_guest() {
     qemu_pid=
 }
 
+print_guest_logs() {
+    local log_file=$1
+    echo "--- guest serial log: ${log_file} ---" >&2
+    cat "$log_file" >&2 || true
+    echo "--- qemu stderr log: ${log_file}.stderr ---" >&2
+    cat "${log_file}.stderr" >&2 || true
+}
+
 wait_for_ssh() {
+    local log_file=$1
     for _ in {1..120}; do
         if ssh_guest true >/dev/null 2>&1; then
             return
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
-            cat "$bootstrap_log" >&2 || true
+            print_guest_logs "$log_file"
             echo "guest stopped before SSH became available" >&2
             exit 70
         fi
         sleep 2
     done
-    cat "$bootstrap_log" >&2 || true
+    print_guest_logs "$log_file"
     echo "guest SSH readiness timed out" >&2
     exit 70
 }
 
 wait_for_bootstrap() {
+    local log_file=$1
     for _ in {1..180}; do
         if ssh_guest 'sudo test -f /var/lib/cageforge-bootstrap-complete' >/dev/null 2>&1; then
             return
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
-            cat "$bootstrap_log" >&2 || true
+            print_guest_logs "$log_file"
             echo "guest stopped during trusted bootstrap" >&2
             exit 70
         fi
         sleep 2
     done
-    cat "$bootstrap_log" >&2 || true
+    print_guest_logs "$log_file"
     echo "guest bootstrap timed out" >&2
     exit 70
 }
 
 echo 'Starting trusted guest bootstrap without PR source attached.'
 start_guest unrestricted "$bootstrap_log" false
-wait_for_ssh
-wait_for_bootstrap
+wait_for_ssh "$bootstrap_log"
+wait_for_bootstrap "$bootstrap_log"
 stop_guest
 
 echo 'Fetching dependencies inside the guest before network isolation.'
 start_guest unrestricted "$bootstrap_log" true
-wait_for_ssh
+wait_for_ssh "$bootstrap_log"
 ssh_guest 'bash -s' <<'EOF'
 set -euo pipefail
 export PATH=/home/ubuntu/.cargo/bin:$PATH
@@ -202,7 +215,7 @@ stop_guest
 
 echo 'Running native tests inside the isolated guest.'
 start_guest restricted "$test_log" true
-wait_for_ssh
+wait_for_ssh "$test_log"
 set +e
 ssh_guest 'bash -s' <<'EOF'
 set -euo pipefail
@@ -221,6 +234,6 @@ set -e
 stop_guest
 
 if [[ "$result" -ne 0 ]]; then
-    cat "$test_log" >&2 || true
+    print_guest_logs "$test_log"
 fi
 exit "$result"
