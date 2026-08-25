@@ -63,7 +63,9 @@ fn build_bwrap(source_dir: &Path) -> Result<(), String> {
         .probe("libcap")
         .map_err(|error| format!("libcap was not found through pkg-config: {error}"))?;
 
-    let compiler = cc::Build::new().get_compiler();
+    let compiler = cc::Build::new()
+        .try_get_compiler()
+        .map_err(|error| format!("target C compiler is unavailable: {error}"))?;
     let binary = out_dir.join("bwrap");
     let mut command = compiler.to_command();
     command
@@ -82,11 +84,12 @@ fn build_bwrap(source_dir: &Path) -> Result<(), String> {
     for library in libcap.libs {
         command.arg(format!("-l{library}"));
     }
-    let output = command
-        .arg("-o")
-        .arg(&binary)
-        .output()
-        .map_err(|error| format!("failed to invoke the C compiler: {error}"))?;
+    let output = command.arg("-o").arg(&binary).output().map_err(|error| {
+        format!(
+            "failed to invoke target C compiler {}: {error}",
+            compiler.path().display()
+        )
+    })?;
     if !output.status.success() {
         return Err(format!(
             "Bubblewrap compiler failed: {}",
