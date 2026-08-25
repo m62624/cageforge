@@ -2,7 +2,8 @@
 
 //! Linux process hardening applied to the Bubblewrap boundary.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::error::Error as StdError;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io;
@@ -12,7 +13,7 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::{Command, ExitCode};
+use std::process::{Child, Command, ExitCode, ExitStatus};
 
 use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
@@ -24,11 +25,15 @@ mod bridge;
 #[path = "hardening/environment.rs"]
 mod environment;
 
-use crate::error::{LinuxHardeningError, LinuxHardeningOperation, SeccompBuildError};
+use crate::error::{
+    LinuxHardeningError, LinuxHardeningOperation, LinuxHelperSetupFailure,
+    LinuxHelperSetupFailureKind, SeccompBuildError,
+};
 use crate::helper_protocol::{
     AUTH_FD_ENV, AUTH_TOKEN, BRIDGE_TOKEN_BYTES, GATEWAY_CONNECTION_LIMIT_ENV, GATEWAY_SOCKET_ENV,
     HARDENING_REQUIRED_ENV, NETWORK_MODE_DIRECT_WITHOUT_UNIX, NETWORK_MODE_DISABLED,
-    NETWORK_MODE_ENV, NETWORK_MODE_PROXY, READY, RELEASE, STATUS_MAGIC,
+    NETWORK_MODE_ENV, NETWORK_MODE_PROXY, RELEASE, SETUP_RESULT_FAILURE, SETUP_RESULT_MAGIC,
+    SETUP_RESULT_NO_ERRNO, SETUP_RESULT_READY, STATUS_MAGIC,
 };
 use bridge::LocalGatewayBridge;
 use environment::read_environment;
@@ -41,13 +46,25 @@ enum NetworkHardeningMode {
     ProxyRouted,
 }
 
-/// Applies process hardening inside the Bubblewrap namespace.
-fn apply(
+#[derive(Debug)]
+struct TraceSupervisor {
+    root_pid: libc::pid_t,
+    tracees: HashSet<libc::pid_t>,
+}
+
+#[derive(Debug)]
+struct CommandSeccompFilter {
+    clone3_compatibility: BpfProgram,
+    policy: BpfProgram,
+}
+
+/// Applies hardening to the trusted helper and prepares the command filter.
+fn prepare_hardening(
     hardening_required: bool,
     network_mode: NetworkHardeningMode,
-) -> Result<(), LinuxHardeningError> {
+) -> Result<Option<CommandSeccompFilter>, LinuxHardeningError> {
     if !hardening_required && network_mode == NetworkHardeningMode::None {
-        return Ok(());
+        return Ok(None);
     }
     set_parent_death_signal()?;
     set_dumpable(false).map_err(|source| LinuxHardeningError::Operation {
@@ -62,10 +79,14 @@ fn apply(
         operation: LinuxHardeningOperation::NoNewPrivileges,
         source,
     })?;
-    let filter = build_filter(network_mode)
+    let clone3_compatibility = build_clone3_compatibility_filter()
         .map_err(|source| LinuxHardeningError::SeccompBuild { source })?;
-    apply_filter(&filter).map_err(|source| LinuxHardeningError::SeccompInstallation { source })?;
-    Ok(())
+    let policy = build_filter(network_mode, true)
+        .map_err(|source| LinuxHardeningError::SeccompBuild { source })?;
+    Ok(Some(CommandSeccompFilter {
+        clone3_compatibility,
+        policy,
+    }))
 }
 
 /// Runs the private helper command used as Bubblewrap's final payload.
@@ -89,35 +110,46 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     let network_mode = match network_hardening_mode() {
         Ok(mode) => mode,
         Err(error) => {
-            eprintln!("invalid Linux network hardening mode: {error}");
-            return ExitCode::from(125);
+            return report_setup_failure(
+                &mut authentication,
+                LinuxHelperSetupFailureKind::NetworkMode,
+                &error,
+            );
         }
     };
     let bridge = match start_gateway_bridge(network_mode, &mut authentication) {
         Ok(bridge) => bridge,
         Err(error) => {
-            eprintln!("failed to activate Linux network gateway bridge: {error}");
-            return ExitCode::from(125);
+            return report_setup_failure(
+                &mut authentication,
+                LinuxHelperSetupFailureKind::GatewayBridge,
+                &error,
+            );
         }
     };
     let environment = match read_environment(&mut authentication) {
         Ok(environment) => environment,
         Err(error) => {
-            eprintln!("failed to receive sandboxed command environment: {error}");
-            return ExitCode::from(125);
+            return report_setup_failure(
+                &mut authentication,
+                LinuxHelperSetupFailureKind::EnvironmentFrame,
+                &error,
+            );
         }
     };
-    if let Err(error) = apply(hardening_required, network_mode) {
-        eprintln!("failed to apply Linux process hardening: {error}");
-        return ExitCode::from(125);
-    }
-    if let Err(error) = complete_setup_handshake(&mut authentication) {
-        eprintln!("failed Linux sandbox setup handshake: {error}");
-        return ExitCode::from(125);
-    }
+    let command_filter = match prepare_hardening(hardening_required, network_mode) {
+        Ok(filter) => filter,
+        Err(error) => {
+            let kind = process_hardening_failure_kind(&error);
+            return report_setup_failure(&mut authentication, kind, &error);
+        }
+    };
     if let Err(error) = set_close_on_exec(authentication.as_raw_fd(), true) {
-        eprintln!("failed to protect Linux helper status channel: {error}");
-        return ExitCode::from(125);
+        return report_setup_failure(
+            &mut authentication,
+            LinuxHelperSetupFailureKind::ProcessHardening,
+            &error,
+        );
     }
     let mut command = Command::new(program);
     command.args(args).env_clear().envs(environment);
@@ -130,22 +162,76 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     if let Some(bridge) = &bridge {
         bridge.configure_command(&mut command);
     }
-    // Re-apply process hardening in the forked command child immediately
-    // before exec. This keeps the invariant true even if the target executable
-    // causes Linux to recalculate dumpability during exec.
-    #[allow(unsafe_code)]
-    unsafe {
-        command.pre_exec(|| {
-            set_dumpable(false)?;
-            set_core_dump_limit_zero()
-        });
+    let trace_command = command_filter.is_some();
+    if let Some(filter) = command_filter {
+        // The helper is intentionally left outside the command's seccomp
+        // filter so it can supervise the traced process tree. The child
+        // installs the filter and requests tracing before exec, while it is
+        // still non-dumpable and stopped by the trusted helper boundary.
+        #[allow(unsafe_code)]
+        unsafe {
+            command.pre_exec(move || prepare_traced_command(&filter));
+        }
     }
-    let status = match command.status() {
-        Ok(status) => status,
-        Err(error) => {
-            let error = LinuxHardeningError::CommandStart { source: error };
-            eprintln!("{error}");
-            return ExitCode::from(126);
+    let status = if trace_command {
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let error = LinuxHardeningError::CommandStart { source: error };
+                return report_setup_failure(
+                    &mut authentication,
+                    LinuxHelperSetupFailureKind::CommandStart,
+                    &error,
+                );
+            }
+        };
+        let supervisor = match prepare_trace_supervision(&child) {
+            Ok(supervisor) => supervisor,
+            Err(error) => {
+                terminate_traced_command(&mut child);
+                return report_setup_failure(
+                    &mut authentication,
+                    LinuxHelperSetupFailureKind::TraceSupervision,
+                    &error,
+                );
+            }
+        };
+        if let Err(error) = complete_setup_handshake(&mut authentication) {
+            terminate_traced_command(&mut child);
+            eprintln!("failed Linux sandbox setup handshake: {error}");
+            return ExitCode::from(125);
+        }
+        match supervise_traced_command(supervisor) {
+            Ok(status) => status,
+            Err(error) => {
+                terminate_traced_command(&mut child);
+                eprintln!("failed to supervise sandboxed command: {error}");
+                return ExitCode::from(125);
+            }
+        }
+    } else {
+        if let Err(error) = complete_setup_handshake(&mut authentication) {
+            eprintln!("failed Linux sandbox setup handshake: {error}");
+            return ExitCode::from(125);
+        }
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let error = LinuxHardeningError::CommandStart { source: error };
+                eprintln!("{error}");
+                return ExitCode::from(126);
+            }
+        };
+        match child.wait() {
+            Ok(status) => status,
+            Err(source) => {
+                let error = LinuxHardeningError::Operation {
+                    operation: LinuxHardeningOperation::CommandWait,
+                    source,
+                };
+                eprintln!("{error}");
+                return ExitCode::from(125);
+            }
         }
     };
     if let Err(error) = write_command_status(&mut authentication, status) {
@@ -153,6 +239,209 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         return ExitCode::from(125);
     }
     ExitCode::from(status.code().unwrap_or(1) as u8)
+}
+
+fn process_hardening_failure_kind(error: &LinuxHardeningError) -> LinuxHelperSetupFailureKind {
+    match error {
+        LinuxHardeningError::ParentExitedDuringHardening
+        | LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::ParentDeathSignal,
+            ..
+        } => LinuxHelperSetupFailureKind::ParentDeathSignal,
+        LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::Dumpability,
+            ..
+        } => LinuxHelperSetupFailureKind::Dumpability,
+        LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::CoreDumpLimit,
+            ..
+        } => LinuxHelperSetupFailureKind::CoreDumpLimit,
+        LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::NoNewPrivileges,
+            ..
+        } => LinuxHelperSetupFailureKind::NoNewPrivileges,
+        LinuxHardeningError::SeccompBuild { .. } => LinuxHelperSetupFailureKind::SeccompBuild,
+        _ => LinuxHelperSetupFailureKind::ProcessHardening,
+    }
+}
+
+fn report_setup_failure(
+    authentication: &mut File,
+    kind: LinuxHelperSetupFailureKind,
+    error: &(dyn StdError + 'static),
+) -> ExitCode {
+    let failure = LinuxHelperSetupFailure::new(kind, first_raw_os_error(error));
+    if let Err(source) = write_setup_failure(authentication, failure) {
+        eprintln!("failed to report typed Linux helper setup failure: {source}");
+    }
+    eprintln!("Linux helper setup failed: {error}");
+    ExitCode::from(125)
+}
+
+fn first_raw_os_error(error: &(dyn StdError + 'static)) -> Option<i32> {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if let Some(error) = error.downcast_ref::<io::Error>()
+            && let Some(raw_os_error) = error.raw_os_error()
+        {
+            return Some(raw_os_error);
+        }
+        current = error.source();
+    }
+    None
+}
+
+fn write_setup_failure(
+    writer: &mut impl Write,
+    failure: LinuxHelperSetupFailure,
+) -> io::Result<()> {
+    writer.write_all(SETUP_RESULT_MAGIC)?;
+    writer.write_all(&[SETUP_RESULT_FAILURE])?;
+    writer.write_all(&u16::from(failure.kind()).to_be_bytes())?;
+    writer.write_all(
+        &failure
+            .raw_os_error()
+            .unwrap_or(SETUP_RESULT_NO_ERRNO)
+            .to_be_bytes(),
+    )
+}
+
+fn prepare_traced_command(filter: &CommandSeccompFilter) -> io::Result<()> {
+    set_command_parent_death_signal()?;
+    apply_filter(&filter.clone3_compatibility)
+        .and_then(|()| apply_filter(&filter.policy))
+        .map_err(|_| io::Error::from_raw_os_error(libc::EPERM))?;
+    request_parent_tracing()
+}
+
+fn prepare_trace_supervision(child: &Child) -> Result<TraceSupervisor, LinuxHardeningError> {
+    let root_pid = child.id() as libc::pid_t;
+    let initial_status = wait_for_tracee(root_pid)?;
+    if !libc::WIFSTOPPED(initial_status) || libc::WSTOPSIG(initial_status) != libc::SIGTRAP {
+        return Err(LinuxHardeningError::UnexpectedTraceStatus {
+            pid: root_pid,
+            status: initial_status,
+        });
+    }
+    set_trace_options(root_pid)?;
+    Ok(TraceSupervisor {
+        root_pid,
+        tracees: HashSet::from([root_pid]),
+    })
+}
+
+fn supervise_traced_command(
+    mut supervisor: TraceSupervisor,
+) -> Result<ExitStatus, LinuxHardeningError> {
+    continue_tracee(supervisor.root_pid, 0)?;
+    loop {
+        let mut status = 0;
+        #[allow(unsafe_code)]
+        let pid = unsafe { libc::waitpid(-1, &mut status, libc::__WALL) };
+        if pid == -1 {
+            let source = io::Error::last_os_error();
+            if source.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceWait,
+                source,
+            });
+        }
+        if libc::WIFEXITED(status) || libc::WIFSIGNALED(status) {
+            supervisor.tracees.remove(&pid);
+            if pid == supervisor.root_pid {
+                return Ok(ExitStatus::from_raw(status));
+            }
+            continue;
+        }
+        if libc::WIFCONTINUED(status) {
+            continue;
+        }
+        if !libc::WIFSTOPPED(status) {
+            return Err(LinuxHardeningError::UnexpectedTraceStatus { pid, status });
+        }
+
+        if supervisor.tracees.insert(pid) {
+            set_trace_options(pid)?;
+            continue_tracee(pid, 0)?;
+            continue;
+        }
+        let event = status >> 16;
+        if event != 0 {
+            continue_tracee(pid, 0)?;
+        } else {
+            continue_tracee(pid, libc::WSTOPSIG(status))?;
+        }
+    }
+}
+
+fn wait_for_tracee(pid: libc::pid_t) -> Result<libc::c_int, LinuxHardeningError> {
+    loop {
+        let mut status = 0;
+        #[allow(unsafe_code)]
+        let result = unsafe { libc::waitpid(pid, &mut status, libc::__WALL) };
+        if result == pid {
+            return Ok(status);
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceWait,
+                source,
+            });
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn set_trace_options(pid: libc::pid_t) -> Result<(), LinuxHardeningError> {
+    let options = libc::PTRACE_O_EXITKILL
+        | libc::PTRACE_O_TRACECLONE
+        | libc::PTRACE_O_TRACEEXEC
+        | libc::PTRACE_O_TRACEFORK
+        | libc::PTRACE_O_TRACEVFORK;
+    let result = unsafe {
+        libc::ptrace(
+            libc::PTRACE_SETOPTIONS,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            options as usize as *mut libc::c_void,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::TraceSetOptions,
+            source: io::Error::last_os_error(),
+        })
+    }
+}
+
+#[allow(unsafe_code)]
+fn continue_tracee(pid: libc::pid_t, signal: libc::c_int) -> Result<(), LinuxHardeningError> {
+    let result = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            signal as usize as *mut libc::c_void,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(LinuxHardeningError::Operation {
+            operation: LinuxHardeningOperation::TraceContinue,
+            source: io::Error::last_os_error(),
+        })
+    }
+}
+
+fn terminate_traced_command(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn write_command_status(
@@ -295,7 +584,8 @@ fn verify_authentication_peer(fd: RawFd) -> Result<(), LinuxHardeningError> {
 
 fn complete_setup_handshake(authentication: &mut File) -> Result<(), LinuxHardeningError> {
     authentication
-        .write_all(READY)
+        .write_all(SETUP_RESULT_MAGIC)
+        .and_then(|()| authentication.write_all(&[SETUP_RESULT_READY]))
         .map_err(|source| LinuxHardeningError::Operation {
             operation: LinuxHardeningOperation::SetupReady,
             source,
@@ -366,6 +656,35 @@ fn set_parent_death_signal() -> Result<(), LinuxHardeningError> {
 }
 
 #[allow(unsafe_code)]
+fn set_command_parent_death_signal() -> io::Result<()> {
+    let expected_parent = unsafe { libc::getppid() };
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::getppid() } != expected_parent {
+        return Err(io::Error::from_raw_os_error(libc::ESRCH));
+    }
+    Ok(())
+}
+
+#[allow(unsafe_code)]
+fn request_parent_tracing() -> io::Result<()> {
+    let result = unsafe {
+        libc::ptrace(
+            libc::PTRACE_TRACEME,
+            0,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[allow(unsafe_code)]
 fn set_close_on_exec(
     fd: std::os::fd::RawFd,
     close_on_exec: bool,
@@ -392,14 +711,42 @@ fn set_close_on_exec(
     }
 }
 
-fn build_filter(mode: NetworkHardeningMode) -> Result<BpfProgram, SeccompBuildError> {
+fn build_filter(
+    mode: NetworkHardeningMode,
+    permit_trace_me: bool,
+) -> Result<BpfProgram, SeccompBuildError> {
     fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, syscall: i64) {
         rules.insert(syscall, Vec::new());
     }
 
     let mut rules = BTreeMap::new();
+    if permit_trace_me {
+        let non_trace_me = SeccompRule::new(vec![
+            SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                libc::PTRACE_TRACEME as u64,
+            )
+            .map_err(|source| SeccompBuildError::Condition { source })?,
+        ])
+        .map_err(|source| SeccompBuildError::Rule { source })?;
+        rules.insert(libc::SYS_ptrace, vec![non_trace_me]);
+    } else {
+        deny_syscall(&mut rules, libc::SYS_ptrace);
+    }
+    let clone_untraced = SeccompRule::new(vec![
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::MaskedEq(libc::CLONE_UNTRACED as u64),
+            libc::CLONE_UNTRACED as u64,
+        )
+        .map_err(|source| SeccompBuildError::Condition { source })?,
+    ])
+    .map_err(|source| SeccompBuildError::Rule { source })?;
+    rules.insert(libc::SYS_clone, vec![clone_untraced]);
     for syscall in [
-        libc::SYS_ptrace,
         libc::SYS_process_vm_readv,
         libc::SYS_process_vm_writev,
         libc::SYS_io_uring_setup,
@@ -428,6 +775,19 @@ fn build_filter(mode: NetworkHardeningMode) -> Result<BpfProgram, SeccompBuildEr
         .try_into()
         .map_err(|source: seccompiler::BackendError| SeccompBuildError::BpfConversion { source })?;
     Ok(program)
+}
+
+fn build_clone3_compatibility_filter() -> Result<BpfProgram, SeccompBuildError> {
+    let filter = SeccompFilter::new(
+        BTreeMap::from([(libc::SYS_clone3, Vec::new())]),
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::ENOSYS as u32),
+        target_architecture()?,
+    )
+    .map_err(|source| SeccompBuildError::Filter { source })?;
+    filter
+        .try_into()
+        .map_err(|source: seccompiler::BackendError| SeccompBuildError::BpfConversion { source })
 }
 
 fn add_unix_socket_isolation_rules(

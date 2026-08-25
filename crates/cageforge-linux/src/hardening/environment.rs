@@ -7,11 +7,11 @@ use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-use crate::environment_transport::{
-    MAX_ENVIRONMENT_ENTRIES, MAX_ENVIRONMENT_FRAME_BYTES, MAX_ENVIRONMENT_VALUE_BYTES,
-};
 use crate::error::EnvironmentFrameError;
-use crate::helper_protocol::ENVIRONMENT_MAGIC;
+use crate::helper_protocol::{
+    ENVIRONMENT_MAGIC, MAX_ENVIRONMENT_ENTRIES, MAX_ENVIRONMENT_FRAME_BYTES,
+    MAX_ENVIRONMENT_VALUE_BYTES,
+};
 
 pub(super) fn read_environment(
     reader: &mut impl Read,

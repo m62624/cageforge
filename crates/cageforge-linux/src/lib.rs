@@ -18,9 +18,11 @@ mod config;
 mod environment_transport;
 mod error;
 mod filesystem;
+mod hardening_error;
 mod helper_protocol;
 mod network;
 mod process;
+mod setup_transport;
 mod status_transport;
 
 pub use backend::LinuxBackend;
@@ -31,9 +33,9 @@ pub use config::{
 pub use error::{
     EnvironmentFrameError, FilesystemLoweringError, FilesystemMetadataOperation, LinuxBackendError,
     LinuxBridgeError, LinuxBridgeOperation, LinuxHardeningError, LinuxHardeningOperation,
-    NetworkCombinationError, NetworkGatewayIngressError, NetworkGatewayRuntimeError,
-    NetworkGatewayRuntimeFailure, NetworkGatewaySetupError, NetworkGatewayTransportError,
-    NetworkLoweringError, PolicyLoweringExpectation, SeccompBuildError, SetupHandshakeError,
-    StatusFrameError,
+    LinuxHelperSetupFailure, LinuxHelperSetupFailureKind, NetworkCombinationError,
+    NetworkGatewayIngressError, NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure,
+    NetworkGatewaySetupError, NetworkGatewayTransportError, NetworkLoweringError,
+    PolicyLoweringExpectation, SeccompBuildError, SetupHandshakeError, StatusFrameError,
 };
 pub use process::LinuxChild;

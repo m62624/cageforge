@@ -489,13 +489,42 @@ command can run:
 
 - enable `PR_SET_NO_NEW_PRIVS` whenever seccomp or another restricted policy
   requires it;
-- set `PR_SET_DUMPABLE` to zero and set `RLIMIT_CORE` to zero for the hardened
-  process boundary;
+- set `PR_SET_DUMPABLE` to zero on the trusted helper and set `RLIMIT_CORE` to
+  zero for both the helper and command;
+- establish the command as a traced child of the trusted helper before
+  `execve`, then set `PTRACE_O_EXITKILL` and keep that trace relationship for
+  the complete command lifetime, because Linux resets an ordinary executable's
+  dumpable attribute during `execve`; this prevents another same-user process
+  from attaching in the post-exec window that a pre-exec
+  `PR_SET_DUMPABLE(0)` call cannot close;
 - install a narrowly defined seccomp policy for the selected network and
   process restrictions;
 - apply hardening to the child boundary, not to the long-lived parent process;
 - preserve close-on-exec and explicit file-descriptor inheritance rules; and
 - return a typed backend error if the requested hardening cannot be installed.
+
+The frozen Codex baseline applies `PR_SET_DUMPABLE(0)` to its own process in
+`codex-rs/process-hardening/src/lib.rs` and installs the Linux command seccomp
+filter in `codex-rs/linux-sandbox/src/landlock.rs`. Cageforge executes arbitrary
+third-party programs rather than only a pre-hardened product binary, so it must
+add the trusted parent-tracer boundary above. The helper establishes tracing
+and `PTRACE_O_EXITKILL` before publishing setup readiness, follows fork, vfork,
+clone, and exec events, and applies the same options to every new tracee before
+letting it run. The command's seccomp filter permits only its one pre-exec
+`PTRACE_TRACEME` request and rejects every other `ptrace` operation; after exec
+the existing trace relationship makes another `PTRACE_TRACEME` fail as well.
+It rejects `clone(CLONE_UNTRACED)` and returns `ENOSYS` for `clone3`, whose
+pointer-based flags cannot be inspected by classic seccomp, so compatible
+runtimes fall back to inspectable `clone`. The helper forwards command signals
+and reports the original raw exit status through the authenticated status
+channel.
+
+Before the command is released, the authenticated helper channel carries a
+framed setup result. A rejected setup includes a stable typed failure category
+and the originating OS error number when one exists; `stderr` is supplemental
+diagnostic output and is not the error API. Unknown tags and failure codes fail
+closed. Authentication failures themselves are not sent over an untrusted or
+unverified channel.
 
 The backend must not claim that a filesystem capability is enforced merely
 because `no_new_privs` or seccomp was installed. Filesystem and process

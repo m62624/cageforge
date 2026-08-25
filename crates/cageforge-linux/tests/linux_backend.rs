@@ -2,6 +2,7 @@
 
 #![cfg(target_os = "linux")]
 
+use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
@@ -36,6 +37,10 @@ const SYNTHETIC_FIXTURE_READY: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_READY";
 const SYNTHETIC_FIXTURE_RELEASE: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_RELEASE";
 const COMMON_SECCOMP_FIXTURE: &str = "CAGEFORGE_COMMON_SECCOMP_FIXTURE";
 const CORE_LIMIT_FIXTURE: &str = "CAGEFORGE_CORE_LIMIT_FIXTURE";
+const TRACER_GUARD_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_FIXTURE";
+const TRACER_GUARD_DESCENDANT_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_DESCENDANT_FIXTURE";
+const EXPECTED_TRACER_PID: &str = "CAGEFORGE_EXPECTED_TRACER_PID";
+const CLONE_UNTRACED_FIXTURE: &str = "CAGEFORGE_CLONE_UNTRACED_FIXTURE";
 
 fn backend() -> LinuxBackend {
     LinuxBackend::new(test_backend_config())
@@ -427,6 +432,120 @@ fn core_limit_fixture() {
     assert_eq!(
         limit.rlim_max, 0,
         "restricted child must not raise core limit"
+    );
+}
+
+fn proc_status_pid(field: &str) -> u32 {
+    let status = fs::read_to_string("/proc/self/status").expect("process status");
+    status
+        .lines()
+        .find_map(|line| {
+            let value = line.strip_prefix(field)?.trim();
+            value.parse().ok()
+        })
+        .unwrap_or_else(|| panic!("missing {field} in /proc/self/status"))
+}
+
+#[test]
+fn tracer_guard_fixture() {
+    if std::env::var_os(TRACER_GUARD_FIXTURE).is_none() {
+        return;
+    }
+    let tracer_pid = proc_status_pid("TracerPid:");
+    assert_ne!(tracer_pid, 0, "restricted child must have a tracer");
+    assert_eq!(
+        tracer_pid,
+        proc_status_pid("PPid:"),
+        "the direct trusted helper must trace the root command"
+    );
+
+    let descendant_status = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "tracer_guard_descendant_fixture", "--nocapture"])
+        .env(TRACER_GUARD_DESCENDANT_FIXTURE, "1")
+        .env(EXPECTED_TRACER_PID, tracer_pid.to_string())
+        .status()
+        .expect("descendant fixture");
+    assert!(
+        descendant_status.success(),
+        "descendant fixture failed with {descendant_status}"
+    );
+}
+
+#[test]
+fn tracer_guard_descendant_fixture() {
+    if std::env::var_os(TRACER_GUARD_DESCENDANT_FIXTURE).is_none() {
+        return;
+    }
+    let expected = std::env::var(EXPECTED_TRACER_PID)
+        .expect("expected tracer")
+        .parse::<u32>()
+        .expect("numeric tracer");
+    assert_eq!(
+        proc_status_pid("TracerPid:"),
+        expected,
+        "descendants must remain under the trusted helper tracer"
+    );
+}
+
+#[test]
+fn clone_untraced_fixture() {
+    if std::env::var_os(CLONE_UNTRACED_FIXTURE).is_none() {
+        return;
+    }
+    #[allow(unsafe_code)]
+    let clone3 =
+        unsafe { libc::syscall(libc::SYS_clone3, std::ptr::null_mut::<libc::c_void>(), 0) };
+    assert_eq!(clone3, -1);
+    assert_eq!(
+        io::Error::last_os_error().raw_os_error(),
+        Some(libc::ENOSYS),
+        "clone3 must request a compatible clone fallback because seccomp cannot inspect its flags"
+    );
+
+    #[allow(unsafe_code)]
+    let pid = unsafe {
+        libc::syscall(
+            libc::SYS_clone,
+            libc::CLONE_UNTRACED | libc::SIGCHLD,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+            0,
+        )
+    };
+    if pid == 0 {
+        #[allow(unsafe_code)]
+        let trace_me = unsafe {
+            libc::ptrace(
+                libc::PTRACE_TRACEME,
+                0,
+                std::ptr::null_mut::<libc::c_void>(),
+                std::ptr::null_mut::<libc::c_void>(),
+            )
+        };
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::_exit(if trace_me == -1 { 0 } else { 42 });
+        }
+    }
+    if pid == -1 {
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM),
+            "CLONE_UNTRACED must fail closed"
+        );
+        return;
+    }
+    assert!(pid > 0, "clone returned invalid PID {pid}");
+    let mut status = 0;
+    #[allow(unsafe_code)]
+    let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+    assert_eq!(waited, pid as libc::pid_t);
+    assert!(libc::WIFEXITED(status));
+    assert_eq!(
+        libc::WEXITSTATUS(status),
+        0,
+        "CLONE_UNTRACED escaped trusted trace supervision"
     );
 }
 
@@ -1828,6 +1947,86 @@ fn restricted_child_cannot_create_core_dumps() {
     let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
         .expect("fixture command")
         .with_args(["--exact", "core_limit_fixture", "--nocapture"])
+        .expect("fixture arguments");
+    let (command, effective, runtime) =
+        request_with_environment(workspace.path(), policy, command, environment);
+    let command = command.with_stdio(StdioSpec::captured());
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout()
+        .expect("captured stdout")
+        .read_to_string(&mut stdout)
+        .expect("read stdout");
+    child
+        .stderr()
+        .expect("captured stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0), "stdout={stdout}\nstderr={stderr}");
+}
+
+#[test]
+fn restricted_child_has_trusted_ptrace_guard_after_exec() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let filesystem = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::root(), AccessMode::Read),
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+    ]);
+    let policy = SandboxPolicy::new(filesystem, NetworkPolicy::disabled());
+    let environment = EnvironmentSpec::inherit_all()
+        .with_var(TRACER_GUARD_FIXTURE, "1")
+        .expect("fixture environment");
+    let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+        .expect("fixture command")
+        .with_args(["--exact", "tracer_guard_fixture", "--nocapture"])
+        .expect("fixture arguments");
+    let (command, effective, runtime) =
+        request_with_environment(workspace.path(), policy, command, environment);
+    let command = command.with_stdio(StdioSpec::captured());
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout()
+        .expect("captured stdout")
+        .read_to_string(&mut stdout)
+        .expect("read stdout");
+    child
+        .stderr()
+        .expect("captured stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0), "stdout={stdout}\nstderr={stderr}");
+}
+
+#[test]
+fn restricted_child_cannot_escape_tracer_with_clone_untraced() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let filesystem = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::root(), AccessMode::Read),
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+    ]);
+    let policy = SandboxPolicy::new(filesystem, NetworkPolicy::disabled());
+    let environment = EnvironmentSpec::inherit_all()
+        .with_var(CLONE_UNTRACED_FIXTURE, "1")
+        .expect("fixture environment");
+    let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+        .expect("fixture command")
+        .with_args(["--exact", "clone_untraced_fixture", "--nocapture"])
         .expect("fixture arguments");
     let (command, effective, runtime) =
         request_with_environment(workspace.path(), policy, command, environment);

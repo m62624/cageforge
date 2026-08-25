@@ -28,18 +28,18 @@ use crate::bwrap::{
 };
 use crate::config::LinuxBackendConfig;
 use crate::environment_transport::write_environment;
-use crate::error::SetupHandshakeError;
 use crate::error::{LinuxBackendError, NetworkCombinationError, NetworkLoweringError};
 use crate::filesystem::FilesystemPlan;
 use crate::filesystem::protected_create::ProtectedCreateMonitor;
 use crate::helper_protocol::{
     AUTH_FD_ENV, AUTH_TOKEN, GATEWAY_CONNECTION_LIMIT_ENV, GATEWAY_SOCKET_ENV,
     HARDENING_REQUIRED_ENV, NETWORK_MODE_DIRECT_WITHOUT_UNIX, NETWORK_MODE_DISABLED,
-    NETWORK_MODE_ENV, NETWORK_MODE_PROXY, READY, RELEASE,
+    NETWORK_MODE_ENV, NETWORK_MODE_PROXY, RELEASE,
 };
 use crate::network::{GatewayRuntime, IN_SANDBOX_GATEWAY_SOCKET};
 use crate::process::LinuxChild;
 use crate::process::timeout::TimeoutWatchdog;
+use crate::setup_transport::read_setup_result;
 
 pub(crate) const IN_SANDBOX_HELPER_PATH: &str = "/dev/.cageforge-runtime/helper";
 const SETUP_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -74,8 +74,7 @@ pub struct LinuxBackend {
     /// Keeps an automatically materialized bundled resource alive for the
     /// lifetime of the pinned executable.
     #[cfg(feature = "bundled-bubblewrap")]
-    #[allow(dead_code)]
-    bundled_resource: Option<Arc<tempfile::TempDir>>,
+    _bundled_resource_guard: Option<Arc<tempfile::TempDir>>,
 }
 
 impl LinuxBackend {
@@ -122,7 +121,7 @@ impl LinuxBackend {
             timeout_supported: TimeoutWatchdog::is_supported(),
             identity: BackendIdentity::new(),
             #[cfg(feature = "bundled-bubblewrap")]
-            bundled_resource,
+            _bundled_resource_guard: bundled_resource,
         })
     }
 
@@ -323,15 +322,8 @@ impl LinuxBackend {
         if let Err(source) = auth_writer.set_read_timeout(Some(SETUP_HANDSHAKE_TIMEOUT)) {
             return Err(setup_handshake_error(&mut child, source));
         }
-        let mut ready = vec![0; READY.len()];
-        if let Err(source) = auth_writer.read_exact(&mut ready) {
+        if let Err(source) = read_setup_result(&mut auth_writer) {
             return Err(setup_handshake_error(&mut child, source));
-        }
-        if ready != READY {
-            return Err(setup_handshake_error(
-                &mut child,
-                SetupHandshakeError::InvalidReady,
-            ));
         }
         let timeout_watchdog = match timeout {
             Some(timeout) => match TimeoutWatchdog::start(child.id(), timeout) {

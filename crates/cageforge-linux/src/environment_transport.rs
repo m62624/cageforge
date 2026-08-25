@@ -8,11 +8,10 @@ use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 
 use crate::error::EnvironmentFrameError;
-use crate::helper_protocol::ENVIRONMENT_MAGIC;
-
-pub(crate) const MAX_ENVIRONMENT_ENTRIES: usize = 4096;
-pub(crate) const MAX_ENVIRONMENT_VALUE_BYTES: usize = 1024 * 1024;
-pub(crate) const MAX_ENVIRONMENT_FRAME_BYTES: usize = 16 * 1024 * 1024;
+use crate::helper_protocol::{
+    ENVIRONMENT_MAGIC, MAX_ENVIRONMENT_ENTRIES, MAX_ENVIRONMENT_FRAME_BYTES,
+    MAX_ENVIRONMENT_VALUE_BYTES,
+};
 
 pub(crate) fn write_environment(
     writer: &mut impl Write,
