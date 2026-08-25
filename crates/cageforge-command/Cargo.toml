@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Platform-independent command invocation and stdio request types"
+repository.workspace = true
 readme = "README.md"
 
 [lib]

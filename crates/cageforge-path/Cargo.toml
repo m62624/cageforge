@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Shared native path comparison and validation primitives"
+repository.workspace = true
 readme = "README.md"
 
 [lib]

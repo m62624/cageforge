@@ -3,6 +3,7 @@ name = "cageforge-bwrap"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0 AND LGPL-2.0-or-later"
+rust-version.workspace = true
 description = "Builds the upstream Bubblewrap executable for Cageforge Linux packages"
 repository.workspace = true
 readme = "README.md"
