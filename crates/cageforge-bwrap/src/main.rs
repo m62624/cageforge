@@ -2,22 +2,40 @@
 
 //! Build-and-stage entry point for the upstream Bubblewrap implementation.
 
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+struct StageRequest {
+    output: PathBuf,
+}
+
+impl StageRequest {
+    fn parse(mut arguments: impl Iterator<Item = OsString>) -> Result<Self, ()> {
+        match (arguments.next().as_deref(), arguments.next()) {
+            (Some(value), Some(path)) if value == "--output" && arguments.next().is_none() => {
+                Ok(Self {
+                    output: PathBuf::from(path),
+                })
+            }
+            _ => Err(()),
+        }
+    }
+}
+
 fn main() {
     if !cfg!(target_os = "linux") {
         eprintln!("cageforge-bwrap can only build Bubblewrap for Linux");
         std::process::exit(2);
     }
 
-    let mut arguments = std::env::args_os().skip(1);
-    let output = match (arguments.next().as_deref(), arguments.next()) {
-        (Some(value), Some(path)) if value == "--output" && arguments.next().is_none() => {
-            std::path::PathBuf::from(path)
-        }
-        _ => {
+    let request = match StageRequest::parse(std::env::args_os().skip(1)) {
+        Ok(request) => request,
+        Err(()) => {
             eprintln!("usage: cageforge-bwrap --output PATH");
             std::process::exit(2);
         }
     };
+    let output = request.output;
 
     let built = std::path::Path::new(env!("CAGEFORGE_BUILT_BWRAP"));
     if let Some(parent) = output.parent()
