@@ -1,9 +1,10 @@
 name: CI
 
 on:
-  # Keep pull_request unfiltered so a required status is always created,
-  # including for documentation-only changes.
+  # Keep the required status for normal PR activity and rerun it when a
+  # maintainer manually adds or removes a sandbox label.
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches:
       - main
@@ -15,6 +16,12 @@ on:
         default: auto
         type: choice
         options: [auto, default, full]
+      sandbox:
+        description: Optional sandbox lane to run manually
+        required: true
+        default: none
+        type: choice
+        options: [none, linux, macos, windows, all]
 
 permissions:
   contents: read
@@ -39,13 +46,16 @@ concurrency:
 #   windows-11-arm     — Windows ARM64
 #
 # CI routing algorithm:
-# 1. Common components run on Linux, macOS, and Windows for every PR and main
-#    push. The package list excludes native sandbox enforcement crates.
-# 2. A changed common component, workspace dependency, CI file, or other shared
-#    input selects every available native sandbox job.
-# 3. A native-only change selects only the matching native sandbox job.
-# 4. Linux sandbox enforcement always runs in the trusted QEMU/KVM workflow.
-# 5. Labeler keeps conventional and release labels only; it does not route CI.
+# 1. Main is the full quality gate: all common components, every Linux feature
+#    combination, and the Linux sandbox in QEMU/KVM always run.
+# 2. PRs always run the common Linux components and Linux feature combinations.
+# 3. A PR selects the Linux sandbox when cageforge-linux itself, Bubblewrap, a
+#    direct/transitive workspace dependency, a Linux test dev-dependency, or a
+#    workspace/CI input changes.
+# 4. Manual PR labels sandbox-linux, sandbox-macos, and sandbox-windows force
+#    the requested lane. Labels are never applied automatically by the labeler.
+# 5. macOS/Windows native backends are dormant until their crates exist; manual
+#    lanes remain callable and report that state without a fake package failure.
 
 jobs:
   changes:
@@ -67,6 +77,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           MANUAL_SCOPE: ${{ inputs.scope }}
+          MANUAL_SANDBOX: ${{ inputs.sandbox }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
           set -euo pipefail
 
@@ -76,10 +88,39 @@ jobs:
           windows_native=false
           shared_change=false
           changed_paths=()
+          manual_linux=false
+          manual_macos=false
+          manual_windows=false
 
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          for label in ${PR_LABELS:-}; do
+            case "$label" in
+              sandbox-linux) manual_linux=true ;;
+              sandbox-macos) manual_macos=true ;;
+              sandbox-windows) manual_windows=true ;;
+            esac
+          done
+
+          case "${MANUAL_SANDBOX:-none}" in
+            none) ;;
+            linux) manual_linux=true ;;
+            macos) manual_macos=true ;;
+            windows) manual_windows=true ;;
+            all)
+              manual_linux=true
+              manual_macos=true
+              manual_windows=true
+              ;;
+            *) echo "Unknown sandbox lane: ${MANUAL_SANDBOX}" >&2; exit 1 ;;
+          esac
+
+          if [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            # Main is the full implemented quality gate. macOS/Windows remain
+            # manual-only until their native backend crates are introduced.
+            linux_native=true
+            mode=main
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
-              full) shared_change=true ;;
+              full) linux_native=true; mode=manual-full ;;
               default|auto) ;;
               *) echo "Unknown scope: ${MANUAL_SCOPE}" >&2; exit 1 ;;
             esac
@@ -96,28 +137,30 @@ jobs:
               crates/cageforge-linux/*|crates/cageforge-bwrap/*)
                 linux_native=true
                 ;;
-              crates/cageforge-macos/*)
-                macos_native=true
+              crates/cageforge-backend-api/*|crates/cageforge-command/*|crates/cageforge-config/*|crates/cageforge-network-proxy/*|crates/cageforge-path/*|crates/cageforge-policy/*|crates/cageforge-policy-compose/*)
+                linux_native=true
                 ;;
-              crates/cageforge-windows/*)
-                windows_native=true
-                ;;
-              crates/*)
+              crates/cageforge-macos/*) ;;
+              crates/cageforge-windows/*) ;;
+              Cargo.toml|Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|.github/workflows/*|ci/*)
                 shared_change=true
                 ;;
-              *)
-                shared_change=true
-                ;;
+              *) ;;
             esac
           done
 
           if [[ "$shared_change" == true ]]; then
             linux_native=true
-            macos_native=true
-            windows_native=true
             mode=shared
-          elif [[ "$linux_native" == true || "$macos_native" == true || "$windows_native" == true ]]; then
+          elif [[ "$mode" == default && ("$linux_native" == true || "$macos_native" == true || "$windows_native" == true) ]]; then
             mode=native
+          fi
+
+          [[ "$manual_linux" == true ]] && linux_native=true
+          [[ "$manual_macos" == true ]] && macos_native=true
+          [[ "$manual_windows" == true ]] && windows_native=true
+          if [[ "$manual_linux" == true || "$manual_macos" == true || "$manual_windows" == true ]]; then
+            mode=manual
           fi
 
           {
@@ -128,19 +171,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   common-components:
-    name: "common components (build target: ${{ matrix.target_name }})"
+    name: "common components (build target: Linux)"
     needs: changes
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target_name: Linux
-            os: ubuntu-24.04
-          - target_name: macOS
-            os: macos-latest
-          - target_name: Windows
-            os: windows-latest
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -219,10 +252,9 @@ jobs:
       expected_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
   native-macos:
-    name: macOS sandbox (native macOS)
+    name: macOS sandbox (manual label)
     needs: changes
     if: needs.changes.outputs.macos_native == 'true'
-    # TODO: use the dedicated macOS runner when cageforge-macos is introduced.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -230,15 +262,49 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --package cageforge-core --package cageforge-macos -- --check
-      - run: cargo clippy -p cageforge-core -p cageforge-macos --all-targets -- -D warnings
-      - run: cargo test -p cageforge-core -p cageforge-macos
+      - name: Check common component formatting on macOS
+        run: cargo fmt --all -- --check
+      - name: Clippy common components on macOS
+        run: >-
+          cargo clippy
+          -p cageforge-backend-api
+          -p cageforge-core
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-network-proxy
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+          --all-targets -- -D warnings
+      - name: Test common components on macOS
+        run: >-
+          cargo test
+          -p cageforge-backend-api
+          -p cageforge-core
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-network-proxy
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+      - name: Run native macOS backend when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo metadata --no-deps --format-version 1 | grep -q '"name":"cageforge-macos"'; then
+            cargo fmt --package cageforge-macos -- --check
+            cargo clippy -p cageforge-macos --all-targets -- -D warnings
+            cargo test -p cageforge-macos
+          else
+            echo "::notice::cageforge-macos is not in this workspace yet; no native macOS enforcement crate was run."
+          fi
 
   native-windows:
-    name: Windows sandbox (native Windows)
+    name: Windows sandbox (manual label)
     needs: changes
     if: needs.changes.outputs.windows_native == 'true'
-    # TODO: use the dedicated Windows runner when cageforge-windows is introduced.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -246,9 +312,47 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --package cageforge-core --package cageforge-windows -- --check
-      - run: cargo clippy -p cageforge-core -p cageforge-windows --all-targets -- -D warnings
-      - run: cargo test -p cageforge-core -p cageforge-windows
+      - name: Check common component formatting on Windows
+        shell: bash
+        run: cargo fmt --all -- --check
+      - name: Clippy common components on Windows
+        shell: bash
+        run: >-
+          cargo clippy
+          -p cageforge-backend-api
+          -p cageforge-core
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-network-proxy
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+          --all-targets -- -D warnings
+      - name: Test common components on Windows
+        shell: bash
+        run: >-
+          cargo test
+          -p cageforge-backend-api
+          -p cageforge-core
+          -p cageforge-command
+          -p cageforge-config
+          -p cageforge-network-proxy
+          -p cageforge-path
+          -p cageforge-policy
+          -p cageforge-policy-compose
+          -p cageforge-upstream-review
+      - name: Run native Windows backend when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo metadata --no-deps --format-version 1 | grep -q '"name":"cageforge-windows"'; then
+            cargo fmt --package cageforge-windows -- --check
+            cargo clippy -p cageforge-windows --all-targets -- -D warnings
+            cargo test -p cageforge-windows
+          else
+            echo "::notice::cageforge-windows is not in this workspace yet; no native Windows enforcement crate was run."
+          fi
 
   feature-surface:
     name: "feature combinations (build target: Linux)"

@@ -16,7 +16,7 @@ jobs:
   labeler:
     runs-on: ubuntu-latest
     steps:
-      - name: Create and apply labels
+      - name: Create labels and apply conventional labels
         uses: actions/github-script@v9
         with:
           script: |
@@ -39,7 +39,18 @@ jobs:
               ['style', 'style', '2c61f6'],
             ];
 
-            const labelsToCreate = conventional.map(([, name, color]) => ({ name, color }));
+            // These labels are intentionally created but never auto-applied.
+            // A maintainer can add one to a PR to request a fresh machine lane.
+            const manualSandbox = [
+              ['sandbox-linux', '1d76db'],
+              ['sandbox-macos', '1d76db'],
+              ['sandbox-windows', '1d76db'],
+            ];
+
+            const labelsToCreate = [
+              ...conventional.map(([, name, color]) => ({ name, color })),
+              ...manualSandbox.map(([name, color]) => ({ name, color })),
+            ];
 
             for (const { name, color } of labelsToCreate) {
               try {

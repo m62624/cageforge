@@ -2,7 +2,7 @@
 
 #![cfg(target_os = "linux")]
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -171,20 +171,42 @@ fn spawn_network_client(
     Ok(status)
 }
 
-fn start_http_server() -> (SocketAddr, thread::JoinHandle<()>) {
+fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("HTTP listener");
     let address = listener.local_addr().expect("HTTP address");
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-    let server = thread::spawn(move || {
+    let server = thread::spawn(move || -> io::Result<()> {
         ready_sender
             .send(())
             .expect("HTTP server readiness receiver");
-        let (mut stream, _) = listener.accept().expect("gateway request");
-        let mut request = [0; 4096];
-        let _ = stream.read(&mut request).expect("HTTP request");
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            .expect("HTTP response");
+        let (mut stream, _) = listener.accept()?;
+        stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+
+        let mut request = Vec::with_capacity(4096);
+        let mut chunk = [0; 1024];
+        loop {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "HTTP client closed before the complete request",
+                ));
+            }
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+            if request.len() > 16 * 1024 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HTTP request headers exceeded the fixture limit",
+                ));
+            }
+        }
+
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")?;
+        Ok(())
     });
     ready_receiver.recv().expect("HTTP server readiness signal");
     (address, server)
@@ -203,6 +225,9 @@ fn proxy_endpoint(variable: &str) -> SocketAddr {
 
 fn send_http_proxy_request(target: SocketAddr) -> Vec<u8> {
     let mut stream = TcpStream::connect(proxy_endpoint("HTTP_PROXY")).expect("HTTP proxy");
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .expect("write timeout");
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .expect("read timeout");
@@ -250,6 +275,9 @@ fn send_socks_request(target: SocketAddr) -> Vec<u8> {
 fn send_direct_request(target: SocketAddr) -> Vec<u8> {
     let mut stream = TcpStream::connect(target).expect("direct target");
     stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .expect("write timeout");
+    stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .expect("read timeout");
     write!(
@@ -258,11 +286,7 @@ fn send_direct_request(target: SocketAddr) -> Vec<u8> {
     )
     .expect("direct request");
     let mut response = Vec::new();
-    if let Err(error) = stream.read_to_end(&mut response)
-        && error.kind() != std::io::ErrorKind::ConnectionReset
-    {
-        panic!("direct response failed: {error}");
-    }
+    stream.read_to_end(&mut response).expect("direct response");
     response
 }
 
@@ -1583,8 +1607,9 @@ fn http_proxy_reaches_only_an_exactly_authorized_loopback_target() {
     let (target, server) = start_http_server();
     let status = spawn_network_client(restricted_loopback_policy(), "http", target)
         .expect("restricted HTTP execution");
+    let server_result = server.join().expect("HTTP server");
     assert_eq!(status.code(), Some(0));
-    server.join().expect("HTTP server");
+    server_result.expect("HTTP server I/O");
 }
 
 #[test]
@@ -1592,8 +1617,9 @@ fn socks_proxy_reaches_only_an_exactly_authorized_loopback_target() {
     let (target, server) = start_http_server();
     let status = spawn_network_client(restricted_loopback_policy(), "socks", target)
         .expect("restricted SOCKS execution");
+    let server_result = server.join().expect("HTTP server");
     assert_eq!(status.code(), Some(0));
-    server.join().expect("HTTP server");
+    server_result.expect("HTTP server I/O");
 }
 
 #[test]
@@ -1609,10 +1635,14 @@ fn concurrent_backend_instances_own_independent_gateway_lifecycles() {
             .expect("second restricted execution")
     });
 
-    assert!(first.join().expect("first backend thread").success());
-    assert!(second.join().expect("second backend thread").success());
-    first_server.join().expect("first HTTP server");
-    second_server.join().expect("second HTTP server");
+    let first_status = first.join().expect("first backend thread");
+    let second_status = second.join().expect("second backend thread");
+    let first_server_result = first_server.join().expect("first HTTP server");
+    let second_server_result = second_server.join().expect("second HTTP server");
+    assert!(first_status.success());
+    assert!(second_status.success());
+    first_server_result.expect("first HTTP server I/O");
+    second_server_result.expect("second HTTP server I/O");
 }
 
 #[test]
@@ -1652,9 +1682,10 @@ fn unrestricted_network_preserves_direct_loopback_connections() {
     let (target, server) = start_http_server();
     let status = spawn_network_client(SandboxPolicy::full_access(), "direct", target)
         .expect("unrestricted-network execution");
+    let server_result = server.join().expect("HTTP server");
 
     assert_eq!(status.code(), Some(0));
-    server.join().expect("HTTP server");
+    server_result.expect("HTTP server I/O");
 }
 
 #[test]
