@@ -21,40 +21,13 @@ use wildmatch::WildMatch;
 use crate::CommandError;
 use crate::command::contains_nul;
 
-/// Selects the base environment from which a command is launched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EnvironmentBase {
-    /// Inherit every variable from the launching process.
-    All,
-    /// Inherit the platform's conservative set of core variables.
-    Core,
-    /// Start with no inherited variables.
-    None,
-}
+mod model;
 
-/// The action applied to a matching environment-variable pattern.
-///
-/// Include and exclude are evaluated with named precedence rules; their enum
-/// declaration order is not an environment authorization order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EnvironmentFilterAction {
-    /// Retain matching variables when the include allowlist is active.
-    Include,
-    /// Remove matching variables with deny precedence over inclusion.
-    Exclude,
-}
-
-/// A wildcard pattern matched against an environment variable name.
-///
-/// The pattern language is deliberately small and portable: `*` matches zero
-/// or more Unicode scalar values and `?` matches one. Matching is
-/// case-insensitive so the same policy is safe on POSIX and Windows hosts.
-#[derive(Debug, Clone)]
-pub struct EnvironmentPattern {
-    original: String,
-    canonical: String,
-    matcher: WildMatch,
-}
+use model::EnvironmentNameIdentity;
+pub use model::{
+    CoreEnvironment, EnvironmentBase, EnvironmentFilterAction, EnvironmentInput,
+    EnvironmentNameKey, EnvironmentOverride, EnvironmentPattern, EnvironmentSpec,
+};
 
 impl PartialEq for EnvironmentPattern {
     fn eq(&self, other: &Self) -> bool {
@@ -117,56 +90,11 @@ impl EnvironmentPattern {
     }
 }
 
-/// A case-insensitive identity key for an operating-system environment name.
-///
-/// Valid Unicode names use the portable case-insensitive Cageforge policy.
-/// Malformed native strings retain their exact code units or bytes so distinct
-/// names can never collide through lossy conversion. Backends and composition
-/// layers can use this key to deduplicate names consistently with
-/// [`EnvironmentSpec`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct EnvironmentNameKey(EnvironmentNameIdentity);
-
 impl EnvironmentNameKey {
     /// Creates the policy identity for one native environment-variable name.
     pub fn new(name: &OsStr) -> Self {
         Self(environment_name_identity(name))
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum EnvironmentNameIdentity {
-    Folded(String),
-    #[cfg(unix)]
-    NativeBytes(Vec<u8>),
-    #[cfg(windows)]
-    NativeWide(Vec<u16>),
-}
-
-/// An explicit change to one environment variable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EnvironmentOverride {
-    /// Set the variable to the given value.
-    Set(OsString),
-    /// Remove the variable from the final environment.
-    Remove,
-}
-
-/// A base environment selected by the process adapter.
-///
-/// The constructors encode the base that the variables represent. This keeps
-/// an [`EnvironmentSpec`] from being applied to an arbitrarily broad map while
-/// claiming that the map is empty or platform-core input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnvironmentInput {
-    base: EnvironmentBase,
-    variables: BTreeMap<OsString, OsString>,
-}
-
-/// A platform-selected snapshot used to construct a core environment input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreEnvironment {
-    variables: BTreeMap<OsString, OsString>,
 }
 
 impl CoreEnvironment {
@@ -229,21 +157,6 @@ impl EnvironmentInput {
     pub fn into_variables(self) -> BTreeMap<OsString, OsString> {
         self.variables
     }
-}
-
-/// Environment construction rules for a command.
-///
-/// Overrides are kept in a sorted map for deterministic inspection and are
-/// applied by a backend after selecting the requested base environment. A
-/// value of [`EnvironmentOverride::Remove`] is distinct from setting an empty
-/// string. Variable names are one logical, case-insensitive namespace, so a
-/// later case variant replaces an earlier override.
-#[derive(Debug, Clone)]
-pub struct EnvironmentSpec {
-    base: EnvironmentBase,
-    overrides: BTreeMap<OsString, EnvironmentOverride>,
-    override_names: HashMap<EnvironmentNameKey, OsString>,
-    filters: BTreeMap<EnvironmentPattern, EnvironmentFilterAction>,
 }
 
 impl PartialEq for EnvironmentSpec {
