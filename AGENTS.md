@@ -142,16 +142,21 @@ These rules are mandatory:
     one grouped `use` declaration. Split imports only when they represent
     genuinely different responsibility zones or the split materially improves
     readability.
-17. Organize Rust modules in structural dependency order. Declare composite
-    data types before the smaller data types they contain or compose; place
-    atomic leaf data types after the composite types that depend on them. Keep
-    declarations for each type together. Order `impl` blocks in the same order
-    as their type declarations: finish every `impl` for the first type before
-    starting the `impl` blocks for the next type, without interleaving types.
-    Group helper methods and other supporting logic by responsibility in a
-    private module or an equivalent dedicated section when that makes the
-    structure clearer. This organization must not widen, remove, or otherwise
-    alter the public API.
+17. Organize Rust modules in structural dependency order. First declare all
+    data types in the module: composite types before the smaller data types
+    they contain or compose, and atomic leaf types after the composite types
+    that depend on them. Only after every type declaration is complete, write
+    the `impl` blocks in the same order as those type declarations. Never
+    interleave a type declaration and its `impl` blocks. Group helper methods
+    and other supporting logic by responsibility in a private module or an
+    equivalent dedicated section when that makes the structure clearer. This
+    organization must not widen, remove, or otherwise alter the public API.
+18. Treat `crates/cageforge-bwrap/vendor/bubblewrap/` C sources and headers as
+    an immutable third-party zone. Do not refactor, reformat, patch, or
+    otherwise modify those C files as part of a Rust refactor. They are kept as
+    upstream sources solely to compile the original Bubblewrap binary; only
+    the surrounding Cageforge build integration may be changed, subject to the
+    separate provenance and licensing rules.
 
 ## Specification ordering
 
