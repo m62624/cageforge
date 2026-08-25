@@ -19,6 +19,15 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
+/// Filesystem restrictions passed to a platform backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesystemPolicy {
+    mode: FilesystemMode,
+    entries: Vec<FilesystemRule>,
+    glob_scan_max_depth: Option<NonZeroUsize>,
+    protected_relative_paths: Vec<PathBuf>,
+}
+
 /// The enforcement ownership for filesystem access.
 ///
 /// The modes are ownership states, not a permission scale, so this type does
@@ -55,20 +64,6 @@ enum FilesystemTargetKey {
     },
 }
 
-fn target_key(target: &FilesystemTarget) -> FilesystemTargetKey {
-    match target {
-        FilesystemTarget::Scope(selector) => FilesystemTargetKey::Scope(selector.clone()),
-        FilesystemTarget::Glob(pattern) => {
-            let (absolute, prefix, components) = pattern.semantic_key();
-            FilesystemTargetKey::Glob {
-                absolute,
-                prefix,
-                components,
-            }
-        }
-    }
-}
-
 /// What a backend should do when a concrete rule target is absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MissingPathBehavior {
@@ -76,6 +71,21 @@ pub enum MissingPathBehavior {
     Error,
     /// Ignore an absent target without creating it.
     Skip,
+}
+
+/// One filesystem target and its access mode.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FilesystemRule {
+    target: FilesystemTarget,
+    access: AccessMode,
+    missing_path_behavior: MissingPathBehavior,
+    read_only_subpaths: Vec<PathSelector>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuleMatch {
+    specificity: usize,
+    access: AccessMode,
 }
 
 impl MissingPathBehavior {
@@ -91,15 +101,6 @@ impl MissingPathBehavior {
             (Self::Skip, Self::Skip) => Self::Skip,
         }
     }
-}
-
-/// One filesystem target and its access mode.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FilesystemRule {
-    target: FilesystemTarget,
-    access: AccessMode,
-    missing_path_behavior: MissingPathBehavior,
-    read_only_subpaths: Vec<PathSelector>,
 }
 
 impl FilesystemRule {
@@ -230,15 +231,15 @@ impl FilesystemRule {
             access,
         })
     }
-}
 
-/// Filesystem restrictions passed to a platform backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FilesystemPolicy {
-    mode: FilesystemMode,
-    entries: Vec<FilesystemRule>,
-    glob_scan_max_depth: Option<NonZeroUsize>,
-    protected_relative_paths: Vec<PathBuf>,
+    fn validate(&self) -> Result<(), PolicyError> {
+        if matches!(self.target, FilesystemTarget::Glob(_)) && self.access != AccessMode::Deny {
+            return Err(PolicyError::UnsupportedGlobAccess {
+                access: self.access,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl FilesystemPolicy {
@@ -516,14 +517,17 @@ impl FilesystemPolicy {
     }
 }
 
-impl FilesystemRule {
-    fn validate(&self) -> Result<(), PolicyError> {
-        if matches!(self.target, FilesystemTarget::Glob(_)) && self.access != AccessMode::Deny {
-            return Err(PolicyError::UnsupportedGlobAccess {
-                access: self.access,
-            });
+fn target_key(target: &FilesystemTarget) -> FilesystemTargetKey {
+    match target {
+        FilesystemTarget::Scope(selector) => FilesystemTargetKey::Scope(selector.clone()),
+        FilesystemTarget::Glob(pattern) => {
+            let (absolute, prefix, components) = pattern.semantic_key();
+            FilesystemTargetKey::Glob {
+                absolute,
+                prefix,
+                components,
+            }
         }
-        Ok(())
     }
 }
 
@@ -566,10 +570,4 @@ fn validate_protected_relative_path(path: PathBuf) -> Result<PathBuf, PolicyErro
         });
     }
     Ok(normalized)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuleMatch {
-    specificity: usize,
-    access: AccessMode,
 }

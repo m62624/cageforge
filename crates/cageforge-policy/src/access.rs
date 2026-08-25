@@ -22,6 +22,28 @@ pub enum AccessMode {
     Deny,
 }
 
+/// The result of evaluating a filesystem request against a policy.
+///
+/// `ExternallyEnforced` is intentionally distinct from [`AccessMode::Deny`].
+/// It tells a backend that Cageforge does not make the local decision because
+/// another trusted sandbox owns the filesystem boundary.
+///
+/// This type intentionally does not implement [`Ord`]. Local access decisions
+/// and external ownership are not one total permission ordering; callers must
+/// handle `ExternallyEnforced` explicitly instead of combining decisions with
+/// `min` or `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FilesystemDecision {
+    /// Permit reads but not modifications.
+    Read,
+    /// Permit reads and modifications.
+    Write,
+    /// Permit neither reads nor modifications.
+    Deny,
+    /// Defer enforcement to the trusted external sandbox.
+    ExternallyEnforced,
+}
+
 impl AccessMode {
     /// Returns whether this mode permits a read.
     pub const fn can_read(self) -> bool {
@@ -54,28 +76,6 @@ impl AccessMode {
                 | (Self::Deny, Self::Deny)
         )
     }
-}
-
-/// The result of evaluating a filesystem request against a policy.
-///
-/// `ExternallyEnforced` is intentionally distinct from [`AccessMode::Deny`].
-/// It tells a backend that Cageforge does not make the local decision because
-/// another trusted sandbox owns the filesystem boundary.
-///
-/// This type intentionally does not implement [`Ord`]. Local access decisions
-/// and external ownership are not one total permission ordering; callers must
-/// handle `ExternallyEnforced` explicitly instead of combining decisions with
-/// `min` or `max`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FilesystemDecision {
-    /// Permit reads but not modifications.
-    Read,
-    /// Permit reads and modifications.
-    Write,
-    /// Permit neither reads nor modifications.
-    Deny,
-    /// Defer enforcement to the trusted external sandbox.
-    ExternallyEnforced,
 }
 
 impl FilesystemDecision {

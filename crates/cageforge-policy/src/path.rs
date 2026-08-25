@@ -36,6 +36,16 @@ enum PathSelectorKind {
     SlashTmp,
 }
 
+/// A validated path glob used by a filesystem rule.
+#[derive(Debug, Clone)]
+pub struct PathPattern {
+    raw: String,
+    absolute: bool,
+    prefix: Option<String>,
+    components: Vec<String>,
+    matchers: Vec<GlobMatcher>,
+}
+
 impl PartialEq for PathSelector {
     fn eq(&self, other: &Self) -> bool {
         selectors_equal(self, other)
@@ -231,41 +241,6 @@ impl PathSelector {
     }
 }
 
-pub(crate) fn selectors_equal(left: &PathSelector, right: &PathSelector) -> bool {
-    match (&left.kind, &right.kind) {
-        (PathSelectorKind::Absolute(left), PathSelectorKind::Absolute(right))
-        | (PathSelectorKind::WorkspaceRoot(left), PathSelectorKind::WorkspaceRoot(right)) => {
-            paths_equal(left, right)
-        }
-        (PathSelectorKind::Root, PathSelectorKind::Root)
-        | (PathSelectorKind::Minimal, PathSelectorKind::Minimal)
-        | (PathSelectorKind::Tmpdir, PathSelectorKind::Tmpdir)
-        | (PathSelectorKind::SlashTmp, PathSelectorKind::SlashTmp) => true,
-        _ => false,
-    }
-}
-
-fn selector_kind_rank(kind: &PathSelectorKind) -> u8 {
-    match kind {
-        PathSelectorKind::Absolute(_) => 0,
-        PathSelectorKind::WorkspaceRoot(_) => 1,
-        PathSelectorKind::Root => 2,
-        PathSelectorKind::Minimal => 3,
-        PathSelectorKind::Tmpdir => 4,
-        PathSelectorKind::SlashTmp => 5,
-    }
-}
-
-/// A validated path glob used by a filesystem rule.
-#[derive(Debug, Clone)]
-pub struct PathPattern {
-    raw: String,
-    absolute: bool,
-    prefix: Option<String>,
-    components: Vec<String>,
-    matchers: Vec<GlobMatcher>,
-}
-
 impl PartialEq for PathPattern {
     fn eq(&self, other: &Self) -> bool {
         self.semantic_key() == other.semantic_key()
@@ -450,6 +425,31 @@ impl PathPattern {
             components,
             matchers,
         })
+    }
+}
+
+pub(crate) fn selectors_equal(left: &PathSelector, right: &PathSelector) -> bool {
+    match (&left.kind, &right.kind) {
+        (PathSelectorKind::Absolute(left), PathSelectorKind::Absolute(right))
+        | (PathSelectorKind::WorkspaceRoot(left), PathSelectorKind::WorkspaceRoot(right)) => {
+            paths_equal(left, right)
+        }
+        (PathSelectorKind::Root, PathSelectorKind::Root)
+        | (PathSelectorKind::Minimal, PathSelectorKind::Minimal)
+        | (PathSelectorKind::Tmpdir, PathSelectorKind::Tmpdir)
+        | (PathSelectorKind::SlashTmp, PathSelectorKind::SlashTmp) => true,
+        _ => false,
+    }
+}
+
+fn selector_kind_rank(kind: &PathSelectorKind) -> u8 {
+    match kind {
+        PathSelectorKind::Absolute(_) => 0,
+        PathSelectorKind::WorkspaceRoot(_) => 1,
+        PathSelectorKind::Root => 2,
+        PathSelectorKind::Minimal => 3,
+        PathSelectorKind::Tmpdir => 4,
+        PathSelectorKind::SlashTmp => 5,
     }
 }
 

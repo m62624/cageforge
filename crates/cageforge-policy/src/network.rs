@@ -19,81 +19,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::path::PathBuf;
 
-/// The enforcement ownership for network access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NetworkMode {
-    /// Outbound command networking is disabled unless a rule is explicitly used
-    /// by a backend that supports an allowlist.
-    Disabled,
-    /// Outbound command networking is enabled.
-    Enabled,
-    /// Another trusted component is responsible for enforcement.
-    External,
-}
+mod model;
 
-/// Default behavior for domain rules when no rule matches.
-///
-/// These are policy states rather than a narrowing scale, so this type does
-/// not implement [`Ord`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DomainMode {
-    /// Reject every domain.
-    Disabled,
-    /// Allow domains by default and apply matching rules as restrictions.
-    Enabled,
-    /// Reject domains by default and allow only matching allow rules.
-    Restricted,
-}
-
-/// Default behavior for Unix socket rules when no rule matches.
-///
-/// These are policy states rather than a narrowing scale, so this type does
-/// not implement [`Ord`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum UnixSocketMode {
-    /// Reject every Unix socket path.
-    Disabled,
-    /// Allow Unix socket paths by default and apply matching rules as restrictions.
-    Enabled,
-    /// Reject Unix socket paths by default and allow only matching allow rules.
-    Restricted,
-}
-
-/// Controls access to loopback, private, link-local, and otherwise
-/// non-public IP addresses reached through a domain.
-///
-/// This is an explicit opt-in state, not an orderable permission value, so it
-/// does not implement [`Ord`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LocalNetworkAccess {
-    /// Reject non-public destinations unless the caller explicitly opts in.
-    Deny,
-    /// Permit non-public destinations after the ordinary domain policy allows.
-    Allow,
-}
-
-/// Whether a domain or socket is allowed or denied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DomainAccess {
-    /// Permit the destination.
-    Allow,
-    /// Deny the destination.
-    Deny,
-}
-
-/// The result of evaluating a complete network policy.
-///
-/// Local denial, local allowance, and external ownership are distinct states,
-/// not values in one total permission order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NetworkDecision {
-    /// The local policy allows the destination.
-    Allow,
-    /// The local policy denies the destination.
-    Deny,
-    /// A trusted external boundary owns enforcement for the destination.
-    ExternallyEnforced,
-}
+use model::DomainMatcher;
+pub use model::{
+    AuthorizedSocketAddr, ConnectionAuthorization, DomainAccess, DomainMode, DomainRule,
+    LocalNetworkAccess, NetworkDecision, NetworkMode, NetworkPolicy, ResolvedNetworkTarget,
+    UnixSocketMode, UnixSocketRule,
+};
 
 impl NetworkDecision {
     pub(crate) const fn is_allowed(self) -> bool {
@@ -105,14 +38,6 @@ impl NetworkDecision {
         matches!(self, Self::ExternallyEnforced)
     }
 }
-
-/// A socket address that has passed the exact resolved-target check.
-///
-/// The value can only be created by [`NetworkPolicy::authorize_connection`].
-/// A backend should use [`Self::into_socket_addr`] instead of reconnecting by
-/// hostname or resolving the host again.
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct AuthorizedSocketAddr(SocketAddr);
 
 impl AuthorizedSocketAddr {
     /// Consumes the authorization and returns the exact checked address.
@@ -130,31 +55,6 @@ impl AuthorizedSocketAddr {
     pub const fn into_socket_addr(self) -> SocketAddr {
         self.0
     }
-}
-
-/// The result of checking the exact address a backend is about to connect to.
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub enum ConnectionAuthorization {
-    /// The address passed local policy and belongs to the resolution snapshot.
-    Allowed(AuthorizedSocketAddr),
-    /// The local policy rejects the connection.
-    Denied,
-    /// Another trusted boundary owns connection enforcement.
-    ExternallyEnforced,
-}
-
-/// A normalized hostname or literal together with the exact addresses a
-/// backend resolved for one connection attempt.
-///
-/// The address list is a snapshot. A backend must connect to one of these
-/// exact `SocketAddr` values and must call
-/// [`NetworkPolicy::authorize_connection`] immediately before the connection
-/// is established. This prevents a second DNS lookup or a changed address
-/// list from bypassing the policy decision.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedNetworkTarget {
-    domain: String,
-    addresses: Vec<SocketAddr>,
 }
 
 impl ResolvedNetworkTarget {
@@ -203,14 +103,6 @@ impl ResolvedNetworkTarget {
     }
 }
 
-/// A normalized domain pattern and its access decision.
-#[derive(Debug, Clone)]
-pub struct DomainRule {
-    pattern: String,
-    access: DomainAccess,
-    matcher: DomainMatcher,
-}
-
 impl PartialEq for DomainRule {
     fn eq(&self, other: &Self) -> bool {
         self.pattern == other.pattern && self.access == other.access
@@ -224,16 +116,6 @@ impl Hash for DomainRule {
         self.pattern.hash(state);
         self.access.hash(state);
     }
-}
-
-#[derive(Debug, Clone)]
-enum DomainMatcher {
-    Any,
-    Full(GlobMatcher),
-    Suffix {
-        labels: Vec<GlobMatcher>,
-        include_apex: bool,
-    },
 }
 
 impl DomainRule {
@@ -281,17 +163,6 @@ impl DomainRule {
     }
 }
 
-/// A Unix socket path and its access decision.
-///
-/// Equality and hashing use the same native lexical path identity as socket
-/// matching and policy normalization. The original path spelling remains
-/// available through [`Self::path`] for diagnostics.
-#[derive(Debug, Clone)]
-pub struct UnixSocketRule {
-    path: PathBuf,
-    access: DomainAccess,
-}
-
 impl PartialEq for UnixSocketRule {
     fn eq(&self, other: &Self) -> bool {
         NativePathKey::new(&self.path) == NativePathKey::new(&other.path)
@@ -325,17 +196,6 @@ impl UnixSocketRule {
     pub const fn access(&self) -> DomainAccess {
         self.access
     }
-}
-
-/// Network restrictions passed to a platform backend or network proxy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NetworkPolicy {
-    mode: NetworkMode,
-    domain_mode: DomainMode,
-    unix_socket_mode: UnixSocketMode,
-    local_network_access: LocalNetworkAccess,
-    domains: Vec<DomainRule>,
-    unix_sockets: Vec<UnixSocketRule>,
 }
 
 impl NetworkPolicy {
