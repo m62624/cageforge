@@ -182,7 +182,10 @@ Secure defaults must bound parser buffers, concurrent connections, requests
 per ingress connection, DNS snapshot size, DNS duration, total candidate
 connect duration, response-header duration, relay inactivity, and transferred
 bytes. Disabling the default relay-byte ceiling uses a named method rather than
-an ambiguous `None` argument.
+an ambiguous `None` argument. A tunnel's idle deadline resets when a byte is
+successfully transferred in either direction and expires after one complete
+configured period without another transfer; periodic sampling must not extend
+that bound to a second interval.
 
 Connection handlers must be cancellation-safe. Dropping the future closes its
 ingress and outbound streams. Native backend shutdown must stop accepting new
