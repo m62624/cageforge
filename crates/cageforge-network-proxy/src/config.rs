@@ -29,6 +29,35 @@ pub struct GatewayConfig {
     relay_byte_limit: Option<NonZeroU64>,
 }
 
+/// Invalid gateway configuration.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum GatewayConfigError {
+    /// A timeout was zero and would disable the intended bound.
+    #[error("{field} timeout must be greater than zero")]
+    ZeroTimeout {
+        /// Name of the rejected timeout.
+        field: &'static str,
+    },
+    /// Hyper requires at least its minimum HTTP/1 buffer size.
+    #[error("HTTP header limit {actual} is below the minimum {minimum}")]
+    HttpHeaderLimitTooSmall {
+        /// Required minimum.
+        minimum: usize,
+        /// Rejected value.
+        actual: usize,
+    },
+    /// The concurrency count exceeds Tokio's representable semaphore range.
+    #[error("{field} {actual} exceeds the maximum {maximum}")]
+    LimitTooLarge {
+        /// Name of the rejected setting.
+        field: &'static str,
+        /// Maximum supported value.
+        maximum: usize,
+        /// Rejected value.
+        actual: usize,
+    },
+}
+
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
@@ -195,35 +224,6 @@ impl GatewayConfig {
     pub const fn relay_byte_limit(&self) -> Option<NonZeroU64> {
         self.relay_byte_limit
     }
-}
-
-/// Invalid gateway configuration.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum GatewayConfigError {
-    /// A timeout was zero and would disable the intended bound.
-    #[error("{field} timeout must be greater than zero")]
-    ZeroTimeout {
-        /// Name of the rejected timeout.
-        field: &'static str,
-    },
-    /// Hyper requires at least its minimum HTTP/1 buffer size.
-    #[error("HTTP header limit {actual} is below the minimum {minimum}")]
-    HttpHeaderLimitTooSmall {
-        /// Required minimum.
-        minimum: usize,
-        /// Rejected value.
-        actual: usize,
-    },
-    /// The concurrency count exceeds Tokio's representable semaphore range.
-    #[error("{field} {actual} exceeds the maximum {maximum}")]
-    LimitTooLarge {
-        /// Name of the rejected setting.
-        field: &'static str,
-        /// Maximum supported value.
-        maximum: usize,
-        /// Rejected value.
-        actual: usize,
-    },
 }
 
 fn validate_timeout(field: &'static str, timeout: Duration) -> Result<(), GatewayConfigError> {

@@ -28,6 +28,15 @@ use crate::{GatewayError, NetworkGateway, NetworkResolver};
 const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 
+#[derive(Clone)]
+struct ProtocolTasks {
+    inner: Arc<ProtocolTasksInner>,
+}
+
+struct ProtocolTasksInner {
+    handles: Mutex<Vec<JoinHandle<Result<(), GatewayError>>>>,
+}
+
 pub(crate) async fn serve<R, S>(gateway: &NetworkGateway<R>, stream: S) -> Result<(), GatewayError>
 where
     R: NetworkResolver,
@@ -354,15 +363,6 @@ fn error_response(status: StatusCode, message: &'static str, close: bool) -> Res
             .insert(CONNECTION, HeaderValue::from_static("close"));
     }
     response
-}
-
-#[derive(Clone)]
-struct ProtocolTasks {
-    inner: Arc<ProtocolTasksInner>,
-}
-
-struct ProtocolTasksInner {
-    handles: Mutex<Vec<JoinHandle<Result<(), GatewayError>>>>,
 }
 
 impl ProtocolTasks {

@@ -26,6 +26,13 @@ pub(crate) struct TransferBudget {
     limit: Option<NonZeroU64>,
 }
 
+struct GuardedBody<B> {
+    inner: Pin<Box<B>>,
+    idle: Pin<Box<Sleep>>,
+    idle_timeout: Duration,
+    budget: Arc<TransferBudget>,
+}
+
 impl TransferBudget {
     pub(crate) fn new(limit: Option<NonZeroU64>) -> Arc<Self> {
         Arc::new(Self {
@@ -57,13 +64,6 @@ impl TransferBudget {
             }
         }
     }
-}
-
-struct GuardedBody<B> {
-    inner: Pin<Box<B>>,
-    idle: Pin<Box<Sleep>>,
-    idle_timeout: Duration,
-    budget: Arc<TransferBudget>,
 }
 
 impl<B> GuardedBody<B> {
