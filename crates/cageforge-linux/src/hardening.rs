@@ -903,7 +903,7 @@ fn add_disabled_network_rules(
     ] {
         rules.insert(syscall, Vec::new());
     }
-    let unix_only = SeccompRule::new(vec![
+    let non_unix = SeccompRule::new(vec![
         SeccompCondition::new(
             0,
             SeccompCmpArgLen::Dword,
@@ -913,8 +913,15 @@ fn add_disabled_network_rules(
         .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
     .map_err(|source| SeccompBuildError::Rule { source })?;
-    rules.insert(libc::SYS_socket, vec![unix_only.clone()]);
-    rules.insert(libc::SYS_socketpair, vec![unix_only]);
+    rules.insert(
+        libc::SYS_socket,
+        vec![
+            non_unix,
+            unix_socket_type_rule(libc::SOCK_DGRAM)?,
+            unix_socket_type_rule(libc::SOCK_SEQPACKET)?,
+        ],
+    );
+    rules.insert(libc::SYS_socketpair, isolated_unix_socketpair_rules()?);
     Ok(())
 }
 
@@ -954,12 +961,12 @@ fn isolated_unix_socketpair_rules() -> Result<Vec<SeccompRule>, SeccompBuildErro
         .map_err(|source| SeccompBuildError::Condition { source })?,
     ])
     .map_err(|source| SeccompBuildError::Rule { source })?;
-    let unix_datagram = unix_socketpair_type_rule(libc::SOCK_DGRAM)?;
-    let unix_seqpacket = unix_socketpair_type_rule(libc::SOCK_SEQPACKET)?;
+    let unix_datagram = unix_socket_type_rule(libc::SOCK_DGRAM)?;
+    let unix_seqpacket = unix_socket_type_rule(libc::SOCK_SEQPACKET)?;
     Ok(vec![non_unix, unix_datagram, unix_seqpacket])
 }
 
-fn unix_socketpair_type_rule(socket_type: libc::c_int) -> Result<SeccompRule, SeccompBuildError> {
+fn unix_socket_type_rule(socket_type: libc::c_int) -> Result<SeccompRule, SeccompBuildError> {
     SeccompRule::new(vec![
         SeccompCondition::new(
             0,

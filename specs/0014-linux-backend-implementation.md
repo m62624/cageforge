@@ -319,7 +319,7 @@ restricted request to an unrestricted process.
 | read-only subpaths | Apply after writable binds and preserve narrower carve-outs |
 | missing-path behavior | Implement error/skip exactly; never reinterpret skip as write permission |
 | default/additional protected paths | Protect existing and not-yet-existing paths against modification, replacement, and creation |
-| disabled network | Isolate the network namespace and apply required process hardening |
+| disabled network | Isolate the network namespace, reject every pathname-capable AF_UNIX endpoint, and apply required process hardening while preserving process-local stream socketpair IPC |
 | unrestricted network | Preserve host network only when no narrower network restriction is requested |
 | external network enforcement | Reject by default without a trusted external integration |
 | domain rules | Enforce through an isolated namespace and backend-owned HTTP/SOCKS gateway that resolves once and applies both effective policy layers |
@@ -590,14 +590,19 @@ isolates this additional boundary in the authenticated helper with
 the typed `KeyringIsolation` category instead of launching with the host
 keyring.
 
-The frozen Codex proxy-routed seccomp policy permits every AF_UNIX
-`socketpair()` type on the assumption that those descriptors cannot reach a
-pathname socket. Linux datagram socketpair endpoints can instead be redirected
-with `connect` or `sendto`. Cageforge therefore permits AF_UNIX `SOCK_STREAM`
-socketpairs, including normal `CLOEXEC` and `NONBLOCK` flags, but denies
-`SOCK_DGRAM` and `SOCK_SEQPACKET` socketpairs whenever pathname Unix isolation
-is required. The base socket type is checked with the Linux UAPI type mask so
-creation flags cannot bypass or accidentally trigger the rule.
+The frozen Codex restricted-network seccomp policy permits every AF_UNIX
+`socket()` and `socketpair()` type, blocks `connect` and `sendto`, but leaves
+`sendmsg` available. Linux datagram endpoints can supply a pathname through
+`sendmsg(msg_name=...)`, and datagram socketpair endpoints can also be
+redirected with `connect` or `sendto`. The frozen proxy-routed policy likewise
+permits every AF_UNIX socketpair type on the assumption that those descriptors
+cannot reach a pathname socket. Cageforge therefore permits AF_UNIX
+`SOCK_STREAM` sockets and socketpairs, including normal `CLOEXEC` and
+`NONBLOCK` flags, but denies `SOCK_DGRAM` and `SOCK_SEQPACKET` endpoints whenever
+pathname Unix isolation is required. The base socket type is checked with the
+Linux UAPI type mask so creation flags cannot bypass or accidentally trigger
+the rule. This preserves process-local stream IPC without leaving a pathname
+Unix-socket route around disabled or proxy-routed networking.
 
 Before the command is released, the authenticated helper channel carries a
 framed setup result. A rejected setup includes a stable typed failure category
@@ -753,6 +758,8 @@ job is an enforcement gate.
 ### Network tests
 
 - disabled networking rejects loopback and public destinations;
+- disabled networking rejects pathname Unix datagrams sent through `sendmsg`
+  while preserving process-local stream socketpair IPC;
 - unrestricted networking is not accidentally treated as disabled;
 - hostname-only decisions cannot authorize a connection;
 - an address outside the captured `ResolvedNetworkTarget` is rejected;

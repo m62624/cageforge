@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::num::NonZeroUsize;
 use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::os::unix::process::ExitStatusExt;
@@ -46,6 +47,7 @@ const TRACER_GUARD_DESCENDANT_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_DESCENDANT
 const EXPECTED_TRACER_PID: &str = "CAGEFORGE_EXPECTED_TRACER_PID";
 const CLONE_UNTRACED_FIXTURE: &str = "CAGEFORGE_CLONE_UNTRACED_FIXTURE";
 const UNIX_SOCKET_BYPASS_TARGET: &str = "CAGEFORGE_UNIX_SOCKET_BYPASS_TARGET";
+const DISABLED_NETWORK_UNIX_BYPASS_FIXTURE: &str = "CAGEFORGE_DISABLED_NETWORK_UNIX_BYPASS_FIXTURE";
 const SYSV_SHARED_MEMORY_FIXTURE: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_FIXTURE";
 const SYSV_SHARED_MEMORY_ID: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_ID";
 const NAMESPACE_ROOT_CAPABILITY_FIXTURE: &str = "CAGEFORGE_NAMESPACE_ROOT_CAPABILITY_FIXTURE";
@@ -623,6 +625,59 @@ fn common_seccomp_fixture() {
             Some(libc::EPERM)
         );
     }
+}
+
+#[test]
+fn disabled_network_unix_bypass_fixture() {
+    if std::env::var_os(DISABLED_NETWORK_UNIX_BYPASS_FIXTURE).is_none() {
+        return;
+    }
+    let target =
+        PathBuf::from(std::env::var_os(UNIX_SOCKET_BYPASS_TARGET).expect("Unix bypass target"));
+    let target = target.as_os_str().as_bytes();
+    assert!(
+        UnixStream::pair().is_ok(),
+        "disabled networking must preserve process-local stream IPC"
+    );
+    #[allow(unsafe_code)]
+    let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+    assert!(target.len() < address.sun_path.len());
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (destination, source) in address.sun_path.iter_mut().zip(target) {
+        *destination = *source as libc::c_char;
+    }
+
+    #[allow(unsafe_code)]
+    let socket = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if socket == -1 {
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+        return;
+    }
+    let mut payload = *b"bypass";
+    let mut vector = libc::iovec {
+        iov_base: payload.as_mut_ptr().cast(),
+        iov_len: payload.len(),
+    };
+    #[allow(unsafe_code)]
+    let mut message = unsafe { std::mem::zeroed::<libc::msghdr>() };
+    message.msg_name = (&mut address as *mut libc::sockaddr_un).cast();
+    message.msg_namelen =
+        (std::mem::offset_of!(libc::sockaddr_un, sun_path) + target.len() + 1) as libc::socklen_t;
+    message.msg_iov = &mut vector;
+    message.msg_iovlen = 1;
+
+    #[allow(unsafe_code)]
+    let result = unsafe { libc::sendmsg(socket, &message, 0) };
+    let error = io::Error::last_os_error();
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::close(socket);
+    }
+    assert_eq!(
+        result, -1,
+        "disabled network reached a pathname Unix socket"
+    );
+    assert_eq!(error.raw_os_error(), Some(libc::EPERM));
 }
 
 #[test]
@@ -2275,6 +2330,53 @@ fn disabled_network_blocks_direct_loopback_connections() {
         .set_nonblocking(true)
         .expect("non-blocking target listener");
     assert!(listener.accept().is_err());
+}
+
+#[test]
+fn disabled_network_blocks_pathname_unix_datagrams_sent_with_sendmsg() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let unix_target = workspace.path().join("disabled-network.sock");
+    let unix_listener = UnixDatagram::bind(&unix_target).expect("Unix datagram target");
+    unix_listener
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("Unix target timeout");
+    let environment = EnvironmentSpec::inherit_all()
+        .with_var(DISABLED_NETWORK_UNIX_BYPASS_FIXTURE, "1")
+        .expect("fixture environment")
+        .with_var(UNIX_SOCKET_BYPASS_TARGET, unix_target.as_os_str())
+        .expect("Unix target environment");
+    let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+        .expect("fixture command")
+        .with_args([
+            "--exact",
+            "disabled_network_unix_bypass_fixture",
+            "--nocapture",
+        ])
+        .expect("fixture arguments");
+    let (command, effective, runtime) = request_with_environment(
+        workspace.path(),
+        SandboxPolicy::workspace(),
+        command,
+        environment,
+    );
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    let mut datagram = [0; 16];
+    match unix_listener.recv(&mut datagram) {
+        Ok(size) => panic!(
+            "disabled network reached pathname Unix target: {:?}",
+            &datagram[..size]
+        ),
+        Err(error) => assert!(matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        )),
+    }
 }
 
 #[test]

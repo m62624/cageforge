@@ -267,7 +267,7 @@ it, and an unsupported combination is rejected before launch.
 | Framed setup/status protocol | Every helper launch | Validates magic, lengths, entry limits, names, values, duplicates, and typed command status |
 | Seccomp and `no_new_privs` | Restricted filesystem, disabled/direct-isolated network, or proxy routing | Blocks ptrace, `process_vm_*`, `io_uring`, forbidden Unix-socket operations, and disallowed network families or socket operations in the child boundary |
 | Core-dump and dumpability hardening | Hardened launches | Prevents core dumps and keeps the restricted process non-dumpable |
-| Disabled network namespace | `NetworkMode::Disabled` | Removes direct network access from the child |
+| Disabled network namespace and socket filter | `NetworkMode::Disabled` | Removes direct IP access and rejects pathname-capable AF_UNIX datagram/seqpacket endpoints while preserving process-local stream IPC |
 | Restricted gateway routing | Domain-restricted network | Uses one DNS snapshot, exact resolved-address authorization, authenticated proxy ingress, and bounded relay timeouts |
 | Unix-socket isolation | Proxy routing or direct mode without Unix sockets | Blocks pathname Unix-socket escapes while preserving only the explicitly supported IPC behavior |
 | Environment frame limits | Every helper launch | Bounds entry count, per-value size, and aggregate setup memory |
