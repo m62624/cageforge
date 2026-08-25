@@ -183,21 +183,21 @@ wait_for_ssh() {
 wait_for_bootstrap() {
     local log_file=$1
     echo "guest bootstrap log:" >&2
-    ssh_guest 'sudo tail -n 40 /var/log/cageforge-bootstrap.log' >&2 || true
-    for _ in {1..180}; do
+    ssh_guest 'sudo test -f /var/log/cageforge-bootstrap.log && sudo tail -n 40 /var/log/cageforge-bootstrap.log' >&2 || true
+    for attempt in {1..180}; do
         if ssh_guest 'sudo test -f /var/lib/cageforge-bootstrap-complete' >/dev/null 2>&1; then
             return
         fi
         if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
             print_guest_logs "$log_file"
-            ssh_guest 'sudo cat /var/log/cageforge-bootstrap.log' >&2 || true
+            ssh_guest 'sudo test -f /var/log/cageforge-bootstrap.log && sudo cat /var/log/cageforge-bootstrap.log' >&2 || true
             echo "guest bootstrap failed" >&2
             exit 70
         fi
-        if (( _ % 5 == 0 )); then
-            echo "guest bootstrap still running (${_}/180)" >&2
+        if (( attempt % 5 == 0 )); then
+            echo "guest bootstrap still running (${attempt}/180)" >&2
             tail -n 20 "$log_file" >&2 || true
-            ssh_guest 'sudo tail -n 40 /var/log/cageforge-bootstrap.log' >&2 || true
+            ssh_guest 'sudo test -f /var/log/cageforge-bootstrap.log && sudo tail -n 40 /var/log/cageforge-bootstrap.log' >&2 || true
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             print_guest_logs "$log_file"
