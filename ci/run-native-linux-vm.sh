@@ -84,11 +84,31 @@ write_files:
       export PATH=/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       echo '[cageforge] bootstrap: configuring user namespaces'
       sysctl -w kernel.unprivileged_userns_clone=1
-      if sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-        sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      fi
+      for apparmor_sysctl in \
+        kernel.apparmor_restrict_unprivileged_userns \
+        kernel.apparmor_restrict_unprivileged_unconfined; do
+        apparmor_sysctl_path=/proc/sys/${apparmor_sysctl//./\/}
+        if [[ -w "$apparmor_sysctl_path" ]]; then
+          sysctl -w "$apparmor_sysctl=0"
+        else
+          echo "[cageforge] bootstrap: $apparmor_sysctl=sysctl-unavailable"
+        fi
+      done
       echo '[cageforge] bootstrap: probing Bubblewrap user and network namespaces'
-      timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap --unshare-user --unshare-net --die-with-parent -- true
+      echo "[cageforge] bootstrap: userns=$(sysctl -n kernel.unprivileged_userns_clone)"
+      if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+        echo "[cageforge] bootstrap: apparmor_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
+      else
+        echo '[cageforge] bootstrap: apparmor_userns=sysctl-unavailable'
+      fi
+      timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
+        --die-with-parent \
+        --unshare-user \
+        --unshare-pid \
+        --unshare-net \
+        --as-pid-1 \
+        --ro-bind / / \
+        /bin/true
       echo '[cageforge] bootstrap: Bubblewrap probe passed'
       echo '[cageforge] bootstrap: installing Rust toolchain'
       runuser -u ubuntu -- env HOME=/home/ubuntu bash -c "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
