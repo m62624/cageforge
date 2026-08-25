@@ -44,6 +44,8 @@ fn backend() -> LinuxBackend {
 fn test_backend_config() -> LinuxBackendConfig {
     let config = LinuxBackendConfig::new()
         .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper"));
+    #[cfg(feature = "bundled-bubblewrap")]
+    let config = config.with_bundled_bubblewrap();
     match std::env::var_os("CAGEFORGE_BWRAP_TEST_RESOURCE_DIR") {
         Some(path) => config
             .with_resource_directory(path)
