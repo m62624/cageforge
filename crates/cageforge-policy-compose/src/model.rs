@@ -288,7 +288,7 @@ impl EffectiveNetworkRequirements {
         self.domain_rules
     }
 
-    /// Returns whether private and loopback address restrictions are present.
+    /// Returns whether non-public and special-purpose address restrictions are present.
     pub const fn local_address_restrictions(self) -> bool {
         self.local_address_restrictions
     }

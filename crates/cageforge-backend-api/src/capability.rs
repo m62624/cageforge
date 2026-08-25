@@ -39,7 +39,7 @@ impl fmt::Display for BackendCapability {
             Self::NetworkExternal => "external network enforcement",
             Self::NetworkDomainRules => "network domain rules",
             Self::NetworkLocalAddressRestrictions => {
-                "network private, loopback, and link-local address restrictions"
+                "network non-public and special-purpose address restrictions"
             }
             Self::NetworkResolvedTargets => "exact resolved network targets",
             Self::NetworkUnixSocketIsolation => "pathname Unix socket isolation",

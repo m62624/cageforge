@@ -172,7 +172,7 @@ pub enum BackendCapability {
     NetworkExternal,
     /// Enforce domain rules and domain defaults.
     NetworkDomainRules,
-    /// Enforce the policy for private, loopback, and link-local addresses.
+    /// Enforce the policy for non-public and special-purpose addresses.
     NetworkLocalAddressRestrictions,
     /// Resolve once and authorize the exact address used for a connection.
     NetworkResolvedTargets,

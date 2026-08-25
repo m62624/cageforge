@@ -77,7 +77,7 @@ an unchecked path selector by writing a public enum payload.
 | `PathPattern` | Represents validated absolute or workspace-relative globs. |
 | `AccessMode` | Expresses `Read`, `Write`, or `Deny`. |
 | `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults; `enabled()` keeps local destinations denied, while `unrestricted()` removes that local restriction explicitly. |
-| `LocalNetworkAccess` | Controls whether resolved loopback/private/link-local addresses are allowed. |
+| `LocalNetworkAccess` | Controls whether resolved non-public and special-purpose addresses are allowed. |
 | `NetworkDecision` | Distinguishes local allow/deny from externally owned network enforcement. |
 | `ResolvedNetworkTarget` | Keeps one normalized host and its exact resolved socket addresses together for a safe connection check. |
 | `ConnectionAuthorization` and `AuthorizedSocketAddr` | Returns the exact checked address that a network backend may use. |
