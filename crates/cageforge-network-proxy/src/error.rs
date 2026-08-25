@@ -15,15 +15,6 @@ pub enum UnsupportedNetworkRequirement {
     ExternalMode,
 }
 
-impl std::fmt::Display for UnsupportedNetworkRequirement {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DisabledMode => formatter.write_str("disabled network mode"),
-            Self::ExternalMode => formatter.write_str("external network enforcement"),
-        }
-    }
-}
-
 /// Errors produced by gateway construction or one ingress connection.
 #[derive(Debug, Error)]
 pub enum GatewayError {
@@ -207,6 +198,15 @@ pub enum GatewayError {
         #[source]
         source: tokio::task::JoinError,
     },
+}
+
+impl std::fmt::Display for UnsupportedNetworkRequirement {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DisabledMode => formatter.write_str("disabled network mode"),
+            Self::ExternalMode => formatter.write_str("external network enforcement"),
+        }
+    }
 }
 
 impl From<io::Error> for GatewayError {
