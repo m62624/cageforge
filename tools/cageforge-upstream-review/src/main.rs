@@ -150,6 +150,10 @@ impl Repository {
     }
 
     fn upstream_root(&self) -> Result<PathBuf, String> {
+        let config_dir = self
+            .config_path
+            .parent()
+            .ok_or_else(|| "canonical configuration path has no parent".to_owned())?;
         let configured_path = self
             .upstream_path_override
             .as_ref()
@@ -162,12 +166,7 @@ impl Repository {
                         .unwrap_or_else(|_| path.clone())
                 }
             })
-            .unwrap_or_else(|| {
-                self.config_path
-                    .parent()
-                    .expect("canonical config path has a parent")
-                    .join(&self.config.upstream.path)
-            });
+            .unwrap_or_else(|| config_dir.join(&self.config.upstream.path));
         let upstream_path = configured_path.canonicalize().map_err(|error| {
             format!(
                 "cannot resolve upstream checkout {}: {error}; pass --upstream-path or set CAGEFORGE_UPSTREAM_PATH",
