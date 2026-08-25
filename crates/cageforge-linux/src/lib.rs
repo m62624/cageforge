@@ -34,9 +34,9 @@ pub use error::{
     EnvironmentFrameError, FilesystemLoweringError, FilesystemMetadataOperation, LinuxBackendError,
     LinuxBridgeError, LinuxBridgeOperation, LinuxHardeningError, LinuxHardeningOperation,
     LinuxHelperRuntimeFailure, LinuxHelperRuntimeFailureKind, LinuxHelperSetupFailure,
-    LinuxHelperSetupFailureKind, NetworkCombinationError, NetworkGatewayIngressError,
-    NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure, NetworkGatewaySetupError,
-    NetworkGatewayTransportError, NetworkLoweringError, PolicyLoweringExpectation,
-    SeccompBuildError, SetupHandshakeError, StatusFrameError,
+    LinuxHelperSetupFailureKind, LinuxNamespace, NetworkCombinationError,
+    NetworkGatewayIngressError, NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure,
+    NetworkGatewaySetupError, NetworkGatewayTransportError, NetworkLoweringError,
+    PolicyLoweringExpectation, SeccompBuildError, SetupHandshakeError, StatusFrameError,
 };
 pub use process::LinuxChild;

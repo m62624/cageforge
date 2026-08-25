@@ -98,12 +98,28 @@ Apache-2.0. A distribution that ships the embedded mode must preserve the
 Bubblewrap license notice and corresponding machine-readable source. The
 `cageforge-bwrap` crate contains both in its published package.
 
-The host kernel must permit the user, mount, PID, and—when requested—network
+The host kernel must permit the user, mount, PID, IPC, and—when requested—network
 namespaces used by Bubblewrap. A missing prerequisite is reported as a typed
 `LinuxBackendError`; restricted requests are never widened into an ordinary
 host process. After construction, the validated Bubblewrap executable and
 hardening helper are pinned by open file descriptors; each spawn uses those
 validated objects rather than reopening their paths.
+
+Cageforge passes all Bubblewrap flags itself; applications and end users do not
+add them to the command line. Backend construction probes each namespace
+separately. `LinuxBackendError::NamespaceUnavailable` identifies the exact
+namespace, its Bubblewrap flag, the native diagnostic, and the corresponding
+host requirement:
+
+| Bubblewrap flag | Isolation | Host requirement when its probe fails |
+|---|---|---|
+| `--unshare-user` | User and mount privileges | Enable unprivileged user namespaces and permit them for the application in the host security policy; do not disable the policy globally |
+| `--unshare-pid` | Process tree and PID view | Use a kernel and outer container configuration that permit `CLONE_NEWPID` |
+| `--unshare-ipc` | System V shared memory, semaphores, and message queues | Use a kernel and outer container configuration that permit `CLONE_NEWIPC` |
+| `--unshare-net` | Network stack | Use a kernel and outer container configuration that permit `CLONE_NEWNET` |
+
+If the executable itself lacks a required option, the separate
+`LinuxBackendError::BubblewrapIncompatible` error lists every missing flag.
 
 ## Basic use
 
@@ -192,6 +208,7 @@ it, and an unsupported combination is rejected before launch.
 | Bubblewrap user and mount namespaces | Restricted filesystem or isolated network mode | Separates the child filesystem/network view from the host |
 | New session and parent-lifetime binding | Every Bubblewrap launch | Uses `--new-session`, `--die-with-parent`, and the native parent-death signal so the boundary cannot outlive its owner |
 | PID namespace and fresh `/proc` | Default `ProcMountPolicy::Required` | Gives the child an isolated process view and prevents host `/proc` exposure |
+| IPC namespace | Every Bubblewrap launch | Prevents access to host System V shared-memory segments, semaphore sets, and message queues |
 | Private device and runtime view | Every restricted filesystem launch | Builds the child `/dev` view, hides Cageforge runtime paths from the command, and exposes only the deliberately mounted helper/gateway endpoints |
 | Empty-root or layered bind mounts | Restricted filesystem | Allows only effective read/write scopes and masks denied paths |
 | Read-only carve-outs | A writable scope with read-only subpaths | Keeps narrower paths read-only inside writable parents |

@@ -10,11 +10,11 @@ use pretty_assertions::assert_eq;
 #[cfg(feature = "bundled-bubblewrap")]
 use super::materialize_bundled_resource;
 use super::{
-    ProbeError, can_fall_back_to_bundled, find_in_search_paths, missing_help_flags,
-    resource_directory, run_probe, verify_bundled_digest,
+    ProbeError, can_fall_back_to_bundled, find_in_search_paths, missing_help_flags, namespace_args,
+    probe_namespace, resource_directory, run_probe, verify_bundled_digest,
 };
-use crate::config::ResourceDirectorySource;
-use crate::error::LinuxBackendError;
+use crate::config::{ProcMountPolicy, ResourceDirectorySource};
+use crate::error::{LinuxBackendError, LinuxNamespace};
 
 #[test]
 fn executable_discovery_skips_workspace_local_and_non_executable_candidates() {
@@ -78,6 +78,53 @@ fn help_capabilities_are_matched_as_complete_flags() {
 
     assert!(missing.iter().any(|flag| flag == "--bind"));
     assert!(missing.iter().any(|flag| flag == "--ro-bind"));
+}
+
+#[test]
+fn namespace_plan_always_isolates_system_v_ipc() {
+    for proc_mount in [ProcMountPolicy::Required, ProcMountPolicy::Disabled] {
+        for network_isolated in [false, true] {
+            let args = namespace_args(proc_mount, network_isolated);
+            assert!(args.iter().any(|argument| argument == "--unshare-ipc"));
+        }
+    }
+}
+
+#[test]
+fn namespace_probe_failures_identify_each_required_flag() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let binary = temporary.path().join("bwrap");
+    write_program(
+        &binary,
+        0o755,
+        "#!/bin/sh\necho 'namespace creation denied' >&2\nexit 1\n",
+    );
+
+    for (namespace, flag, guidance) in [
+        (
+            LinuxNamespace::User,
+            "--unshare-user",
+            "unprivileged user namespaces",
+        ),
+        (LinuxNamespace::Pid, "--unshare-pid", "CLONE_NEWPID"),
+        (LinuxNamespace::Ipc, "--unshare-ipc", "CLONE_NEWIPC"),
+        (LinuxNamespace::Network, "--unshare-net", "CLONE_NEWNET"),
+    ] {
+        let error = probe_namespace(&binary, namespace).expect_err("namespace probe must fail");
+        assert!(matches!(
+            &error,
+            LinuxBackendError::NamespaceUnavailable {
+                namespace: actual,
+                ..
+            } if *actual == namespace
+        ));
+        let message = error.to_string();
+        assert!(message.contains(flag), "missing {flag} in {message:?}");
+        assert!(
+            message.contains(guidance),
+            "missing {guidance} in {message:?}"
+        );
+    }
 }
 
 #[test]
@@ -182,7 +229,8 @@ fn only_system_executable_compatibility_failures_use_the_bundled_fallback() {
         &LinuxBackendError::BubblewrapProbeTimedOut { stage: "help" }
     ));
     assert!(!can_fall_back_to_bundled(
-        &LinuxBackendError::UserNamespaceUnavailable {
+        &LinuxBackendError::NamespaceUnavailable {
+            namespace: LinuxNamespace::User,
             message: String::new()
         }
     ));

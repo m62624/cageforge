@@ -98,22 +98,41 @@ write_files:
         fi
       done
       sysctl --system
-      echo '[cageforge] bootstrap: probing Bubblewrap user and network namespaces'
+      echo '[cageforge] bootstrap: probing Bubblewrap user, PID, IPC, and network namespaces'
       echo "[cageforge] bootstrap: userns=\$(sysctl -n kernel.unprivileged_userns_clone)"
       if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
         echo "[cageforge] bootstrap: apparmor_userns=\$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
       else
         echo '[cageforge] bootstrap: apparmor_userns=sysctl-unavailable'
       fi
-      timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
-        --die-with-parent \
-        --unshare-user \
-        --unshare-pid \
-        --unshare-net \
-        --as-pid-1 \
-        --ro-bind / / \
-        /bin/true
-      echo '[cageforge] bootstrap: Bubblewrap probe passed'
+      probe_bubblewrap_namespace() {
+        local namespace=$1
+        local flag=$2
+        local guidance=$3
+        shift 3
+        echo "[cageforge] bootstrap: probing $namespace namespace ($flag)"
+        if ! timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
+          --die-with-parent \
+          --unshare-user \
+          "$@" \
+          --ro-bind / / \
+          /bin/true; then
+          echo "[cageforge] bootstrap: $namespace namespace probe failed ($flag): $guidance" >&2
+          return 1
+        fi
+      }
+      probe_bubblewrap_namespace user --unshare-user \
+        'enable unprivileged user namespaces and permit them in the guest security policy'
+      probe_bubblewrap_namespace PID --unshare-pid \
+        'the guest kernel must permit CLONE_NEWPID' \
+        --unshare-pid --as-pid-1
+      probe_bubblewrap_namespace IPC --unshare-ipc \
+        'the guest kernel must permit CLONE_NEWIPC' \
+        --unshare-ipc
+      probe_bubblewrap_namespace network --unshare-net \
+        'the guest kernel must permit CLONE_NEWNET' \
+        --unshare-net
+      echo '[cageforge] bootstrap: all Bubblewrap namespace probes passed'
       echo '[cageforge] bootstrap: installing Rust toolchain'
       runuser -u ubuntu -- env HOME=/home/ubuntu bash -c "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
       runuser -u ubuntu -- env HOME=/home/ubuntu PATH=/home/ubuntu/.cargo/bin:\$PATH rustup component add clippy rustfmt

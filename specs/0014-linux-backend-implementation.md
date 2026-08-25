@@ -345,7 +345,7 @@ minimum taxonomy is:
 - `InvalidConfiguration`;
 - `BubblewrapUnavailable`;
 - `BubblewrapIncompatible`;
-- `UserNamespaceUnavailable`;
+- `NamespaceUnavailable { namespace, message }`;
 - `ProcMountUnavailable`;
 - `UnsupportedSeccompArchitecture`;
 - `InvalidRuntimeContext`;
@@ -398,6 +398,7 @@ The generated Bubblewrap plan must establish, as applicable:
 
 - a new user namespace;
 - a new PID namespace;
+- a new IPC namespace for every launch;
 - a new network namespace when the effective network mode requires isolation;
 - a fresh `/proc` unless the backend has a documented, typed reason to reject
   or disable it;
@@ -407,6 +408,25 @@ The generated Bubblewrap plan must establish, as applicable:
 
 The backend must execute the command only after the complete plan is built and
 validated. A partially built plan must never be launched.
+
+The IPC namespace is unconditional because the portable policy has no
+capability that authorizes access to host System V shared-memory segments,
+semaphore sets, or message queues. Mounting a private `/dev/shm` protects the
+filesystem-backed POSIX shared-memory namespace but does not isolate those
+System V IPC objects. The frozen Codex Bubblewrap plans in
+`codex-rs/linux-sandbox/src/bwrap.rs` unshare user and PID namespaces but retain
+the host IPC namespace. Cageforge intentionally requires Bubblewrap's
+`--unshare-ipc` flag and probes it before accepting the executable, because it
+runs arbitrary third-party commands rather than a product-controlled helper.
+
+Compatibility validation must probe user, PID, IPC, and network namespace
+creation separately. A runtime denial returns
+`NamespaceUnavailable { namespace, message }`; its display form identifies the
+exact Bubblewrap flag and the corresponding kernel or outer-container
+requirement. A missing command-line option remains
+`BubblewrapIncompatible { missing }`, which lists the exact absent flags. This
+separation prevents an IPC, PID, or network restriction from being
+misreported as a user-namespace failure.
 
 The backend reserves `/dev` for Bubblewrap's minimal device tree, `/proc` for
 the fresh PID namespace, and `/dev/.cageforge-runtime` for the authenticated
@@ -668,6 +688,8 @@ job is an enforcement gate.
 - timeout and cancellation terminate the sandboxed process tree;
 - dropping a running `LinuxChild` terminates and reaps the Bubblewrap boundary;
 - parent death does not leave an orphaned sandbox process;
+- restricted and unrestricted filesystem modes cannot attach to host System V
+  IPC objects;
 - `NoNewPrivs` is visible inside the restricted child; and
 - unsupported capabilities fail before the child is started.
 

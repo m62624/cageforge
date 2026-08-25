@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::config::{
     BubblewrapSource, HardeningHelperSource, ProcMountPolicy, ResourceDirectorySource,
 };
-use crate::error::LinuxBackendError;
+use crate::error::{LinuxBackendError, LinuxNamespace};
 
 const REQUIRED_HELP_FLAGS: &[&str] = &[
     "--as-pid-1",
@@ -36,6 +36,7 @@ const REQUIRED_HELP_FLAGS: &[&str] = &[
     "--ro-bind-data",
     "--ro-bind-fd",
     "--tmpfs",
+    "--unshare-ipc",
     "--unshare-net",
     "--unshare-pid",
     "--unshare-user",
@@ -406,26 +407,33 @@ fn missing_help_flags(help: &str) -> Vec<String> {
 }
 
 fn probe_namespaces(path: &Path) -> Result<(), LinuxBackendError> {
-    let output = run_probe(
-        path,
-        &[
-            "--die-with-parent",
-            "--unshare-user",
-            "--unshare-pid",
-            "--unshare-net",
-            "--as-pid-1",
-            "--ro-bind",
-            "/",
-            "/",
-            "/bin/true",
-        ],
-        PROBE_TIMEOUT,
-    )
-    .map_err(|error| probe_error("user namespace", error))?;
+    for namespace in [
+        LinuxNamespace::User,
+        LinuxNamespace::Pid,
+        LinuxNamespace::Ipc,
+        LinuxNamespace::Network,
+    ] {
+        probe_namespace(path, namespace)?;
+    }
+    Ok(())
+}
+
+fn probe_namespace(path: &Path, namespace: LinuxNamespace) -> Result<(), LinuxBackendError> {
+    let mut args = vec!["--die-with-parent", "--unshare-user"];
+    match namespace {
+        LinuxNamespace::User => {}
+        LinuxNamespace::Pid => args.extend(["--unshare-pid", "--as-pid-1"]),
+        LinuxNamespace::Ipc => args.push("--unshare-ipc"),
+        LinuxNamespace::Network => args.push("--unshare-net"),
+    }
+    args.extend(["--ro-bind", "/", "/", "/bin/true"]);
+    let output = run_probe(path, &args, PROBE_TIMEOUT)
+        .map_err(|error| probe_error(namespace.probe_stage(), error))?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(LinuxBackendError::UserNamespaceUnavailable {
+        Err(LinuxBackendError::NamespaceUnavailable {
+            namespace,
             message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         })
     }
@@ -587,6 +595,7 @@ pub(crate) fn namespace_args(
         "--new-session".into(),
         "--unshare-user".into(),
         "--unshare-pid".into(),
+        "--unshare-ipc".into(),
         "--as-pid-1".into(),
     ];
     if network_isolated {

@@ -10,6 +10,19 @@ use cageforge_backend_api::{BackendCapability, BackendContractError};
 use cageforge_network_proxy::GatewayError;
 use thiserror::Error;
 
+/// A Linux namespace required by the Bubblewrap process boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxNamespace {
+    /// User and mount privilege isolation established by `--unshare-user`.
+    User,
+    /// Process-tree isolation established by `--unshare-pid`.
+    Pid,
+    /// System V IPC isolation established by `--unshare-ipc`.
+    Ipc,
+    /// Network-stack isolation established by `--unshare-net`.
+    Network,
+}
+
 /// The filesystem operation whose native lowering failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilesystemMetadataOperation {
@@ -445,9 +458,15 @@ pub enum LinuxBackendError {
         /// Missing stream name.
         stream: &'static str,
     },
-    /// A Bubblewrap user-namespace probe failed.
-    #[error("Bubblewrap cannot create the required user/network namespace: {message}")]
-    UserNamespaceUnavailable {
+    /// Bubblewrap could not create one required Linux namespace.
+    #[error(
+        "Bubblewrap cannot create the required {namespace} namespace with {flag}: {message}. {guidance}",
+        flag = .namespace.bubblewrap_flag(),
+        guidance = .namespace.host_guidance()
+    )]
+    NamespaceUnavailable {
+        /// Exact namespace whose isolated probe failed.
+        namespace: LinuxNamespace,
         /// Diagnostic emitted by the namespace probe.
         message: String,
     },
@@ -683,6 +702,54 @@ pub enum LinuxBackendError {
         /// Operating-system error returned while waiting or terminating.
         source: std::io::Error,
     },
+}
+
+impl LinuxNamespace {
+    pub(crate) const fn bubblewrap_flag(self) -> &'static str {
+        match self {
+            Self::User => "--unshare-user",
+            Self::Pid => "--unshare-pid",
+            Self::Ipc => "--unshare-ipc",
+            Self::Network => "--unshare-net",
+        }
+    }
+
+    pub(crate) const fn host_guidance(self) -> &'static str {
+        match self {
+            Self::User => {
+                "Enable unprivileged user namespaces and permit them in the host security policy"
+            }
+            Self::Pid => {
+                "Ensure the kernel and any outer container permit CLONE_NEWPID/PID namespaces"
+            }
+            Self::Ipc => {
+                "Ensure the kernel and any outer container permit CLONE_NEWIPC/IPC namespaces"
+            }
+            Self::Network => {
+                "Ensure the kernel and any outer container permit CLONE_NEWNET/network namespaces"
+            }
+        }
+    }
+
+    pub(crate) const fn probe_stage(self) -> &'static str {
+        match self {
+            Self::User => "user namespace",
+            Self::Pid => "PID namespace",
+            Self::Ipc => "IPC namespace",
+            Self::Network => "network namespace",
+        }
+    }
+}
+
+impl fmt::Display for LinuxNamespace {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::User => "user",
+            Self::Pid => "PID",
+            Self::Ipc => "IPC",
+            Self::Network => "network",
+        })
+    }
 }
 
 impl fmt::Display for FilesystemMetadataOperation {

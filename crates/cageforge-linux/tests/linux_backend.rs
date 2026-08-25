@@ -45,6 +45,74 @@ const TRACER_GUARD_DESCENDANT_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_DESCENDANT
 const EXPECTED_TRACER_PID: &str = "CAGEFORGE_EXPECTED_TRACER_PID";
 const CLONE_UNTRACED_FIXTURE: &str = "CAGEFORGE_CLONE_UNTRACED_FIXTURE";
 const UNIX_SOCKET_BYPASS_TARGET: &str = "CAGEFORGE_UNIX_SOCKET_BYPASS_TARGET";
+const SYSV_SHARED_MEMORY_FIXTURE: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_FIXTURE";
+const SYSV_SHARED_MEMORY_ID: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_ID";
+const SYSV_SHARED_MEMORY_SECRET: &[u8] = b"host-ipc-secret";
+
+struct SysvSharedMemory {
+    identifier: libc::c_int,
+}
+
+impl SysvSharedMemory {
+    fn new() -> Self {
+        #[allow(unsafe_code)]
+        let identifier = unsafe {
+            libc::shmget(
+                libc::IPC_PRIVATE,
+                SYSV_SHARED_MEMORY_SECRET.len(),
+                libc::IPC_CREAT | libc::IPC_EXCL | 0o600,
+            )
+        };
+        assert!(
+            identifier >= 0,
+            "create SysV shared memory: {}",
+            io::Error::last_os_error()
+        );
+        let segment = Self { identifier };
+        segment.write_secret();
+        segment
+    }
+
+    fn identifier(&self) -> libc::c_int {
+        self.identifier
+    }
+
+    fn write_secret(&self) {
+        #[allow(unsafe_code)]
+        let address = unsafe { libc::shmat(self.identifier, std::ptr::null(), 0) };
+        assert_ne!(
+            address,
+            libc::MAP_FAILED,
+            "attach host SysV shared memory: {}",
+            io::Error::last_os_error()
+        );
+        #[allow(unsafe_code)]
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                SYSV_SHARED_MEMORY_SECRET.as_ptr(),
+                address.cast(),
+                SYSV_SHARED_MEMORY_SECRET.len(),
+            );
+        }
+        #[allow(unsafe_code)]
+        let result = unsafe { libc::shmdt(address) };
+        assert_eq!(
+            result,
+            0,
+            "detach host SysV shared memory: {}",
+            io::Error::last_os_error()
+        );
+    }
+}
+
+impl Drop for SysvSharedMemory {
+    fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::shmctl(self.identifier, libc::IPC_RMID, std::ptr::null_mut());
+        }
+    }
+}
 
 fn backend() -> LinuxBackend {
     LinuxBackend::new(test_backend_config())
@@ -633,6 +701,31 @@ fn clone_untraced_fixture() {
         0,
         "CLONE_UNTRACED escaped trusted trace supervision"
     );
+}
+
+#[test]
+fn sysv_shared_memory_fixture() {
+    if std::env::var_os(SYSV_SHARED_MEMORY_FIXTURE).is_none() {
+        return;
+    }
+    let identifier = std::env::var(SYSV_SHARED_MEMORY_ID)
+        .expect("SysV shared-memory identifier")
+        .parse::<libc::c_int>()
+        .expect("numeric SysV shared-memory identifier");
+    #[allow(unsafe_code)]
+    let address = unsafe { libc::shmat(identifier, std::ptr::null(), 0) };
+    if address == libc::MAP_FAILED {
+        return;
+    }
+    #[allow(unsafe_code)]
+    let exposed = unsafe {
+        std::slice::from_raw_parts(address.cast::<u8>(), SYSV_SHARED_MEMORY_SECRET.len()).to_vec()
+    };
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::shmdt(address);
+    }
+    panic!("sandbox attached to host SysV shared memory: {exposed:?}");
 }
 
 fn wait_for_marker(path: &Path) {
@@ -1659,6 +1752,36 @@ fn explicit_dev_shm_scope_remains_usable_without_exposing_backend_runtime() {
         std::fs::read_to_string(output).expect("shared output"),
         "allowed"
     );
+}
+
+#[test]
+fn sandboxed_commands_cannot_attach_to_host_sysv_shared_memory() {
+    let segment = SysvSharedMemory::new();
+    for policy in [SandboxPolicy::workspace(), SandboxPolicy::full_access()] {
+        let workspace = TempDir::new().expect("temporary workspace");
+        let environment = EnvironmentSpec::inherit_all()
+            .with_var(SYSV_SHARED_MEMORY_FIXTURE, "1")
+            .expect("fixture environment")
+            .with_var(SYSV_SHARED_MEMORY_ID, segment.identifier().to_string())
+            .expect("shared-memory identifier environment");
+        let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+            .expect("fixture command")
+            .with_args(["--exact", "sysv_shared_memory_fixture", "--nocapture"])
+            .expect("fixture arguments");
+        let (command, effective, runtime) =
+            request_with_environment(workspace.path(), policy, command, environment);
+        let backend = backend();
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &runtime)
+            .expect("preflight");
+        let mut child = backend.spawn(prepared).expect("spawn");
+
+        assert_eq!(
+            child.wait().expect("wait").code(),
+            Some(0),
+            "sandbox must enter an independent IPC namespace"
+        );
+    }
 }
 
 #[test]
