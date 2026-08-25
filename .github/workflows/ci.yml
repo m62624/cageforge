@@ -47,15 +47,15 @@ concurrency:
 #
 # CI routing algorithm:
 # 1. Main is the full quality gate: all common components, every Linux feature
-#    combination, and the Linux sandbox in QEMU/KVM always run.
+#    combination, and every platform target lane always run.
 # 2. PRs always run the common Linux components and Linux feature combinations.
 # 3. A PR selects the Linux sandbox when cageforge-linux itself, Bubblewrap, a
 #    direct/transitive workspace dependency, a Linux test dev-dependency, or a
 #    workspace/CI input changes.
 # 4. Manual PR labels sandbox-linux, sandbox-macos, and sandbox-windows force
 #    the requested lane. Labels are never applied automatically by the labeler.
-# 5. macOS/Windows native backends are dormant until their crates exist; manual
-#    lanes remain callable and report that state without a fake package failure.
+# 5. macOS/Windows target lanes run their host checks now and report the missing
+#    native enforcement crate until those crates are introduced.
 
 jobs:
   changes:
@@ -114,9 +114,13 @@ jobs:
           esac
 
           if [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            # Main is the full implemented quality gate. macOS/Windows remain
-            # manual-only until their native backend crates are introduced.
+            # Main always checks every platform target. The macOS/Windows jobs
+            # remain useful before their native enforcement crates exist: they
+            # run the common components on that host and fail closed if a
+            # future crate is malformed.
             linux_native=true
+            macos_native=true
+            windows_native=true
             mode=main
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
@@ -252,7 +256,7 @@ jobs:
       expected_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
   native-macos:
-    name: macOS sandbox (manual label)
+    name: macOS target checks
     needs: changes
     if: needs.changes.outputs.macos_native == 'true'
     runs-on: macos-latest
@@ -302,7 +306,7 @@ jobs:
           fi
 
   native-windows:
-    name: Windows sandbox (manual label)
+    name: Windows target checks
     needs: changes
     if: needs.changes.outputs.windows_native == 'true'
     runs-on: windows-latest
