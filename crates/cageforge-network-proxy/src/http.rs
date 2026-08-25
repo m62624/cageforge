@@ -195,7 +195,7 @@ where
     })?
     .map_err(|source| GatewayError::HttpConnection { source })?;
     let (mut parts, incoming) = response.into_parts();
-    remove_response_hop_by_hop_headers(&mut parts.headers);
+    remove_response_hop_by_hop_headers(&mut parts.headers)?;
     Ok(Response::from_parts(
         parts,
         body::guarded(incoming, gateway.inner.config.relay_idle_timeout(), budget),
@@ -342,16 +342,29 @@ fn remove_request_hop_by_hop_headers(headers: &mut HeaderMap) -> Result<(), Gate
     Ok(())
 }
 
-fn remove_response_hop_by_hop_headers(headers: &mut HeaderMap) {
-    let nominated = headers
+fn remove_response_hop_by_hop_headers(headers: &mut HeaderMap) -> Result<(), GatewayError> {
+    let nominated: Vec<HeaderName> = headers
         .get_all(CONNECTION)
         .iter()
-        .filter_map(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| GatewayError::InvalidHttpResponse {
+                    reason: "Connection header contains non-ASCII data",
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .flat_map(|value| value.split(','))
         .map(str::trim)
-        .filter_map(|name| HeaderName::from_bytes(name.as_bytes()).ok())
-        .collect();
+        .map(|name| {
+            HeaderName::from_bytes(name.as_bytes()).map_err(|_| GatewayError::InvalidHttpResponse {
+                reason: "Connection header contains an invalid field name",
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     remove_hop_by_hop_headers(headers, nominated);
+    Ok(())
 }
 
 fn remove_hop_by_hop_headers(headers: &mut HeaderMap, nominated: Vec<HeaderName>) {
@@ -395,6 +408,9 @@ fn response_for_error(error: &GatewayError) -> Response<ProxyBody> {
         }
         GatewayError::RelayByteLimitExceeded { .. } => {
             (StatusCode::PAYLOAD_TOO_LARGE, "transfer limit exceeded\n")
+        }
+        GatewayError::InvalidHttpResponse { .. } => {
+            (StatusCode::BAD_GATEWAY, "invalid upstream response\n")
         }
         _ => (StatusCode::BAD_GATEWAY, "upstream failed\n"),
     };

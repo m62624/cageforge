@@ -253,6 +253,47 @@ async fn upstream_response_header_timeout_becomes_gateway_timeout() {
 }
 
 #[tokio::test]
+async fn malformed_upstream_connection_nominations_fail_closed() {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = read_header(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: x-upstream-hop,\x80\r\nX-Upstream-Hop: private\r\n\r\n",
+            )
+            .await
+            .unwrap();
+    });
+    let policy = effective_network(
+        restricted("allowed.test", LocalNetworkAccess::Allow),
+        NetworkPolicy::unrestricted(),
+    );
+    let gateway = NetworkGateway::new(
+        policy,
+        StaticResolver::one("allowed.test", address),
+        GatewayConfig::new(),
+    )
+    .unwrap();
+
+    let response = raw_http(
+        gateway,
+        &format!(
+            "GET http://allowed.test:{0}/ HTTP/1.1\r\nHost: allowed.test:{0}\r\n\r\n",
+            address.port()
+        ),
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 502"), "{response:?}");
+    assert!(!response.to_ascii_lowercase().contains("x-upstream-hop"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn stalled_http_response_consumer_releases_the_ingress_deadline() {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await

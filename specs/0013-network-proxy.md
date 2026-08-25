@@ -142,6 +142,15 @@ origin-form, and creates a new authorized upstream connection for every
 request. Persistent ingress connections must not let a later request reuse an
 earlier hostname authorization.
 
+Request and response `Connection` nominations are parsed strictly before any
+nominated hop-by-hop fields are forwarded. A malformed nomination rejects the
+request or upstream response as a typed protocol failure; it must not cause a
+nominated field to survive merely because the complete header value is not
+valid ASCII. The frozen Codex baseline recorded in
+[UPSTREAM.md](../UPSTREAM.md) removes the malformed `Connection` field but can
+retain a valid nominated field from that same value. Cageforge intentionally
+fails closed instead.
+
 Only `http` absolute-form requests are forwarded directly. HTTPS is carried
 through `CONNECT`; unsupported schemes fail closed.
 
@@ -205,6 +214,7 @@ semaphores; no global mutable allowlist is permitted.
 - concurrency or request limit reached;
 - handshake timeout;
 - malformed or unsupported HTTP/SOCKS5 input;
+- malformed upstream HTTP forwarding metadata;
 - invalid authority;
 - DNS timeout, failure, or empty result;
 - policy denial or external ownership;

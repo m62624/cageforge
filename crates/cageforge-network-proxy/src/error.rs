@@ -53,6 +53,12 @@ pub enum GatewayError {
         /// Rejection reason.
         reason: &'static str,
     },
+    /// An upstream HTTP response contained forwarding-ambiguous metadata.
+    #[error("invalid upstream HTTP response: {reason}")]
+    InvalidHttpResponse {
+        /// Rejection reason.
+        reason: &'static str,
+    },
     /// SOCKS5 input was malformed or unsupported.
     #[error("invalid SOCKS5 request: {reason}")]
     InvalidSocksRequest {
