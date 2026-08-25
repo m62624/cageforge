@@ -22,6 +22,17 @@ fn absolute_root(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn native_path(unix_path: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            r"C:\{}",
+            unix_path.trim_start_matches('/').replace('/', "\\")
+        )
+    } else {
+        unix_path.to_string()
+    }
+}
+
 fn requested_policy() -> SandboxPolicy {
     SandboxPolicy::new(
         FilesystemPolicy::restricted([FilesystemRule::new(
@@ -54,7 +65,7 @@ fn intersects_filesystem_and_network_decisions() {
     let context = effective
         .path_context(
             &PathResolutionContext::new()
-                .with_workspace_root("/workspace")
+                .with_workspace_root(native_path("/workspace"))
                 .expect("valid workspace root"),
         )
         .expect("effective context");
@@ -92,13 +103,13 @@ fn lowering_views_retain_every_filesystem_and_network_constraint_layer() {
         .expect("valid requested domain");
     let requested = SandboxPolicy::new(requested_filesystem, requested_network);
     let ceiling_filesystem = FilesystemPolicy::restricted([FilesystemRule::absolute_glob(
-        "/workspace/**/private/**",
+        native_path("/workspace/**/private/**"),
         AccessMode::Deny,
     )
     .expect("valid ceiling glob")]);
     let ceiling_network = NetworkPolicy::enabled()
         .with_unix_socket_mode(UnixSocketMode::Restricted)
-        .with_unix_socket("/run/example.sock", DomainAccess::Allow)
+        .with_unix_socket(native_path("/run/example.sock"), DomainAccess::Allow)
         .expect("valid ceiling socket");
     let ceiling = PolicyCeiling::new(
         SandboxPolicy::new(ceiling_filesystem, ceiling_network),
@@ -199,7 +210,7 @@ fn effective_context_identity_is_not_equal_across_compositions() {
     let second = compose(CompositionRequest::new(&requested, &environment, &ceiling))
         .expect("valid second composition");
     let base = PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(native_path("/workspace"))
         .expect("valid workspace root");
     let first_context = first.path_context(&base).expect("valid first context");
     let second_context = second.path_context(&base).expect("valid second context");
@@ -234,7 +245,7 @@ fn composition_canonicalizes_duplicate_filesystem_targets_before_backend_handoff
     let context = effective
         .path_context(
             &PathResolutionContext::new()
-                .with_workspace_root("/workspace")
+                .with_workspace_root(native_path("/workspace"))
                 .expect("valid workspace root"),
         )
         .expect("effective context");
@@ -399,7 +410,7 @@ fn external_decisions_remain_external_when_both_sides_delegate() {
     assert!(
         effective
             .network()
-            .decision_for_unix_socket(PathBuf::from("/tmp/socket").as_path())
+            .decision_for_unix_socket(PathBuf::from(native_path("/tmp/socket")).as_path())
             .expect("valid socket")
             .is_externally_enforced()
     );
@@ -818,7 +829,7 @@ fn custom_protected_paths_remain_read_only_after_composition() {
 fn composes_unix_socket_allowlists_without_exposing_component_policies() {
     let requested_network = NetworkPolicy::enabled()
         .with_unix_socket_mode(UnixSocketMode::Restricted)
-        .with_unix_socket("/tmp/allowed", DomainAccess::Allow)
+        .with_unix_socket(native_path("/tmp/allowed"), DomainAccess::Allow)
         .expect("valid socket");
     let requested = SandboxPolicy::new(FilesystemPolicy::unrestricted(), requested_network);
     let ceiling = PolicyCeiling::new(requested.clone(), EnvironmentSpec::inherit_core())
@@ -844,7 +855,7 @@ fn composes_unix_socket_allowlists_without_exposing_component_policies() {
     assert_eq!(
         effective
             .network()
-            .decision_for_unix_socket(PathBuf::from("/tmp/allowed").as_path())
+            .decision_for_unix_socket(PathBuf::from(native_path("/tmp/allowed")).as_path())
             .expect("valid socket"),
         cageforge_policy::NetworkDecision::Allow
     );
