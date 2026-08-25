@@ -67,9 +67,10 @@ let effective = compose(CompositionRequest::new(
     &EnvironmentSpec::inherit_all(),
     &ceiling,
 ))?;
+let workspace = std::env::temp_dir().join("cageforge-example-workspace");
 let context = effective.path_context(
     &cageforge_policy::PathResolutionContext::new()
-        .with_workspace_root("/workspace")
+        .with_workspace_root(workspace)
         .expect("valid workspace root"),
 )?;
 
