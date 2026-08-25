@@ -31,12 +31,13 @@ pub use config::{
     ProcMountPolicy, ResourceDirectorySource,
 };
 pub use error::{
-    BubblewrapFlag, EnvironmentFrameError, FilesystemLoweringError, FilesystemMetadataOperation,
-    LinuxBackendError, LinuxBridgeError, LinuxBridgeOperation, LinuxHardeningError,
-    LinuxHardeningOperation, LinuxHelperRuntimeFailure, LinuxHelperRuntimeFailureKind,
-    LinuxHelperSetupFailure, LinuxHelperSetupFailureKind, LinuxNamespace, NetworkCombinationError,
-    NetworkGatewayIngressError, NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure,
-    NetworkGatewaySetupError, NetworkGatewayTransportError, NetworkLoweringError,
-    PolicyLoweringExpectation, SeccompBuildError, SetupHandshakeError, StatusFrameError,
+    BubblewrapFlag, EnvironmentFrameError, ExecutableSnapshotOperation, FilesystemLoweringError,
+    FilesystemMetadataOperation, LinuxBackendError, LinuxBridgeError, LinuxBridgeOperation,
+    LinuxExecutable, LinuxHardeningError, LinuxHardeningOperation, LinuxHelperRuntimeFailure,
+    LinuxHelperRuntimeFailureKind, LinuxHelperSetupFailure, LinuxHelperSetupFailureKind,
+    LinuxNamespace, NetworkCombinationError, NetworkGatewayIngressError,
+    NetworkGatewayRuntimeError, NetworkGatewayRuntimeFailure, NetworkGatewaySetupError,
+    NetworkGatewayTransportError, NetworkLoweringError, PolicyLoweringExpectation,
+    SeccompBuildError, SetupHandshakeError, StatusFrameError,
 };
 pub use process::LinuxChild;

@@ -24,7 +24,8 @@ use command_fds::CommandFdExt;
 #[cfg(feature = "bundled-bubblewrap")]
 use crate::bwrap::materialize_bundled_resource;
 use crate::bwrap::{
-    discover_and_probe, discover_hardening_helper, namespace_args, open_pinned, resource_directory,
+    discover_and_probe, discover_hardening_helper, namespace_args, open_pinned, probe_pinned,
+    resource_directory,
 };
 use crate::config::LinuxBackendConfig;
 use crate::environment_transport::write_environment;
@@ -107,7 +108,9 @@ impl LinuxBackend {
             resource_directory.as_deref(),
             config.proc_mount(),
         )?;
-        let bubblewrap_file = Arc::new(open_pinned(&bubblewrap)?);
+        let bubblewrap_file = open_pinned(&bubblewrap)?;
+        probe_pinned(&bubblewrap_file, config.proc_mount())?;
+        let bubblewrap_file = Arc::new(bubblewrap_file);
         let hardening_helper =
             discover_hardening_helper(config.hardening_helper(), resource_directory.as_deref())?;
         let hardening_helper_path = hardening_helper.path;

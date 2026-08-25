@@ -5,7 +5,7 @@
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -17,10 +17,13 @@ use sha2::{Digest, Sha256};
 use crate::config::{
     BubblewrapSource, HardeningHelperSource, ProcMountPolicy, ResourceDirectorySource,
 };
-use crate::error::{BubblewrapFlag, LinuxBackendError, LinuxNamespace};
+use crate::error::{
+    BubblewrapFlag, ExecutableSnapshotOperation, LinuxBackendError, LinuxExecutable, LinuxNamespace,
+};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROBE_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const MFD_EXEC: libc::c_uint = 0x0010;
 
 #[cfg(feature = "bundled-bubblewrap")]
 const BUNDLED_RESOURCE_PREFIX: &str = "cageforge-bwrap-";
@@ -139,7 +142,7 @@ pub(crate) fn discover_hardening_helper(
         HardeningHelperSource::SiblingThenResource => vec![sibling(), resource()],
         HardeningHelperSource::Explicit(path) => vec![Some(path.clone())],
     };
-    paths
+    let executable = paths
         .into_iter()
         .flatten()
         .find_map(|path| {
@@ -149,7 +152,11 @@ pub(crate) fn discover_hardening_helper(
                 .ok()
                 .map(|()| PinnedExecutable { path, file })
         })
-        .ok_or(LinuxBackendError::HardeningHelperUnavailable)
+        .ok_or(LinuxBackendError::HardeningHelperUnavailable)?;
+    Ok(PinnedExecutable {
+        path: executable.path,
+        file: snapshot_executable(&executable.file, LinuxExecutable::HardeningHelper)?,
+    })
 }
 
 pub(crate) fn discover_and_probe(
@@ -205,7 +212,20 @@ pub(crate) fn open_pinned(selection: &BubblewrapSelection) -> Result<File, Linux
     if selection.bundled {
         verify_bundled_digest_file(&file, &selection.path)?;
     }
-    Ok(file)
+    snapshot_executable(&file, LinuxExecutable::Bubblewrap)
+}
+
+pub(crate) fn probe_pinned(
+    executable: &File,
+    proc_mount: ProcMountPolicy,
+) -> Result<(), LinuxBackendError> {
+    let path = PathBuf::from(format!("/proc/self/fd/{}", executable.as_raw_fd()));
+    probe_help(&path)?;
+    probe_namespaces(&path)?;
+    if proc_mount == ProcMountPolicy::Required {
+        probe_proc_mount(&path)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn resource_directory(
@@ -328,6 +348,108 @@ fn sha256_file_handle(file: &File) -> io::Result<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+fn snapshot_executable(
+    source: &File,
+    executable: LinuxExecutable,
+) -> Result<File, LinuxBackendError> {
+    let mut snapshot = create_executable_memfd().map_err(|source| {
+        LinuxBackendError::ExecutableSnapshotFailed {
+            executable,
+            operation: ExecutableSnapshotOperation::Create,
+            source,
+        }
+    })?;
+    let mut source =
+        source
+            .try_clone()
+            .map_err(|source| LinuxBackendError::ExecutableSnapshotFailed {
+                executable,
+                operation: ExecutableSnapshotOperation::CloneSource,
+                source,
+            })?;
+    source.seek(SeekFrom::Start(0)).map_err(|source| {
+        LinuxBackendError::ExecutableSnapshotFailed {
+            executable,
+            operation: ExecutableSnapshotOperation::RewindSource,
+            source,
+        }
+    })?;
+    io::copy(&mut source, &mut snapshot).map_err(|source| {
+        LinuxBackendError::ExecutableSnapshotFailed {
+            executable,
+            operation: ExecutableSnapshotOperation::Copy,
+            source,
+        }
+    })?;
+    let mut permissions = snapshot
+        .metadata()
+        .map_err(|source| LinuxBackendError::ExecutableSnapshotFailed {
+            executable,
+            operation: ExecutableSnapshotOperation::Permissions,
+            source,
+        })?
+        .permissions();
+    permissions.set_mode(0o500);
+    snapshot.set_permissions(permissions).map_err(|source| {
+        LinuxBackendError::ExecutableSnapshotFailed {
+            executable,
+            operation: ExecutableSnapshotOperation::Permissions,
+            source,
+        }
+    })?;
+    seal_executable(&snapshot).map_err(|source| LinuxBackendError::ExecutableSnapshotFailed {
+        executable,
+        operation: ExecutableSnapshotOperation::Seal,
+        source,
+    })?;
+    File::open(format!("/proc/self/fd/{}", snapshot.as_raw_fd())).map_err(|source| {
+        LinuxBackendError::ExecutableSnapshotFailed {
+            executable,
+            operation: ExecutableSnapshotOperation::OpenSnapshot,
+            source,
+        }
+    })
+}
+
+#[allow(unsafe_code)]
+fn create_executable_memfd() -> io::Result<File> {
+    let base_flags = libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING;
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_memfd_create,
+            c"cageforge-executable".as_ptr(),
+            base_flags | MFD_EXEC,
+        )
+    };
+    let descriptor =
+        if descriptor < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
+            unsafe {
+                libc::syscall(
+                    libc::SYS_memfd_create,
+                    c"cageforge-executable".as_ptr(),
+                    base_flags,
+                )
+            }
+        } else {
+            descriptor
+        };
+    if descriptor < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
+    }
+}
+
+#[allow(unsafe_code)]
+fn seal_executable(file: &File) -> io::Result<()> {
+    let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) } < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn find_on_path(program: &str) -> Option<PathBuf> {

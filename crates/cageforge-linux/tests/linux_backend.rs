@@ -186,12 +186,6 @@ fn test_backend_config() -> LinuxBackendConfig {
     }
 }
 
-fn write_test_executable(path: &Path, contents: &str) {
-    fs::write(path, contents).expect("write test executable");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-        .expect("make test executable runnable");
-}
-
 fn context(workspace: &Path) -> PathResolutionContext {
     PathResolutionContext::new()
         .with_root(PathBuf::from("/"))
@@ -1166,6 +1160,29 @@ fn ordinary_bin_true_is_not_reserved_by_the_backend() {
 }
 
 #[test]
+fn hardening_helper_uses_immutable_snapshot_across_spawns() {
+    let temporary = TempDir::new().expect("temporary workspace");
+    let helper = temporary.path().join("cageforge-linux-helper");
+    fs::copy(env!("CARGO_BIN_EXE_cageforge-linux-helper"), &helper).expect("copy hardening helper");
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755))
+        .expect("make helper executable");
+    let backend = LinuxBackend::new(test_backend_config().with_hardening_helper_path(&helper))
+        .expect("construct backend from helper snapshot");
+    fs::write(&helper, b"source changed after backend construction").expect("change helper source");
+
+    for _ in 0..2 {
+        let command = CommandSpec::new("/bin/true").expect("command");
+        let (command, effective, runtime) =
+            request(temporary.path(), SandboxPolicy::workspace(), command);
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &runtime)
+            .expect("preflight");
+        let mut child = backend.spawn(prepared).expect("spawn from helper snapshot");
+        assert_eq!(child.wait().expect("wait").code(), Some(0));
+    }
+}
+
+#[test]
 fn backend_configuration_rejects_a_zero_default_timeout() {
     assert_eq!(
         LinuxBackendConfig::new().hardening_helper_source(),
@@ -1179,11 +1196,8 @@ fn backend_configuration_rejects_a_zero_default_timeout() {
 
 #[test]
 fn incompatible_bubblewrap_reports_every_missing_flag_with_its_purpose() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bubblewrap = temporary.path().join("bwrap");
-    write_test_executable(&bubblewrap, "#!/bin/sh\nexit 0\n");
     let config = LinuxBackendConfig::new()
-        .with_bubblewrap_path(&bubblewrap)
+        .with_bubblewrap_path("/bin/false")
         .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper"));
 
     let error = match LinuxBackend::new(config) {
@@ -1204,17 +1218,8 @@ fn incompatible_bubblewrap_reports_every_missing_flag_with_its_purpose() {
 
 #[test]
 fn proc_mount_denial_is_not_reported_as_missing_flag_support() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bubblewrap = temporary.path().join("bwrap");
-    let help = BubblewrapFlag::ALL
-        .iter()
-        .map(|flag| flag.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let program = format!(
-        "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo '{help}'\n  exit 0\nfi\nfor argument in \"$@\"; do\n  if [ \"$argument\" = \"--proc\" ]; then\n    echo 'procfs denied by fixture' >&2\n    exit 1\n  fi\ndone\nexit 0\n"
-    );
-    write_test_executable(&bubblewrap, &program);
+    let bubblewrap =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bwrap-proc-denied.sh");
     let config = LinuxBackendConfig::new()
         .with_bubblewrap_path(&bubblewrap)
         .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper"));
@@ -2372,10 +2377,13 @@ fn disabled_network_blocks_pathname_unix_datagrams_sent_with_sendmsg() {
             "disabled network reached pathname Unix target: {:?}",
             &datagram[..size]
         ),
-        Err(error) => assert!(matches!(
-            error.kind(),
-            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-        )),
+        Err(error) => assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            "unexpected Unix datagram receive error: {error:?}"
+        ),
     }
 }
 
@@ -2500,10 +2508,13 @@ fn assert_common_seccomp_policy(network: NetworkPolicy) {
             "socketpair endpoint reached pathname Unix target: {:?}",
             &datagram[..size]
         ),
-        Err(error) => assert!(matches!(
-            error.kind(),
-            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-        )),
+        Err(error) => assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            "unexpected Unix datagram receive error: {error:?}"
+        ),
     }
 }
 

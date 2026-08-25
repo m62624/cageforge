@@ -76,6 +76,34 @@ pub enum LinuxNamespace {
     Network,
 }
 
+/// Trusted executable captured into an immutable Linux launch snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxExecutable {
+    /// Bubblewrap namespace launcher.
+    Bubblewrap,
+    /// Cageforge process-hardening helper.
+    HardeningHelper,
+}
+
+/// Operation used while creating an immutable executable snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutableSnapshotOperation {
+    /// Creating the anonymous executable file.
+    Create,
+    /// Cloning the validated source descriptor.
+    CloneSource,
+    /// Rewinding the validated source descriptor.
+    RewindSource,
+    /// Copying the executable bytes.
+    Copy,
+    /// Applying executable-only permissions.
+    Permissions,
+    /// Sealing the bytes against later mutation.
+    Seal,
+    /// Reopening the sealed snapshot through a read-only launch descriptor.
+    OpenSnapshot,
+}
+
 /// The filesystem operation whose native lowering failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilesystemMetadataOperation {
@@ -125,12 +153,9 @@ pub enum FilesystemLoweringError {
     /// A deny target was incorrectly passed to a descriptor bind-mount operation.
     #[error("deny access cannot be lowered as a descriptor bind mount")]
     DenyDescriptorBind,
-    /// A deny target was incorrectly passed to a pinned-file bind operation.
-    #[error("deny access cannot be lowered as a pinned-file bind")]
-    DenyPinnedFileBind,
-    /// A pinned mount source descriptor could not be cloned.
-    #[error("cannot clone the pinned mount source: {source}")]
-    CloneSource {
+    /// An immutable executable snapshot could not be opened for Bubblewrap.
+    #[error("cannot open the immutable executable snapshot: {source}")]
+    OpenExecutableSnapshot {
         /// Operating-system failure.
         #[source]
         source: io::Error,
@@ -452,6 +477,18 @@ pub enum LinuxBackendError {
     BubblewrapChanged {
         /// Path whose file identity no longer matches the probed executable.
         path: PathBuf,
+    },
+    /// A validated executable could not be captured into an immutable launch
+    /// snapshot.
+    #[error("cannot capture {executable} during {operation}: {source}")]
+    ExecutableSnapshotFailed {
+        /// Executable whose bytes were being captured.
+        executable: LinuxExecutable,
+        /// Snapshot operation that failed.
+        operation: ExecutableSnapshotOperation,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
     },
     /// The in-sandbox hardening helper was not found.
     #[error("Cageforge Linux hardening helper was not found")]
@@ -856,12 +893,14 @@ impl BubblewrapFlag {
             Self::Devices => "creates the isolated /dev filesystem",
             Self::DieWithParent => "kills the sandbox boundary if Bubblewrap or its parent dies",
             Self::NewSession => "starts the sandbox in a separate terminal session",
-            Self::Permissions => "sets exact modes on synthetic mount targets and mask files",
+            Self::Permissions => {
+                "sets exact modes on synthetic mount targets, mask files, and the hardening helper"
+            }
             Self::Proc => "mounts procfs for the sandbox PID namespace",
             Self::RemountReadOnly => "makes completed mount targets read-only",
             Self::ReadOnlyBind => "mounts explicitly readable host paths without write access",
             Self::ReadOnlyBindData => {
-                "creates an immutable file mask from a descriptor supplied by Cageforge"
+                "materializes immutable file masks and the hardening helper from Cageforge descriptors"
             }
             Self::ReadOnlyBindFd => {
                 "mounts read-only paths from descriptors pinned before the sandbox starts"
@@ -878,6 +917,29 @@ impl BubblewrapFlag {
 impl fmt::Display for BubblewrapFlag {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for LinuxExecutable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bubblewrap => formatter.write_str("Bubblewrap executable"),
+            Self::HardeningHelper => formatter.write_str("Linux hardening helper"),
+        }
+    }
+}
+
+impl fmt::Display for ExecutableSnapshotOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Create => formatter.write_str("anonymous snapshot creation"),
+            Self::CloneSource => formatter.write_str("source descriptor cloning"),
+            Self::RewindSource => formatter.write_str("source descriptor rewind"),
+            Self::Copy => formatter.write_str("snapshot byte copy"),
+            Self::Permissions => formatter.write_str("snapshot permission setup"),
+            Self::Seal => formatter.write_str("snapshot sealing"),
+            Self::OpenSnapshot => formatter.write_str("read-only snapshot open"),
+        }
     }
 }
 

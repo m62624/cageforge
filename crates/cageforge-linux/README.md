@@ -99,11 +99,19 @@ Bubblewrap license notice and corresponding machine-readable source. The
 `cageforge-bwrap` crate contains both in its published package.
 
 The host kernel must permit the user, mount, PID, IPC, and—when requested—network
-namespaces used by Bubblewrap. A missing prerequisite is reported as a typed
+namespaces used by Bubblewrap. It must also support anonymous executable files
+and file sealing so Cageforge can capture Bubblewrap and the hardening helper
+after validation. A missing prerequisite is reported as a typed
 `LinuxBackendError`; restricted requests are never widened into an ordinary
-host process. After construction, the validated Bubblewrap executable and
-hardening helper are pinned by open file descriptors; each spawn uses those
-validated objects rather than reopening their paths.
+host process. `ExecutableSnapshotFailed` identifies the executable and the
+failed capture operation. After construction, each spawn uses the sealed
+snapshots rather than reopening mutable package paths.
+
+Running a Cageforge sandbox does not require `sudo`, a privileged container, or
+capabilities granted to the application. The host must allow unprivileged user
+namespaces and the subordinate namespace operations listed below. If an outer
+container or host security policy disables them, Cageforge reports the exact
+unavailable operation instead of requesting elevation or weakening the policy.
 
 Cageforge passes all Bubblewrap flags itself; applications and end users do not
 add them to the command line. If a system executable lacks an option,
@@ -126,11 +134,11 @@ can add an option that the executable does not implement.
 | `--dev` | Create an isolated `/dev` filesystem |
 | `--die-with-parent` | Kill the sandbox boundary if Bubblewrap or its parent dies |
 | `--new-session` | Start the sandbox in a separate terminal session |
-| `--perms` | Set exact modes on synthetic mount targets and mask files |
+| `--perms` | Set exact modes on synthetic mount targets, mask files, and the captured hardening helper |
 | `--proc` | Mount procfs for the sandbox PID namespace |
 | `--remount-ro` | Make completed mount targets read-only |
 | `--ro-bind` | Mount explicitly readable host paths without write access |
-| `--ro-bind-data` | Create an immutable file mask from a Cageforge-supplied descriptor |
+| `--ro-bind-data` | Materialize immutable file masks and the captured hardening helper from Cageforge-supplied descriptors |
 | `--ro-bind-fd` | Mount read-only paths from descriptors pinned before launch |
 | `--tmpfs` | Create isolated filesystem roots and in-memory deny masks |
 | `--unshare-ipc` | Isolate System V IPC and POSIX message queues |
@@ -257,7 +265,7 @@ it, and an unsupported combination is rejected before launch.
 | Protected metadata paths | `.git` by default plus configured additional paths | Blocks existing paths and monitors missing paths against creation/replacement with inotify and fail-closed cleanup |
 | Symlink and mount-boundary checks | Any native filesystem lowering | Rejects writable symlink escapes and unsafe path/mount relationships |
 | Protected-directory inode pinning | Protected-path monitor | Rejects a replacement directory before removal instead of deleting a different entry under the protected name |
-| Descriptor pinning | Mount sources, Bubblewrap, and hardening helper | Prevents path replacement from changing the file handed to Bubblewrap |
+| Descriptor pinning and sealed executable snapshots | Mount sources, Bubblewrap, and hardening helper | Keeps mount sources bound to validated descriptors and prevents later package-path changes from changing launched executables |
 | Close-on-exec and FD inheritance | Every launch | Keeps mount, authentication, gateway, and coordination descriptors out of unrelated child processes |
 | Helper authentication | Every hardened launch | Requires the backend-owned descriptor, peer-namespace check, and authentication token before the helper runs |
 | Bridge token authentication | Restricted gateway routing | Prevents another same-user process from using the per-run TCP-to-gateway bridge |

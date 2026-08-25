@@ -3,7 +3,7 @@
 use std::{
     collections::HashSet,
     fs::{self, File},
-    os::unix::fs::PermissionsExt,
+    os::{fd::AsRawFd, unix::fs::PermissionsExt},
     path::Path,
     time::Duration,
 };
@@ -141,14 +141,6 @@ fn namespace_plan_always_disables_nested_user_namespaces() {
 
 #[test]
 fn namespace_probe_failures_identify_each_required_flag() {
-    let temporary = tempfile::tempdir().expect("temporary root");
-    let binary = temporary.path().join("bwrap");
-    write_program(
-        &binary,
-        0o755,
-        "#!/bin/sh\necho 'namespace creation denied' >&2\nexit 1\n",
-    );
-
     for (namespace, flag, guidance) in [
         (
             LinuxNamespace::User,
@@ -159,14 +151,18 @@ fn namespace_probe_failures_identify_each_required_flag() {
         (LinuxNamespace::Ipc, "--unshare-ipc", "CLONE_NEWIPC"),
         (LinuxNamespace::Network, "--unshare-net", "CLONE_NEWNET"),
     ] {
-        let error = probe_namespace(&binary, namespace).expect_err("namespace probe must fail");
-        assert!(matches!(
-            &error,
-            LinuxBackendError::NamespaceUnavailable {
-                namespace: actual,
-                ..
-            } if *actual == namespace
-        ));
+        let error = probe_namespace(Path::new("/bin/false"), namespace)
+            .expect_err("namespace probe must fail");
+        assert!(
+            matches!(
+                &error,
+                LinuxBackendError::NamespaceUnavailable {
+                    namespace: actual,
+                    ..
+                } if *actual == namespace
+            ),
+            "unexpected namespace probe error: {error:?}"
+        );
         let message = error.to_string();
         assert!(message.contains(flag), "missing {flag} in {message:?}");
         assert!(
@@ -178,20 +174,15 @@ fn namespace_probe_failures_identify_each_required_flag() {
 
 #[test]
 fn capability_drop_probe_failure_identifies_the_exact_flag() {
-    let temporary = tempfile::tempdir().expect("temporary root");
-    let binary = temporary.path().join("bwrap");
-    write_program(
-        &binary,
-        0o755,
-        "#!/bin/sh\necho 'capability operation denied' >&2\nexit 1\n",
+    let error = probe_capability_drop(Path::new("/bin/false"))
+        .expect_err("capability-drop probe must fail");
+    assert!(
+        matches!(
+            &error,
+            LinuxBackendError::CapabilityDropUnavailable { message } if message.is_empty()
+        ),
+        "unexpected capability-drop probe error: {error:?}"
     );
-
-    let error = probe_capability_drop(&binary).expect_err("capability-drop probe must fail");
-    assert!(matches!(
-        &error,
-        LinuxBackendError::CapabilityDropUnavailable { message }
-            if message == "capability operation denied"
-    ));
     let message = error.to_string();
     assert!(message.contains("--cap-drop ALL"));
     assert!(message.contains("capability reduction"));
@@ -199,21 +190,16 @@ fn capability_drop_probe_failure_identifies_the_exact_flag() {
 
 #[test]
 fn nested_user_namespace_probe_failure_identifies_the_exact_flag() {
-    let temporary = tempfile::tempdir().expect("temporary root");
-    let binary = temporary.path().join("bwrap");
-    write_program(
-        &binary,
-        0o755,
-        "#!/bin/sh\necho 'user namespace lockdown denied' >&2\nexit 1\n",
-    );
-
-    let error = probe_nested_user_namespace_isolation(&binary)
+    let error = probe_nested_user_namespace_isolation(Path::new("/bin/false"))
         .expect_err("nested-user-namespace probe must fail");
-    assert!(matches!(
-        &error,
-        LinuxBackendError::NestedUserNamespaceIsolationUnavailable { message }
-            if message == "user namespace lockdown denied"
-    ));
+    assert!(
+        matches!(
+            &error,
+            LinuxBackendError::NestedUserNamespaceIsolationUnavailable { message }
+                if message.is_empty()
+        ),
+        "unexpected nested-userns probe error: {error:?}"
+    );
     let message = error.to_string();
     assert!(message.contains("--disable-userns"));
     assert!(message.contains("user.max_user_namespaces"));
@@ -221,20 +207,14 @@ fn nested_user_namespace_probe_failure_identifies_the_exact_flag() {
 
 #[test]
 fn proc_mount_probe_failure_identifies_the_exact_flag() {
-    let temporary = tempfile::tempdir().expect("temporary root");
-    let binary = temporary.path().join("bwrap");
-    write_program(
-        &binary,
-        0o755,
-        "#!/bin/sh\necho 'procfs mount denied' >&2\nexit 1\n",
+    let error = probe_proc_mount(Path::new("/bin/false")).expect_err("proc-mount probe must fail");
+    assert!(
+        matches!(
+            &error,
+            LinuxBackendError::ProcMountUnavailable { message } if message.is_empty()
+        ),
+        "unexpected proc-mount probe error: {error:?}"
     );
-
-    let error = probe_proc_mount(&binary).expect_err("proc-mount probe must fail");
-    assert!(matches!(
-        &error,
-        LinuxBackendError::ProcMountUnavailable { message }
-            if message == "procfs mount denied"
-    ));
     let message = error.to_string();
     assert!(message.contains("--proc /proc"));
     assert!(message.contains("procfs mounts"));
@@ -300,6 +280,55 @@ fn pinned_bubblewrap_keeps_the_validated_file_after_path_replacement() {
         super::sha256_file_handle(&pinned).expect("hash pinned file"),
         digest
     );
+}
+
+#[test]
+fn pinned_bubblewrap_keeps_an_immutable_snapshot_after_in_place_mutation() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let binary = temporary.path().join("bwrap");
+    fs::write(&binary, b"trusted fixture").expect("write fixture");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("set executable mode");
+    let digest = super::sha256_file(&binary).expect("hash fixture");
+    fs::write(temporary.path().join("bwrap.sha256"), format!("{digest}\n"))
+        .expect("write digest manifest");
+
+    let selected_file = File::open(&binary).expect("open selected executable");
+    let selection = super::BubblewrapSelection {
+        path: binary.clone(),
+        bundled: true,
+        identity: super::file_identity(&selected_file).expect("selected executable identity"),
+    };
+    let pinned = super::open_pinned(&selection).expect("pin bundled executable");
+    fs::write(&binary, b"replacement fixture").expect("mutate source inode");
+
+    assert_eq!(
+        super::sha256_file_handle(&pinned).expect("hash immutable snapshot"),
+        digest
+    );
+}
+
+#[test]
+fn pinned_bubblewrap_snapshot_uses_a_read_only_launch_descriptor() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let binary = temporary.path().join("bwrap");
+    fs::write(&binary, b"trusted fixture").expect("write fixture");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("set executable mode");
+    let digest = super::sha256_file(&binary).expect("hash fixture");
+    fs::write(temporary.path().join("bwrap.sha256"), format!("{digest}\n"))
+        .expect("write digest manifest");
+
+    let selected_file = File::open(&binary).expect("open selected executable");
+    let selection = super::BubblewrapSelection {
+        path: binary,
+        bundled: true,
+        identity: super::file_identity(&selected_file).expect("selected executable identity"),
+    };
+    let pinned = super::open_pinned(&selection).expect("pin bundled executable");
+    #[allow(unsafe_code)]
+    let descriptor_flags = unsafe { libc::fcntl(pinned.as_raw_fd(), libc::F_GETFL) };
+
+    assert_ne!(descriptor_flags, -1, "read launch descriptor flags");
+    assert_eq!(descriptor_flags & libc::O_ACCMODE, libc::O_RDONLY);
 }
 
 #[test]

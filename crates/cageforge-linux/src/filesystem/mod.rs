@@ -645,11 +645,10 @@ fn append_private_runtime(
         "--tmpfs".into(),
         PRIVATE_RUNTIME_ROOT.into(),
     ]);
-    add_bind_file(
+    add_executable_snapshot(
         args,
         helper,
         Path::new(IN_SANDBOX_HELPER_PATH),
-        AccessMode::Read,
         preserved_files,
     )?;
     if let Some(gateway_mount) = gateway_mount {
@@ -736,32 +735,23 @@ fn add_bind_fd(
     Ok(())
 }
 
-fn add_bind_file(
+fn add_executable_snapshot(
     args: &mut Vec<OsString>,
     source: &File,
     destination: &Path,
-    access: AccessMode,
     preserved_files: &mut Vec<File>,
 ) -> Result<(), LinuxBackendError> {
-    let file =
-        source
-            .try_clone()
-            .map_err(|source| LinuxBackendError::FilesystemLoweringFailed {
-                path: destination.to_path_buf(),
-                source: FilesystemLoweringError::CloneSource { source },
-            })?;
+    let file = File::open(format!("/proc/self/fd/{}", source.as_raw_fd())).map_err(|source| {
+        LinuxBackendError::FilesystemLoweringFailed {
+            path: destination.to_path_buf(),
+            source: FilesystemLoweringError::OpenExecutableSnapshot { source },
+        }
+    })?;
     let descriptor = file.as_raw_fd();
     args.extend([
-        match access {
-            AccessMode::Read => "--ro-bind-fd".into(),
-            AccessMode::Write => "--bind-fd".into(),
-            AccessMode::Deny => {
-                return Err(LinuxBackendError::FilesystemLoweringFailed {
-                    path: destination.to_path_buf(),
-                    source: FilesystemLoweringError::DenyPinnedFileBind,
-                });
-            }
-        },
+        "--perms".into(),
+        "0500".into(),
+        "--ro-bind-data".into(),
         descriptor.to_string().into(),
         destination.as_os_str().into(),
     ]);

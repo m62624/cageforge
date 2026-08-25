@@ -385,16 +385,27 @@ executable before use and must reject a missing or incompatible executable.
 Bundled Bubblewrap is implemented as the separately identified
 `cageforge-bwrap` component described in Specification 0015. Bubblewrap keeps
 its own upstream license and notices; it is never treated as Apache-2.0
-Cageforge code. The backend verifies a bundled digest on the opened file and
-executes the pinned file descriptor, so a later replacement of the resource
-path cannot change the binary used for a spawn. The hardening helper is pinned
-by the same descriptor-based handoff.
+Cageforge code. The backend verifies a bundled digest on the opened file,
+copies the validated executable into an anonymous sealed memory file, repeats
+all capability probes against that snapshot, and executes only the sealed
+descriptor. A later path replacement or in-place source update therefore
+cannot change the binary used for a spawn. The hardening helper is captured by
+the same immutable-snapshot mechanism and copied into the sandbox through
+Bubblewrap's descriptor-data operation with mode `0500`.
 
 The pinning contract includes the regular-file identity captured during
 compatibility validation. If the Bubblewrap path names a different device or
 inode when the backend is constructed, construction fails closed instead of
-launching an unprobed replacement. The helper is opened once during discovery
-and that same descriptor is used for every launch.
+launching an unprobed replacement. Snapshot creation, copying, permission
+setup, sealing, and read-only launch-descriptor failures remain separate typed
+operations. Neither executable is launched while a writable snapshot
+descriptor remains open. The helper snapshot supports repeated launches from
+one backend without sharing a consumed file offset.
+
+The frozen Codex baseline recorded in [UPSTREAM.md](../UPSTREAM.md) discovers,
+probes, and executes system Bubblewrap by pathname. Cageforge intentionally
+uses the immutable snapshot above because its reusable library boundary may
+outlive mutable application or packaged-resource paths.
 
 The generated Bubblewrap plan must establish, as applicable:
 
