@@ -1517,14 +1517,18 @@ fn resolved_domains_reject_non_global_special_purpose_ipv6_ranges_by_default() {
         .expect("wildcard domain");
 
     for address in [
+        "64:ff9b::1",
+        "64:ff9b::7f00:1",
         "64:ff9b:1::1",
         "100::1",
+        "100:0:0:1::1",
         "2001::1",
         "2001:2::1",
         "2001:db8::1",
         "2002::1",
         "3fff::1",
         "5f00::1",
+        "fec0::1",
     ] {
         assert_eq!(
             policy
@@ -1539,9 +1543,10 @@ fn resolved_domains_reject_non_global_special_purpose_ipv6_ranges_by_default() {
     }
 
     for address in [
-        "64:ff9b::1",
+        "64:ff9b::5db8:d822",
         "2001:1::1",
         "2001:1::2",
+        "2001:1::3",
         "2001:3::1",
         "2001:4:112::1",
         "2001:20::1",
@@ -1572,6 +1577,8 @@ fn resolved_domains_preserve_globally_reachable_ipv4_anycast_exceptions() {
         ("192.0.0.9", NetworkDecision::Allow),
         ("192.0.0.10", NetworkDecision::Allow),
         ("192.0.0.11", NetworkDecision::Deny),
+        ("192.88.99.1", NetworkDecision::Deny),
+        ("192.88.99.2", NetworkDecision::Deny),
     ] {
         assert_eq!(
             policy

@@ -223,7 +223,8 @@ Black-box integration tests must cover:
 - ordinary HTTP requests authorize every request separately;
 - HTTP `CONNECT` and SOCKS5 use the same exact-address flow;
 - allow and deny domain patterns;
-- public, private, loopback, IPv4, IPv6, and empty DNS snapshots;
+- public, private, loopback, current special-purpose IPv4/IPv6, NAT64-embedded,
+  and empty DNS snapshots;
 - a candidate outside the captured snapshot cannot be connected;
 - malformed HTTP, authority, SOCKS version, command, and address input;
 - missing, malformed, and cross-instance ingress authentication;

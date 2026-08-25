@@ -15,7 +15,7 @@ use globset::GlobBuilder;
 use globset::GlobMatcher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -744,6 +744,7 @@ fn is_non_public_ip(ip: IpAddr) -> bool {
                 || ((value & 0xffff_ff00) == 0xc000_0000
                     && !matches!(value, 0xc000_0009 | 0xc000_000a))
                 || (value & 0xffff_ff00) == 0xc000_0200
+                || (value & 0xffff_ff00) == 0xc058_6300
                 || (value & 0xfffe_0000) == 0xc612_0000
                 || (value & 0xffff_ff00) == 0xc633_6400
                 || (value & 0xffff_ff00) == 0xcb00_7100
@@ -763,10 +764,16 @@ fn is_non_public_ipv6(address: std::net::Ipv6Addr) -> bool {
         || address
             .to_ipv4()
             .is_some_and(|address| is_non_public_ip(IpAddr::V4(address)))
+        // The globally routed NAT64 well-known prefix is safe only when its
+        // embedded IPv4 destination is itself globally reachable.
+        || well_known_nat64_ipv4(segments)
+            .is_some_and(|address| is_non_public_ip(IpAddr::V4(address)))
         // IPv4-IPv6 translation local-use prefix.
         || matches!(segments, [0x64, 0xff9b, 1, _, _, _, _, _])
         // Discard-only address block.
         || matches!(segments, [0x100, 0, 0, 0, _, _, _, _])
+        // Dummy IPv6 prefix.
+        || matches!(segments, [0x100, 0, 0, 1, _, _, _, _])
         || is_non_public_ietf_protocol_assignment(segments)
         // 6to4 has no globally-reachable registry designation.
         || matches!(segments, [0x2002, _, _, _, _, _, _, _])
@@ -775,6 +782,20 @@ fn is_non_public_ipv6(address: std::net::Ipv6Addr) -> bool {
         || matches!(segments, [0x3fff, 0x0000..=0x0fff, _, _, _, _, _, _])
         // Segment Routing SIDs.
         || matches!(segments, [0x5f00, _, _, _, _, _, _, _])
+        // Deprecated site-local addresses can remain reachable inside a host
+        // or organization even though new routers should not forward them.
+        || (segments[0] & 0xffc0) == 0xfec0
+}
+
+fn well_known_nat64_ipv4(segments: [u16; 8]) -> Option<Ipv4Addr> {
+    match segments {
+        [0x64, 0xff9b, 0, 0, 0, 0, high, low] => {
+            let [first, second] = high.to_be_bytes();
+            let [third, fourth] = low.to_be_bytes();
+            Some(Ipv4Addr::new(first, second, third, fourth))
+        }
+        _ => None,
+    }
 }
 
 fn is_non_public_ietf_protocol_assignment(segments: [u16; 8]) -> bool {
@@ -784,7 +805,7 @@ fn is_non_public_ietf_protocol_assignment(segments: [u16; 8]) -> bool {
     !matches!(
         segments,
         // PCP and TURN anycast addresses.
-        [0x2001, 0x0001, 0, 0, 0, 0, 0, 1 | 2]
+        [0x2001, 0x0001, 0, 0, 0, 0, 0, 1..=3]
             // AMT.
             | [0x2001, 0x0003, _, _, _, _, _, _]
             // AS112-v6.

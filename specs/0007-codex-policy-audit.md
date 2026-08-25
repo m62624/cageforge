@@ -70,13 +70,15 @@ actual connection.
 The frozen Codex classifier covers common IPv4 special-purpose ranges and the
 principal IPv6 local scopes, but omits several IPv6 ranges that its own
 "non-public" contract intends to reject. Cageforge deliberately also rejects
-the local translation prefix, discard-only block, non-global IETF protocol
-assignments, benchmarking and documentation blocks, 6to4, and SRv6 SID space,
-while preserving explicitly globally reachable registry exceptions.
+non-global IPv4 destinations embedded in the NAT64 well-known prefix, the local
+translation prefix, discard-only and dummy blocks, deprecated site-local
+addresses, non-global IETF protocol assignments, benchmarking and
+documentation blocks, 6to4, and SRv6 SID space, while preserving explicitly
+globally reachable registry exceptions.
 The frozen Codex IPv4 helper also classifies all of `192.0.0.0/24` as
 non-public; Cageforge retains the globally reachable `192.0.0.9` and
 `192.0.0.10` anycast exceptions while continuing to deny the rest of that
-block.
+block. It also denies the deprecated `192.88.99.0/24` 6to4 relay block.
 Portable glob rules are deny-only; a read/write glob is rejected as
 unsupported rather than silently delegated. Filesystem and domain matching use
 the same `globset`-compatible character classes, ranges, and negative classes

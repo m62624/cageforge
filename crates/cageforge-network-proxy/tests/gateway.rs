@@ -266,29 +266,22 @@ async fn ordinary_http_authorizes_each_persistent_request_separately() {
 }
 
 #[tokio::test]
-async fn private_dns_result_is_denied_before_connect() {
-    let private = SocketAddr::from(([10, 0, 0, 1], 8080));
-    let resolver = StaticResolver::one("private.test", private);
-    let requested = NetworkPolicy::enabled()
-        .with_domain_mode(DomainMode::Restricted)
-        .with_domain("private.test", DomainAccess::Allow)
-        .expect("valid domain");
-    let policy = effective_network(requested, NetworkPolicy::unrestricted());
-    let gateway = NetworkGateway::new(policy, resolver, GatewayConfig::new()).unwrap();
-    let key = gateway.ingress_key();
-    let (mut client, ingress) = tokio::io::duplex(4096);
-    let task = tokio::spawn(async move { gateway.serve_connection(ingress).await });
-    key.authenticate(&mut client).await.unwrap();
-    client
-        .write_all(b"GET http://private.test:8080/ HTTP/1.1\r\nHost: private.test:8080\r\n\r\n")
-        .await
-        .unwrap();
-    let response = String::from_utf8(read_header(&mut client).await).unwrap();
-    assert!(response.starts_with("HTTP/1.1 403"));
-    client.shutdown().await.unwrap();
-    task.await
-        .unwrap()
-        .expect("HTTP denial is a handled response");
+async fn non_public_dns_results_are_denied_before_connect() {
+    for address in ["10.0.0.1", "64:ff9b::7f00:1", "100:0:0:1::1", "fec0::1"] {
+        let resolved = SocketAddr::new(address.parse().expect("fixture IP address"), 8080);
+        let resolver = StaticResolver::one("private.test", resolved);
+        let requested = NetworkPolicy::enabled()
+            .with_domain_mode(DomainMode::Restricted)
+            .with_domain("private.test", DomainAccess::Allow)
+            .expect("valid domain");
+        let policy = effective_network(requested, NetworkPolicy::unrestricted());
+        let gateway = NetworkGateway::new(policy, resolver, GatewayConfig::new()).unwrap();
+        let response = raw_http_status(gateway, "private.test", 8080).await;
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "{address} must be denied before connect"
+        );
+    }
 }
 
 #[tokio::test]

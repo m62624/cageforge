@@ -67,11 +67,14 @@ result to a future socket connection.
 
 Non-public includes special-purpose IPv4 and IPv6 ranges that are not globally
 reachable, not only private and loopback scopes. IPv6 classification therefore
-also rejects the local translation prefix, discard-only block, non-global IETF
-protocol assignments, benchmarking and documentation blocks, 6to4, and SRv6
-SID space while retaining the registry's explicitly global exceptions.
+also rejects non-global IPv4 destinations embedded in the NAT64 well-known
+prefix, the local translation prefix, discard-only and dummy blocks, deprecated
+site-local addresses, non-global IETF protocol assignments, benchmarking and
+documentation blocks, 6to4, and SRv6 SID space while retaining the registry's
+explicitly global exceptions.
 For IPv4, `192.0.0.9` and `192.0.0.10` remain globally reachable exceptions
-inside the otherwise non-global `192.0.0.0/24` protocol-assignment block.
+inside the otherwise non-global `192.0.0.0/24` protocol-assignment block, while
+the deprecated `192.88.99.0/24` 6to4 relay block remains non-public.
 
 The policy crate does not perform DNS or network I/O. A consuming backend must
 resolve the hostname and pass every result to the target. It passes an empty
