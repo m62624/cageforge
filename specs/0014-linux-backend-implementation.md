@@ -346,6 +346,7 @@ minimum taxonomy is:
 - `BubblewrapUnavailable`;
 - `BubblewrapIncompatible`;
 - `NamespaceUnavailable { namespace, message }`;
+- `CapabilityDropUnavailable { message }`;
 - `ProcMountUnavailable`;
 - `UnsupportedSeccompArchitecture`;
 - `InvalidRuntimeContext`;
@@ -399,6 +400,8 @@ The generated Bubblewrap plan must establish, as applicable:
 - a new user namespace;
 - a new PID namespace;
 - a new IPC namespace for every launch;
+- empty effective, permitted, inheritable, bounding, and ambient Linux
+  capability sets for the user command;
 - a new network namespace when the effective network mode requires isolation;
 - a fresh `/proc` unless the backend has a documented, typed reason to reject
   or disable it;
@@ -427,6 +430,18 @@ requirement. A missing command-line option remains
 `BubblewrapIncompatible { missing }`, which lists the exact absent flags. This
 separation prevents an IPC, PID, or network restriction from being
 misreported as a user-namespace failure.
+
+Every launch must pass `--cap-drop ALL`, even when the application itself runs
+as UID 0. Upstream Bubblewrap intentionally inherits the caller's effective
+capabilities by default when its real UID is zero; creating another user
+namespace does not by itself clear those capabilities. The frozen Codex
+Bubblewrap plans do not pass an explicit capability-drop option. Cageforge
+intentionally strengthens that behavior because arbitrary plugin, agent, game,
+or build commands have no portable capability grant and must receive zeroed
+effective, permitted, inheritable, bounding, and ambient sets. Compatibility
+validation checks both the option and a native capability-drop probe;
+`CapabilityDropUnavailable { message }` identifies a runtime denial without
+misreporting it as a namespace failure.
 
 The backend reserves `/dev` for Bubblewrap's minimal device tree, `/proc` for
 the fresh PID namespace, and `/dev/.cageforge-runtime` for the authenticated
@@ -690,6 +705,9 @@ job is an enforcement gate.
 - parent death does not leave an orphaned sandbox process;
 - restricted and unrestricted filesystem modes cannot attach to host System V
   IPC objects;
+- restricted and unrestricted commands launched by a namespace-root caller
+  have zero effective, permitted, inheritable, bounding, and ambient Linux
+  capabilities;
 - `NoNewPrivs` is visible inside the restricted child; and
 - unsupported capabilities fail before the child is started.
 
@@ -725,14 +743,16 @@ Each Linux backend job must:
    `kernel.apparmor_restrict_unprivileged_userns`, disable that CI-only
    restriction before probing `uid_map`, because `kernel.unprivileged_userns_clone`
    alone does not guarantee that the runner permits the mapping;
-3. build `cageforge-bwrap`, stage its `bwrap` and `bwrap.sha256` resources,
+3. verify as UID 0 that `--cap-drop ALL` clears every Linux capability set
+   inside the Bubblewrap user namespace;
+4. build `cageforge-bwrap`, stage its `bwrap` and `bwrap.sha256` resources,
    build the backend and runtime helper, and run the tests against the staged
    Bubblewrap;
-4. run formatting, Clippy with `-D warnings`, and the backend integration
+5. run formatting, Clippy with `-D warnings`, and the backend integration
    suite;
-5. preserve `RUST_BACKTRACE=1` and produce a JUnit or equivalent test report;
-6. cancel superseded runs for the same pull request; and
-7. fail the required status when native prerequisites or enforcement tests
+6. preserve `RUST_BACKTRACE=1` and produce a JUnit or equivalent test report;
+7. cancel superseded runs for the same pull request; and
+8. fail the required status when native prerequisites or enforcement tests
    fail.
 
 The portable default job must continue to test all portable crates on one

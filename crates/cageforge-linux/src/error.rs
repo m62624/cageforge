@@ -470,6 +470,14 @@ pub enum LinuxBackendError {
         /// Diagnostic emitted by the namespace probe.
         message: String,
     },
+    /// Bubblewrap could not remove the command's Linux capabilities.
+    #[error(
+        "Bubblewrap cannot drop all Linux capabilities with --cap-drop ALL: {message}. Ensure the kernel and any outer container permit capability reduction inside user namespaces"
+    )]
+    CapabilityDropUnavailable {
+        /// Diagnostic emitted by the capability-drop probe.
+        message: String,
+    },
     /// The backend configuration cannot provide the requested proc boundary.
     #[error("the requested proc mount is unavailable")]
     ProcMountUnavailable,

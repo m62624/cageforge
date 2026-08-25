@@ -24,6 +24,7 @@ const REQUIRED_HELP_FLAGS: &[&str] = &[
     "--bind",
     "--bind-fd",
     "--bind-try",
+    "--cap-drop",
     "--chdir",
     "--dir",
     "--dev",
@@ -407,8 +408,9 @@ fn missing_help_flags(help: &str) -> Vec<String> {
 }
 
 fn probe_namespaces(path: &Path) -> Result<(), LinuxBackendError> {
+    probe_namespace(path, LinuxNamespace::User)?;
+    probe_capability_drop(path)?;
     for namespace in [
-        LinuxNamespace::User,
         LinuxNamespace::Pid,
         LinuxNamespace::Ipc,
         LinuxNamespace::Network,
@@ -434,6 +436,31 @@ fn probe_namespace(path: &Path, namespace: LinuxNamespace) -> Result<(), LinuxBa
     } else {
         Err(LinuxBackendError::NamespaceUnavailable {
             namespace,
+            message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        })
+    }
+}
+
+fn probe_capability_drop(path: &Path) -> Result<(), LinuxBackendError> {
+    let output = run_probe(
+        path,
+        &[
+            "--die-with-parent",
+            "--unshare-user",
+            "--cap-drop",
+            "ALL",
+            "--ro-bind",
+            "/",
+            "/",
+            "/bin/true",
+        ],
+        PROBE_TIMEOUT,
+    )
+    .map_err(|error| probe_error("capability drop", error))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(LinuxBackendError::CapabilityDropUnavailable {
             message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         })
     }
@@ -597,6 +624,8 @@ pub(crate) fn namespace_args(
         "--unshare-pid".into(),
         "--unshare-ipc".into(),
         "--as-pid-1".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
     ];
     if network_isolated {
         args.push("--unshare-net".into());

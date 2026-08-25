@@ -106,18 +106,18 @@ write_files:
         echo '[cageforge] bootstrap: apparmor_userns=sysctl-unavailable'
       fi
       probe_bubblewrap_namespace() {
-        local namespace=$1
-        local flag=$2
-        local guidance=$3
+        local namespace=\$1
+        local flag=\$2
+        local guidance=\$3
         shift 3
-        echo "[cageforge] bootstrap: probing $namespace namespace ($flag)"
+        echo "[cageforge] bootstrap: probing \$namespace namespace (\$flag)"
         if ! timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
           --die-with-parent \
           --unshare-user \
-          "$@" \
+          "\$@" \
           --ro-bind / / \
           /bin/true; then
-          echo "[cageforge] bootstrap: $namespace namespace probe failed ($flag): $guidance" >&2
+          echo "[cageforge] bootstrap: \$namespace namespace probe failed (\$flag): \$guidance" >&2
           return 1
         fi
       }
@@ -133,6 +133,21 @@ write_files:
         'the guest kernel must permit CLONE_NEWNET' \
         --unshare-net
       echo '[cageforge] bootstrap: all Bubblewrap namespace probes passed'
+      echo '[cageforge] bootstrap: probing root capability removal (--cap-drop ALL)'
+      if ! timeout --kill-after=5s 15s bwrap \
+        --die-with-parent \
+        --unshare-user \
+        --unshare-pid \
+        --as-pid-1 \
+        --cap-drop ALL \
+        --ro-bind / / \
+        --proc /proc \
+        /bin/sh -c \
+        'awk '\''/^Cap(Inh|Prm|Eff|Bnd|Amb):/ { found++; if (\$2 != "0000000000000000") bad=1 } END { exit (found == 5 && bad == 0 ? 0 : 1) }'\'' /proc/self/status'; then
+        echo '[cageforge] bootstrap: root capability removal failed (--cap-drop ALL): the guest must permit capability reduction inside user namespaces' >&2
+        exit 1
+      fi
+      echo '[cageforge] bootstrap: root capability removal passed'
       echo '[cageforge] bootstrap: installing Rust toolchain'
       runuser -u ubuntu -- env HOME=/home/ubuntu bash -c "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
       runuser -u ubuntu -- env HOME=/home/ubuntu PATH=/home/ubuntu/.cargo/bin:\$PATH rustup component add clippy rustfmt

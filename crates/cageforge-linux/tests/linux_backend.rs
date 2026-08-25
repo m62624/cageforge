@@ -47,6 +47,7 @@ const CLONE_UNTRACED_FIXTURE: &str = "CAGEFORGE_CLONE_UNTRACED_FIXTURE";
 const UNIX_SOCKET_BYPASS_TARGET: &str = "CAGEFORGE_UNIX_SOCKET_BYPASS_TARGET";
 const SYSV_SHARED_MEMORY_FIXTURE: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_FIXTURE";
 const SYSV_SHARED_MEMORY_ID: &str = "CAGEFORGE_SYSV_SHARED_MEMORY_ID";
+const NAMESPACE_ROOT_CAPABILITY_FIXTURE: &str = "CAGEFORGE_NAMESPACE_ROOT_CAPABILITY_FIXTURE";
 const SYSV_SHARED_MEMORY_SECRET: &[u8] = b"host-ipc-secret";
 
 struct SysvSharedMemory {
@@ -2268,6 +2269,74 @@ fn restricted_child_has_no_new_privs() {
         "stdout: {stdout:?}, stderr: {stderr:?}"
     );
     assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn sandboxed_commands_drop_capabilities_for_namespace_root() {
+    if std::env::var_os(NAMESPACE_ROOT_CAPABILITY_FIXTURE).is_none() {
+        let output = std::process::Command::new("unshare")
+            .args(["--user", "--map-root-user", "--"])
+            .arg(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "sandboxed_commands_drop_capabilities_for_namespace_root",
+                "--nocapture",
+            ])
+            .env(NAMESPACE_ROOT_CAPABILITY_FIXTURE, "1")
+            .output()
+            .expect("run namespace-root fixture");
+        assert_fixture_success(output);
+        return;
+    }
+
+    #[allow(unsafe_code)]
+    let effective_user = unsafe { libc::geteuid() };
+    assert_eq!(effective_user, 0, "fixture must run as namespace root");
+
+    for policy in [SandboxPolicy::workspace(), SandboxPolicy::full_access()] {
+        let workspace = TempDir::new().expect("temporary workspace");
+        let command = CommandSpec::new("/bin/sh")
+            .expect("shell")
+            .with_args([
+                "-c",
+                "grep -E '^(CapInh|CapPrm|CapEff|CapBnd|CapAmb):' /proc/self/status",
+            ])
+            .expect("arguments");
+        let (command, effective, runtime) = request(workspace.path(), policy, command);
+        let command = command.with_stdio(StdioSpec::captured());
+        let backend = backend();
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &runtime)
+            .expect("preflight");
+        let mut child = backend.spawn(prepared).expect("spawn");
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        child
+            .stdout()
+            .expect("captured stdout")
+            .read_to_string(&mut stdout)
+            .expect("read stdout");
+        child
+            .stderr()
+            .expect("captured stderr")
+            .read_to_string(&mut stderr)
+            .expect("read stderr");
+        let status = child.wait().expect("wait");
+        assert_eq!(status.code(), Some(0), "stdout={stdout}\nstderr={stderr}");
+
+        let capability_values = stdout
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name, value.trim()))
+            .collect::<Vec<_>>();
+        assert_eq!(capability_values.len(), 5, "unexpected status: {stdout:?}");
+        for (name, value) in capability_values {
+            assert_eq!(
+                value, "0000000000000000",
+                "sandbox retained {name}: {value}"
+            );
+        }
+    }
 }
 
 #[test]

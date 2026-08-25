@@ -117,6 +117,7 @@ host requirement:
 | `--unshare-pid` | Process tree and PID view | Use a kernel and outer container configuration that permit `CLONE_NEWPID` |
 | `--unshare-ipc` | System V shared memory, semaphores, and message queues | Use a kernel and outer container configuration that permit `CLONE_NEWIPC` |
 | `--unshare-net` | Network stack | Use a kernel and outer container configuration that permit `CLONE_NEWNET` |
+| `--cap-drop ALL` | Effective, permitted, inheritable, bounding, and ambient capability sets | Permit capability reduction inside user namespaces; Cageforge never asks applications to retain a Linux capability |
 
 If the executable itself lacks a required option, the separate
 `LinuxBackendError::BubblewrapIncompatible` error lists every missing flag.
@@ -209,6 +210,7 @@ it, and an unsupported combination is rejected before launch.
 | New session and parent-lifetime binding | Every Bubblewrap launch | Uses `--new-session`, `--die-with-parent`, and the native parent-death signal so the boundary cannot outlive its owner |
 | PID namespace and fresh `/proc` | Default `ProcMountPolicy::Required` | Gives the child an isolated process view and prevents host `/proc` exposure |
 | IPC namespace | Every Bubblewrap launch | Prevents access to host System V shared-memory segments, semaphore sets, and message queues |
+| Empty Linux capability sets | Every Bubblewrap launch | Uses `--cap-drop ALL` so namespace-root and host-root callers cannot pass capabilities to the command |
 | Private device and runtime view | Every restricted filesystem launch | Builds the child `/dev` view, hides Cageforge runtime paths from the command, and exposes only the deliberately mounted helper/gateway endpoints |
 | Empty-root or layered bind mounts | Restricted filesystem | Allows only effective read/write scopes and masks denied paths |
 | Read-only carve-outs | A writable scope with read-only subpaths | Keeps narrower paths read-only inside writable parents |
