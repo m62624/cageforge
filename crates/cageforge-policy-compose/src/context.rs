@@ -17,6 +17,17 @@ use cageforge_policy::{PathPattern, PathResolutionContext, PathSelector};
 #[derive(Debug, Clone)]
 pub(crate) struct ContextIdentity(Arc<()>);
 
+/// A runtime path context created by [`crate::EffectiveSandbox::path_context`].
+///
+/// The constructor is intentionally private so a filesystem decision cannot
+/// accidentally use a context with workspace roots broader than the composed
+/// result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectivePathContext {
+    context: PathResolutionContext,
+    identity: ContextIdentity,
+}
+
 impl ContextIdentity {
     pub(crate) fn new() -> Self {
         Self(Arc::new(()))
@@ -34,17 +45,6 @@ impl PartialEq for ContextIdentity {
 }
 
 impl Eq for ContextIdentity {}
-
-/// A runtime path context created by [`crate::EffectiveSandbox::path_context`].
-///
-/// The constructor is intentionally private so a filesystem decision cannot
-/// accidentally use a context with workspace roots broader than the composed
-/// result.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EffectivePathContext {
-    context: PathResolutionContext,
-    identity: ContextIdentity,
-}
 
 impl EffectivePathContext {
     pub(crate) fn new(context: PathResolutionContext, identity: ContextIdentity) -> Self {

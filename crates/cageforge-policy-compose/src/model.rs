@@ -24,20 +24,12 @@ use crate::filesystem::EffectiveFilesystemPolicy;
 use crate::lowering::EffectiveNetworkLowering;
 use crate::ownership::ExternalOwner;
 
-/// A neutral maximum policy supplied by the component that owns the outer
-/// safety boundary.
-///
-/// A ceiling is not a backend or a harness contract. It is simply another
-/// portable policy whose decisions must also permit an operation. Workspace
-/// roots are unrestricted when no root limit was configured; use
-/// [`Self::with_workspace_roots`] to make the limit explicit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicyCeiling {
-    policy: SandboxPolicy,
-    environment: EnvironmentSpec,
-    workspace_roots: Option<Vec<PathBuf>>,
-    external_owner: Option<ExternalOwner>,
-}
+mod types;
+
+pub use types::{
+    CompositionRequest, EffectiveNetworkPolicy, EffectiveNetworkRequirements, EffectiveSandbox,
+    PolicyCeiling,
+};
 
 impl PolicyCeiling {
     /// Creates a ceiling with no workspace-root limit.
@@ -92,16 +84,6 @@ impl PolicyCeiling {
     }
 }
 
-/// Inputs to a pure policy composition operation.
-#[derive(Debug, Clone)]
-pub struct CompositionRequest<'a> {
-    pub(crate) requested_policy: &'a SandboxPolicy,
-    pub(crate) requested_environment: &'a EnvironmentSpec,
-    pub(crate) requested_workspace_roots: Option<Vec<PathBuf>>,
-    pub(crate) ceiling: &'a PolicyCeiling,
-    pub(crate) external_owner: Option<ExternalOwner>,
-}
-
 impl<'a> CompositionRequest<'a> {
     /// Creates a composition request from portable policy declarations.
     pub fn new(
@@ -133,16 +115,6 @@ impl<'a> CompositionRequest<'a> {
         self.external_owner = Some(owner);
         self
     }
-}
-
-/// The effective policy constraints after composition.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EffectiveSandbox {
-    filesystem: EffectiveFilesystemPolicy,
-    network: EffectiveNetworkPolicy,
-    environment: EffectiveEnvironment,
-    workspace_roots: Option<Vec<PathBuf>>,
-    workspace_root_limit: Option<Vec<PathBuf>>,
 }
 
 impl EffectiveSandbox {
@@ -243,62 +215,6 @@ impl EffectiveSandbox {
     }
 }
 
-/// Network decisions constrained by both input policies.
-///
-/// The component policies remain private. Use the decision methods and
-/// [`EffectiveNetworkRequirements`] for preflight, and [`Self::lowering`] for
-/// native lowering. The lowering view contains both sides as mandatory
-/// constraints rather than selecting one side.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EffectiveNetworkPolicy {
-    requested: NetworkPolicy,
-    ceiling: NetworkPolicy,
-}
-
-/// The network features a backend must be able to enforce for one effective
-/// composition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EffectiveNetworkRequirements {
-    mode: NetworkMode,
-    domain_rules: bool,
-    local_address_restrictions: bool,
-    resolved_targets: bool,
-    unix_socket_isolation: bool,
-    unix_socket_rules: bool,
-}
-
-impl EffectiveNetworkRequirements {
-    /// Returns the effective network ownership mode.
-    pub const fn mode(self) -> NetworkMode {
-        self.mode
-    }
-
-    /// Returns whether domain rules or a non-default domain mode are present.
-    pub const fn domain_rules(self) -> bool {
-        self.domain_rules
-    }
-
-    /// Returns whether private and loopback address restrictions are present.
-    pub const fn local_address_restrictions(self) -> bool {
-        self.local_address_restrictions
-    }
-
-    /// Returns whether exact resolved-target authorization is required.
-    pub const fn resolved_targets(self) -> bool {
-        self.resolved_targets
-    }
-
-    /// Returns whether pathname Unix sockets must be fully unavailable.
-    pub const fn unix_socket_isolation(self) -> bool {
-        self.unix_socket_isolation
-    }
-
-    /// Returns whether per-path Unix socket rules must be enforced.
-    pub const fn unix_socket_rules(self) -> bool {
-        self.unix_socket_rules
-    }
-}
-
 impl EffectiveNetworkPolicy {
     pub(crate) fn new(requested: NetworkPolicy, ceiling: NetworkPolicy) -> Self {
         Self { requested, ceiling }
@@ -353,6 +269,38 @@ impl EffectiveNetworkPolicy {
     /// layer and discard the other.
     pub fn lowering(&self) -> EffectiveNetworkLowering<'_> {
         EffectiveNetworkLowering::new(&self.requested, &self.ceiling)
+    }
+}
+
+impl EffectiveNetworkRequirements {
+    /// Returns the effective network ownership mode.
+    pub const fn mode(self) -> NetworkMode {
+        self.mode
+    }
+
+    /// Returns whether domain rules or a non-default domain mode are present.
+    pub const fn domain_rules(self) -> bool {
+        self.domain_rules
+    }
+
+    /// Returns whether private and loopback address restrictions are present.
+    pub const fn local_address_restrictions(self) -> bool {
+        self.local_address_restrictions
+    }
+
+    /// Returns whether exact resolved-target authorization is required.
+    pub const fn resolved_targets(self) -> bool {
+        self.resolved_targets
+    }
+
+    /// Returns whether pathname Unix sockets must be fully unavailable.
+    pub const fn unix_socket_isolation(self) -> bool {
+        self.unix_socket_isolation
+    }
+
+    /// Returns whether per-path Unix socket rules must be enforced.
+    pub const fn unix_socket_rules(self) -> bool {
+        self.unix_socket_rules
     }
 }
 

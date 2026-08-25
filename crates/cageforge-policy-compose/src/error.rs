@@ -17,15 +17,6 @@ pub enum CompositionBoundary {
     Network,
 }
 
-impl std::fmt::Display for CompositionBoundary {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Filesystem => formatter.write_str("filesystem"),
-            Self::Network => formatter.write_str("network"),
-        }
-    }
-}
-
 /// An error raised while narrowing a requested policy.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CompositionError {
@@ -110,4 +101,13 @@ pub enum CompositionError {
         #[source]
         source: PolicyError,
     },
+}
+
+impl std::fmt::Display for CompositionBoundary {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Filesystem => formatter.write_str("filesystem"),
+            Self::Network => formatter.write_str("network"),
+        }
+    }
 }

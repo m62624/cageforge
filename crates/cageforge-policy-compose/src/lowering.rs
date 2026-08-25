@@ -26,6 +26,28 @@ pub struct EffectiveFilesystemLowering<'a> {
     glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
+/// One immutable filesystem constraint layer in an effective lowering view.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectiveFilesystemLayer<'a> {
+    policy: &'a FilesystemPolicy,
+}
+
+/// The complete network constraint set required by one effective result.
+///
+/// Every layer returned by [`Self::layers`] is mandatory input to lowering.
+/// Runtime connections must still use the exact-target authorization methods
+/// after lowering; these rules are not themselves socket authorization.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectiveNetworkLowering<'a> {
+    layers: [&'a NetworkPolicy; 2],
+}
+
+/// One immutable network constraint layer in an effective lowering view.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectiveNetworkLayer<'a> {
+    policy: &'a NetworkPolicy,
+}
+
 impl<'a> EffectiveFilesystemLowering<'a> {
     pub(crate) fn new(
         requested: &'a FilesystemPolicy,
@@ -55,12 +77,6 @@ impl<'a> EffectiveFilesystemLowering<'a> {
     }
 }
 
-/// One immutable filesystem constraint layer in an effective lowering view.
-#[derive(Debug, Clone, Copy)]
-pub struct EffectiveFilesystemLayer<'a> {
-    policy: &'a FilesystemPolicy,
-}
-
 impl<'a> EffectiveFilesystemLayer<'a> {
     fn new(policy: &'a FilesystemPolicy) -> Self {
         Self { policy }
@@ -87,16 +103,6 @@ impl<'a> EffectiveFilesystemLayer<'a> {
     }
 }
 
-/// The complete network constraint set required by one effective result.
-///
-/// Every layer returned by [`Self::layers`] is mandatory input to lowering.
-/// Runtime connections must still use the exact-target authorization methods
-/// after lowering; these rules are not themselves socket authorization.
-#[derive(Debug, Clone, Copy)]
-pub struct EffectiveNetworkLowering<'a> {
-    layers: [&'a NetworkPolicy; 2],
-}
-
 impl<'a> EffectiveNetworkLowering<'a> {
     pub(crate) fn new(requested: &'a NetworkPolicy, ceiling: &'a NetworkPolicy) -> Self {
         Self {
@@ -108,12 +114,6 @@ impl<'a> EffectiveNetworkLowering<'a> {
     pub fn layers(&self) -> impl ExactSizeIterator<Item = EffectiveNetworkLayer<'a>> + '_ {
         self.layers.into_iter().map(EffectiveNetworkLayer::new)
     }
-}
-
-/// One immutable network constraint layer in an effective lowering view.
-#[derive(Debug, Clone, Copy)]
-pub struct EffectiveNetworkLayer<'a> {
-    policy: &'a NetworkPolicy,
 }
 
 impl<'a> EffectiveNetworkLayer<'a> {
