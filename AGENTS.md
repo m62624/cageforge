@@ -142,6 +142,16 @@ These rules are mandatory:
     one grouped `use` declaration. Split imports only when they represent
     genuinely different responsibility zones or the split materially improves
     readability.
+17. Organize Rust modules in structural dependency order. Declare composite
+    data types before the smaller data types they contain or compose; place
+    atomic leaf data types after the composite types that depend on them. Keep
+    declarations for each type together. Order `impl` blocks in the same order
+    as their type declarations: finish every `impl` for the first type before
+    starting the `impl` blocks for the next type, without interleaving types.
+    Group helper methods and other supporting logic by responsibility in a
+    private module or an equivalent dedicated section when that makes the
+    structure clearer. This organization must not widen, remove, or otherwise
+    alter the public API.
 
 ## Specification ordering
 
