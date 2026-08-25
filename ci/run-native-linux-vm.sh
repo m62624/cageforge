@@ -78,7 +78,8 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
       bootstrap_log=/var/log/cageforge-bootstrap.log
-      exec > >(tee -a "\$bootstrap_log") 2>&1
+      : >"\$bootstrap_log"
+      exec >>"\$bootstrap_log" 2>&1
       export HOME=/home/ubuntu
       export PATH=/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       echo '[cageforge] bootstrap: configuring user namespaces'
@@ -157,18 +158,19 @@ stop_guest() {
 print_guest_logs() {
     local log_file=$1
     echo "--- guest serial log: ${log_file} ---" >&2
-    cat "$log_file" >&2 || true
+    tail -n 80 "$log_file" >&2 || true
     echo "--- qemu stderr log: ${log_file}.stderr ---" >&2
-    cat "${log_file}.stderr" >&2 || true
+    tail -n 80 "${log_file}.stderr" >&2 || true
 }
 
 print_guest_bootstrap_diagnostics() {
+    echo "--- guest bootstrap log ---" >&2
+    ssh_guest 'sudo tail -n 120 /var/log/cageforge-bootstrap.log || true' >&2 || true
     echo "--- guest cloud-init status ---" >&2
     ssh_guest 'sudo cloud-init status --long || true
-sudo systemctl status cloud-final.service --no-pager --full || true
-sudo journalctl -u cloud-final.service -n 160 --no-pager || true
-sudo tail -n 160 /var/log/cloud-init-output.log || true
-sudo tail -n 160 /var/log/cloud-init.log || true
+sudo systemctl show cloud-final.service --property=ActiveState,SubState,ExecMainStatus --no-pager || true
+sudo journalctl -u cloud-final.service -n 80 --no-pager || true
+sudo grep -Ei "error|fail|unexpected|exit code|traceback" /var/log/cloud-init-output.log /var/log/cloud-init.log | tail -n 80 || true
 sudo dpkg --audit || true' >&2 || true
 }
 
@@ -199,7 +201,6 @@ wait_for_bootstrap() {
             return
         fi
         if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
-            print_guest_logs "$log_file"
             print_guest_bootstrap_diagnostics
             echo "guest bootstrap failed" >&2
             exit 70
@@ -216,7 +217,6 @@ wait_for_bootstrap() {
         fi
         sleep 2
     done
-    print_guest_logs "$log_file"
     print_guest_bootstrap_diagnostics
     echo "guest bootstrap timed out" >&2
     exit 70
