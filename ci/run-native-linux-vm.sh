@@ -334,6 +334,7 @@ set +e
 ssh_guest 'bash -s' <<'EOF'
 set -euo pipefail
 export PATH=/home/ubuntu/.cargo/bin:$PATH
+export RUST_BACKTRACE=1
 source_mount=/mnt/cageforge-source
 sudo mkdir -p "$source_mount"
 sudo mount -L CAGEFORGE_SOURCE -o ro "$source_mount"

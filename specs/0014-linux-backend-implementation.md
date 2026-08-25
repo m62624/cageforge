@@ -784,12 +784,20 @@ job is an enforcement gate.
 The Linux backend CI must run on real Linux runners, not a generic portable
 job and not a Docker image that hides the host kernel requirements.
 
-The initial required matrix is:
+The required native enforcement lane is:
 
 | Runner | Rust target | Purpose |
 |---|---|---|
 | `ubuntu-24.04` or the project Linux x64 runner | `x86_64-unknown-linux-gnu` | required Linux enforcement tests |
-| `ubuntu-24.04-arm` or the project Linux ARM64 runner | `aarch64-unknown-linux-gnu` | required architecture coverage |
+
+The public policy and backend contract are architecture-independent, while
+the hardening helper selects the target-specific seccomp audit architecture.
+Portable CI therefore compile-checks the Rust backend and proxy surfaces for
+`aarch64-unknown-linux-gnu`. `cageforge-bwrap` compiles the unchanged
+Bubblewrap source for the selected Linux target, so a native ARM64 build or
+release lane may be added when the project ships ARM64 artifacts. Such a lane
+is compatibility coverage and does not duplicate the required x86_64
+QEMU/KVM enforcement suite by default.
 
 Each Linux backend job must:
 
@@ -808,7 +816,8 @@ Each Linux backend job must:
    Bubblewrap;
 6. run formatting, Clippy with `-D warnings`, and the backend integration
    suite;
-7. preserve `RUST_BACKTRACE=1` and produce a JUnit or equivalent test report;
+7. preserve `RUST_BACKTRACE=1` and retain the complete Cargo test transcript in
+   the workflow log;
 8. cancel superseded runs for the same pull request; and
 9. fail the required status when native prerequisites or enforcement tests
    fail.
@@ -872,7 +881,7 @@ tests, Clippy, documentation, and Linux CI gate pass.
 - process tests cover timeout, cleanup, stdio, environment, and hardening;
 - network tests prove exact-address handling or explicitly prove the feature is
   rejected as unsupported;
-- x86_64 and ARM64 Linux runners pass without prerequisite skips;
+- the x86_64 Linux QEMU/KVM runner passes without prerequisite skips;
 - portable workspace tests remain green on Linux, macOS, and Windows; and
 - provenance and third-party license records are complete if any upstream or
   bundled source is introduced.

@@ -378,7 +378,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Install bundled Bubblewrap build requirements
         run: |
@@ -424,6 +424,12 @@ jobs:
           cargo check -p cageforge-linux --target x86_64-pc-windows-msvc --bin cageforge-linux-helper
           cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --all-features --all-targets
           cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --no-default-features --all-targets
+      - name: Cross-check ARM64 Linux backend and proxy surfaces
+        run: |
+          cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --lib --all-targets --no-default-features
+          cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --bin cageforge-linux-helper --no-default-features
+          cargo check -p cageforge-network-proxy --target aarch64-unknown-linux-gnu --all-features --all-targets
+          cargo check -p cageforge-network-proxy --target aarch64-unknown-linux-gnu --no-default-features --all-targets
 
   coverage-portable:
     name: "portable coverage (build target: Linux)"
