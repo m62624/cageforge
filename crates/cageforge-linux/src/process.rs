@@ -14,7 +14,7 @@ use crate::error::LinuxBackendError;
 use crate::filesystem::protected_create::ProtectedCreateMonitor;
 use crate::filesystem::synthetic::SyntheticMountTarget;
 use crate::network::GatewayRuntime;
-use crate::status_transport::read_status;
+use crate::status_transport::{HelperExecutionResult, read_status};
 use timeout::TimeoutWatchdog;
 
 /// A child launched inside the Linux backend boundary.
@@ -154,9 +154,13 @@ impl LinuxChild {
         let Some(mut channel) = self.status_channel.take() else {
             return Ok(boundary_status);
         };
-        read_status(&mut channel)
-            .map(|status| status.unwrap_or(boundary_status))
-            .map_err(|source| LinuxBackendError::CommandStatusFailed { source })
+        match read_status(&mut channel) {
+            Ok(HelperExecutionResult::CommandExited(status)) => Ok(status),
+            Ok(HelperExecutionResult::HelperFailed(failure)) => {
+                Err(LinuxBackendError::HardeningHelperRuntimeFailed { failure })
+            }
+            Err(source) => Err(LinuxBackendError::CommandStatusFailed { source }),
+        }
     }
 
     fn finish_status(

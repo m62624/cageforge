@@ -194,6 +194,20 @@ pub enum EnvironmentFrameError {
     InvalidMagic,
 }
 
+/// Typed helper setup failure reconstructed by the host-side protocol reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinuxHelperSetupFailure {
+    kind: LinuxHelperSetupFailureKind,
+    raw_os_error: Option<i32>,
+}
+
+/// A typed helper runtime failure reconstructed by the host-side protocol reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinuxHelperRuntimeFailure {
+    kind: LinuxHelperRuntimeFailureKind,
+    raw_os_error: Option<i32>,
+}
+
 /// Stable category sent by the private helper when setup fails before launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
@@ -222,11 +236,16 @@ pub enum LinuxHelperSetupFailureKind {
     TraceSupervision = 11,
 }
 
-/// Typed helper setup failure reconstructed by the host-side protocol reader.
+/// Stable category sent by the private helper when execution fails after setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinuxHelperSetupFailure {
-    kind: LinuxHelperSetupFailureKind,
-    raw_os_error: Option<i32>,
+#[repr(u16)]
+pub enum LinuxHelperRuntimeFailureKind {
+    /// The final command could not be started after the setup barrier opened.
+    CommandStart = 1,
+    /// The trusted helper failed while supervising the traced process tree.
+    TraceSupervision = 2,
+    /// The trusted helper failed while waiting for an untraced command.
+    CommandWait = 3,
 }
 
 /// A native hardening-helper failure.
@@ -413,6 +432,44 @@ impl LinuxHelperSetupFailure {
     }
 }
 
+impl fmt::Display for LinuxHelperSetupFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} failed", self.kind)?;
+        if let Some(errno) = self.raw_os_error {
+            write!(formatter, " with OS error {errno}")?;
+        }
+        Ok(())
+    }
+}
+
+impl LinuxHelperRuntimeFailure {
+    /// Creates a helper runtime failure from its stable category and optional
+    /// operating-system error number.
+    pub const fn new(kind: LinuxHelperRuntimeFailureKind, raw_os_error: Option<i32>) -> Self {
+        Self { kind, raw_os_error }
+    }
+
+    /// Returns the stable failure category.
+    pub const fn kind(&self) -> LinuxHelperRuntimeFailureKind {
+        self.kind
+    }
+
+    /// Returns the original operating-system error number, when one existed.
+    pub const fn raw_os_error(&self) -> Option<i32> {
+        self.raw_os_error
+    }
+}
+
+impl fmt::Display for LinuxHelperRuntimeFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} failed", self.kind)?;
+        if let Some(errno) = self.raw_os_error {
+            write!(formatter, " with OS error {errno}")?;
+        }
+        Ok(())
+    }
+}
+
 impl From<LinuxHelperSetupFailureKind> for u16 {
     fn from(value: LinuxHelperSetupFailureKind) -> Self {
         value as Self
@@ -459,12 +516,32 @@ impl fmt::Display for LinuxHelperSetupFailureKind {
     }
 }
 
-impl fmt::Display for LinuxHelperSetupFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{} failed", self.kind)?;
-        if let Some(errno) = self.raw_os_error {
-            write!(formatter, " with OS error {errno}")?;
+impl From<LinuxHelperRuntimeFailureKind> for u16 {
+    fn from(value: LinuxHelperRuntimeFailureKind) -> Self {
+        value as Self
+    }
+}
+
+impl TryFrom<u16> for LinuxHelperRuntimeFailureKind {
+    type Error = ();
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::CommandStart),
+            2 => Ok(Self::TraceSupervision),
+            3 => Ok(Self::CommandWait),
+            _ => Err(()),
         }
-        Ok(())
+    }
+}
+
+impl fmt::Display for LinuxHelperRuntimeFailureKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let description = match self {
+            Self::CommandStart => "command start",
+            Self::TraceSupervision => "trace supervision",
+            Self::CommandWait => "command wait",
+        };
+        formatter.write_str(description)
     }
 }

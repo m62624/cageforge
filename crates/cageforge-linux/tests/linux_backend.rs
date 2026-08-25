@@ -22,7 +22,8 @@ use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioSpec}
 use cageforge_config::Config;
 use cageforge_linux::{
     FilesystemLoweringError, HardeningHelperSource, LinuxBackend, LinuxBackendConfig,
-    LinuxBackendConfigError, LinuxBackendError, NetworkCombinationError,
+    LinuxBackendConfigError, LinuxBackendError, LinuxHelperRuntimeFailureKind,
+    LinuxHelperSetupFailureKind, NetworkCombinationError, SetupHandshakeError,
 };
 use cageforge_network_proxy::GatewayConfig;
 use cageforge_policy::{
@@ -1682,6 +1683,74 @@ fn unrestricted_filesystem_restores_host_shared_memory() {
         std::fs::read_to_string(output).expect("shared output"),
         "allowed"
     );
+}
+
+#[test]
+fn post_handshake_command_start_failure_is_not_an_exit_status() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let missing_program = workspace.path().join("missing-command");
+    let command = CommandSpec::new(&missing_program).expect("missing command path");
+    let (command, effective, runtime) =
+        request(workspace.path(), SandboxPolicy::full_access(), command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("setup handshake");
+
+    let error = child
+        .wait()
+        .expect_err("helper command-start failure must be typed");
+    let LinuxBackendError::HardeningHelperRuntimeFailed { failure } = error else {
+        panic!("unexpected error: {error}");
+    };
+    assert_eq!(failure.kind(), LinuxHelperRuntimeFailureKind::CommandStart);
+    assert_eq!(failure.raw_os_error(), Some(libc::ENOENT));
+}
+
+#[test]
+fn pre_release_command_start_failure_remains_a_setup_error() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let missing_program = workspace.path().join("missing-command");
+    let command = CommandSpec::new(&missing_program).expect("missing command path");
+    let (command, effective, runtime) =
+        request(workspace.path(), SandboxPolicy::workspace(), command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let error = match backend.spawn(prepared) {
+        Ok(_) => panic!("command start must fail before release"),
+        Err(error) => error,
+    };
+
+    let LinuxBackendError::SetupHandshakeFailed {
+        source: SetupHandshakeError::HelperRejected { failure },
+        ..
+    } = error
+    else {
+        panic!("unexpected error: {error}");
+    };
+    assert_eq!(failure.kind(), LinuxHelperSetupFailureKind::CommandStart);
+    assert_eq!(failure.raw_os_error(), Some(libc::ENOENT));
+}
+
+#[test]
+fn real_command_exit_126_remains_a_command_status() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args(["-c", "exit 126"])
+        .expect("arguments");
+    let (command, effective, runtime) =
+        request(workspace.path(), SandboxPolicy::full_access(), command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("setup handshake");
+
+    assert_eq!(child.wait().expect("command status").code(), Some(126));
 }
 
 #[test]

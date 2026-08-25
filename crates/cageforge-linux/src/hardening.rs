@@ -26,14 +26,16 @@ mod bridge;
 mod environment;
 
 use crate::error::{
-    LinuxHardeningError, LinuxHardeningOperation, LinuxHelperSetupFailure,
-    LinuxHelperSetupFailureKind, SeccompBuildError,
+    LinuxHardeningError, LinuxHardeningOperation, LinuxHelperRuntimeFailure,
+    LinuxHelperRuntimeFailureKind, LinuxHelperSetupFailure, LinuxHelperSetupFailureKind,
+    SeccompBuildError,
 };
 use crate::helper_protocol::{
     AUTH_FD_ENV, AUTH_TOKEN, BRIDGE_TOKEN_BYTES, GATEWAY_CONNECTION_LIMIT_ENV, GATEWAY_SOCKET_ENV,
     HARDENING_REQUIRED_ENV, NETWORK_MODE_DIRECT_WITHOUT_UNIX, NETWORK_MODE_DISABLED,
     NETWORK_MODE_ENV, NETWORK_MODE_PROXY, RELEASE, SETUP_RESULT_FAILURE, SETUP_RESULT_MAGIC,
-    SETUP_RESULT_NO_ERRNO, SETUP_RESULT_READY, STATUS_MAGIC,
+    SETUP_RESULT_NO_ERRNO, SETUP_RESULT_READY, STATUS_MAGIC, STATUS_RESULT_COMMAND,
+    STATUS_RESULT_FAILURE, STATUS_RESULT_NO_ERRNO,
 };
 use bridge::LocalGatewayBridge;
 use environment::read_environment;
@@ -207,8 +209,12 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             Ok(status) => status,
             Err(error) => {
                 terminate_traced_command(&mut child);
-                eprintln!("failed to supervise sandboxed command: {error}");
-                return ExitCode::from(125);
+                return report_runtime_failure(
+                    &mut authentication,
+                    LinuxHelperRuntimeFailureKind::TraceSupervision,
+                    &error,
+                    125,
+                );
             }
         }
     } else {
@@ -220,8 +226,12 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             Ok(child) => child,
             Err(error) => {
                 let error = LinuxHardeningError::CommandStart { source: error };
-                eprintln!("{error}");
-                return ExitCode::from(126);
+                return report_runtime_failure(
+                    &mut authentication,
+                    LinuxHelperRuntimeFailureKind::CommandStart,
+                    &error,
+                    126,
+                );
             }
         };
         match child.wait() {
@@ -231,8 +241,12 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
                     operation: LinuxHardeningOperation::CommandWait,
                     source,
                 };
-                eprintln!("{error}");
-                return ExitCode::from(125);
+                return report_runtime_failure(
+                    &mut authentication,
+                    LinuxHelperRuntimeFailureKind::CommandWait,
+                    &error,
+                    125,
+                );
             }
         }
     };
@@ -280,6 +294,20 @@ fn report_setup_failure(
     ExitCode::from(125)
 }
 
+fn report_runtime_failure(
+    authentication: &mut File,
+    kind: LinuxHelperRuntimeFailureKind,
+    error: &(dyn StdError + 'static),
+    exit_code: u8,
+) -> ExitCode {
+    let failure = LinuxHelperRuntimeFailure::new(kind, first_raw_os_error(error));
+    if let Err(source) = write_runtime_failure(authentication, failure) {
+        eprintln!("failed to report typed Linux helper runtime failure: {source}");
+    }
+    eprintln!("Linux helper runtime failed: {error}");
+    ExitCode::from(exit_code)
+}
+
 fn first_raw_os_error(error: &(dyn StdError + 'static)) -> Option<i32> {
     let mut current = Some(error);
     while let Some(error) = current {
@@ -304,6 +332,21 @@ fn write_setup_failure(
         &failure
             .raw_os_error()
             .unwrap_or(SETUP_RESULT_NO_ERRNO)
+            .to_be_bytes(),
+    )
+}
+
+fn write_runtime_failure(
+    writer: &mut impl Write,
+    failure: LinuxHelperRuntimeFailure,
+) -> io::Result<()> {
+    writer.write_all(STATUS_MAGIC)?;
+    writer.write_all(&[STATUS_RESULT_FAILURE])?;
+    writer.write_all(&u16::from(failure.kind()).to_be_bytes())?;
+    writer.write_all(
+        &failure
+            .raw_os_error()
+            .unwrap_or(STATUS_RESULT_NO_ERRNO)
             .to_be_bytes(),
     )
 }
@@ -454,7 +497,8 @@ fn write_command_status(
         .write_all(STATUS_MAGIC)
         .map_err(|source| LinuxHardeningError::StatusWrite { source })?;
     writer
-        .write_all(&status.into_raw().to_ne_bytes())
+        .write_all(&[STATUS_RESULT_COMMAND])
+        .and_then(|()| writer.write_all(&status.into_raw().to_be_bytes()))
         .map_err(|source| LinuxHardeningError::StatusWrite { source })
 }
 

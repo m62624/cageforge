@@ -133,8 +133,8 @@ pub enum PolicyLoweringExpectation {
 
 pub use crate::hardening_error::{
     EnvironmentFrameError, LinuxBridgeError, LinuxBridgeOperation, LinuxHardeningError,
-    LinuxHardeningOperation, LinuxHelperSetupFailure, LinuxHelperSetupFailureKind,
-    SeccompBuildError,
+    LinuxHardeningOperation, LinuxHelperRuntimeFailure, LinuxHelperRuntimeFailureKind,
+    LinuxHelperSetupFailure, LinuxHelperSetupFailureKind, SeccompBuildError,
 };
 
 /// A framed command-status failure.
@@ -149,9 +149,24 @@ pub enum StatusFrameError {
         #[source]
         source: io::Error,
     },
+    /// The helper closed the authenticated channel without reporting a result.
+    #[error("command status frame was not reported")]
+    MissingFrame,
     /// The status frame had an invalid magic prefix.
     #[error("command status frame magic did not match")]
     InvalidMagic,
+    /// The helper returned an unknown status-result tag.
+    #[error("command status frame returned unknown result tag {tag}")]
+    InvalidResultTag {
+        /// Unrecognized one-byte result tag.
+        tag: u8,
+    },
+    /// The helper returned an unknown runtime-failure category.
+    #[error("command status frame returned unknown helper failure code {code}")]
+    InvalidFailureCode {
+        /// Unrecognized stable wire code.
+        code: u16,
+    },
     /// The reader returned an invalid prefix length.
     #[error("command status frame returned an invalid prefix length")]
     InvalidPrefixLength,
@@ -616,6 +631,12 @@ pub enum LinuxBackendError {
         /// Status-channel failure.
         #[source]
         source: StatusFrameError,
+    },
+    /// The trusted helper failed after the setup barrier opened.
+    #[error("Linux hardening helper failed during execution: {failure}")]
+    HardeningHelperRuntimeFailed {
+        /// Typed helper-side failure and retained OS error number.
+        failure: LinuxHelperRuntimeFailure,
     },
     /// A process failed to spawn.
     #[error("failed to spawn sandboxed process: {source}")]

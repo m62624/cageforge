@@ -535,6 +535,23 @@ diagnostic output and is not the error API. Unknown tags and failure codes fail
 closed. Authentication failures themselves are not sent over an untrusted or
 unverified channel.
 
+After release, the same authenticated channel carries either the command's raw
+wait status or a stable typed helper-runtime failure with its originating OS
+error number. A helper-side command-start, command-wait, or trace-supervision
+failure must never be represented as the user command's exit code; in
+particular, an internal command-start failure cannot be confused with a real
+command that exits with status 126. A missing, truncated, or unknown runtime
+frame is a typed transport failure. `stderr` remains only supplemental or
+last-resort diagnostic output when the authenticated channel itself is broken.
+
+The frozen Codex `codex-rs/linux-sandbox/src/linux_run_main.rs` inner stage
+forks, reaps, and exits with the final command status; internal failures panic
+inside that product helper. Cageforge intentionally keeps a distinct private
+runtime-result protocol because its trusted helper remains alive to supervise
+arbitrary third-party process trees and the per-sandbox network bridge. Library
+callers therefore receive helper failures as `LinuxBackendError` values rather
+than parsing helper stderr or interpreting reserved-looking exit codes.
+
 The backend must not claim that a filesystem capability is enforced merely
 because `no_new_privs` or seccomp was installed. Filesystem and process
 capabilities remain separately advertised.
