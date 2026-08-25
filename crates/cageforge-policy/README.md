@@ -230,8 +230,10 @@ list means that resolution failed or timed out and is denied. An IP literal
 does not need DNS resolution, so an empty list is valid for the literal itself;
 non-public literals still require an exact IP-literal allow or
 `LocalNetworkAccess::Allow`. An exact `localhost` allow opts into loopback
-addresses only. Other private, metadata, and link-local destinations require
-`LocalNetworkAccess::Allow`.
+addresses only. Other private, metadata, link-local, documentation,
+benchmarking, translation-local, discard-only, and reserved IPv4/IPv6
+destinations require `LocalNetworkAccess::Allow`; explicitly globally
+reachable special-purpose anycast addresses remain ordinary public targets.
 The policy crate performs no DNS or network I/O. It also cannot prove that a
 caller actually connected to the checked address; the native backend must use
 the target snapshot instead of resolving the hostname again.

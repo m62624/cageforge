@@ -741,24 +741,57 @@ fn is_non_public_ip(ip: IpAddr) -> bool {
                 || address.is_broadcast()
                 || (value & 0xff00_0000) == 0
                 || (value & 0xffc0_0000) == 0x6440_0000
-                || (value & 0xffff_ff00) == 0xc000_0000
+                || ((value & 0xffff_ff00) == 0xc000_0000
+                    && !matches!(value, 0xc000_0009 | 0xc000_000a))
                 || (value & 0xffff_ff00) == 0xc000_0200
                 || (value & 0xfffe_0000) == 0xc612_0000
                 || (value & 0xffff_ff00) == 0xc633_6400
                 || (value & 0xffff_ff00) == 0xcb00_7100
                 || (value & 0xf000_0000) == 0xf000_0000
         }
-        IpAddr::V6(address) => {
-            address.is_loopback()
-                || address.is_unspecified()
-                || address.is_multicast()
-                || address.is_unique_local()
-                || address.is_unicast_link_local()
-                || address
-                    .to_ipv4()
-                    .is_some_and(|address| is_non_public_ip(IpAddr::V4(address)))
-        }
+        IpAddr::V6(address) => is_non_public_ipv6(address),
     }
+}
+
+fn is_non_public_ipv6(address: std::net::Ipv6Addr) -> bool {
+    let segments = address.segments();
+    address.is_loopback()
+        || address.is_unspecified()
+        || address.is_multicast()
+        || address.is_unique_local()
+        || address.is_unicast_link_local()
+        || address
+            .to_ipv4()
+            .is_some_and(|address| is_non_public_ip(IpAddr::V4(address)))
+        // IPv4-IPv6 translation local-use prefix.
+        || matches!(segments, [0x64, 0xff9b, 1, _, _, _, _, _])
+        // Discard-only address block.
+        || matches!(segments, [0x100, 0, 0, 0, _, _, _, _])
+        || is_non_public_ietf_protocol_assignment(segments)
+        // 6to4 has no globally-reachable registry designation.
+        || matches!(segments, [0x2002, _, _, _, _, _, _, _])
+        // Documentation prefixes.
+        || matches!(segments, [0x2001, 0x0db8, _, _, _, _, _, _])
+        || matches!(segments, [0x3fff, 0x0000..=0x0fff, _, _, _, _, _, _])
+        // Segment Routing SIDs.
+        || matches!(segments, [0x5f00, _, _, _, _, _, _, _])
+}
+
+fn is_non_public_ietf_protocol_assignment(segments: [u16; 8]) -> bool {
+    if segments[0] != 0x2001 || segments[1] >= 0x0200 {
+        return false;
+    }
+    !matches!(
+        segments,
+        // PCP and TURN anycast addresses.
+        [0x2001, 0x0001, 0, 0, 0, 0, 0, 1 | 2]
+            // AMT.
+            | [0x2001, 0x0003, _, _, _, _, _, _]
+            // AS112-v6.
+            | [0x2001, 0x0004, 0x0112, _, _, _, _, _]
+            // ORCHIDv2 and Drone Remote ID entity tags.
+            | [0x2001, 0x0020..=0x003f, _, _, _, _, _, _]
+    )
 }
 
 fn valid_domain_literal(pattern: &str) -> bool {

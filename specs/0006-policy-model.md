@@ -139,9 +139,9 @@ dangerous request.
   does not require DNS results, so an empty result is valid for the literal
   itself; non-public literals still require an exact IP rule or
   `LocalNetworkAccess::Allow`. An exact `localhost` rule permits only loopback
-  among non-public addresses. Broader private/link-local access requires
-  `LocalNetworkAccess::Allow`. The policy crate never performs DNS or
-  connection I/O.
+  among non-public addresses. Broader private, link-local, reserved, or other
+  special-purpose non-global access requires `LocalNetworkAccess::Allow`. The
+  policy crate never performs DNS or connection I/O.
 - Disabled network mode always denies even when inert rules are retained for
   inspection. External network policy cannot carry local domain or socket
   rules; its rule builders reject the combination at construction time.
