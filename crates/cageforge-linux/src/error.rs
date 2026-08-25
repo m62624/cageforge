@@ -10,6 +10,59 @@ use cageforge_backend_api::{BackendCapability, BackendContractError};
 use cageforge_network_proxy::GatewayError;
 use thiserror::Error;
 
+/// A Bubblewrap command-line option required by the Linux backend.
+///
+/// Values identify missing executable support, not options that an application
+/// or end user must pass manually. [`Self::purpose`] explains why Cageforge
+/// requires each flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BubblewrapFlag {
+    /// `--as-pid-1` support.
+    AsPidOne,
+    /// `--bind` support.
+    Bind,
+    /// `--bind-fd` support.
+    BindFd,
+    /// `--bind-try` support.
+    BindTry,
+    /// `--cap-drop` support.
+    CapabilityDrop,
+    /// `--chdir` support.
+    ChangeDirectory,
+    /// `--disable-userns` support.
+    DisableUserNamespace,
+    /// `--dir` support.
+    Directory,
+    /// `--dev` support.
+    Devices,
+    /// `--die-with-parent` support.
+    DieWithParent,
+    /// `--new-session` support.
+    NewSession,
+    /// `--perms` support.
+    Permissions,
+    /// `--proc` support.
+    Proc,
+    /// `--remount-ro` support.
+    RemountReadOnly,
+    /// `--ro-bind` support.
+    ReadOnlyBind,
+    /// `--ro-bind-data` support.
+    ReadOnlyBindData,
+    /// `--ro-bind-fd` support.
+    ReadOnlyBindFd,
+    /// `--tmpfs` support.
+    Tmpfs,
+    /// `--unshare-ipc` support.
+    UnshareIpc,
+    /// `--unshare-net` support.
+    UnshareNetwork,
+    /// `--unshare-pid` support.
+    UnsharePid,
+    /// `--unshare-user` support.
+    UnshareUser,
+}
+
 /// A Linux namespace required by the Bubblewrap process boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxNamespace {
@@ -422,10 +475,13 @@ pub enum LinuxBackendError {
         path: PathBuf,
     },
     /// Bubblewrap did not expose the flags required by this backend.
-    #[error("Bubblewrap executable is missing required capabilities: {missing:?}")]
+    #[error(
+        "Bubblewrap executable is missing required command-line options: {details}. Install a compatible system Bubblewrap or enable the cageforge-linux bundled-bubblewrap feature",
+        details = format_missing_bubblewrap_flags(.missing)
+    )]
     BubblewrapIncompatible {
         /// Required Bubblewrap flags absent from its help output.
-        missing: Vec<String>,
+        missing: Vec<BubblewrapFlag>,
     },
     /// A Bubblewrap compatibility probe could not run or be observed.
     #[error("Bubblewrap {stage} probe failed: {source}")]
@@ -478,9 +534,22 @@ pub enum LinuxBackendError {
         /// Diagnostic emitted by the capability-drop probe.
         message: String,
     },
-    /// The backend configuration cannot provide the requested proc boundary.
-    #[error("the requested proc mount is unavailable")]
-    ProcMountUnavailable,
+    /// Bubblewrap could not disable nested user-namespace creation.
+    #[error(
+        "Bubblewrap cannot disable nested user namespaces with --disable-userns: {message}. Ensure the kernel and any outer container permit the namespaced user.max_user_namespaces lockdown"
+    )]
+    NestedUserNamespaceIsolationUnavailable {
+        /// Diagnostic emitted by the nested-user-namespace probe.
+        message: String,
+    },
+    /// Bubblewrap could not mount procfs for the isolated PID namespace.
+    #[error(
+        "Bubblewrap cannot mount the sandbox procfs with --proc /proc: {message}. Ensure the kernel and any outer container permit procfs mounts inside user and PID namespaces"
+    )]
+    ProcMountUnavailable {
+        /// Diagnostic emitted by the proc-mount probe.
+        message: String,
+    },
     /// This build does not contain a seccomp filter lowering for the host CPU.
     #[error("Linux seccomp hardening is unsupported on architecture {architecture}")]
     UnsupportedSeccompArchitecture {
@@ -712,6 +781,106 @@ pub enum LinuxBackendError {
     },
 }
 
+impl BubblewrapFlag {
+    /// Every Bubblewrap flag required by the current Linux backend.
+    pub const ALL: [Self; 22] = [
+        Self::AsPidOne,
+        Self::Bind,
+        Self::BindFd,
+        Self::BindTry,
+        Self::CapabilityDrop,
+        Self::ChangeDirectory,
+        Self::DisableUserNamespace,
+        Self::Directory,
+        Self::Devices,
+        Self::DieWithParent,
+        Self::NewSession,
+        Self::Permissions,
+        Self::Proc,
+        Self::RemountReadOnly,
+        Self::ReadOnlyBind,
+        Self::ReadOnlyBindData,
+        Self::ReadOnlyBindFd,
+        Self::Tmpfs,
+        Self::UnshareIpc,
+        Self::UnshareNetwork,
+        Self::UnsharePid,
+        Self::UnshareUser,
+    ];
+
+    /// Returns the exact Bubblewrap command-line flag.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AsPidOne => "--as-pid-1",
+            Self::Bind => "--bind",
+            Self::BindFd => "--bind-fd",
+            Self::BindTry => "--bind-try",
+            Self::CapabilityDrop => "--cap-drop",
+            Self::ChangeDirectory => "--chdir",
+            Self::DisableUserNamespace => "--disable-userns",
+            Self::Directory => "--dir",
+            Self::Devices => "--dev",
+            Self::DieWithParent => "--die-with-parent",
+            Self::NewSession => "--new-session",
+            Self::Permissions => "--perms",
+            Self::Proc => "--proc",
+            Self::RemountReadOnly => "--remount-ro",
+            Self::ReadOnlyBind => "--ro-bind",
+            Self::ReadOnlyBindData => "--ro-bind-data",
+            Self::ReadOnlyBindFd => "--ro-bind-fd",
+            Self::Tmpfs => "--tmpfs",
+            Self::UnshareIpc => "--unshare-ipc",
+            Self::UnshareNetwork => "--unshare-net",
+            Self::UnsharePid => "--unshare-pid",
+            Self::UnshareUser => "--unshare-user",
+        }
+    }
+
+    /// Explains the security or launch operation that needs this flag.
+    pub const fn purpose(self) -> &'static str {
+        match self {
+            Self::AsPidOne => {
+                "runs the Cageforge hardening helper as PID 1 without a separate Bubblewrap reaper"
+            }
+            Self::Bind => "mounts explicitly writable host paths into the sandbox",
+            Self::BindFd => {
+                "mounts writable paths from descriptors pinned before the sandbox starts"
+            }
+            Self::BindTry => "restores optional host shared memory only when that path exists",
+            Self::CapabilityDrop => "removes every Linux capability from the sandboxed command",
+            Self::ChangeDirectory => "enters the validated working directory before execution",
+            Self::DisableUserNamespace => {
+                "prevents the command from creating nested user namespaces"
+            }
+            Self::Directory => "creates required in-sandbox mount-point directories",
+            Self::Devices => "creates the isolated /dev filesystem",
+            Self::DieWithParent => "kills the sandbox boundary if Bubblewrap or its parent dies",
+            Self::NewSession => "starts the sandbox in a separate terminal session",
+            Self::Permissions => "sets exact modes on synthetic mount targets and mask files",
+            Self::Proc => "mounts procfs for the sandbox PID namespace",
+            Self::RemountReadOnly => "makes completed mount targets read-only",
+            Self::ReadOnlyBind => "mounts explicitly readable host paths without write access",
+            Self::ReadOnlyBindData => {
+                "creates an immutable file mask from a descriptor supplied by Cageforge"
+            }
+            Self::ReadOnlyBindFd => {
+                "mounts read-only paths from descriptors pinned before the sandbox starts"
+            }
+            Self::Tmpfs => "creates isolated filesystem roots and in-memory deny masks",
+            Self::UnshareIpc => "isolates System V IPC and POSIX message queues",
+            Self::UnshareNetwork => "isolates the network stack when direct networking is denied",
+            Self::UnsharePid => "isolates process identifiers and the process tree",
+            Self::UnshareUser => "creates the user and mount privilege boundary",
+        }
+    }
+}
+
+impl fmt::Display for BubblewrapFlag {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 impl LinuxNamespace {
     pub(crate) const fn bubblewrap_flag(self) -> &'static str {
         match self {
@@ -758,6 +927,14 @@ impl fmt::Display for LinuxNamespace {
             Self::Network => "network",
         })
     }
+}
+
+fn format_missing_bubblewrap_flags(flags: &[BubblewrapFlag]) -> String {
+    flags
+        .iter()
+        .map(|flag| format!("{flag} ({})", flag.purpose()))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 impl fmt::Display for FilesystemMetadataOperation {

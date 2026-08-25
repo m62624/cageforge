@@ -344,10 +344,11 @@ minimum taxonomy is:
 - `UnsupportedCapability { capability }`;
 - `InvalidConfiguration`;
 - `BubblewrapUnavailable`;
-- `BubblewrapIncompatible`;
+- `BubblewrapIncompatible { missing: Vec<BubblewrapFlag> }`;
 - `NamespaceUnavailable { namespace, message }`;
 - `CapabilityDropUnavailable { message }`;
-- `ProcMountUnavailable`;
+- `NestedUserNamespaceIsolationUnavailable { message }`;
+- `ProcMountUnavailable { message }`;
 - `UnsupportedSeccompArchitecture`;
 - `InvalidRuntimeContext`;
 - `FilesystemLoweringFailed`;
@@ -402,6 +403,7 @@ The generated Bubblewrap plan must establish, as applicable:
 - a new IPC namespace for every launch;
 - empty effective, permitted, inheritable, bounding, and ambient Linux
   capability sets for the user command;
+- disabled nested user-namespace creation for the user command;
 - a new network namespace when the effective network mode requires isolation;
 - a fresh `/proc` unless the backend has a documented, typed reason to reject
   or disable it;
@@ -427,9 +429,19 @@ creation separately. A runtime denial returns
 `NamespaceUnavailable { namespace, message }`; its display form identifies the
 exact Bubblewrap flag and the corresponding kernel or outer-container
 requirement. A missing command-line option remains
-`BubblewrapIncompatible { missing }`, which lists the exact absent flags. This
-separation prevents an IPC, PID, or network restriction from being
-misreported as a user-namespace failure.
+`BubblewrapIncompatible { missing: Vec<BubblewrapFlag> }`. Every
+`BubblewrapFlag` value must provide the exact command-line spelling and a
+non-empty explanation of the Cageforge operation that requires it. The error's
+display form includes both for every missing option and tells the operator to
+install a compatible system Bubblewrap or use the `bundled-bubblewrap` feature.
+This executable-compatibility error remains separate from native host denials,
+preventing an IPC, PID, network, capability, nested-userns, or procfs
+restriction from being reported as missing executable support.
+
+When procfs is required, the backend must probe `--proc /proc` independently.
+A native denial returns `ProcMountUnavailable { message }`; its display form
+names the exact flag, preserves Bubblewrap's diagnostic, and identifies procfs
+mount permission inside user and PID namespaces as the host prerequisite.
 
 Every launch must pass `--cap-drop ALL`, even when the application itself runs
 as UID 0. Upstream Bubblewrap intentionally inherits the caller's effective
@@ -442,6 +454,19 @@ effective, permitted, inheritable, bounding, and ambient sets. Compatibility
 validation checks both the option and a native capability-drop probe;
 `CapabilityDropUnavailable { message }` identifies a runtime denial without
 misreporting it as a namespace failure.
+
+Every launch must also pass `--disable-userns`. Creating a nested user
+namespace grants the creating process capabilities in that namespace and
+widens the Linux kernel attack surface even after the outer capability sets
+were cleared. The portable policy has no capability that authorizes
+`CLONE_NEWUSER`, so neither unrestricted filesystem nor unrestricted network
+access implies permission to create one. Bubblewrap applies a namespaced
+`user.max_user_namespaces` lockdown, enters its final user namespace, and
+verifies that another namespace cannot be created. The frozen Codex
+Bubblewrap plans do not request this lockdown; Cageforge intentionally uses a
+stricter default for arbitrary third-party commands. Missing option support is
+reported by `BubblewrapIncompatible`; a native lockdown failure is
+`NestedUserNamespaceIsolationUnavailable { message }`.
 
 The backend reserves `/dev` for Bubblewrap's minimal device tree, `/proc` for
 the fresh PID namespace, and `/dev/.cageforge-runtime` for the authenticated
@@ -708,6 +733,7 @@ job is an enforcement gate.
 - restricted and unrestricted commands launched by a namespace-root caller
   have zero effective, permitted, inheritable, bounding, and ambient Linux
   capabilities;
+- restricted and unrestricted commands cannot create nested user namespaces;
 - `NoNewPrivs` is visible inside the restricted child; and
 - unsupported capabilities fail before the child is started.
 
@@ -743,16 +769,17 @@ Each Linux backend job must:
    `kernel.apparmor_restrict_unprivileged_userns`, disable that CI-only
    restriction before probing `uid_map`, because `kernel.unprivileged_userns_clone`
    alone does not guarantee that the runner permits the mapping;
-3. verify as UID 0 that `--cap-drop ALL` clears every Linux capability set
+3. verify that `--disable-userns` prevents nested user-namespace creation;
+4. verify as UID 0 that `--cap-drop ALL` clears every Linux capability set
    inside the Bubblewrap user namespace;
-4. build `cageforge-bwrap`, stage its `bwrap` and `bwrap.sha256` resources,
+5. build `cageforge-bwrap`, stage its `bwrap` and `bwrap.sha256` resources,
    build the backend and runtime helper, and run the tests against the staged
    Bubblewrap;
-5. run formatting, Clippy with `-D warnings`, and the backend integration
+6. run formatting, Clippy with `-D warnings`, and the backend integration
    suite;
-6. preserve `RUST_BACKTRACE=1` and produce a JUnit or equivalent test report;
-7. cancel superseded runs for the same pull request; and
-8. fail the required status when native prerequisites or enforcement tests
+7. preserve `RUST_BACKTRACE=1` and produce a JUnit or equivalent test report;
+8. cancel superseded runs for the same pull request; and
+9. fail the required status when native prerequisites or enforcement tests
    fail.
 
 The portable default job must continue to test all portable crates on one

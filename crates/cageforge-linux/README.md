@@ -106,10 +106,42 @@ hardening helper are pinned by open file descriptors; each spawn uses those
 validated objects rather than reopening their paths.
 
 Cageforge passes all Bubblewrap flags itself; applications and end users do not
-add them to the command line. Backend construction probes each namespace
-separately. `LinuxBackendError::NamespaceUnavailable` identifies the exact
-namespace, its Bubblewrap flag, the native diagnostic, and the corresponding
-host requirement:
+add them to the command line. If a system executable lacks an option,
+`LinuxBackendError::BubblewrapIncompatible` returns a typed `BubblewrapFlag` for
+every missing option. Each value exposes the exact spelling through `as_str()`
+and its Cageforge use through `purpose()`. Install a compatible system
+Bubblewrap or build `cageforge-linux` with `bundled-bubblewrap`; no host setting
+can add an option that the executable does not implement.
+
+| Required flag | Why Cageforge requires it |
+|---|---|
+| `--as-pid-1` | Run the Cageforge hardening helper as PID 1 without a separate Bubblewrap reaper |
+| `--bind` | Mount explicitly writable host paths into the sandbox |
+| `--bind-fd` | Mount writable paths from descriptors pinned before launch |
+| `--bind-try` | Restore host `/dev/shm` for unrestricted filesystem mode only when it exists |
+| `--cap-drop` | Remove every Linux capability from the sandboxed command; Cageforge passes `ALL` |
+| `--chdir` | Enter the validated working directory before execution |
+| `--disable-userns` | Prevent the command from creating nested user namespaces |
+| `--dir` | Create required in-sandbox mount-point directories |
+| `--dev` | Create an isolated `/dev` filesystem |
+| `--die-with-parent` | Kill the sandbox boundary if Bubblewrap or its parent dies |
+| `--new-session` | Start the sandbox in a separate terminal session |
+| `--perms` | Set exact modes on synthetic mount targets and mask files |
+| `--proc` | Mount procfs for the sandbox PID namespace |
+| `--remount-ro` | Make completed mount targets read-only |
+| `--ro-bind` | Mount explicitly readable host paths without write access |
+| `--ro-bind-data` | Create an immutable file mask from a Cageforge-supplied descriptor |
+| `--ro-bind-fd` | Mount read-only paths from descriptors pinned before launch |
+| `--tmpfs` | Create isolated filesystem roots and in-memory deny masks |
+| `--unshare-ipc` | Isolate System V IPC and POSIX message queues |
+| `--unshare-net` | Isolate the network stack when direct networking is denied |
+| `--unshare-pid` | Isolate process identifiers and the process tree |
+| `--unshare-user` | Create the user and mount privilege boundary |
+
+Flag support and host permission are different failures. Once support is
+confirmed, backend construction probes each host-sensitive operation
+separately. The corresponding error identifies the exact operation, native
+diagnostic, and host requirement:
 
 | Bubblewrap flag | Isolation | Host requirement when its probe fails |
 |---|---|---|
@@ -118,9 +150,14 @@ host requirement:
 | `--unshare-ipc` | System V shared memory, semaphores, and message queues | Use a kernel and outer container configuration that permit `CLONE_NEWIPC` |
 | `--unshare-net` | Network stack | Use a kernel and outer container configuration that permit `CLONE_NEWNET` |
 | `--cap-drop ALL` | Effective, permitted, inheritable, bounding, and ambient capability sets | Permit capability reduction inside user namespaces; Cageforge never asks applications to retain a Linux capability |
+| `--disable-userns` | Nested user-namespace creation | Permit Bubblewrap to apply its namespaced `user.max_user_namespaces` lockdown; Cageforge has no portable policy grant for nested user namespaces |
+| `--proc /proc` | procfs scoped to the sandbox PID namespace | Permit procfs mounts inside user and PID namespaces |
 
-If the executable itself lacks a required option, the separate
-`LinuxBackendError::BubblewrapIncompatible` error lists every missing flag.
+The runtime errors remain distinct: `NamespaceUnavailable` names one namespace,
+`CapabilityDropUnavailable` covers capability clearing,
+`NestedUserNamespaceIsolationUnavailable` covers the nested-userns lockdown,
+and `ProcMountUnavailable` covers the procfs mount. Cageforge preserves the
+Bubblewrap diagnostic in each error.
 
 ## Basic use
 
@@ -211,6 +248,7 @@ it, and an unsupported combination is rejected before launch.
 | PID namespace and fresh `/proc` | Default `ProcMountPolicy::Required` | Gives the child an isolated process view and prevents host `/proc` exposure |
 | IPC namespace | Every Bubblewrap launch | Prevents access to host System V shared-memory segments, semaphore sets, and message queues |
 | Empty Linux capability sets | Every Bubblewrap launch | Uses `--cap-drop ALL` so namespace-root and host-root callers cannot pass capabilities to the command |
+| Nested user-namespace lockdown | Every Bubblewrap launch | Uses `--disable-userns` so the command cannot reacquire namespace-local capabilities through `CLONE_NEWUSER` |
 | Private device and runtime view | Every restricted filesystem launch | Builds the child `/dev` view, hides Cageforge runtime paths from the command, and exposes only the deliberately mounted helper/gateway endpoints |
 | Empty-root or layered bind mounts | Restricted filesystem | Allows only effective read/write scopes and masks denied paths |
 | Read-only carve-outs | A writable scope with read-only subpaths | Keeps narrower paths read-only inside writable parents |

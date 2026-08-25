@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::num::NonZeroUsize;
 use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -21,8 +22,8 @@ use cageforge_backend_api::{
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioSpec};
 use cageforge_config::Config;
 use cageforge_linux::{
-    FilesystemLoweringError, HardeningHelperSource, LinuxBackend, LinuxBackendConfig,
-    LinuxBackendConfigError, LinuxBackendError, LinuxHelperRuntimeFailureKind,
+    BubblewrapFlag, FilesystemLoweringError, HardeningHelperSource, LinuxBackend,
+    LinuxBackendConfig, LinuxBackendConfigError, LinuxBackendError, LinuxHelperRuntimeFailureKind,
     LinuxHelperSetupFailureKind, NetworkCombinationError, SetupHandshakeError,
 };
 use cageforge_network_proxy::GatewayConfig;
@@ -131,6 +132,12 @@ fn test_backend_config() -> LinuxBackendConfig {
             .with_bundled_bubblewrap(),
         None => config,
     }
+}
+
+fn write_test_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).expect("write test executable");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        .expect("make test executable runnable");
 }
 
 fn context(workspace: &Path) -> PathResolutionContext {
@@ -1034,6 +1041,62 @@ fn backend_configuration_rejects_a_zero_default_timeout() {
         LinuxBackendConfig::new().with_default_timeout(Duration::ZERO),
         Err(LinuxBackendConfigError::ZeroDefaultTimeout)
     );
+}
+
+#[test]
+fn incompatible_bubblewrap_reports_every_missing_flag_with_its_purpose() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bubblewrap = temporary.path().join("bwrap");
+    write_test_executable(&bubblewrap, "#!/bin/sh\nexit 0\n");
+    let config = LinuxBackendConfig::new()
+        .with_bubblewrap_path(&bubblewrap)
+        .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper"));
+
+    let error = match LinuxBackend::new(config) {
+        Ok(_) => panic!("Bubblewrap without required flags must be rejected"),
+        Err(error) => error,
+    };
+    let LinuxBackendError::BubblewrapIncompatible { missing } = &error else {
+        panic!("unexpected error: {error}");
+    };
+    assert_eq!(missing, &BubblewrapFlag::ALL);
+    let message = error.to_string();
+    for flag in missing {
+        assert!(message.contains(flag.as_str()));
+        assert!(message.contains(flag.purpose()));
+    }
+    assert!(message.contains("bundled-bubblewrap"));
+}
+
+#[test]
+fn proc_mount_denial_is_not_reported_as_missing_flag_support() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bubblewrap = temporary.path().join("bwrap");
+    let help = BubblewrapFlag::ALL
+        .iter()
+        .map(|flag| flag.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let program = format!(
+        "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo '{help}'\n  exit 0\nfi\nfor argument in \"$@\"; do\n  if [ \"$argument\" = \"--proc\" ]; then\n    echo 'procfs denied by fixture' >&2\n    exit 1\n  fi\ndone\nexit 0\n"
+    );
+    write_test_executable(&bubblewrap, &program);
+    let config = LinuxBackendConfig::new()
+        .with_bubblewrap_path(&bubblewrap)
+        .with_hardening_helper_path(env!("CARGO_BIN_EXE_cageforge-linux-helper"));
+
+    let error = match LinuxBackend::new(config) {
+        Ok(_) => panic!("denied procfs mount must reject backend construction"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        &error,
+        LinuxBackendError::ProcMountUnavailable { message }
+            if message == "procfs denied by fixture"
+    ));
+    let message = error.to_string();
+    assert!(message.contains("--proc /proc"));
+    assert!(message.contains("procfs mounts"));
 }
 
 #[test]
@@ -2336,6 +2399,33 @@ fn sandboxed_commands_drop_capabilities_for_namespace_root() {
                 "sandbox retained {name}: {value}"
             );
         }
+    }
+}
+
+#[test]
+fn sandboxed_commands_cannot_create_nested_user_namespaces() {
+    assert!(
+        Path::new("/usr/bin/unshare").is_file(),
+        "native test requires util-linux unshare"
+    );
+    for policy in [SandboxPolicy::workspace(), SandboxPolicy::full_access()] {
+        let workspace = TempDir::new().expect("temporary workspace");
+        let command = CommandSpec::new("/usr/bin/unshare")
+            .expect("unshare command")
+            .with_args(["--user", "/bin/true"])
+            .expect("fixture arguments");
+        let (command, effective, runtime) = request(workspace.path(), policy, command);
+        let backend = backend();
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &runtime)
+            .expect("preflight");
+        let mut child = backend.spawn(prepared).expect("spawn");
+
+        assert_ne!(
+            child.wait().expect("wait").code(),
+            Some(0),
+            "sandbox must deny unmodelled nested user namespaces"
+        );
     }
 }
 

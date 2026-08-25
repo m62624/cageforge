@@ -133,6 +133,17 @@ write_files:
         'the guest kernel must permit CLONE_NEWNET' \
         --unshare-net
       echo '[cageforge] bootstrap: all Bubblewrap namespace probes passed'
+      echo '[cageforge] bootstrap: probing nested user namespace isolation (--disable-userns)'
+      if ! timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
+        --die-with-parent \
+        --unshare-user \
+        --disable-userns \
+        --ro-bind / / \
+        /bin/true; then
+        echo '[cageforge] bootstrap: nested user namespace isolation failed (--disable-userns): the guest must permit namespaced user.max_user_namespaces lockdown' >&2
+        exit 1
+      fi
+      echo '[cageforge] bootstrap: nested user namespace isolation passed'
       echo '[cageforge] bootstrap: probing root capability removal (--cap-drop ALL)'
       if ! timeout --kill-after=5s 15s bwrap \
         --die-with-parent \

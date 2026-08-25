@@ -17,31 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::config::{
     BubblewrapSource, HardeningHelperSource, ProcMountPolicy, ResourceDirectorySource,
 };
-use crate::error::{LinuxBackendError, LinuxNamespace};
-
-const REQUIRED_HELP_FLAGS: &[&str] = &[
-    "--as-pid-1",
-    "--bind",
-    "--bind-fd",
-    "--bind-try",
-    "--cap-drop",
-    "--chdir",
-    "--dir",
-    "--dev",
-    "--die-with-parent",
-    "--new-session",
-    "--perms",
-    "--proc",
-    "--remount-ro",
-    "--ro-bind",
-    "--ro-bind-data",
-    "--ro-bind-fd",
-    "--tmpfs",
-    "--unshare-ipc",
-    "--unshare-net",
-    "--unshare-pid",
-    "--unshare-user",
-];
+use crate::error::{BubblewrapFlag, LinuxBackendError, LinuxNamespace};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROBE_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -396,20 +372,20 @@ fn probe_help(path: &Path) -> Result<(), LinuxBackendError> {
     }
 }
 
-fn missing_help_flags(help: &str) -> Vec<String> {
+fn missing_help_flags(help: &str) -> Vec<BubblewrapFlag> {
     let available = help
         .split_ascii_whitespace()
         .collect::<std::collections::HashSet<_>>();
-    REQUIRED_HELP_FLAGS
-        .iter()
-        .filter(|flag| !available.contains(**flag))
-        .map(|flag| (*flag).to_string())
+    BubblewrapFlag::ALL
+        .into_iter()
+        .filter(|flag| !available.contains(flag.as_str()))
         .collect()
 }
 
 fn probe_namespaces(path: &Path) -> Result<(), LinuxBackendError> {
     probe_namespace(path, LinuxNamespace::User)?;
     probe_capability_drop(path)?;
+    probe_nested_user_namespace_isolation(path)?;
     for namespace in [
         LinuxNamespace::Pid,
         LinuxNamespace::Ipc,
@@ -466,6 +442,30 @@ fn probe_capability_drop(path: &Path) -> Result<(), LinuxBackendError> {
     }
 }
 
+fn probe_nested_user_namespace_isolation(path: &Path) -> Result<(), LinuxBackendError> {
+    let output = run_probe(
+        path,
+        &[
+            "--die-with-parent",
+            "--unshare-user",
+            "--disable-userns",
+            "--ro-bind",
+            "/",
+            "/",
+            "/bin/true",
+        ],
+        PROBE_TIMEOUT,
+    )
+    .map_err(|error| probe_error("nested user namespace isolation", error))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(LinuxBackendError::NestedUserNamespaceIsolationUnavailable {
+            message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        })
+    }
+}
+
 fn probe_proc_mount(path: &Path) -> Result<(), LinuxBackendError> {
     let output = run_probe(
         path,
@@ -487,7 +487,9 @@ fn probe_proc_mount(path: &Path) -> Result<(), LinuxBackendError> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(LinuxBackendError::ProcMountUnavailable)
+        Err(LinuxBackendError::ProcMountUnavailable {
+            message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        })
     }
 }
 
@@ -626,6 +628,7 @@ pub(crate) fn namespace_args(
         "--as-pid-1".into(),
         "--cap-drop".into(),
         "ALL".into(),
+        "--disable-userns".into(),
     ];
     if network_isolated {
         args.push("--unshare-net".into());
