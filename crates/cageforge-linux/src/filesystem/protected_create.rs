@@ -19,6 +19,16 @@ static REMOVE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 
 use crate::error::LinuxBackendError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+struct ProtectedCreateWatcher {
+    descriptor: libc::c_int,
+}
+
 pub(crate) struct ProtectedCreateMonitor {
     stop: Arc<AtomicBool>,
     event: Receiver<LinuxBackendError>,
@@ -308,12 +318,6 @@ fn remove_directory_entry(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileIdentity {
-    device: u64,
-    inode: u64,
-}
-
 #[allow(unsafe_code)]
 fn file_identity(fd: libc::c_int) -> io::Result<FileIdentity> {
     let mut metadata = unsafe { std::mem::zeroed::<libc::stat>() };
@@ -363,10 +367,6 @@ fn unlink_entry(
             Err(protected_path_monitor_error(path, source))
         }
     }
-}
-
-struct ProtectedCreateWatcher {
-    descriptor: libc::c_int,
 }
 
 impl ProtectedCreateWatcher {

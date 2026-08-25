@@ -37,6 +37,24 @@ const AUTHENTICATED_BRIDGE_BUFFER_BYTES: usize = 64 * 1024;
 #[derive(Clone)]
 struct BridgeIngressToken(Arc<[u8; BRIDGE_TOKEN_BYTES]>);
 
+/// One independently budgeted host gateway owned by one launched process.
+pub(crate) struct GatewayRuntime {
+    _directory: TempDir,
+    socket_directory: PathBuf,
+    bridge_token: BridgeIngressToken,
+    shutdown: Option<oneshot::Sender<()>>,
+    thread: Option<JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>>,
+}
+
+struct GatewayServer {
+    listener: std::os::unix::net::UnixListener,
+    gateway: NetworkGateway<SystemResolver>,
+    ingress_key: GatewayIngressKey,
+    bridge_token: BridgeIngressToken,
+    handshake_timeout: Duration,
+    pre_authentication_limit: usize,
+}
+
 impl BridgeIngressToken {
     fn generate() -> Result<Self, LinuxBackendError> {
         let mut bytes = [0; BRIDGE_TOKEN_BYTES];
@@ -71,24 +89,6 @@ impl BridgeIngressToken {
             Err(NetworkGatewayIngressError::TokenMismatch)
         }
     }
-}
-
-/// One independently budgeted host gateway owned by one launched process.
-pub(crate) struct GatewayRuntime {
-    _directory: TempDir,
-    socket_directory: PathBuf,
-    bridge_token: BridgeIngressToken,
-    shutdown: Option<oneshot::Sender<()>>,
-    thread: Option<JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>>,
-}
-
-struct GatewayServer {
-    listener: std::os::unix::net::UnixListener,
-    gateway: NetworkGateway<SystemResolver>,
-    ingress_key: GatewayIngressKey,
-    bridge_token: BridgeIngressToken,
-    handshake_timeout: Duration,
-    pre_authentication_limit: usize,
 }
 
 impl std::fmt::Debug for GatewayRuntime {

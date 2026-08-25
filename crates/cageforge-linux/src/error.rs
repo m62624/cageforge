@@ -24,18 +24,6 @@ pub enum FilesystemMetadataOperation {
     DescendantMount,
 }
 
-impl fmt::Display for FilesystemMetadataOperation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let operation = match self {
-            Self::Scope => "scope",
-            Self::Mask => "mask",
-            Self::WritableSymlinkAncestor => "writable symlink ancestor",
-            Self::DescendantMount => "descendant mount",
-        };
-        formatter.write_str(operation)
-    }
-}
-
 /// A typed failure while translating a portable filesystem rule to Bubblewrap
 /// mounts. Each variant identifies the failed operation without requiring a
 /// caller to parse an implementation-specific reason string.
@@ -144,14 +132,6 @@ pub enum PolicyLoweringExpectation {
     DenyGlobMatch,
 }
 
-impl fmt::Display for PolicyLoweringExpectation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DenyGlobMatch => formatter.write_str("deny-glob match"),
-        }
-    }
-}
-
 /// A native operation performed while hardening a Linux process boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxHardeningOperation {
@@ -173,23 +153,6 @@ pub enum LinuxHardeningOperation {
     SetupRelease,
     /// Setting close-on-exec on the helper channel.
     CloseOnExec,
-}
-
-impl fmt::Display for LinuxHardeningOperation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let operation = match self {
-            Self::ParentDeathSignal => "parent-death signal",
-            Self::Dumpability => "dumpability",
-            Self::CoreDumpLimit => "core-dump limit",
-            Self::NoNewPrivileges => "no-new-privileges",
-            Self::SetupReady => "setup-ready marker",
-            Self::BridgeTokenRead => "bridge token",
-            Self::AuthenticationTokenRead => "authentication token",
-            Self::SetupRelease => "setup-release marker",
-            Self::CloseOnExec => "close-on-exec",
-        };
-        formatter.write_str(operation)
-    }
 }
 
 /// A typed seccomp construction failure.
@@ -392,27 +355,6 @@ pub enum LinuxBridgeOperation {
     HardenProcess,
 }
 
-impl fmt::Display for LinuxBridgeOperation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let operation = match self {
-            Self::CreateReadyPipe => "create ready pipe",
-            Self::MoveDescriptor => "move descriptor",
-            Self::CloseDescriptor => "close descriptor",
-            Self::BindListener => "bind loopback listener",
-            Self::ReadListenerAddress => "read listener address",
-            Self::ReadReadyPort => "read ready port",
-            Self::WriteReadyPort => "write ready port",
-            Self::AcceptConnection => "accept bridge connection",
-            Self::ConnectGateway => "connect gateway",
-            Self::RelayToGateway => "relay to gateway",
-            Self::RelayToClient => "relay to client",
-            Self::DetachStandardStreams => "detach standard streams",
-            Self::HardenProcess => "harden bridge process",
-        };
-        formatter.write_str(operation)
-    }
-}
-
 /// A host-to-helper bridge failure.
 #[derive(Debug, Error)]
 pub enum LinuxBridgeError {
@@ -544,24 +486,6 @@ pub enum SetupHandshakeError {
     /// The helper returned a wrong ready marker.
     #[error("setup handshake ready marker did not match")]
     InvalidReady,
-}
-
-impl From<io::Error> for SetupHandshakeError {
-    fn from(source: io::Error) -> Self {
-        Self::Io { source }
-    }
-}
-
-impl From<EnvironmentFrameError> for SetupHandshakeError {
-    fn from(source: EnvironmentFrameError) -> Self {
-        Self::EnvironmentFrame { source }
-    }
-}
-
-impl From<NetworkGatewayTransportError> for SetupHandshakeError {
-    fn from(source: NetworkGatewayTransportError) -> Self {
-        Self::GatewayToken { source }
-    }
 }
 
 /// A per-run gateway token transport failure.
@@ -1022,4 +946,80 @@ pub enum LinuxBackendError {
         /// Operating-system error returned while waiting or terminating.
         source: std::io::Error,
     },
+}
+
+impl fmt::Display for FilesystemMetadataOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let operation = match self {
+            Self::Scope => "scope",
+            Self::Mask => "mask",
+            Self::WritableSymlinkAncestor => "writable symlink ancestor",
+            Self::DescendantMount => "descendant mount",
+        };
+        formatter.write_str(operation)
+    }
+}
+
+impl fmt::Display for PolicyLoweringExpectation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DenyGlobMatch => formatter.write_str("deny-glob match"),
+        }
+    }
+}
+
+impl fmt::Display for LinuxHardeningOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let operation = match self {
+            Self::ParentDeathSignal => "parent-death signal",
+            Self::Dumpability => "dumpability",
+            Self::CoreDumpLimit => "core-dump limit",
+            Self::NoNewPrivileges => "no-new-privileges",
+            Self::SetupReady => "setup-ready marker",
+            Self::BridgeTokenRead => "bridge token",
+            Self::AuthenticationTokenRead => "authentication token",
+            Self::SetupRelease => "setup-release marker",
+            Self::CloseOnExec => "close-on-exec",
+        };
+        formatter.write_str(operation)
+    }
+}
+
+impl fmt::Display for LinuxBridgeOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let operation = match self {
+            Self::CreateReadyPipe => "create ready pipe",
+            Self::MoveDescriptor => "move descriptor",
+            Self::CloseDescriptor => "close descriptor",
+            Self::BindListener => "bind loopback listener",
+            Self::ReadListenerAddress => "read listener address",
+            Self::ReadReadyPort => "read ready port",
+            Self::WriteReadyPort => "write ready port",
+            Self::AcceptConnection => "accept bridge connection",
+            Self::ConnectGateway => "connect gateway",
+            Self::RelayToGateway => "relay to gateway",
+            Self::RelayToClient => "relay to client",
+            Self::DetachStandardStreams => "detach standard streams",
+            Self::HardenProcess => "harden bridge process",
+        };
+        formatter.write_str(operation)
+    }
+}
+
+impl From<io::Error> for SetupHandshakeError {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<EnvironmentFrameError> for SetupHandshakeError {
+    fn from(source: EnvironmentFrameError) -> Self {
+        Self::EnvironmentFrame { source }
+    }
+}
+
+impl From<NetworkGatewayTransportError> for SetupHandshakeError {
+    fn from(source: NetworkGatewayTransportError) -> Self {
+        Self::GatewayToken { source }
+    }
 }

@@ -66,6 +66,21 @@ pub(crate) struct PinnedExecutable {
     pub(crate) file: File,
 }
 
+#[derive(Debug)]
+struct ProbeOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+#[derive(Debug)]
+enum ProbeError {
+    Io(io::Error),
+    MissingPipe(&'static str),
+    TimedOut,
+    OutputLimitExceeded,
+}
+
 #[cfg(feature = "bundled-bubblewrap")]
 pub(crate) fn materialize_bundled_resource() -> Result<tempfile::TempDir, LinuxBackendError> {
     let resource = tempfile::Builder::new()
@@ -127,21 +142,6 @@ pub(crate) fn materialize_bundled_resource() -> Result<tempfile::TempDir, LinuxB
         }
     })?;
     Ok(resource)
-}
-
-#[derive(Debug)]
-struct ProbeOutput {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-#[derive(Debug)]
-enum ProbeError {
-    Io(io::Error),
-    MissingPipe(&'static str),
-    TimedOut,
-    OutputLimitExceeded,
 }
 
 pub(crate) fn discover_hardening_helper(

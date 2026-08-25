@@ -22,15 +22,6 @@ struct DirectoryIdentity {
     inode: u64,
 }
 
-impl DirectoryIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        }
-    }
-}
-
 struct GlobScanner<'a> {
     pattern: &'a PathPattern,
     context: &'a EffectivePathContext,
@@ -38,6 +29,15 @@ struct GlobScanner<'a> {
     matches: BTreeMap<PathBuf, bool>,
     entries: usize,
     ancestors: Vec<DirectoryIdentity>,
+}
+
+impl DirectoryIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
 }
 
 impl GlobScanner<'_> {

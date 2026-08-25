@@ -15,6 +15,22 @@ use crate::error::LinuxBackendError;
 static OWNER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SHARED_SETUP_DIRECTORY: &str = "/tmp";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// One host directory shared by active Bubblewrap launch instances.
+#[derive(Debug)]
+pub(crate) struct SyntheticMountTarget {
+    path: PathBuf,
+    identity: FileIdentity,
+    marker_file: PathBuf,
+    marker_dir: PathBuf,
+    active: bool,
+}
+
 /// Serializes registry and mount-target mutations across Cageforge processes
 /// running under the same user.
 pub(crate) struct SetupLock {
@@ -63,12 +79,6 @@ impl Drop for SetupLock {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileIdentity {
-    device: u64,
-    inode: u64,
-}
-
 impl FileIdentity {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         Self {
@@ -88,16 +98,6 @@ impl FileIdentity {
             inode: inode.parse().ok()?,
         })
     }
-}
-
-/// One host directory shared by active Bubblewrap launch instances.
-#[derive(Debug)]
-pub(crate) struct SyntheticMountTarget {
-    path: PathBuf,
-    identity: FileIdentity,
-    marker_file: PathBuf,
-    marker_dir: PathBuf,
-    active: bool,
 }
 
 impl SyntheticMountTarget {

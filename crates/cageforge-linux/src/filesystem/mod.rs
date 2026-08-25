@@ -38,6 +38,14 @@ pub(crate) struct FilesystemPlan {
     protected_create_paths: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mount {
+    Read,
+    Write,
+    ReadOnly,
+    Deny,
+}
+
 impl FilesystemPlan {
     pub(crate) fn take_synthetic_targets(&mut self) -> Vec<SyntheticMountTarget> {
         std::mem::take(&mut self.synthetic_targets)
@@ -46,14 +54,6 @@ impl FilesystemPlan {
     pub(crate) fn take_protected_create_paths(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.protected_create_paths)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mount {
-    Read,
-    Write,
-    ReadOnly,
-    Deny,
 }
 
 impl Mount {
