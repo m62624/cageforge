@@ -1,13 +1,17 @@
 name: Native Linux VM experiment
 
 on:
-  # Manual-only until nested KVM is proven stable. The workflow is defined on
-  # the trusted default branch and never checks out the pull-request tree.
+  # The workflow is defined on the trusted default branch and never checks out
+  # the pull-request tree. A push tests the commit that reached main; the
+  # manual mode can test an open pull request before it is merged.
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       pr_number:
         description: Open GitHub pull request number to test
-        required: true
+        required: false
         type: string
       expected_sha:
         description: Optional 40-character head SHA; fail if the PR moved
@@ -19,7 +23,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: cageforge-native-linux-vm-${{ inputs.pr_number }}
+  group: cageforge-native-linux-vm-${{ inputs.pr_number || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -41,7 +45,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes genisoimage jq qemu-system-x86 qemu-utils
 
-      - name: Resolve immutable pull-request head
+      - name: Resolve immutable source revision
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -84,7 +89,20 @@ jobs:
             echo "HEAD_REPO=$head_repo"
           } >>"${GITHUB_ENV}"
 
-      - name: Download pull-request archive without extracting it
+      - name: Resolve pushed main revision
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::GitHub returned an invalid pushed commit SHA"
+            exit 65
+          }
+          {
+            echo "HEAD_SHA=$GITHUB_SHA"
+            echo "HEAD_REPO=$GITHUB_REPOSITORY"
+          } >>"${GITHUB_ENV}"
+
+      - name: Download source archive without extracting it
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -94,8 +112,8 @@ jobs:
             --header "Authorization: Bearer ${GH_TOKEN}" \
             --header "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${HEAD_REPO}/tarball/${HEAD_SHA}" \
-            --output "$RUNNER_TEMP/cageforge-pr.tar.gz"
-          test -s "$RUNNER_TEMP/cageforge-pr.tar.gz"
+            --output "$RUNNER_TEMP/cageforge-source.tar.gz"
+          test -s "$RUNNER_TEMP/cageforge-source.tar.gz"
 
       - name: Download and verify pinned Ubuntu guest image
         run: |
@@ -114,4 +132,4 @@ jobs:
           set -euo pipefail
           ./ci/run-native-linux-vm.sh \
             --image "$CAGEFORGE_VM_IMAGE" \
-            --source-archive "$RUNNER_TEMP/cageforge-pr.tar.gz"
+            --source-archive "$RUNNER_TEMP/cageforge-source.tar.gz"
