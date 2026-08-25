@@ -26,6 +26,16 @@ fn containment_is_component_aware() {
 }
 
 #[test]
+fn containment_rejects_parent_escape_and_mismatched_anchors() {
+    assert!(!is_within(
+        Path::new("/workspace/../outside"),
+        Path::new("/workspace")
+    ));
+    assert!(!is_within(Path::new("/workspace"), Path::new(".")));
+    assert!(is_within(Path::new("src/lib.rs"), Path::new(".")));
+}
+
+#[test]
 fn complete_paths_compare_components() {
     assert!(paths_equal(
         Path::new("/workspace/./src"),

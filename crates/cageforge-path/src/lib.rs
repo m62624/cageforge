@@ -98,11 +98,24 @@ pub fn paths_equal(left: &Path, right: &Path) -> bool {
 }
 
 /// Returns whether `path` is the same as or below `root` by path component.
+///
+/// Parent traversal fails closed. An empty or current-directory relative root
+/// contains relative descendants, but never an absolute or drive-qualified
+/// path.
 pub fn is_within(path: &Path, root: &Path) -> bool {
+    if contains_parent_traversal(path) || contains_parent_traversal(root) {
+        return false;
+    }
     #[cfg(windows)]
     {
         let path = NativePathKey::new(path);
         let root = NativePathKey::new(root);
+        if root.0.is_empty() {
+            return !matches!(
+                path.0.first(),
+                Some(native::NativeComponentKey::Prefix(_) | native::NativeComponentKey::RootDir)
+            );
+        }
         path.0.starts_with(&root.0)
     }
     #[cfg(not(windows))]
@@ -113,6 +126,10 @@ pub fn is_within(path: &Path, root: &Path) -> bool {
     let mut root = root
         .components()
         .filter(|component| *component != Component::CurDir);
+    #[cfg(not(windows))]
+    if root.clone().next().is_none() {
+        return path.clone().next() != Some(Component::RootDir);
+    }
     #[cfg(not(windows))]
     loop {
         match (root.next(), path.next()) {

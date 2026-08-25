@@ -18,6 +18,14 @@ process launching, DNS, and native enforcement.
 - platform-aware component and string comparisons;
 - lexical `contains_parent_traversal` validation.
 
+`is_within` itself fails closed when either operand contains parent traversal;
+callers do not have to rely on a separate validation call to prevent a lexical
+escape from satisfying prefix containment. An empty or `.` relative root may
+contain relative descendants but never an absolute or drive-qualified path.
+The frozen Codex baseline recorded in [UPSTREAM.md](../UPSTREAM.md) commonly
+pairs ordinary path-prefix operations with validation or canonicalization at
+its call sites; Cageforge places this invariant in the reusable shared helper.
+
 On POSIX targets comparisons are case-sensitive. On Windows they are
 case-insensitive, including drive-prefix and component comparisons. Supported
 drive and UNC verbatim/device aliases share one lexical key, while malformed
