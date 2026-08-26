@@ -55,7 +55,7 @@ pub(crate) struct RunnerSpawnRequest {
     pub(crate) desktop_name: Vec<u16>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct RunnerStdioPlan {
     pub(crate) stdin: RunnerStdioMode,
     pub(crate) stdout: RunnerStdioMode,

@@ -73,6 +73,11 @@ fn install(
         "preparing protected state directory",
     );
     security::prepare_state_directory(&request.state_directory, &request.owner_sid)?;
+    progress(
+        SetupStage::CapabilityState,
+        "creating and verifying protected capability-SID state",
+    );
+    prepare_capability_state(request)?;
     progress(SetupStage::Request, "verifying helper resources");
     let resources = resources::verify(request)?;
     let marker_path = request.state_directory.join("setup.json");
@@ -201,12 +206,123 @@ fn write_marker(
     })
 }
 
+fn prepare_capability_state(request: &SetupRequest) -> NativeSetupResult<()> {
+    let path = request
+        .state_directory
+        .join(crate::capability_state::CAPABILITY_STATE_NAME);
+    let state = match fs::read(&path) {
+        Ok(bytes) => crate::capability_state::CapabilityState::decode(&bytes)
+            .map_err(capability_state_model_failure)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::capability_state::CapabilityState::fresh()
+                .map_err(capability_state_model_failure)?
+        }
+        Err(error) => {
+            return Err(NativeSetupFailure::new(
+                SetupStage::CapabilityState,
+                SetupFailureCode::CapabilityStateRead,
+                error.raw_os_error().map(|code| code as u32),
+                format!("failed to read capability-SID state {path:?}: {error}"),
+            ));
+        }
+    };
+    let encoded = state.encode().map_err(capability_state_model_failure)?;
+    let mut file =
+        security::create_protected_file(&path, &request.owner_sid).map_err(|failure| {
+            NativeSetupFailure::new(
+                SetupStage::CapabilityState,
+                SetupFailureCode::CapabilityStateAcl,
+                failure.native_code,
+                failure.detail,
+            )
+        })?;
+    file.write_all(&encoded).map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::CapabilityState,
+            SetupFailureCode::CapabilityStateWrite,
+            error.raw_os_error().map(|code| code as u32),
+            format!("failed to write capability-SID state {path:?}: {error}"),
+        )
+    })?;
+    file.sync_all().map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::CapabilityState,
+            SetupFailureCode::CapabilityStateWrite,
+            error.raw_os_error().map(|code| code as u32),
+            format!("failed to flush capability-SID state {path:?}: {error}"),
+        )
+    })?;
+    let lock_path = request
+        .state_directory
+        .join(crate::capability_state::CAPABILITY_LOCK_NAME);
+    let lock =
+        security::create_protected_file(&lock_path, &request.owner_sid).map_err(|failure| {
+            NativeSetupFailure::new(
+                SetupStage::CapabilityState,
+                SetupFailureCode::CapabilityStateAcl,
+                failure.native_code,
+                failure.detail,
+            )
+        })?;
+    lock.sync_all().map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::CapabilityState,
+            SetupFailureCode::CapabilityStateWrite,
+            error.raw_os_error().map(|code| code as u32),
+            format!("failed to flush capability-SID lock file {lock_path:?}: {error}"),
+        )
+    })
+}
+
+fn capability_state_model_failure(
+    error: crate::capability_state::CapabilityStateError,
+) -> NativeSetupFailure {
+    let code = match error {
+        crate::capability_state::CapabilityStateError::Random { .. } => {
+            SetupFailureCode::CapabilityStateRandom
+        }
+        crate::capability_state::CapabilityStateError::Encode { .. } => {
+            SetupFailureCode::CapabilityStateSerialize
+        }
+        crate::capability_state::CapabilityStateError::Decode { .. }
+        | crate::capability_state::CapabilityStateError::Version { .. }
+        | crate::capability_state::CapabilityStateError::InvalidProfileIdentity
+        | crate::capability_state::CapabilityStateError::InvalidSid { .. }
+        | crate::capability_state::CapabilityStateError::NonCanonicalSid
+        | crate::capability_state::CapabilityStateError::ForeignAuthoritySid
+        | crate::capability_state::CapabilityStateError::DuplicateSid
+        | crate::capability_state::CapabilityStateError::RelativeRoot { .. }
+        | crate::capability_state::CapabilityStateError::ParentTraversal { .. }
+        | crate::capability_state::CapabilityStateError::DuplicateAuthority
+        | crate::capability_state::CapabilityStateError::NonCanonicalOrder
+        | crate::capability_state::CapabilityStateError::InvalidDacl
+        | crate::capability_state::CapabilityStateError::DuplicateAclObject
+        | crate::capability_state::CapabilityStateError::NonCanonicalAclOrder
+        | crate::capability_state::CapabilityStateError::RedundantAclObject
+        | crate::capability_state::CapabilityStateError::InvalidAclMutation
+        | crate::capability_state::CapabilityStateError::PendingAclMutation { .. }
+        | crate::capability_state::CapabilityStateError::MissingAclMutation
+        | crate::capability_state::CapabilityStateError::AclObjectIdentityMismatch { .. }
+        | crate::capability_state::CapabilityStateError::AclBeforeMismatch { .. }
+        | crate::capability_state::CapabilityStateError::AclMutationDrift { .. } => {
+            SetupFailureCode::CapabilityStateDecode
+        }
+    };
+    NativeSetupFailure::new(SetupStage::CapabilityState, code, None, error.to_string())
+}
+
 fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
     firewall::remove(&request.owner_sid)?;
     wfp::remove(&request.owner_sid)?;
     accounts::remove(request)?;
     for path in [
         request.state_directory.join("setup.json"),
+        request
+            .state_directory
+            .join(crate::capability_state::CAPABILITY_STATE_NAME),
+        request
+            .state_directory
+            .join(crate::capability_state::CAPABILITY_LOCK_NAME),
         request.state_directory.join("credentials.json.dpapi"),
         request
             .state_directory

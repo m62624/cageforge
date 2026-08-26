@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![cfg(target_os = "windows")]
+#![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[path = "../capability_state.rs"]
+mod capability_state;
 #[path = "../firewall_contract.rs"]
 mod firewall_contract;
 #[path = "../runner_manifest.rs"]

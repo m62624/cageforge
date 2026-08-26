@@ -96,6 +96,37 @@ Setup is idempotent. It reconciles stale state without silently deleting
 unrelated accounts, rules, ACLs, or files. Destructive uninstall is a separate
 explicit operation and is not performed by backend construction.
 
+Capability state consists of a protected state record and a separate protected
+cross-process lock file. Setup generates one random installation SID namespace;
+runtime entries append random subauthorities and are keyed by the SHA-256 of the
+complete resolved filesystem enforcement profile, authority role, and canonical
+root identity. One profile-guard SID owns every deny ACE for that immutable
+profile, while separate write-root SIDs own only their corresponding allow
+ACEs. Every update holds an exclusive `LockFileEx` range lock, writes
+and flushes the existing protected record, then validates its owner, DACL,
+schema, canonical ordering, SID namespace, and exact contents again. A missing,
+malformed, non-canonical, foreign-namespace, or unlocked record fails closed;
+setup never silently rotates a damaged record because existing ACLs may still
+refer to its authorities.
+
+Every persistent ACL mutation uses the same record as a write-ahead journal.
+Before `SetSecurityInfo`, Cageforge stores the canonical path, volume serial,
+128-bit file identity, complete DACL bytes and protection bit both before and
+after the intended mutation, together with the prior and next managed-object
+records. The journal is flushed before mutation and cleared only after the same
+handle reads back the exact after state. Recovery accepts exactly two outcomes:
+the object still matches `before`, so the prior record remains, or it matches
+`after`, so the next record is committed. A replaced object or any third DACL
+state is typed drift and fails closed; recovery never guesses which descriptor
+to restore and never overwrites an unrelated owner change.
+
+This is an intentional strengthening over the per-root capability identity in
+the frozen implementation recorded by [the upstream baseline](../UPSTREAM.md).
+Two concurrent requests that name the same writable root but have different
+deny, glob, protected-path, or read-only constraints receive different
+restricting SIDs, so reconciliation for one profile cannot remove or reuse the
+other profile's ACL boundary.
+
 `WindowsBackend::new` performs read-only setup verification. It does not launch
 UAC automatically. `WindowsSetup::install` may launch the signed sibling setup
 helper with `runas`; UAC cancellation and every helper stage remain distinct
@@ -114,6 +145,8 @@ Restricted launches use a primary token derived from the selected dedicated
 sandbox account. The token:
 
 - disables maximum privileges and applies the LUA restriction;
+- applies restricting-SID access checks to reads and writes rather than using
+  the upstream `WRITE_RESTRICTED` optimization;
 - retains only `SeChangeNotifyPrivilege` when Windows requires traversal;
 - includes only the capability SIDs required by this request;
 - includes one random network-route restricting SID when proxy routing is
@@ -178,11 +211,17 @@ The runner is initially created with `CREATE_SUSPENDED`. Before its first
 instruction executes, the parent reads the new token's unique logon SID, creates
 both named-pipe DACLs for exactly that logon SID rather than the shared account
 SID, and replaces the runner process and primary-thread DACLs with protected
-owner/Admin/SYSTEM descriptors. It then duplicates the assign-only Job handle
-and resumes the primary thread. Exact client-PID checks remain mandatory after
-connection. An older process using the same dedicated account therefore cannot
-race a pipe connection, open the new runner for injection, steal handles, or
-reuse another launch's authenticated channel.
+owner/Admin/SYSTEM descriptors. The parent creates each pipe with
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, rejects remote clients, and grants the runner
+only `FILE_READ_DATA` on the request pipe and `FILE_WRITE_DATA` on the response
+pipe. It intentionally does not grant `FILE_GENERIC_WRITE`, because that mask
+also contains `FILE_CREATE_PIPE_INSTANCE` for named pipes. Pipe owner and DACL
+are read back before the runner resumes. The parent then duplicates the
+assign-only Job handle and resumes the primary thread. Exact client-PID checks
+remain mandatory after connection. An older process using the same dedicated
+account therefore cannot race a pipe connection, create another instance, open
+the new runner for injection, steal handles, or reuse another launch's
+authenticated channel.
 
 Only the user command's explicit standard handles cross the second process
 boundary. The runner supplies those handles through the process handle-list
@@ -216,6 +255,38 @@ Windows filesystem enforcement combines:
 - persistent state reconciliation for ACEs that must survive descendants; and
 - reparse-point and final-handle validation before a path can participate in
   an ACL plan.
+
+A deny ACE for the profile-guard SID must not remain effective inside a
+more-specific writable carve-out. Windows evaluates a matching deny before an
+allow from another restricting SID, so a writable child cannot override an
+inherited deny by ACE ordering. A finite snapshot that makes the deny
+non-inheriting on ancestors is also insufficient: another concurrent sandbox
+could create a sibling after enumeration and before launch.
+
+The backend therefore keeps each deny and read-only ACE inheritable across its
+complete subtree and turns every nested writable root into a protected-DACL
+inheritance boundary. The protected DACL is built from the handle-read effective
+DACL, removes only the current profile-guard SID, converts retained inherited
+ACEs to explicit ACEs without changing their masks, and installs the writable
+group and write-root capability ACEs. New descendants then inherit from the
+protected writable root while new siblings outside it continue to inherit the
+deny. Unknown or malformed ACE forms, a failed protected-DACL read-back, or a
+descendant on which the effective deny did not propagate fails before launch.
+
+All capability-state and ACL reconciliation uses the same protected
+cross-process lock. A later profile may preserve another profile's capability
+ACEs but must never revoke or rewrite them as its own. Persistent state records
+every Cageforge-created protected inheritance boundary and the descriptor it
+replaced so uninstall or a future no-longer-needed reconciliation can restore
+host inheritance only after no active profile depends on the boundary.
+
+The filesystem profile digest is computed only after both mandatory lowering
+layers have been resolved, deny globs have been expanded, and every native path
+has passed final-handle validation. Its canonical input contains each final
+read root, write root, deny target, read-only target, protected target, and
+missing-path outcome. Declaration order and diagnostic spelling are not
+authority identity. A profile digest therefore cannot be reused when any
+effective native constraint differs.
 
 All path opens used for validation set the reparse-point and backup-semantics
 flags as appropriate. The backend compares normalized final paths obtained from
@@ -391,7 +462,7 @@ review includes:
 | `windows-sandbox-rs/src/process.rs` and `proc_thread_attr.rs` | `CreateProcessAsUserW`, explicit handles, atomic job assignment | Backend-owned child API and typed errors |
 | `windows-sandbox-rs/src/desktop.rs` | Private desktop for each launch | Private desktop is mandatory initially |
 | `windows-sandbox-rs/src/identity.rs`, `setup.rs`, and setup helper | Versioned users, protected credentials, ACL/firewall reconciliation | Upstream fixed account names become user-SID-scoped Cageforge identities; library does not silently launch weaker fallback |
-| `windows-sandbox-rs/src/acl.rs`, `deny_read_*`, `allow.rs`, and `audit.rs` | Capability ACEs, deny-read/write and persistent reconciliation | Handle-based reparse/TOCTOU validation; no time-bounded best-effort security scan |
+| `windows-sandbox-rs/src/acl.rs`, `deny_read_*`, `allow.rs`, and `audit.rs` | Capability ACEs, deny-read/write and persistent reconciliation | Handle-based reparse/TOCTOU validation; profile-scoped identities; protected-DACL writable boundaries preserve inheritable denies without deny/allow ordering or finite branch snapshots; no time-bounded best-effort security scan |
 | `windows-sandbox-rs/src/wfp.rs` and setup firewall module | Offline-account firewall and WFP filters | WFP failure is fatal and all configured policy is read back |
 | `network-proxy/src/windows_tcp_attribution.rs` and `windows_proxy_ingress.rs` | IPv4 four-tuple PID attribution and random restricting-SID routing | IPv4-only ingress is explicit and the route feeds the independent Cageforge gateway authentication contract |
 | `windows-sandbox-rs/src/elevated/*` and command runner | Dedicated-user helper transport and lifecycle | Versioned minimal protocol with no Codex command/profile types |
@@ -450,7 +521,7 @@ versions of `src/token.rs`, `src/token_tests.rs`, `src/process.rs`,
 
 The Cageforge boundary retains the dedicated-account runner, bounded framed
 transport, exact runner-PID pipe attribution, `CreateRestrictedToken` with
-maximum privileges disabled and LUA/write restrictions, capability and token-
+maximum privileges disabled and the LUA restriction, capability and token-
 user restricting SIDs, route SIDs excluded from the default object DACL,
 `SeChangeNotifyPrivilege` as the sole re-enabled privilege,
 `CreateProcessAsUserW`, an explicit handle list, a private desktop, atomic Job
@@ -461,7 +532,10 @@ Cageforge intentionally adds runner-side owner-PID and token verification,
 uses a protected owner manifest, forbids Job Object breakaway and descendant
 preservation, keeps private desktop mandatory, and returns stage-specific typed
 protocol, token, desktop, job, process, wait, and termination failures. It does
-not retain Codex permission profiles, command schemas, logging, credential
+not set `WRITE_RESTRICTED`: the full restricting set participates in read and
+write checks, which permits profile-scoped deny-read ACLs instead of the frozen
+implementation's shared sandbox-group deny-read state. It also does not retain
+Codex permission profiles, command schemas, logging, credential
 refresh fallback, ConPTY, filesystem-helper aliases, or cloned secret-bearing
 protocol requests.
 
@@ -482,3 +556,29 @@ its Windows object owner, and read-back verifies that owner together with the
 protected DACL. Matching only the ACE list is insufficient because a sandbox
 account that owns an attacker-created lookalike retains implicit DACL-control
 rights even if it writes visually equivalent ACEs.
+
+### 12.3 Filesystem ACL review record
+
+Filesystem lowering and ACL reconciliation were reviewed line by line against
+the frozen versions of `src/acl.rs`, `src/allow.rs`, `src/workspace_acl.rs`,
+`src/deny_read_acl.rs`, `src/deny_read_state.rs`, `src/deny_read_resolver.rs`,
+`src/spawn_prep.rs`, and the ACL portions of `src/bin/setup_main/win.rs` under
+`codex-rs/windows-sandbox-rs`.
+
+Cageforge retains separate normal-pass group grants and restricting-pass
+capability grants, a write-root mask that excludes `FILE_DELETE_CHILD`,
+inheritable deny-read and deny-write ACEs, durable capability identity, and
+read-back before launch. It intentionally replaces path-based
+`SetNamedSecurityInfoW` mutation with `GetSecurityInfo` and `SetSecurityInfo` on
+the same validated handle, rejects reparse-point and final-path changes, and
+uses profile-scoped guards rather than a machine-global deny-read principal.
+Writable descendants below a deny use protected-DACL inheritance boundaries;
+the frozen implementation instead materializes deny targets and relies on
+separate capability SIDs and ACL ordering without representing this nested
+composition as one transactional plan.
+
+Unlike the frozen deny-read state, which records only principal-to-path lists,
+Cageforge journals the complete before/after descriptor and stable file
+identity before every mutation. This closes the crash interval between state
+write and ACL application and makes a path replacement distinguishable from a
+recoverable interrupted operation.

@@ -9,9 +9,7 @@ use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, OPEN_EXISTING,
-};
+use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -23,6 +21,9 @@ use crate::runner_protocol::RunnerAccount;
 use crate::runner_resource_security::{
     RunnerResourceKind, RunnerResourceSecurityError, verify_runner_resource,
 };
+
+const FILE_READ_DATA: u32 = 0x0000_0001;
+const FILE_WRITE_DATA: u32 = 0x0000_0002;
 
 pub(super) struct InstalledRunnerIdentity {
     manifest: RunnerManifest,
@@ -185,8 +186,8 @@ pub(super) fn open_pipe(
         return Err(RunnerAuthenticationError::InvalidPipeName);
     }
     let access = match direction {
-        PipeDirection::Read => FILE_GENERIC_READ,
-        PipeDirection::Write => FILE_GENERIC_WRITE,
+        PipeDirection::Read => FILE_READ_DATA,
+        PipeDirection::Write => FILE_WRITE_DATA,
     };
     let wide = name
         .encode_utf16()

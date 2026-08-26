@@ -24,32 +24,32 @@ struct ProtectedCredentials {
     online_password: Vec<u8>,
 }
 
-pub(super) struct SandboxCredentials {
+pub(crate) struct SandboxCredentials {
     offline: AccountCredential,
     online: AccountCredential,
 }
 
-pub(super) struct AccountCredential {
+pub(crate) struct AccountCredential {
     name: String,
     password: Zeroizing<Vec<u16>>,
 }
 
 impl SandboxCredentials {
-    pub(super) const fn offline(&self) -> &AccountCredential {
+    pub(crate) const fn offline(&self) -> &AccountCredential {
         &self.offline
     }
 
-    pub(super) const fn online(&self) -> &AccountCredential {
+    pub(crate) const fn online(&self) -> &AccountCredential {
         &self.online
     }
 }
 
 impl AccountCredential {
-    pub(super) fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
-    pub(super) fn password_wide(&self) -> &[u16] {
+    pub(crate) fn password_wide(&self) -> &[u16] {
         &self.password
     }
 }

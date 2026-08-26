@@ -20,7 +20,7 @@ use windows_sys::Win32::Security::{
     SE_CHANGE_NOTIFY_NAME, SE_PRIVILEGE_ENABLED, SID_AND_ATTRIBUTES, SetTokenInformation,
     TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY,
     TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER,
-    TokenDefaultDacl, TokenPrivileges, TokenRestrictedSids, TokenUser, WRITE_RESTRICTED,
+    TokenDefaultDacl, TokenPrivileges, TokenRestrictedSids, TokenUser,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -294,7 +294,7 @@ fn create_restricted_token(
     if unsafe {
         CreateRestrictedToken(
             base,
-            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+            DISABLE_MAX_PRIVILEGE | LUA_TOKEN,
             0,
             std::ptr::null(),
             0,

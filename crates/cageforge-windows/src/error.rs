@@ -153,6 +153,23 @@ pub enum WindowsNetworkCombinationError {
 /// Read-back failure for one mandatory elevated setup component.
 #[derive(Debug, Error)]
 pub enum WindowsSetupVerificationError {
+    /// The protected capability-SID record could not be read.
+    #[error("failed to read protected Windows capability-SID state {path:?}: {source}")]
+    CapabilityStateRead {
+        /// Capability-SID state path.
+        path: PathBuf,
+        /// Filesystem failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The protected capability-SID record was malformed or internally inconsistent.
+    #[error("invalid protected Windows capability-SID state {path:?}: {detail}")]
+    CapabilityStateInvalid {
+        /// Capability-SID state path.
+        path: PathBuf,
+        /// Exact validation failure.
+        detail: String,
+    },
     /// The marker does not contain exactly two usable ingress ports.
     #[error("Windows setup marker has invalid proxy ingress ports: {ports:?}")]
     InvalidProxyPorts {

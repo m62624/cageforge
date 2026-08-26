@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use crate::error::WindowsSetupVerificationError;
 use crate::setup::WindowsSetupDetails;
 
-mod credentials;
+pub(crate) mod credentials;
 mod firewall;
-mod paths;
+pub(crate) mod paths;
 mod rights;
 mod runner;
 mod wfp;
@@ -23,6 +23,8 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     let state = details.state_directory();
     let bin_directory = state.join("bin");
     let credentials_path = state.join("credentials.json.dpapi");
+    let capability_state_path = state.join(crate::capability_state::CAPABILITY_STATE_NAME);
+    let capability_lock_path = state.join(crate::capability_state::CAPABILITY_LOCK_NAME);
     let setup_helper_path = bin_directory.join(SETUP_HELPER_NAME);
     let command_runner_path = bin_directory.join(COMMAND_RUNNER_NAME);
     let runner_manifest_path = bin_directory.join(crate::runner_manifest::RUNNER_MANIFEST_NAME);
@@ -33,12 +35,15 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
         details.accounts().group_sid(),
     )?;
     for path in [
+        &capability_state_path,
+        &capability_lock_path,
         &credentials_path,
         &setup_helper_path,
         &state.join("setup.json"),
     ] {
         paths::verify_protected_dacl(path, details.owner_sid(), false)?;
     }
+    verify_capability_state(state, details.owner_sid())?;
     paths::verify_runner_executable_dacl(
         &command_runner_path,
         details.owner_sid(),
@@ -66,6 +71,29 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     firewall::verify(details)?;
     wfp::verify(details)?;
     Ok(())
+}
+
+fn verify_capability_state(
+    state_directory: &Path,
+    owner_sid: &str,
+) -> Result<(), WindowsSetupVerificationError> {
+    crate::capability_store::CapabilityStateStore::new(state_directory, owner_sid)
+        .verify()
+        .map_err(
+            |error| WindowsSetupVerificationError::CapabilityStateInvalid {
+                path: state_directory.join(crate::capability_state::CAPABILITY_STATE_NAME),
+                detail: error.to_string(),
+            },
+        )
+}
+
+pub(crate) fn read_credentials(
+    details: &WindowsSetupDetails,
+) -> Result<credentials::SandboxCredentials, WindowsSetupVerificationError> {
+    credentials::read(
+        details,
+        &details.state_directory().join("credentials.json.dpapi"),
+    )
 }
 
 fn verify_ports(ports: &[u16]) -> Result<(), WindowsSetupVerificationError> {

@@ -55,6 +55,8 @@ pub enum SetupStage {
     Elevation,
     /// Protected state-directory creation.
     StateDirectory,
+    /// Persistent filesystem capability-SID state creation.
+    CapabilityState,
     /// Managed local-group provisioning.
     ManagedGroup,
     /// Offline account provisioning.
@@ -91,6 +93,18 @@ pub enum SetupFailureCode {
     DirectoryCreate,
     /// A state-directory DACL could not be applied or verified.
     DirectoryAcl,
+    /// Cryptographic capability-SID generation failed.
+    CapabilityStateRandom,
+    /// Existing capability-SID state could not be read.
+    CapabilityStateRead,
+    /// Existing capability-SID state could not be decoded or validated.
+    CapabilityStateDecode,
+    /// Capability-SID state could not be serialized.
+    CapabilityStateSerialize,
+    /// Capability-SID state could not be written durably.
+    CapabilityStateWrite,
+    /// Capability-SID state owner or DACL is ineffective.
+    CapabilityStateAcl,
     /// The managed local group could not be created.
     GroupCreate,
     /// A sandbox user could not be created.

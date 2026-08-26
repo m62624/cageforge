@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![cfg(target_os = "windows")]
+#![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
 use std::process::ExitCode;
 

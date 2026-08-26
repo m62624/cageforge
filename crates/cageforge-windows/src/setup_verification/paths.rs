@@ -66,7 +66,7 @@ impl Drop for LocalSid {
 }
 
 #[allow(unsafe_code)]
-pub(super) fn verify_protected_dacl(
+pub(crate) fn verify_protected_dacl(
     path: &Path,
     owner_sid: &str,
     inherit: bool,

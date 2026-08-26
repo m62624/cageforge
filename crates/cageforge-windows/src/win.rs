@@ -447,11 +447,11 @@ fn wide_ptr_to_string(value: *const u16) -> Option<String> {
     Some(value)
 }
 
-fn to_wide(value: &str) -> Vec<u16> {
+pub(crate) fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn quote_argument(value: &str) -> String {
+pub(crate) fn quote_argument(value: &str) -> String {
     let mut quoted = String::from('"');
     let mut backslashes = 0usize;
     for character in value.chars() {
