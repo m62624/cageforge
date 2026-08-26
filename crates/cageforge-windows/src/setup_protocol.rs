@@ -97,6 +97,12 @@ pub enum SetupFailureCode {
     UserCreate,
     /// An existing sandbox user could not be reconciled.
     UserUpdate,
+    /// A sandbox account is not classified as an ordinary local user.
+    UserNotRegular,
+    /// A sandbox account remained disabled after reconciliation.
+    UserDisabled,
+    /// A sandbox account remained locked after reconciliation.
+    UserLocked,
     /// Managed group membership could not be applied or verified.
     GroupMembership,
     /// Required LSA logon rights could not be applied or verified.

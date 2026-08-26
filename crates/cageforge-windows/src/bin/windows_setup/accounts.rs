@@ -13,8 +13,8 @@ use windows_sys::Win32::NetworkManagement::NetManagement::{
     MAX_PREFERRED_LENGTH, NERR_GroupExists, NERR_GroupNotFound, NERR_Success, NERR_UserExists,
     NERR_UserNotFound, NetApiBufferFree, NetLocalGroupAdd, NetLocalGroupAddMembers,
     NetLocalGroupDel, NetUserAdd, NetUserDel, NetUserGetInfo, NetUserGetLocalGroups,
-    NetUserSetInfo, UF_ACCOUNTDISABLE, UF_DONT_EXPIRE_PASSWD, UF_LOCKOUT, UF_SCRIPT, USER_INFO_1,
-    USER_INFO_1003, USER_INFO_1008, USER_PRIV_USER,
+    NetUserSetInfo, UF_ACCOUNTDISABLE, UF_DONT_EXPIRE_PASSWD, UF_LOCKOUT, UF_NORMAL_ACCOUNT,
+    UF_SCRIPT, USER_INFO_1, USER_INFO_1003, USER_INFO_1008, USER_PRIV_USER,
 };
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
@@ -120,13 +120,31 @@ fn verify_account(
     }
     let user_buffer = NetApiBuffer(user_buffer);
     let info = unsafe { &*user_buffer.0.cast::<USER_INFO_1>() };
-    if info.usri1_priv != USER_PRIV_USER || info.usri1_flags & (UF_ACCOUNTDISABLE | UF_LOCKOUT) != 0
-    {
+    if info.usri1_priv != USER_PRIV_USER {
         return Err(NativeSetupFailure::new(
             stage,
-            SetupFailureCode::UserUpdate,
+            SetupFailureCode::UserNotRegular,
             None,
-            format!("sandbox user {account:?} is disabled, locked, or not an ordinary user"),
+            format!(
+                "sandbox user {account:?} has privilege class {}, expected {USER_PRIV_USER}",
+                info.usri1_priv
+            ),
+        ));
+    }
+    if info.usri1_flags & UF_ACCOUNTDISABLE != 0 {
+        return Err(NativeSetupFailure::new(
+            stage,
+            SetupFailureCode::UserDisabled,
+            None,
+            format!("sandbox user {account:?} remains disabled"),
+        ));
+    }
+    if info.usri1_flags & UF_LOCKOUT != 0 {
+        return Err(NativeSetupFailure::new(
+            stage,
+            SetupFailureCode::UserLocked,
+            None,
+            format!("sandbox user {account:?} remains locked"),
         ));
     }
 
@@ -231,7 +249,7 @@ fn ensure_user(name: &str, password: &str, stage: SetupStage) -> NativeSetupResu
         usri1_priv: USER_PRIV_USER,
         usri1_home_dir: std::ptr::null_mut(),
         usri1_comment: std::ptr::null_mut(),
-        usri1_flags: UF_SCRIPT | UF_DONT_EXPIRE_PASSWD,
+        usri1_flags: UF_SCRIPT | UF_DONT_EXPIRE_PASSWD | UF_NORMAL_ACCOUNT,
         usri1_script_path: std::ptr::null_mut(),
     };
     let mut parameter_error = 0u32;
@@ -259,7 +277,7 @@ fn ensure_user(name: &str, password: &str, stage: SetupStage) -> NativeSetupResu
         set_user_info(name, &name_wide, 1003, &raw const password_info, stage)?;
     }
     let flags_info = USER_INFO_1008 {
-        usri1008_flags: UF_SCRIPT | UF_DONT_EXPIRE_PASSWD,
+        usri1008_flags: UF_SCRIPT | UF_DONT_EXPIRE_PASSWD | UF_NORMAL_ACCOUNT,
     };
     set_user_info(name, &name_wide, 1008, &raw const flags_info, stage)
 }
