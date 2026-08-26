@@ -17,11 +17,11 @@ use windows_sys::Win32::Security::Authorization::{
     SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce,
-    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, INHERIT_ONLY_ACE,
-    IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY,
-    TokenElevation,
+    ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
+    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+    INHERIT_ONLY_ACE, IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_ALWAYS, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
@@ -37,6 +37,8 @@ use super::{NativeSetupFailure, NativeSetupResult};
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 struct LocalWideString(*mut u16);
+
+struct LocalSid(*mut c_void);
 
 enum ProtectedDescriptor<'a> {
     OwnerOnly { inherit: bool },
@@ -58,6 +60,17 @@ impl Drop for LocalSecurityDescriptor {
 
 #[allow(unsafe_code)]
 impl Drop for LocalWideString {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                LocalFree(self.0 as HLOCAL);
+            }
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for LocalSid {
     fn drop(&mut self) {
         if !self.0.is_null() {
             unsafe {
@@ -285,6 +298,7 @@ fn create_file_with_descriptor(
         ));
     }
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
+    apply_descriptor(path, &descriptor)?;
     verify_file_descriptor(path, &file, owner_sid, descriptor_kind)?;
     Ok(file)
 }
@@ -298,15 +312,19 @@ fn security_descriptor(
         ProtectedDescriptor::OwnerOnly { inherit } => {
             let inheritance = if *inherit { "OICI" } else { "" };
             format!(
-                "D:P(A;{inheritance};GA;;;SY)(A;{inheritance};GA;;;BA)(A;{inheritance};GA;;;{owner_sid})"
+                "O:{owner_sid}D:P(A;{inheritance};GA;;;SY)(A;{inheritance};GA;;;BA)(A;{inheritance};GA;;;{owner_sid})"
             )
         }
         ProtectedDescriptor::RunnerDirectory { group_sid }
         | ProtectedDescriptor::RunnerExecutable { group_sid } => {
-            format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;GRGX;;;{group_sid})")
+            format!(
+                "O:{owner_sid}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;GRGX;;;{group_sid})"
+            )
         }
         ProtectedDescriptor::RunnerManifest { group_sid } => {
-            format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;GR;;;{group_sid})")
+            format!(
+                "O:{owner_sid}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;GR;;;{group_sid})"
+            )
         }
     };
     let sddl_wide = wide(&sddl);
@@ -331,6 +349,17 @@ fn security_descriptor(
 
 #[allow(unsafe_code)]
 fn apply_descriptor(path: &Path, descriptor: &LocalSecurityDescriptor) -> NativeSetupResult<()> {
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    if unsafe { GetSecurityDescriptorOwner(descriptor.0, &mut owner, &mut owner_defaulted) } == 0
+        || owner.is_null()
+    {
+        return Err(last_error(
+            SetupStage::StateDirectory,
+            SetupFailureCode::DirectoryAcl,
+            "failed to extract the protected setup owner",
+        ));
+    }
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl = std::ptr::null_mut();
@@ -350,8 +379,10 @@ fn apply_descriptor(path: &Path, descriptor: &LocalSecurityDescriptor) -> Native
         windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW(
             path_wide.as_ptr().cast_mut(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            owner,
             std::ptr::null_mut(),
             dacl,
             std::ptr::null(),
@@ -380,7 +411,7 @@ fn verify_descriptor(
         GetNamedSecurityInfoW(
             path_wide.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -416,7 +447,7 @@ fn verify_file_descriptor(
         GetSecurityInfo(
             file.as_raw_handle() as _,
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -452,7 +483,7 @@ fn verify_descriptor_value(
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
             descriptor.0,
             SDDL_REVISION_1,
-            DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &mut value,
             std::ptr::null_mut(),
         )
@@ -466,7 +497,7 @@ fn verify_descriptor_value(
     }
     let value = LocalWideString(value);
     let actual = wide_pointer_to_string(value.0);
-    if !protected_dacl_matches(descriptor.0, owner_sid, descriptor_kind) {
+    if !protected_descriptor_matches(descriptor.0, owner_sid, descriptor_kind) {
         return Err(NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::DirectoryAcl,
@@ -478,12 +509,26 @@ fn verify_descriptor_value(
 }
 
 #[allow(unsafe_code)]
-fn protected_dacl_matches(
+fn protected_descriptor_matches(
     descriptor: PSECURITY_DESCRIPTOR,
     owner_sid: &str,
     descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> bool {
     if unsafe { IsValidSecurityDescriptor(descriptor) } == 0 {
+        return false;
+    }
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    if unsafe { GetSecurityDescriptorOwner(descriptor, &mut owner, &mut owner_defaulted) } == 0
+        || owner.is_null()
+        || unsafe { IsValidSid(owner) } == 0
+    {
+        return false;
+    }
+    let Some(expected_owner) = local_sid(owner_sid) else {
+        return false;
+    };
+    if unsafe { EqualSid(owner, expected_owner.0) } == 0 {
         return false;
     }
     let mut control = 0u16;
@@ -559,6 +604,23 @@ fn protected_dacl_matches(
     actual_aces.sort_unstable();
     expected_aces.sort_unstable();
     actual_aces == expected_aces
+}
+
+#[allow(unsafe_code)]
+fn local_sid(sid: &str) -> Option<LocalSid> {
+    let value = wide(sid);
+    let mut parsed = std::ptr::null_mut();
+    if unsafe {
+        windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW(
+            value.as_ptr(),
+            &mut parsed,
+        )
+    } == 0
+    {
+        None
+    } else {
+        Some(LocalSid(parsed))
+    }
 }
 
 #[allow(unsafe_code)]

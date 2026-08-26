@@ -431,3 +431,9 @@ fields is read back before setup is accepted. The runner obtains the manifest
 only from the protected directory containing its own verified executable, so a
 copied binary and attacker-selected manifest cannot establish a trusted
 endpoint.
+
+Each protected setup directory and file also has the real setup owner SID as
+its Windows object owner, and read-back verifies that owner together with the
+protected DACL. Matching only the ACE list is insufficient because a sandbox
+account that owns an attacker-created lookalike retains implicit DACL-control
+rights even if it writes visually equivalent ACEs.

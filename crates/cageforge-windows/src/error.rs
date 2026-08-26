@@ -193,12 +193,12 @@ pub enum WindowsSetupVerificationError {
         /// Native Win32 code.
         code: u32,
     },
-    /// A protected setup path does not have the required owner/Admin/SYSTEM DACL.
-    #[error("protected Windows setup DACL mismatch at {path:?}: {actual}")]
-    ProtectedAclMismatch {
+    /// A protected setup path has the wrong object owner or effective DACL.
+    #[error("protected Windows setup security descriptor mismatch at {path:?}: {actual}")]
+    ProtectedSecurityDescriptorMismatch {
         /// State, credential, marker, or helper path.
         path: PathBuf,
-        /// Read-back SDDL.
+        /// Read-back owner and DACL SDDL.
         actual: String,
     },
     /// The protected credential record could not be read.

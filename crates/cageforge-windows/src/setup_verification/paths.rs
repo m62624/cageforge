@@ -7,13 +7,13 @@ use std::ffi::c_void;
 use windows_sys::Win32::Foundation::{GENERIC_ALL, GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-    GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
+    ConvertStringSidToSidW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce,
-    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, INHERIT_ONLY_ACE,
-    IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, PSECURITY_DESCRIPTOR,
-    SE_DACL_PROTECTED,
+    ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
+    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+    INHERIT_ONLY_ACE, IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
@@ -24,6 +24,8 @@ use crate::error::WindowsSetupVerificationError;
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 struct LocalWideString(*mut u16);
+
+struct LocalSid(*mut c_void);
 
 enum ProtectedDescriptor<'a> {
     OwnerOnly { inherit: bool },
@@ -45,6 +47,17 @@ impl Drop for LocalSecurityDescriptor {
 
 #[allow(unsafe_code)]
 impl Drop for LocalWideString {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                LocalFree(self.0 as HLOCAL);
+            }
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for LocalSid {
     fn drop(&mut self) {
         if !self.0.is_null() {
             unsafe {
@@ -117,7 +130,7 @@ fn verify_dacl(
         GetNamedSecurityInfoW(
             path_wide.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -137,7 +150,7 @@ fn verify_dacl(
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
             descriptor.0,
             SDDL_REVISION_1,
-            DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &mut value,
             std::ptr::null_mut(),
         )
@@ -150,23 +163,39 @@ fn verify_dacl(
     }
     let value = LocalWideString(value);
     let actual = wide_pointer_to_string(value.0);
-    if protected_dacl_matches(descriptor.0, owner_sid, descriptor_kind) {
+    if protected_descriptor_matches(descriptor.0, owner_sid, descriptor_kind) {
         Ok(())
     } else {
-        Err(WindowsSetupVerificationError::ProtectedAclMismatch {
-            path: path.to_path_buf(),
-            actual,
-        })
+        Err(
+            WindowsSetupVerificationError::ProtectedSecurityDescriptorMismatch {
+                path: path.to_path_buf(),
+                actual,
+            },
+        )
     }
 }
 
 #[allow(unsafe_code)]
-fn protected_dacl_matches(
+fn protected_descriptor_matches(
     descriptor: PSECURITY_DESCRIPTOR,
     owner_sid: &str,
     descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> bool {
     if unsafe { IsValidSecurityDescriptor(descriptor) } == 0 {
+        return false;
+    }
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    if unsafe { GetSecurityDescriptorOwner(descriptor, &mut owner, &mut owner_defaulted) } == 0
+        || owner.is_null()
+        || unsafe { IsValidSid(owner) } == 0
+    {
+        return false;
+    }
+    let Some(expected_owner) = local_sid(owner_sid) else {
+        return false;
+    };
+    if unsafe { EqualSid(owner, expected_owner.0) } == 0 {
         return false;
     }
     let mut control = 0u16;
@@ -242,6 +271,20 @@ fn protected_dacl_matches(
     actual_aces.sort_unstable();
     expected_aces.sort_unstable();
     actual_aces == expected_aces
+}
+
+#[allow(unsafe_code)]
+fn local_sid(sid: &str) -> Option<LocalSid> {
+    let value = sid
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut parsed = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(value.as_ptr(), &mut parsed) } == 0 {
+        None
+    } else {
+        Some(LocalSid(parsed))
+    }
 }
 
 #[allow(unsafe_code)]
