@@ -424,7 +424,7 @@ impl WindowsSetup {
                 .join(STATE_COMPONENT),
             WindowsStateDirectorySource::Explicit(path) => path.clone(),
         };
-        Ok(base.join(owner_key(owner_sid)))
+        Ok(base.join(crate::account_identity::owner_key(owner_sid)))
     }
 
     fn resolve_setup_helper(&self) -> Result<PathBuf, WindowsSetupError> {
@@ -472,20 +472,15 @@ impl SetupMarker {
 }
 
 fn account_names(owner_sid: &str) -> WindowsSandboxAccounts {
-    let key = owner_key(owner_sid);
+    let names = crate::account_identity::ManagedAccountNames::for_owner(owner_sid);
     WindowsSandboxAccounts {
-        offline_name: format!("CgfOff_{}", &key[..12]),
+        offline_name: names.offline,
         offline_sid: String::new(),
-        online_name: format!("CgfOn_{}", &key[..12]),
+        online_name: names.online,
         online_sid: String::new(),
-        group_name: format!("CgfGrp_{}", &key[..12]),
+        group_name: names.group,
         group_sid: String::new(),
     }
-}
-
-fn owner_key(owner_sid: &str) -> String {
-    let digest = Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn verify_accounts(details: &WindowsSetupDetails) -> Result<(), WindowsSetupError> {

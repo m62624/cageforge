@@ -37,14 +37,29 @@ pub(super) fn verify(
     )?;
     verify_field("owner_sid", details.owner_sid(), &manifest.owner_sid)?;
     verify_field(
+        "group_name",
+        details.accounts().group_name(),
+        &manifest.group_name,
+    )?;
+    verify_field(
         "group_sid",
         details.accounts().group_sid(),
         &manifest.group_sid,
     )?;
     verify_field(
+        "offline_name",
+        details.accounts().offline_name(),
+        &manifest.offline_name,
+    )?;
+    verify_field(
         "offline_sid",
         details.accounts().offline_sid(),
         &manifest.offline_sid,
+    )?;
+    verify_field(
+        "online_name",
+        details.accounts().online_name(),
+        &manifest.online_name,
     )?;
     verify_field(
         "online_sid",

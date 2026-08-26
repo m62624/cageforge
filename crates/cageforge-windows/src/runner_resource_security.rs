@@ -1,25 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::Path;
+//! Exact installed-resource owner and DACL verification shared with the runner.
 
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::Foundation::{GENERIC_ALL, GetLastError, HLOCAL, LocalFree};
+use thiserror::Error;
+use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSidToSidW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
-    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-    INHERIT_ONLY_ACE, IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
+    ACCESS_ALLOWED_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetSecurityDescriptorControl,
+    GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidSecurityDescriptor, IsValidSid,
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
-use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
-use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
+};
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
-use crate::error::WindowsSetupVerificationError;
+pub(crate) enum RunnerResourceKind {
+    Executable,
+    Manifest,
+}
+
+pub(crate) struct ResourceSecuritySnapshot {
+    pub(crate) path: PathBuf,
+    pub(crate) descriptor: String,
+}
 
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
@@ -27,9 +37,12 @@ struct LocalWideString(*mut u16);
 
 struct LocalSid(*mut c_void);
 
-enum ProtectedDescriptor<'a> {
-    OwnerOnly { inherit: bool },
-    RunnerDirectory { group_sid: &'a str },
+#[derive(Debug, Error)]
+pub(crate) enum RunnerResourceSecurityError {
+    #[error("failed to read Windows security descriptor for {path:?}: error {code}")]
+    Read { path: PathBuf, code: u32 },
+    #[error("protected Windows security descriptor mismatch for {path:?}: {descriptor}")]
+    Mismatch { path: PathBuf, descriptor: String },
 }
 
 #[allow(unsafe_code)]
@@ -66,79 +79,12 @@ impl Drop for LocalSid {
 }
 
 #[allow(unsafe_code)]
-pub(super) fn verify_protected_dacl(
-    path: &Path,
-    owner_sid: &str,
-    inherit: bool,
-) -> Result<(), WindowsSetupVerificationError> {
-    verify_dacl(path, owner_sid, &ProtectedDescriptor::OwnerOnly { inherit })
-}
-
-pub(super) fn verify_runner_directory_dacl(
+pub(crate) fn verify_runner_resource(
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
-) -> Result<(), WindowsSetupVerificationError> {
-    verify_dacl(
-        path,
-        owner_sid,
-        &ProtectedDescriptor::RunnerDirectory { group_sid },
-    )
-}
-
-pub(super) fn verify_runner_executable_dacl(
-    path: &Path,
-    owner_sid: &str,
-    group_sid: &str,
-) -> Result<(), WindowsSetupVerificationError> {
-    verify_shared_runner_resource(
-        path,
-        owner_sid,
-        group_sid,
-        crate::runner_resource_security::RunnerResourceKind::Executable,
-    )
-}
-
-pub(super) fn verify_runner_manifest_dacl(
-    path: &Path,
-    owner_sid: &str,
-    group_sid: &str,
-) -> Result<(), WindowsSetupVerificationError> {
-    verify_shared_runner_resource(
-        path,
-        owner_sid,
-        group_sid,
-        crate::runner_resource_security::RunnerResourceKind::Manifest,
-    )
-}
-
-fn verify_shared_runner_resource(
-    path: &Path,
-    owner_sid: &str,
-    group_sid: &str,
-    kind: crate::runner_resource_security::RunnerResourceKind,
-) -> Result<(), WindowsSetupVerificationError> {
-    crate::runner_resource_security::verify_runner_resource(path, owner_sid, group_sid, kind)
-        .map_err(|error| match error {
-            crate::runner_resource_security::RunnerResourceSecurityError::Read { path, code } => {
-                WindowsSetupVerificationError::ProtectedAclRead { path, code }
-            }
-            crate::runner_resource_security::RunnerResourceSecurityError::Mismatch {
-                path,
-                descriptor,
-            } => WindowsSetupVerificationError::ProtectedSecurityDescriptorMismatch {
-                path,
-                actual: descriptor,
-            },
-        })
-}
-
-#[allow(unsafe_code)]
-fn verify_dacl(
-    path: &Path,
-    owner_sid: &str,
-    descriptor_kind: &ProtectedDescriptor<'_>,
-) -> Result<(), WindowsSetupVerificationError> {
+    kind: RunnerResourceKind,
+) -> Result<(), RunnerResourceSecurityError> {
     use std::os::windows::ffi::OsStrExt;
 
     let path_wide = path
@@ -146,7 +92,7 @@ fn verify_dacl(
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
     let status = unsafe {
         GetNamedSecurityInfoW(
             path_wide.as_ptr(),
@@ -160,16 +106,32 @@ fn verify_dacl(
         )
     };
     if status != 0 {
-        return Err(WindowsSetupVerificationError::ProtectedAclRead {
+        return Err(RunnerResourceSecurityError::Read {
             path: path.to_path_buf(),
             code: status,
         });
     }
     let descriptor = LocalSecurityDescriptor(descriptor);
+    let snapshot = descriptor_snapshot(path, descriptor.0)?;
+    if descriptor_matches(descriptor.0, owner_sid, group_sid, kind) {
+        Ok(())
+    } else {
+        Err(RunnerResourceSecurityError::Mismatch {
+            path: snapshot.path,
+            descriptor: snapshot.descriptor,
+        })
+    }
+}
+
+#[allow(unsafe_code)]
+fn descriptor_snapshot(
+    path: &Path,
+    descriptor: PSECURITY_DESCRIPTOR,
+) -> Result<ResourceSecuritySnapshot, RunnerResourceSecurityError> {
     let mut value = std::ptr::null_mut();
     if unsafe {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            descriptor.0,
+            descriptor,
             SDDL_REVISION_1,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &mut value,
@@ -177,30 +139,24 @@ fn verify_dacl(
         )
     } == 0
     {
-        return Err(WindowsSetupVerificationError::ProtectedAclRead {
+        return Err(RunnerResourceSecurityError::Read {
             path: path.to_path_buf(),
             code: unsafe { GetLastError() },
         });
     }
     let value = LocalWideString(value);
-    let actual = wide_pointer_to_string(value.0);
-    if protected_descriptor_matches(descriptor.0, owner_sid, descriptor_kind) {
-        Ok(())
-    } else {
-        Err(
-            WindowsSetupVerificationError::ProtectedSecurityDescriptorMismatch {
-                path: path.to_path_buf(),
-                actual,
-            },
-        )
-    }
+    Ok(ResourceSecuritySnapshot {
+        path: path.to_path_buf(),
+        descriptor: wide_pointer_to_string(value.0),
+    })
 }
 
 #[allow(unsafe_code)]
-fn protected_descriptor_matches(
+fn descriptor_matches(
     descriptor: PSECURITY_DESCRIPTOR,
     owner_sid: &str,
-    descriptor_kind: &ProtectedDescriptor<'_>,
+    group_sid: &str,
+    kind: RunnerResourceKind,
 ) -> bool {
     if unsafe { IsValidSecurityDescriptor(descriptor) } == 0 {
         return false;
@@ -236,39 +192,28 @@ fn protected_descriptor_matches(
     {
         return false;
     }
-    let principals = ["S-1-5-18", "S-1-5-32-544", owner_sid];
-    let mut expected_aces = principals
-        .iter()
-        .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
-        .collect::<Vec<_>>();
-    match descriptor_kind {
-        ProtectedDescriptor::OwnerOnly { inherit: true } => {
-            let inherited_flags =
-                (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
-            expected_aces.extend(
-                principals
-                    .iter()
-                    .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
-            );
-        }
-        ProtectedDescriptor::OwnerOnly { inherit: false } => {}
-        ProtectedDescriptor::RunnerDirectory { group_sid } => expected_aces.push((
-            (*group_sid).to_string(),
-            0,
-            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-        )),
-    }
-    if unsafe { (*dacl).AceCount } as usize != expected_aces.len() {
+    let group_mask = match kind {
+        RunnerResourceKind::Executable => FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        RunnerResourceKind::Manifest => FILE_GENERIC_READ,
+    };
+    let mut expected = [
+        ("S-1-5-18".to_string(), FILE_ALL_ACCESS),
+        ("S-1-5-32-544".to_string(), FILE_ALL_ACCESS),
+        (owner_sid.to_string(), FILE_ALL_ACCESS),
+        (group_sid.to_string(), group_mask),
+    ];
+    if unsafe { (*dacl).AceCount } as usize != expected.len() {
         return false;
     }
-    let mut actual_aces = Vec::with_capacity(expected_aces.len());
-    for index in 0..expected_aces.len() {
+    let mut actual = Vec::with_capacity(expected.len());
+    for index in 0..expected.len() {
         let mut raw_ace = std::ptr::null_mut();
         if unsafe { GetAce(dacl, index as u32, &mut raw_ace) } == 0 || raw_ace.is_null() {
             return false;
         }
         let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
         if unsafe { (*ace).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
+            || unsafe { (*ace).Header.AceFlags } != 0
             || (unsafe { (*ace).Header.AceSize } as usize)
                 < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
         {
@@ -281,13 +226,11 @@ fn protected_descriptor_matches(
         let Some(sid) = sid_string(sid) else {
             return false;
         };
-        actual_aces.push((sid, unsafe { (*ace).Header.AceFlags }, unsafe {
-            (*ace).Mask
-        }));
+        actual.push((sid, unsafe { (*ace).Mask }));
     }
-    actual_aces.sort_unstable();
-    expected_aces.sort_unstable();
-    actual_aces == expected_aces
+    actual.sort_unstable();
+    expected.sort_unstable();
+    actual == expected
 }
 
 #[allow(unsafe_code)]

@@ -154,8 +154,11 @@ fn write_runner_manifest(
     let manifest = RunnerManifest {
         version: RUNNER_MANIFEST_VERSION,
         owner_sid: request.owner_sid.clone(),
+        group_name: accounts.group_name.clone(),
         group_sid: accounts.group_sid.clone(),
+        offline_name: accounts.offline_name.clone(),
         offline_sid: accounts.offline_sid.clone(),
+        online_name: accounts.online_name.clone(),
         online_sid: accounts.online_sid.clone(),
         command_runner_sha256: request.command_runner_sha256.clone(),
     };

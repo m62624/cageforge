@@ -12,10 +12,12 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
+mod account_identity;
 mod config;
 mod error;
 mod firewall_contract;
 mod runner_manifest;
+mod runner_resource_security;
 mod setup;
 mod setup_protocol;
 mod setup_state;

@@ -4,9 +4,16 @@
 
 use std::process::ExitCode;
 
+#[path = "../account_identity.rs"]
+mod account_identity;
+#[path = "../runner_manifest.rs"]
+mod runner_manifest;
+#[path = "../runner_protocol.rs"]
+mod runner_protocol;
+#[path = "../runner_resource_security.rs"]
+mod runner_resource_security;
+mod windows_runner;
+
 fn main() -> ExitCode {
-    eprintln!(
-        "cageforge-windows-command-runner: direct invocation is forbidden; an authenticated inherited setup channel is required"
-    );
-    ExitCode::from(125)
+    windows_runner::run()
 }

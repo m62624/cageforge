@@ -126,23 +126,53 @@ Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Cageforge does not
 enable breakaway. If Windows cannot apply the job-list process attribute, the
 spawn fails before the primary thread runs.
 
+The parent creates and retains that fresh Job Object before launching the
+runner. Only after the runner process is created suspended does the parent
+duplicate a handle granting only `JOB_OBJECT_ASSIGN_PROCESS` into that exact
+process; no pre-existing parent handle is exposed. The runner uses the limited
+copy only for `PROC_THREAD_ATTRIBUTE_JOB_LIST` and closes it after child
+creation. `WindowsChild` retains the original handle with termination rights and
+can therefore kill the complete user-command tree without trusting a control
+response from the runner.
+
 The process starts on a private desktop by default. Disabling private-desktop
 is not part of the first public API because it would weaken the declared
-boundary. The desktop, token, process, thread, pipe, and job handles use owned
-RAII wrappers and are never inherited unless explicitly present in the process
-handle list.
+boundary. After learning the runner's unique logon SID, the trusted parent
+creates and retains the desktop, gives that SID only the access required to
+start and use the child, and verifies the protected owner/Admin/SYSTEM/logon-SID
+descriptor before resuming the runner. The runner receives only the desktop
+name. A desktop created by the sandbox account would be unsafe because another
+logon of the same file owner retains implicit descriptor-control rights. The
+desktop, token, process, thread, pipe, and job handles use owned RAII wrappers
+and are never inherited unless explicitly present in the process handle list.
 
 The parent launches the command runner with `CreateProcessWithLogonW`, which
 does not provide a safe inherited-handle request channel. The runner therefore
 receives a versioned authenticated request over one random private named-pipe
 pair. Both directions are identity-bound: the parent verifies that both pipe
 clients have the exact PID returned for the launched runner, while the runner
-verifies that both pipe servers have the same PID and that this process token
-belongs to the setup owner recorded in a protected runner manifest. The staged
-runner and manifest are readable and executable, but not writable, by the
-managed sandbox group. A direct invocation under a sandbox account therefore
-cannot manufacture an authenticated owner endpoint or acquire the backend's
+verifies that both pipe servers have the same PID and that the server process
+`TokenUser` is the setup owner recorded in a protected runner manifest. The
+runner also verifies the exact owner and DACL of its own executable and
+manifest, its executable digest, its own `TokenUser` against the selected
+manifest account SID, and the deterministic relation between that account name
+and the setup-owner SID. No one check is treated as a root of trust by itself.
+The staged runner and manifest are readable and executable, but not writable,
+by the managed sandbox group. A copied runner with a forged adjacent manifest
+can imitate file contents, but it cannot simultaneously run as the provisioned
+owner-derived sandbox identity and authenticate a pipe server whose token is
+the real setup owner. Direct invocation therefore cannot acquire the backend's
 prepared state.
+
+The runner is initially created with `CREATE_SUSPENDED`. Before its first
+instruction executes, the parent reads the new token's unique logon SID, creates
+both named-pipe DACLs for exactly that logon SID rather than the shared account
+SID, and replaces the runner process and primary-thread DACLs with protected
+owner/Admin/SYSTEM descriptors. It then duplicates the assign-only Job handle
+and resumes the primary thread. Exact client-PID checks remain mandatory after
+connection. An older process using the same dedicated account therefore cannot
+race a pipe connection, open the new runner for injection, steal handles, or
+reuse another launch's authenticated channel.
 
 Only the user command's explicit standard handles cross the second process
 boundary. The runner supplies those handles through the process handle-list
