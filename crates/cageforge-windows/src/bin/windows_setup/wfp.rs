@@ -246,21 +246,35 @@ pub(super) fn install_and_verify(
     offline_account: &str,
     offline_sid: &str,
 ) -> NativeSetupResult<String> {
+    trace_wfp("opening engine");
     let engine = Engine::open()?;
+    trace_wfp("beginning transaction");
     let mut transaction = engine.begin_transaction()?;
+    trace_wfp("ensuring provider");
     ensure_provider(&engine)?;
+    trace_wfp("ensuring sublayer");
     ensure_sublayer(&engine)?;
+    trace_wfp("building user condition");
     let user = UserCondition::new(offline_account)?;
     let specs = filter_specs(owner_sid);
     for spec in &specs {
+        trace_wfp(&format!("installing filter {}", spec.name));
         replace_filter(&engine, spec, &user)?;
     }
+    trace_wfp("committing transaction");
     transaction.commit()?;
+    trace_wfp("verifying provider");
     verify_provider(&engine)?;
+    trace_wfp("verified provider");
+    trace_wfp("verifying sublayer");
     verify_sublayer(&engine)?;
+    trace_wfp("verified sublayer");
     for spec in &specs {
+        trace_wfp(&format!("verifying filter {}", spec.name));
         verify_filter(&engine, spec, offline_sid)?;
+        trace_wfp(&format!("verified filter {}", spec.name));
     }
+    trace_wfp("verification complete");
     Ok(guid_string(PROVIDER_KEY))
 }
 
@@ -749,6 +763,12 @@ fn wfp_mismatch(component: &str) -> NativeSetupFailure {
         None,
         format!("WFP {component} failed complete read-back verification"),
     )
+}
+
+fn trace_wfp(detail: &str) {
+    if std::env::var_os("CAGEFORGE_WINDOWS_SETUP_TRACE").is_some() {
+        eprintln!("cageforge-windows-setup: WFP {detail}");
+    }
 }
 
 fn empty_blob() -> FWP_BYTE_BLOB {

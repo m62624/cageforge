@@ -357,6 +357,8 @@ jobs:
           cargo clippy -p cageforge-windows --all-targets --features bundled-helpers -- -D warnings
           cargo clippy -p cageforge-windows --all-targets --all-features -- -D warnings
       - name: Test Windows backend in every feature mode
+        env:
+          CAGEFORGE_WINDOWS_SETUP_TRACE: "1"
         run: |
           set -euo pipefail
           cargo test -p cageforge-windows --no-default-features
