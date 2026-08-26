@@ -249,6 +249,36 @@ pub enum WindowsSetupVerificationError {
         #[source]
         source: io::Error,
     },
+    /// The protected command-runner manifest could not be read.
+    #[error("failed to read protected Windows command-runner manifest {path:?}: {source}")]
+    RunnerManifestRead {
+        /// Manifest path.
+        path: PathBuf,
+        /// Filesystem failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The protected command-runner manifest could not be decoded.
+    #[error("failed to decode protected Windows command-runner manifest {path:?}: {source}")]
+    RunnerManifestDecode {
+        /// Manifest path.
+        path: PathBuf,
+        /// JSON failure.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// One protected command-runner manifest field differs from setup state.
+    #[error(
+        "Windows command-runner manifest field {field:?} mismatch: expected {expected:?}, found {actual:?}"
+    )]
+    RunnerManifestFieldMismatch {
+        /// Stable manifest field name.
+        field: &'static str,
+        /// Value committed by the setup contract.
+        expected: String,
+        /// Value read from the manifest.
+        actual: String,
+    },
     /// Windows Firewall COM initialization failed.
     #[error("failed to initialize COM for Windows Firewall read-back: HRESULT {code:#x}")]
     FirewallComInitialization {
@@ -430,7 +460,7 @@ pub enum WindowsSetupError {
         path: PathBuf,
         /// Native helper process exit code, including NTSTATUS-style crash values.
         exit_code: u32,
-        /// Last native setup checkpoint durably recorded by the helper.
+        /// Last native setup checkpoint recorded by the helper.
         last_checkpoint: Option<String>,
         /// Filesystem error proving that the response is absent.
         #[source]

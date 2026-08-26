@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const SETUP_STATE_VERSION: u32 = 2;
+pub(crate) const SETUP_STATE_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SetupMarker {
@@ -16,6 +16,8 @@ pub(crate) struct SetupMarker {
     pub(crate) wfp_provider_id: String,
     pub(crate) setup_helper_sha256: String,
     pub(crate) command_runner_sha256: String,
+    #[serde(default)]
+    pub(crate) runner_manifest_sha256: String,
     pub(crate) credential_sha256: String,
 }
 

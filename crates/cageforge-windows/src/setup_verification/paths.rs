@@ -16,6 +16,7 @@ use windows_sys::Win32::Security::{
     SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
 use crate::error::WindowsSetupVerificationError;
@@ -23,6 +24,13 @@ use crate::error::WindowsSetupVerificationError;
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 struct LocalWideString(*mut u16);
+
+enum ProtectedDescriptor<'a> {
+    OwnerOnly { inherit: bool },
+    RunnerDirectory { group_sid: &'a str },
+    RunnerExecutable { group_sid: &'a str },
+    RunnerManifest { group_sid: &'a str },
+}
 
 #[allow(unsafe_code)]
 impl Drop for LocalSecurityDescriptor {
@@ -51,6 +59,51 @@ pub(super) fn verify_protected_dacl(
     path: &Path,
     owner_sid: &str,
     inherit: bool,
+) -> Result<(), WindowsSetupVerificationError> {
+    verify_dacl(path, owner_sid, &ProtectedDescriptor::OwnerOnly { inherit })
+}
+
+pub(super) fn verify_runner_directory_dacl(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+) -> Result<(), WindowsSetupVerificationError> {
+    verify_dacl(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::RunnerDirectory { group_sid },
+    )
+}
+
+pub(super) fn verify_runner_executable_dacl(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+) -> Result<(), WindowsSetupVerificationError> {
+    verify_dacl(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::RunnerExecutable { group_sid },
+    )
+}
+
+pub(super) fn verify_runner_manifest_dacl(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+) -> Result<(), WindowsSetupVerificationError> {
+    verify_dacl(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::RunnerManifest { group_sid },
+    )
+}
+
+#[allow(unsafe_code)]
+fn verify_dacl(
+    path: &Path,
+    owner_sid: &str,
+    descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> Result<(), WindowsSetupVerificationError> {
     use std::os::windows::ffi::OsStrExt;
 
@@ -97,7 +150,7 @@ pub(super) fn verify_protected_dacl(
     }
     let value = LocalWideString(value);
     let actual = wide_pointer_to_string(value.0);
-    if protected_dacl_matches(descriptor.0, owner_sid, inherit) {
+    if protected_dacl_matches(descriptor.0, owner_sid, descriptor_kind) {
         Ok(())
     } else {
         Err(WindowsSetupVerificationError::ProtectedAclMismatch {
@@ -111,7 +164,7 @@ pub(super) fn verify_protected_dacl(
 fn protected_dacl_matches(
     descriptor: PSECURITY_DESCRIPTOR,
     owner_sid: &str,
-    inherit: bool,
+    descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> bool {
     if unsafe { IsValidSecurityDescriptor(descriptor) } == 0 {
         return false;
@@ -133,18 +186,31 @@ fn protected_dacl_matches(
     {
         return false;
     }
-    let inherited_flags = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
     let principals = ["S-1-5-18", "S-1-5-32-544", owner_sid];
     let mut expected_aces = principals
         .iter()
         .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
         .collect::<Vec<_>>();
-    if inherit {
-        expected_aces.extend(
-            principals
-                .iter()
-                .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
-        );
+    match descriptor_kind {
+        ProtectedDescriptor::OwnerOnly { inherit: true } => {
+            let inherited_flags =
+                (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
+            expected_aces.extend(
+                principals
+                    .iter()
+                    .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
+            );
+        }
+        ProtectedDescriptor::OwnerOnly { inherit: false } => {}
+        ProtectedDescriptor::RunnerDirectory { group_sid }
+        | ProtectedDescriptor::RunnerExecutable { group_sid } => expected_aces.push((
+            (*group_sid).to_string(),
+            0,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        )),
+        ProtectedDescriptor::RunnerManifest { group_sid } => {
+            expected_aces.push(((*group_sid).to_string(), 0, FILE_GENERIC_READ));
+        }
     }
     if unsafe { (*dacl).AceCount } as usize != expected_aces.len() {
         return false;

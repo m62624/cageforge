@@ -15,6 +15,7 @@
 mod config;
 mod error;
 mod firewall_contract;
+mod runner_manifest;
 mod setup;
 mod setup_protocol;
 mod setup_state;

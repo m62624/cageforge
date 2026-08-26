@@ -12,6 +12,7 @@ mod credentials;
 mod firewall;
 mod paths;
 mod rights;
+mod runner;
 mod wfp;
 
 const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
@@ -24,17 +25,30 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     let credentials_path = state.join("credentials.json.dpapi");
     let setup_helper_path = bin_directory.join(SETUP_HELPER_NAME);
     let command_runner_path = bin_directory.join(COMMAND_RUNNER_NAME);
-    for path in [state, &bin_directory] {
-        paths::verify_protected_dacl(path, details.owner_sid(), true)?;
-    }
+    let runner_manifest_path = bin_directory.join(crate::runner_manifest::RUNNER_MANIFEST_NAME);
+    paths::verify_protected_dacl(state, details.owner_sid(), true)?;
+    paths::verify_runner_directory_dacl(
+        &bin_directory,
+        details.owner_sid(),
+        details.accounts().group_sid(),
+    )?;
     for path in [
         &credentials_path,
         &setup_helper_path,
-        &command_runner_path,
         &state.join("setup.json"),
     ] {
         paths::verify_protected_dacl(path, details.owner_sid(), false)?;
     }
+    paths::verify_runner_executable_dacl(
+        &command_runner_path,
+        details.owner_sid(),
+        details.accounts().group_sid(),
+    )?;
+    paths::verify_runner_manifest_dacl(
+        &runner_manifest_path,
+        details.owner_sid(),
+        details.accounts().group_sid(),
+    )?;
     rights::verify(details.accounts().offline_sid())?;
     rights::verify(details.accounts().online_sid())?;
     credentials::verify(details, &credentials_path)?;
@@ -48,6 +62,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
         &command_runner_path,
         details.command_runner_sha256(),
     )?;
+    runner::verify(details, &runner_manifest_path)?;
     firewall::verify(details)?;
     wfp::verify(details)?;
     Ok(())

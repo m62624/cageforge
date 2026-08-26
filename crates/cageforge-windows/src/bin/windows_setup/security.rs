@@ -25,7 +25,7 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_ALWAYS, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
-    READ_CONTROL,
+    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, READ_CONTROL,
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -37,6 +37,13 @@ use super::{NativeSetupFailure, NativeSetupResult};
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 struct LocalWideString(*mut u16);
+
+enum ProtectedDescriptor<'a> {
+    OwnerOnly { inherit: bool },
+    RunnerDirectory { group_sid: &'a str },
+    RunnerExecutable { group_sid: &'a str },
+    RunnerManifest { group_sid: &'a str },
+}
 
 #[allow(unsafe_code)]
 impl Drop for LocalSecurityDescriptor {
@@ -146,6 +153,32 @@ pub(super) fn validate_request_boundary(request: &SetupRequest) -> NativeSetupRe
 
 #[allow(unsafe_code)]
 pub(super) fn prepare_state_directory(path: &Path, owner_sid: &str) -> NativeSetupResult<()> {
+    prepare_directory(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit: true },
+    )
+}
+
+#[allow(unsafe_code)]
+pub(super) fn prepare_runner_directory(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+) -> NativeSetupResult<()> {
+    prepare_directory(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::RunnerDirectory { group_sid },
+    )
+}
+
+#[allow(unsafe_code)]
+fn prepare_directory(
+    path: &Path,
+    owner_sid: &str,
+    descriptor_kind: &ProtectedDescriptor<'_>,
+) -> NativeSetupResult<()> {
     let parent = path.parent().ok_or_else(|| {
         NativeSetupFailure::new(
             SetupStage::StateDirectory,
@@ -162,7 +195,7 @@ pub(super) fn prepare_state_directory(path: &Path, owner_sid: &str) -> NativeSet
             format!("failed to create setup state parent {parent:?}: {error}"),
         )
     })?;
-    let descriptor = security_descriptor(owner_sid, true)?;
+    let descriptor = security_descriptor(owner_sid, descriptor_kind)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: descriptor.0,
@@ -182,12 +215,51 @@ pub(super) fn prepare_state_directory(path: &Path, owner_sid: &str) -> NativeSet
         }
     }
     apply_descriptor(path, &descriptor)?;
-    verify_descriptor(path, owner_sid, true)
+    verify_descriptor(path, owner_sid, descriptor_kind)
 }
 
 #[allow(unsafe_code)]
 pub(super) fn create_protected_file(path: &Path, owner_sid: &str) -> NativeSetupResult<File> {
-    let descriptor = security_descriptor(owner_sid, false)?;
+    create_file_with_descriptor(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit: false },
+    )
+}
+
+#[allow(unsafe_code)]
+pub(super) fn create_runner_executable(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+) -> NativeSetupResult<File> {
+    create_file_with_descriptor(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::RunnerExecutable { group_sid },
+    )
+}
+
+#[allow(unsafe_code)]
+pub(super) fn create_runner_manifest(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+) -> NativeSetupResult<File> {
+    create_file_with_descriptor(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::RunnerManifest { group_sid },
+    )
+}
+
+#[allow(unsafe_code)]
+fn create_file_with_descriptor(
+    path: &Path,
+    owner_sid: &str,
+    descriptor_kind: &ProtectedDescriptor<'_>,
+) -> NativeSetupResult<File> {
+    let descriptor = security_descriptor(owner_sid, descriptor_kind)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: descriptor.0,
@@ -213,19 +285,30 @@ pub(super) fn create_protected_file(path: &Path, owner_sid: &str) -> NativeSetup
         ));
     }
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    verify_file_descriptor(path, &file, owner_sid, false)?;
+    verify_file_descriptor(path, &file, owner_sid, descriptor_kind)?;
     Ok(file)
 }
 
 #[allow(unsafe_code)]
 fn security_descriptor(
     owner_sid: &str,
-    inherit: bool,
+    descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> NativeSetupResult<LocalSecurityDescriptor> {
-    let inheritance = if inherit { "OICI" } else { "" };
-    let sddl = format!(
-        "D:P(A;{inheritance};GA;;;SY)(A;{inheritance};GA;;;BA)(A;{inheritance};GA;;;{owner_sid})"
-    );
+    let sddl = match descriptor_kind {
+        ProtectedDescriptor::OwnerOnly { inherit } => {
+            let inheritance = if *inherit { "OICI" } else { "" };
+            format!(
+                "D:P(A;{inheritance};GA;;;SY)(A;{inheritance};GA;;;BA)(A;{inheritance};GA;;;{owner_sid})"
+            )
+        }
+        ProtectedDescriptor::RunnerDirectory { group_sid }
+        | ProtectedDescriptor::RunnerExecutable { group_sid } => {
+            format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;GRGX;;;{group_sid})")
+        }
+        ProtectedDescriptor::RunnerManifest { group_sid } => {
+            format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;GR;;;{group_sid})")
+        }
+    };
     let sddl_wide = wide(&sddl);
     let mut descriptor = std::ptr::null_mut();
     if unsafe {
@@ -286,7 +369,11 @@ fn apply_descriptor(path: &Path, descriptor: &LocalSecurityDescriptor) -> Native
 }
 
 #[allow(unsafe_code)]
-fn verify_descriptor(path: &Path, owner_sid: &str, inherit: bool) -> NativeSetupResult<()> {
+fn verify_descriptor(
+    path: &Path,
+    owner_sid: &str,
+    descriptor_kind: &ProtectedDescriptor<'_>,
+) -> NativeSetupResult<()> {
     let path_wide = wide_path(path);
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     let status = unsafe {
@@ -313,7 +400,7 @@ fn verify_descriptor(path: &Path, owner_sid: &str, inherit: bool) -> NativeSetup
         path,
         LocalSecurityDescriptor(descriptor),
         owner_sid,
-        inherit,
+        descriptor_kind,
     )
 }
 
@@ -322,7 +409,7 @@ fn verify_file_descriptor(
     path: &Path,
     file: &File,
     owner_sid: &str,
-    inherit: bool,
+    descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> NativeSetupResult<()> {
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     let status = unsafe {
@@ -349,7 +436,7 @@ fn verify_file_descriptor(
         path,
         LocalSecurityDescriptor(descriptor),
         owner_sid,
-        inherit,
+        descriptor_kind,
     )
 }
 
@@ -358,7 +445,7 @@ fn verify_descriptor_value(
     path: &Path,
     descriptor: LocalSecurityDescriptor,
     owner_sid: &str,
-    inherit: bool,
+    descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> NativeSetupResult<()> {
     let mut value = std::ptr::null_mut();
     if unsafe {
@@ -379,7 +466,7 @@ fn verify_descriptor_value(
     }
     let value = LocalWideString(value);
     let actual = wide_pointer_to_string(value.0);
-    if !protected_dacl_matches(descriptor.0, owner_sid, inherit) {
+    if !protected_dacl_matches(descriptor.0, owner_sid, descriptor_kind) {
         return Err(NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::DirectoryAcl,
@@ -394,7 +481,7 @@ fn verify_descriptor_value(
 fn protected_dacl_matches(
     descriptor: PSECURITY_DESCRIPTOR,
     owner_sid: &str,
-    inherit: bool,
+    descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> bool {
     if unsafe { IsValidSecurityDescriptor(descriptor) } == 0 {
         return false;
@@ -416,18 +503,31 @@ fn protected_dacl_matches(
     {
         return false;
     }
-    let inherited_flags = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
     let principals = ["S-1-5-18", "S-1-5-32-544", owner_sid];
     let mut expected_aces = principals
         .iter()
         .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
         .collect::<Vec<_>>();
-    if inherit {
-        expected_aces.extend(
-            principals
-                .iter()
-                .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
-        );
+    match descriptor_kind {
+        ProtectedDescriptor::OwnerOnly { inherit: true } => {
+            let inherited_flags =
+                (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
+            expected_aces.extend(
+                principals
+                    .iter()
+                    .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
+            );
+        }
+        ProtectedDescriptor::OwnerOnly { inherit: false } => {}
+        ProtectedDescriptor::RunnerDirectory { group_sid }
+        | ProtectedDescriptor::RunnerExecutable { group_sid } => expected_aces.push((
+            (*group_sid).to_string(),
+            0,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        )),
+        ProtectedDescriptor::RunnerManifest { group_sid } => {
+            expected_aces.push(((*group_sid).to_string(), 0, FILE_GENERIC_READ));
+        }
     }
     if unsafe { (*dacl).AceCount } as usize != expected_aces.len() {
         return false;

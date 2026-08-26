@@ -56,6 +56,7 @@ pub struct WindowsSetupDetails {
     wfp_provider_id: String,
     setup_helper_sha256: String,
     command_runner_sha256: String,
+    runner_manifest_sha256: String,
     credential_sha256: String,
 }
 
@@ -141,6 +142,11 @@ impl WindowsSetupDetails {
     /// Returns the SHA-256 digest recorded for the installed command runner.
     pub fn command_runner_sha256(&self) -> &str {
         &self.command_runner_sha256
+    }
+
+    /// Returns the SHA-256 digest of the protected command-runner manifest.
+    pub fn runner_manifest_sha256(&self) -> &str {
+        &self.runner_manifest_sha256
     }
 
     /// Returns the SHA-256 digest of the protected credential record.
@@ -459,6 +465,7 @@ impl SetupMarker {
             wfp_provider_id: self.wfp_provider_id,
             setup_helper_sha256: self.setup_helper_sha256,
             command_runner_sha256: self.command_runner_sha256,
+            runner_manifest_sha256: self.runner_manifest_sha256,
             credential_sha256: self.credential_sha256,
         }
     }

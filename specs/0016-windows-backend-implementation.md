@@ -420,3 +420,14 @@ protocol, token, desktop, job, process, wait, and termination failures. It does
 not retain Codex permission profiles, command schemas, logging, credential
 refresh fallback, ConPTY, filesystem-helper aliases, or cloned secret-bearing
 protocol requests.
+
+The installed runner manifest is versioned and binds the setup owner SID,
+managed-group SID, both dedicated account SIDs, and the staged runner digest.
+Its digest is committed in the final setup marker. The runner directory and
+executable grant the managed group exactly read/execute access, while the
+manifest grants that group exactly read access; owner, Administrators, and
+SYSTEM retain full control. Every one of these protected DACLs and manifest
+fields is read back before setup is accepted. The runner obtains the manifest
+only from the protected directory containing its own verified executable, so a
+copied binary and attacker-selected manifest cannot establish a trusted
+endpoint.

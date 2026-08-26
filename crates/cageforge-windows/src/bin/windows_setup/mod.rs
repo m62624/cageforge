@@ -73,11 +73,8 @@ fn install(
         "preparing protected state directory",
     );
     security::prepare_state_directory(&request.state_directory, &request.owner_sid)?;
-    progress(
-        SetupStage::Request,
-        "verifying and staging helper resources",
-    );
-    resources::verify_and_stage(request)?;
+    progress(SetupStage::Request, "verifying helper resources");
+    let resources = resources::verify(request)?;
     let marker_path = request.state_directory.join("setup.json");
     match fs::remove_file(&marker_path) {
         Ok(()) => {}
@@ -97,6 +94,11 @@ fn install(
         "provisioning dedicated sandbox accounts",
     );
     let accounts = accounts::provision(request)?;
+    progress(
+        SetupStage::StateDirectory,
+        "staging protected helper resources and runner manifest",
+    );
+    let runner_manifest_sha256 = resources::stage(request, &accounts, &resources)?;
     progress(
         SetupStage::AccountRights,
         "applying offline account logon rights",
@@ -130,6 +132,7 @@ fn install(
         request,
         accounts,
         credential_sha256,
+        runner_manifest_sha256,
         firewall_policy_id,
         wfp_provider_id,
     )
@@ -139,6 +142,7 @@ fn write_marker(
     request: &SetupRequest,
     accounts: ProvisionedAccounts,
     credential_sha256: String,
+    runner_manifest_sha256: String,
     firewall_policy_id: String,
     wfp_provider_id: String,
 ) -> NativeSetupResult<()> {
@@ -158,6 +162,7 @@ fn write_marker(
         wfp_provider_id,
         setup_helper_sha256: request.setup_helper_sha256.clone(),
         command_runner_sha256: request.command_runner_sha256.clone(),
+        runner_manifest_sha256,
         credential_sha256,
     };
     let encoded = serde_json::to_vec(&marker).map_err(|error| {
@@ -211,6 +216,10 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
             .state_directory
             .join("bin")
             .join("cageforge-windows-command-runner.exe"),
+        request
+            .state_directory
+            .join("bin")
+            .join(crate::runner_manifest::RUNNER_MANIFEST_NAME),
     ] {
         match fs::remove_file(&path) {
             Ok(()) => {}
