@@ -332,7 +332,15 @@ fn random_password(stage: SetupStage) -> NativeSetupResult<String> {
             format!("cryptographic password generation failed: {error}"),
         )
     })?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02X}")).collect())
+    let random_hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    // Preserve 256 bits of operating-system entropy while constructively
+    // satisfying the built-in Windows upper/lower/digit/symbol policy. Pure
+    // hexadecimal is long but has only two character classes and is rejected
+    // by Windows Server 2025 as NERR_PasswordTooShort.
+    Ok(format!("A!a0{random_hex}"))
 }
 
 #[allow(unsafe_code)]
@@ -446,4 +454,25 @@ fn wide_pointer_to_string(value: *const u16) -> Option<String> {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::random_password;
+    use crate::setup_protocol::SetupStage;
+
+    #[test]
+    fn generated_passwords_satisfy_windows_complexity_classes() {
+        let first = random_password(SetupStage::OfflineAccount)
+            .unwrap_or_else(|_| panic!("first password generation failed"));
+        let second = random_password(SetupStage::OnlineAccount)
+            .unwrap_or_else(|_| panic!("second password generation failed"));
+
+        assert_ne!(first, second);
+        assert!(first.len() >= 64);
+        assert!(first.chars().any(char::is_uppercase));
+        assert!(first.chars().any(char::is_lowercase));
+        assert!(first.chars().any(|character| character.is_ascii_digit()));
+        assert!(first.chars().any(|character| !character.is_alphanumeric()));
+    }
 }
