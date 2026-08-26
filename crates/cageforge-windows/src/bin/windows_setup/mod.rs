@@ -50,17 +50,33 @@ impl NativeSetupFailure {
     }
 }
 
-pub(super) fn execute(request: &SetupRequest) -> NativeSetupResult<()> {
+pub(super) fn execute(
+    request: &SetupRequest,
+    progress: &mut dyn FnMut(SetupStage, &str),
+) -> NativeSetupResult<()> {
+    progress(SetupStage::Elevation, "validating elevated setup identity");
     security::require_elevated()?;
+    progress(SetupStage::Request, "validating setup request boundary");
     security::validate_request_boundary(request)?;
     match request.operation {
-        SetupOperation::Install => install(request),
+        SetupOperation::Install => install(request, progress),
         SetupOperation::Uninstall => uninstall(request),
     }
 }
 
-fn install(request: &SetupRequest) -> NativeSetupResult<()> {
+fn install(
+    request: &SetupRequest,
+    progress: &mut dyn FnMut(SetupStage, &str),
+) -> NativeSetupResult<()> {
+    progress(
+        SetupStage::StateDirectory,
+        "preparing protected state directory",
+    );
     security::prepare_state_directory(&request.state_directory, &request.owner_sid)?;
+    progress(
+        SetupStage::Request,
+        "verifying and staging helper resources",
+    );
     resources::verify_and_stage(request)?;
     let marker_path = request.state_directory.join("setup.json");
     match fs::remove_file(&marker_path) {
@@ -76,16 +92,39 @@ fn install(request: &SetupRequest) -> NativeSetupResult<()> {
         }
     }
 
+    progress(
+        SetupStage::OfflineAccount,
+        "provisioning dedicated sandbox accounts",
+    );
     let accounts = accounts::provision(request)?;
+    progress(
+        SetupStage::AccountRights,
+        "applying offline account logon rights",
+    );
     rights::apply_and_verify(&accounts.offline_sid)?;
+    progress(
+        SetupStage::AccountRights,
+        "applying online account logon rights",
+    );
     rights::apply_and_verify(&accounts.online_sid)?;
+    progress(
+        SetupStage::Credentials,
+        "writing protected sandbox credentials",
+    );
     let credential_sha256 = credentials::write_protected(request, &accounts)?;
+    progress(
+        SetupStage::Firewall,
+        "installing and verifying firewall policy",
+    );
     let firewall_policy_id = firewall::install_and_verify(request, &accounts.offline_sid)?;
+    progress(SetupStage::Wfp, "installing WFP policy");
     let wfp_provider_id = wfp::install_and_verify(
         &request.owner_sid,
         &accounts.offline_name,
         &accounts.offline_sid,
+        progress,
     )?;
+    progress(SetupStage::Marker, "committing verified setup marker");
     write_marker(
         request,
         accounts,

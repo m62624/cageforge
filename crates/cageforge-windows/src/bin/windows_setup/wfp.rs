@@ -245,36 +245,34 @@ pub(super) fn install_and_verify(
     owner_sid: &str,
     offline_account: &str,
     offline_sid: &str,
+    progress: &mut dyn FnMut(SetupStage, &str),
 ) -> NativeSetupResult<String> {
-    trace_wfp("opening engine");
+    progress(SetupStage::Wfp, "opening WFP engine");
     let engine = Engine::open()?;
-    trace_wfp("beginning transaction");
+    progress(SetupStage::Wfp, "beginning WFP transaction");
     let mut transaction = engine.begin_transaction()?;
-    trace_wfp("ensuring provider");
+    progress(SetupStage::Wfp, "ensuring WFP provider");
     ensure_provider(&engine)?;
-    trace_wfp("ensuring sublayer");
+    progress(SetupStage::Wfp, "ensuring WFP sublayer");
     ensure_sublayer(&engine)?;
-    trace_wfp("building user condition");
+    progress(SetupStage::Wfp, "building WFP user condition");
     let user = UserCondition::new(offline_account)?;
     let specs = filter_specs(owner_sid);
     for spec in &specs {
-        trace_wfp(&format!("installing filter {}", spec.name));
+        progress(SetupStage::Wfp, &format!("installing filter {}", spec.name));
         replace_filter(&engine, spec, &user)?;
     }
-    trace_wfp("committing transaction");
+    progress(SetupStage::Wfp, "committing WFP transaction");
     transaction.commit()?;
-    trace_wfp("verifying provider");
+    progress(SetupStage::Wfp, "verifying WFP provider");
     verify_provider(&engine)?;
-    trace_wfp("verified provider");
-    trace_wfp("verifying sublayer");
+    progress(SetupStage::Wfp, "verifying WFP sublayer");
     verify_sublayer(&engine)?;
-    trace_wfp("verified sublayer");
     for spec in &specs {
-        trace_wfp(&format!("verifying filter {}", spec.name));
+        progress(SetupStage::Wfp, &format!("verifying filter {}", spec.name));
         verify_filter(&engine, spec, offline_sid)?;
-        trace_wfp(&format!("verified filter {}", spec.name));
     }
-    trace_wfp("verification complete");
+    progress(SetupStage::Wfp, "completed WFP verification");
     Ok(guid_string(PROVIDER_KEY))
 }
 
@@ -763,10 +761,6 @@ fn wfp_mismatch(component: &str) -> NativeSetupFailure {
         None,
         format!("WFP {component} failed complete read-back verification"),
     )
-}
-
-fn trace_wfp(detail: &str) {
-    eprintln!("cageforge-windows-setup: WFP {detail}");
 }
 
 fn empty_blob() -> FWP_BYTE_BLOB {

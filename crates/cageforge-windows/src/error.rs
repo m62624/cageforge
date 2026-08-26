@@ -423,13 +423,15 @@ pub enum WindowsSetupError {
     },
     /// The helper exited before creating its mandatory structured response.
     #[error(
-        "Windows setup helper exited with code {exit_code:#x} without creating response {path:?}: {source}"
+        "Windows setup helper exited with code {exit_code:#x} without creating response {path:?} after {last_checkpoint:?}: {source}"
     )]
     HelperResponseMissing {
         /// Expected response file path.
         path: PathBuf,
         /// Native helper process exit code, including NTSTATUS-style crash values.
         exit_code: u32,
+        /// Last native setup checkpoint durably recorded by the helper.
+        last_checkpoint: Option<String>,
         /// Filesystem error proving that the response is absent.
         #[source]
         source: io::Error,

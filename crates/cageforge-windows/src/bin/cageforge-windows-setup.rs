@@ -57,6 +57,10 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let arguments = Arguments::parse()?;
+    let progress_path = arguments.response.with_extension("progress");
+    let mut report_progress = |stage: SetupStage, detail: &str| {
+        let _ = fs::write(&progress_path, format!("{stage:?}: {detail}"));
+    };
     let request_bytes = fs::read(&arguments.request).map_err(|error| {
         format!(
             "failed to read setup request {:?}: {error}",
@@ -79,7 +83,7 @@ fn run() -> Result<(), String> {
             },
         }
     } else {
-        match windows_setup::execute(&request) {
+        match windows_setup::execute(&request, &mut report_progress) {
             Ok(()) => SetupResponse {
                 version: SETUP_PROTOCOL_VERSION,
                 outcome: SetupOutcome::Complete,

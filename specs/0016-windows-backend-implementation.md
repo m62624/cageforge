@@ -101,6 +101,13 @@ UAC automatically. `WindowsSetup::install` may launch the signed sibling setup
 helper with `runas`; UAC cancellation and every helper stage remain distinct
 typed errors.
 
+The helper records a non-secret native-operation checkpoint beside its
+structured response before entering each setup boundary. If Windows terminates
+the helper before it can encode a response, the caller reports both the native
+exit code and the last checkpoint. Checkpoints contain stage and operation
+labels only; account SIDs, credentials, request contents, and policy data are
+never written to this diagnostic channel.
+
 ## 5. Token and process boundary
 
 Restricted launches use a primary token derived from the selected dedicated

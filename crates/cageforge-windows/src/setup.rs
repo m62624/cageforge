@@ -363,9 +363,13 @@ impl WindowsSetup {
         let response_bytes = match fs::read(&response_path) {
             Ok(response) => response,
             Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                let last_checkpoint = fs::read_to_string(response_path.with_extension("progress"))
+                    .ok()
+                    .filter(|checkpoint| !checkpoint.is_empty());
                 return Err(WindowsSetupError::HelperResponseMissing {
                     path: response_path,
                     exit_code,
+                    last_checkpoint,
                     source,
                 });
             }
