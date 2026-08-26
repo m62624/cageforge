@@ -125,10 +125,22 @@ boundary. The desktop, token, process, thread, pipe, and job handles use owned
 RAII wrappers and are never inherited unless explicitly present in the process
 handle list.
 
-The command runner receives a versioned authenticated request over private
-inherited handles. It validates the parent proof before applying the token and
-starting the user command. A direct invocation cannot acquire the backend's
+The parent launches the command runner with `CreateProcessWithLogonW`, which
+does not provide a safe inherited-handle request channel. The runner therefore
+receives a versioned authenticated request over one random private named-pipe
+pair. Both directions are identity-bound: the parent verifies that both pipe
+clients have the exact PID returned for the launched runner, while the runner
+verifies that both pipe servers have the same PID and that this process token
+belongs to the setup owner recorded in a protected runner manifest. The staged
+runner and manifest are readable and executable, but not writable, by the
+managed sandbox group. A direct invocation under a sandbox account therefore
+cannot manufacture an authenticated owner endpoint or acquire the backend's
 prepared state.
+
+Only the user command's explicit standard handles cross the second process
+boundary. The runner supplies those handles through the process handle-list
+attribute; no transport, token, job, desktop, setup, or unrelated inheritable
+handle reaches the user command.
 
 `WindowsChild` owns the Job Object and every runtime resource. `kill`, timeout,
 drop, and failed setup terminate the complete job and reap the primary process.
@@ -365,3 +377,30 @@ names, checked group-membership updates, a required `SeBatchLogonRight`, fatal
 WFP failure, and no telemetry or product directory conventions. The
 Cageforge-authored implementation uses the Windows APIs directly and does not
 copy the reviewed source files.
+
+### 12.2 Token, runner, process, and lifecycle review record
+
+The process-boundary design was reviewed line by line against the frozen
+versions of `src/token.rs`, `src/token_tests.rs`, `src/process.rs`,
+`src/proc_thread_attr.rs`, `src/desktop.rs`, `src/elevated/ipc_framed.rs`,
+`src/elevated/runner_pipe.rs`, `src/elevated/runner_client.rs`,
+`src/elevated_impl.rs`, and `src/bin/command_runner/win.rs` under
+`codex-rs/windows-sandbox-rs`, plus `src/win/job.rs` under
+`codex-rs/utils/pty`.
+
+The Cageforge boundary retains the dedicated-account runner, bounded framed
+transport, exact runner-PID pipe attribution, `CreateRestrictedToken` with
+maximum privileges disabled and LUA/write restrictions, capability and token-
+user restricting SIDs, route SIDs excluded from the default object DACL,
+`SeChangeNotifyPrivilege` as the sole re-enabled privilege,
+`CreateProcessAsUserW`, an explicit handle list, a private desktop, atomic Job
+Object assignment through `PROC_THREAD_ATTRIBUTE_JOB_LIST`, and complete tree
+termination on startup failure, timeout, explicit kill, or owner drop.
+
+Cageforge intentionally adds runner-side owner-PID and token verification,
+uses a protected owner manifest, forbids Job Object breakaway and descendant
+preservation, keeps private desktop mandatory, and returns stage-specific typed
+protocol, token, desktop, job, process, wait, and termination failures. It does
+not retain Codex permission profiles, command schemas, logging, credential
+refresh fallback, ConPTY, filesystem-helper aliases, or cloned secret-bearing
+protocol requests.
