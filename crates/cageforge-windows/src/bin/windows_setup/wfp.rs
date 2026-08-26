@@ -766,9 +766,7 @@ fn wfp_mismatch(component: &str) -> NativeSetupFailure {
 }
 
 fn trace_wfp(detail: &str) {
-    if std::env::var_os("CAGEFORGE_WINDOWS_SETUP_TRACE").is_some() {
-        eprintln!("cageforge-windows-setup: WFP {detail}");
-    }
+    eprintln!("cageforge-windows-setup: WFP {detail}");
 }
 
 fn empty_blob() -> FWP_BYTE_BLOB {
