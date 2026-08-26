@@ -32,10 +32,15 @@ concurrency:
   group: cageforge-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Current runners for portable checks:
-#   ubuntu-latest
+# Current runners for common-component checks:
+#   ubuntu-24.04
 #   windows-latest
 #   macos-latest
+#
+# Current native sandbox runners:
+#   Linux x64       — disposable QEMU/KVM guest on ubuntu-24.04
+#   Linux ARM64     — cross-build on ubuntu-24.04
+#   Windows x64     — windows-2025
 #
 # Reserved runner labels for future native backends and release builds:
 #   ubuntu-24.04       — Linux x64
@@ -46,15 +51,17 @@ concurrency:
 #   windows-11-arm     — Windows ARM64
 #
 # CI routing algorithm:
-# 1. Main is the full quality gate: all common components, every Linux feature
-#    combination, and every platform target lane always run.
-# 2. PRs always run the common Linux components and Linux feature combinations.
-# 3. A PR selects every target lane when a common component, workspace input,
-#    or CI input changes. An OS-specific crate selects only its own target.
+# 1. Main is the full quality gate: common components and their feature
+#    combinations run on every target, and every sandbox lane is selected.
+# 2. PRs always run common components and their feature combinations on Linux,
+#    macOS, and Windows.
+# 3. A PR selects every sandbox when a common component, workspace input, or CI
+#    input changes. An OS-specific crate selects only its own sandbox.
 # 4. Manual PR labels sandbox-linux, sandbox-macos, and sandbox-windows force
 #    the requested lane. Labels are never applied automatically by the labeler.
-# 5. The Windows target lane runs every cageforge-windows feature combination
-#    and its native tests. macOS still reports its missing native backend.
+# 5. Sandbox crates never enter the common-component jobs. The Windows sandbox
+#    lane runs every cageforge-windows feature combination and its native tests;
+#    macOS still reports its missing native backend in its own sandbox job.
 
 jobs:
   changes:
@@ -62,9 +69,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
-      linux_native: ${{ steps.classify.outputs.linux_native }}
-      macos_native: ${{ steps.classify.outputs.macos_native }}
-      windows_native: ${{ steps.classify.outputs.windows_native }}
+      linux_sandbox: ${{ steps.classify.outputs.linux_sandbox }}
+      macos_sandbox: ${{ steps.classify.outputs.macos_sandbox }}
+      windows_sandbox: ${{ steps.classify.outputs.windows_sandbox }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,9 +89,9 @@ jobs:
           set -euo pipefail
 
           mode=default
-          linux_native=false
-          macos_native=false
-          windows_native=false
+          linux_sandbox=false
+          macos_sandbox=false
+          windows_sandbox=false
           shared_change=false
           changed_paths=()
           manual_linux=false
@@ -113,20 +120,16 @@ jobs:
           esac
 
           if [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            # Main always checks every platform target. The macOS/Windows jobs
-            # remain useful before their native enforcement crates exist: they
-            # run the common components on that host and fail closed if a
-            # future crate is malformed.
-            linux_native=true
-            macos_native=true
-            windows_native=true
+            linux_sandbox=true
+            macos_sandbox=true
+            windows_sandbox=true
             mode=main
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
               full)
-                linux_native=true
-                macos_native=true
-                windows_native=true
+                linux_sandbox=true
+                macos_sandbox=true
+                windows_sandbox=true
                 mode=manual-full
                 ;;
               default|auto) ;;
@@ -143,16 +146,16 @@ jobs:
           for path in "${changed_paths[@]}"; do
             case "$path" in
               crates/cageforge-linux/*|crates/cageforge-bwrap/*)
-                linux_native=true
+                linux_sandbox=true
                 ;;
               crates/cageforge-backend-api/*|crates/cageforge-command/*|crates/cageforge-config/*|crates/cageforge-core/*|crates/cageforge-network-proxy/*|crates/cageforge-path/*|crates/cageforge-policy/*|crates/cageforge-policy-compose/*)
                 shared_change=true
                 ;;
               crates/cageforge-macos/*)
-                macos_native=true
+                macos_sandbox=true
                 ;;
               crates/cageforge-windows/*)
-                windows_native=true
+                windows_sandbox=true
                 ;;
               Cargo.toml|Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|.github/workflows/*|ci/*)
                 shared_change=true
@@ -162,32 +165,45 @@ jobs:
           done
 
           if [[ "$shared_change" == true ]]; then
-            linux_native=true
-            macos_native=true
-            windows_native=true
+            linux_sandbox=true
+            macos_sandbox=true
+            windows_sandbox=true
             mode=shared
-          elif [[ "$mode" == default && ("$linux_native" == true || "$macos_native" == true || "$windows_native" == true) ]]; then
+          elif [[ "$mode" == default && ("$linux_sandbox" == true || "$macos_sandbox" == true || "$windows_sandbox" == true) ]]; then
             mode=native
           fi
 
-          [[ "$manual_linux" == true ]] && linux_native=true
-          [[ "$manual_macos" == true ]] && macos_native=true
-          [[ "$manual_windows" == true ]] && windows_native=true
+          [[ "$manual_linux" == true ]] && linux_sandbox=true
+          [[ "$manual_macos" == true ]] && macos_sandbox=true
+          [[ "$manual_windows" == true ]] && windows_sandbox=true
           if [[ "$manual_linux" == true || "$manual_macos" == true || "$manual_windows" == true ]]; then
             mode=manual
           fi
 
           {
             echo "mode=${mode}"
-            echo "linux_native=${linux_native}"
-            echo "macos_native=${macos_native}"
-            echo "windows_native=${windows_native}"
+            echo "linux_sandbox=${linux_sandbox}"
+            echo "macos_sandbox=${macos_sandbox}"
+            echo "windows_sandbox=${windows_sandbox}"
           } >> "$GITHUB_OUTPUT"
 
   common-components:
-    name: "common components (build target: Linux)"
+    name: "common components (build target: ${{ matrix.target }})"
     needs: changes
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Linux
+            runner: ubuntu-24.04
+          - target: macOS
+            runner: macos-latest
+          - target: Windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -195,8 +211,10 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace publication metadata
+        if: matrix.target == 'Linux'
         run: ci/check-workspace-metadata.sh
       - name: Check formatting
+        if: matrix.target == 'Linux'
         run: >-
           cargo fmt
           -p cageforge-backend-api
@@ -234,15 +252,23 @@ jobs:
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
-      - name: Lint network proxy without runtime feature
-        run: >-
-          cargo clippy
-          -p cageforge-network-proxy
-          --no-default-features
-          --all-targets -- -D warnings
-      - name: Test network proxy without runtime feature
-        run: cargo test -p cageforge-network-proxy --no-default-features
+      # Keep every public feature mode explicit. Workspace feature unification
+      # can otherwise make a nominal --no-default-features check inherit the
+      # proxy runtime from another selected package.
+      - name: Lint common component feature combinations
+        run: |
+          set -euo pipefail
+          cargo clippy -p cageforge-network-proxy --no-default-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-network-proxy --features runtime --all-targets -- -D warnings
+          cargo clippy -p cageforge-network-proxy --all-features --all-targets -- -D warnings
+      - name: Test common component feature combinations
+        run: |
+          set -euo pipefail
+          cargo test -p cageforge-network-proxy --no-default-features --all-targets
+          cargo test -p cageforge-network-proxy --features runtime --all-targets
+          cargo test -p cageforge-network-proxy --all-features --all-targets
       - name: Check common component documentation
+        if: matrix.target == 'Linux'
         env:
           RUSTDOCFLAGS: -D warnings
         run: >-
@@ -261,16 +287,33 @@ jobs:
   native-linux:
     name: Linux sandbox (QEMU/KVM)
     needs: changes
-    if: needs.changes.outputs.linux_native == 'true'
+    if: needs.changes.outputs.linux_sandbox == 'true'
     uses: m62624/cageforge/.github/workflows/native-linux-vm.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number || '' }}
       expected_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
-  native-macos:
-    name: macOS target checks
+  native-linux-arm64:
+    name: "Linux sandbox (cross-build target: ARM64)"
     needs: changes
-    if: needs.changes.outputs.macos_native == 'true'
+    if: needs.changes.outputs.linux_sandbox == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Cross-check Linux ARM64 backend surfaces
+        run: |
+          set -euo pipefail
+          cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --lib --all-targets --no-default-features
+          cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --bin cageforge-linux-helper --no-default-features
+
+  native-macos:
+    name: macOS sandbox
+    needs: changes
+    if: needs.changes.outputs.macos_sandbox == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -278,88 +321,35 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Check common component formatting on macOS
-        run: cargo fmt --all -- --check
-      - name: Clippy common components on macOS
-        run: >-
-          cargo clippy
-          -p cageforge-backend-api
-          -p cageforge-core
-          -p cageforge-command
-          -p cageforge-config
-          -p cageforge-network-proxy
-          -p cageforge-path
-          -p cageforge-policy
-          -p cageforge-policy-compose
-          -p cageforge-upstream-review
-          --all-targets -- -D warnings
-      - name: Test common components on macOS
-        run: >-
-          cargo test
-          -p cageforge-backend-api
-          -p cageforge-core
-          -p cageforge-command
-          -p cageforge-config
-          -p cageforge-network-proxy
-          -p cageforge-path
-          -p cageforge-policy
-          -p cageforge-policy-compose
-          -p cageforge-upstream-review
       - name: Run native macOS backend when available
         shell: bash
         run: |
           set -euo pipefail
           if cargo metadata --no-deps --format-version 1 | grep -q '"name":"cageforge-macos"'; then
             cargo fmt --package cageforge-macos -- --check
-            cargo clippy -p cageforge-macos --all-targets -- -D warnings
-            cargo test -p cageforge-macos
+            cargo clippy -p cageforge-macos --no-default-features --all-targets -- -D warnings
+            cargo clippy -p cageforge-macos --all-features --all-targets -- -D warnings
+            cargo test -p cageforge-macos --no-default-features
+            cargo test -p cageforge-macos --all-features
           else
             echo "::notice::cageforge-macos is not in this workspace yet; no native macOS enforcement crate was run."
           fi
 
   native-windows:
-    name: Windows target checks
+    name: "Windows sandbox (Windows Server 2025)"
     needs: changes
-    if: needs.changes.outputs.windows_native == 'true'
-    runs-on: windows-latest
+    if: needs.changes.outputs.windows_sandbox == 'true'
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Check common component formatting on Windows
-        shell: bash
-        run: cargo fmt --all -- --check
-      - name: Clippy common components on Windows
-        shell: bash
-        run: >-
-          cargo clippy
-          -p cageforge-backend-api
-          -p cageforge-core
-          -p cageforge-command
-          -p cageforge-config
-          -p cageforge-network-proxy
-          -p cageforge-path
-          -p cageforge-policy
-          -p cageforge-policy-compose
-          -p cageforge-upstream-review
-          --all-targets -- -D warnings
-      - name: Test common components on Windows
-        shell: bash
-        run: >-
-          cargo test
-          -p cageforge-backend-api
-          -p cageforge-core
-          -p cageforge-command
-          -p cageforge-config
-          -p cageforge-network-proxy
-          -p cageforge-path
-          -p cageforge-policy
-          -p cageforge-policy-compose
-          -p cageforge-upstream-review
       - name: Lint Windows backend in every feature mode
-        shell: bash
         run: |
           set -euo pipefail
           cargo fmt --package cageforge-windows -- --check
@@ -367,76 +357,11 @@ jobs:
           cargo clippy -p cageforge-windows --all-targets --features bundled-helpers -- -D warnings
           cargo clippy -p cageforge-windows --all-targets --all-features -- -D warnings
       - name: Test Windows backend in every feature mode
-        shell: bash
         run: |
           set -euo pipefail
           cargo test -p cageforge-windows --no-default-features
           cargo test -p cageforge-windows --features bundled-helpers
           cargo test -p cageforge-windows --all-features
-
-  feature-surface:
-    name: "feature combinations (build target: Linux)"
-    needs: changes
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@v2
-      - name: Install bundled Bubblewrap build requirements
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libcap-dev pkg-config
-      # Keep these explicit. Workspace feature unification means that a
-      # workspace-wide --no-default-features run can still enable the proxy's
-      # runtime through cageforge-linux's target dependency.
-      - name: Lint Linux library and helper binary in every feature mode
-        run: |
-          cargo clippy -p cageforge-bwrap --all-targets -- -D warnings
-          cargo clippy -p cageforge-linux --lib --no-default-features --all-targets -- -D warnings
-          cargo clippy -p cageforge-linux --lib --features bundled-bubblewrap --all-targets -- -D warnings
-          cargo clippy -p cageforge-linux --lib --all-features --all-targets -- -D warnings
-          cargo clippy -p cageforge-linux --bin cageforge-linux-helper --no-default-features -- -D warnings
-          cargo clippy -p cageforge-linux --bin cageforge-linux-helper --features bundled-bubblewrap -- -D warnings
-          cargo clippy -p cageforge-linux --bin cageforge-linux-helper --all-features -- -D warnings
-      - name: Test Linux library and helper binary in every feature mode
-        run: |
-          cargo test -p cageforge-bwrap -p cageforge-linux --lib --no-default-features
-          cargo test -p cageforge-linux --lib --features bundled-bubblewrap
-          cargo test -p cageforge-linux --lib --all-features
-      - name: Lint network proxy runtime and configuration-only modes
-        run: |
-          cargo clippy -p cageforge-network-proxy --no-default-features --all-targets -- -D warnings
-          cargo clippy -p cageforge-network-proxy --features runtime --all-targets -- -D warnings
-          cargo clippy -p cageforge-network-proxy --all-features --all-targets -- -D warnings
-      - name: Test network proxy runtime and configuration-only modes
-        run: |
-          cargo test -p cageforge-network-proxy --all-features --all-targets
-          cargo test -p cageforge-network-proxy --features runtime --all-targets
-          cargo test -p cageforge-network-proxy --no-default-features --all-targets
-      - name: Check Linux documentation in every public feature mode
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: |
-          cargo doc -p cageforge-bwrap -p cageforge-linux --no-deps
-          cargo doc -p cageforge-linux --features bundled-bubblewrap --no-deps
-          cargo doc -p cageforge-linux --all-features --no-deps
-      - name: Cross-check Windows library, helper, and proxy surfaces
-        run: |
-          cargo check -p cageforge-linux --target x86_64-pc-windows-msvc --lib --all-targets
-          cargo check -p cageforge-linux --target x86_64-pc-windows-msvc --bin cageforge-linux-helper
-          cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --all-features --all-targets
-          cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --no-default-features --all-targets
-          cargo check -p cageforge-windows --target x86_64-pc-windows-msvc --no-default-features --all-targets
-          cargo check -p cageforge-windows --target x86_64-pc-windows-msvc --features bundled-helpers --all-targets
-          cargo check -p cageforge-windows --target x86_64-pc-windows-msvc --all-features --all-targets
-      - name: Cross-check ARM64 Linux backend and proxy surfaces
-        run: |
-          cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --lib --all-targets --no-default-features
-          cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --bin cageforge-linux-helper --no-default-features
-          cargo check -p cageforge-network-proxy --target aarch64-unknown-linux-gnu --all-features --all-targets
-          cargo check -p cageforge-network-proxy --target aarch64-unknown-linux-gnu --no-default-features --all-targets
 
   coverage-portable:
     name: "portable coverage (build target: Linux)"
@@ -496,7 +421,7 @@ jobs:
     name: CI passed
     if: always()
     needs:
-      [changes, common-components, native-linux, native-macos, native-windows, feature-surface, coverage-portable]
+      [changes, common-components, native-linux, native-linux-arm64, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

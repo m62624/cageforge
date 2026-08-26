@@ -300,11 +300,16 @@ and processes even after a failed assertion.
 
 ## 11. CI contract
 
-The Windows target lane performs formatting and Clippy, cross-target checks,
-all feature combinations, native tests, setup-helper tests, command-runner
-tests, and a machine-readable test report. `main` always runs this lane. Pull
-requests run it for shared dependencies, Windows crate changes, workflow
-changes, a manual `sandbox-windows` label, or manual workflow dispatch.
+The common-component lane runs independently on Linux, macOS, and Windows and
+must not compile or test an OS sandbox crate. It checks every feature
+combination exposed by the platform-independent crates on each target.
+
+The separate Windows sandbox lane performs formatting and Clippy, all
+`cageforge-windows` feature combinations, native tests, setup-helper tests,
+command-runner tests, and a machine-readable test report. It runs on an
+explicit Windows Server 2025 runner. `main` always runs this lane. Pull requests
+run it for shared dependencies, Windows crate changes, workflow changes, a
+manual `sandbox-windows` label, or manual workflow dispatch.
 
 The native security job runs on an ephemeral Windows runner and provisions
 only the runner VM. It receives read-only repository permissions, does not run
