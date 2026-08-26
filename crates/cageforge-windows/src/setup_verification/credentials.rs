@@ -8,6 +8,7 @@ use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
 };
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::WindowsSetupVerificationError;
 use crate::setup::WindowsSetupDetails;
@@ -23,10 +24,47 @@ struct ProtectedCredentials {
     online_password: Vec<u8>,
 }
 
+pub(super) struct SandboxCredentials {
+    offline: AccountCredential,
+    online: AccountCredential,
+}
+
+pub(super) struct AccountCredential {
+    name: String,
+    password: Zeroizing<Vec<u16>>,
+}
+
+impl SandboxCredentials {
+    pub(super) const fn offline(&self) -> &AccountCredential {
+        &self.offline
+    }
+
+    pub(super) const fn online(&self) -> &AccountCredential {
+        &self.online
+    }
+}
+
+impl AccountCredential {
+    pub(super) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(super) fn password_wide(&self) -> &[u16] {
+        &self.password
+    }
+}
+
 pub(super) fn verify(
     details: &WindowsSetupDetails,
     path: &Path,
 ) -> Result<(), WindowsSetupVerificationError> {
+    read(details, path).map(|_| ())
+}
+
+pub(super) fn read(
+    details: &WindowsSetupDetails,
+    path: &Path,
+) -> Result<SandboxCredentials, WindowsSetupVerificationError> {
     let encoded =
         fs::read(path).map_err(|source| WindowsSetupVerificationError::CredentialRead {
             path: path.to_path_buf(),
@@ -46,18 +84,50 @@ pub(super) fn verify(
             source,
         }
     })?;
-    if credentials.version != CREDENTIALS_VERSION
-        || credentials.offline_name != details.accounts().offline_name()
-        || credentials.online_name != details.accounts().online_name()
+    if credentials.version != CREDENTIALS_VERSION {
+        return Err(WindowsSetupVerificationError::CredentialIdentityMismatch);
+    }
+    let offline = decode_password(
+        "offline",
+        decrypt("offline", &credentials.offline_password)?,
+    )?;
+    let online = decode_password("online", decrypt("online", &credentials.online_password)?)?;
+    let credentials = SandboxCredentials {
+        offline: AccountCredential {
+            name: credentials.offline_name,
+            password: offline,
+        },
+        online: AccountCredential {
+            name: credentials.online_name,
+            password: online,
+        },
+    };
+    if credentials.offline().name() != details.accounts().offline_name()
+        || credentials.online().name() != details.accounts().online_name()
+        || credentials.offline().password_wide().len() < 2
+        || credentials.online().password_wide().len() < 2
+        || credentials.offline().password_wide() == credentials.online().password_wide()
     {
         return Err(WindowsSetupVerificationError::CredentialIdentityMismatch);
     }
-    let offline = decrypt("offline", &credentials.offline_password)?;
-    let online = decrypt("online", &credentials.online_password)?;
-    if offline.is_empty() || online.is_empty() || offline == online {
-        return Err(WindowsSetupVerificationError::CredentialIdentityMismatch);
-    }
-    Ok(())
+    Ok(credentials)
+}
+
+fn decode_password(
+    component: &'static str,
+    mut decrypted: Vec<u8>,
+) -> Result<Zeroizing<Vec<u16>>, WindowsSetupVerificationError> {
+    let text = match std::str::from_utf8(&decrypted) {
+        Ok(text) if !text.is_empty() && !text.contains('\0') => text,
+        Ok(_) | Err(_) => {
+            decrypted.zeroize();
+            return Err(WindowsSetupVerificationError::CredentialEncoding { component });
+        }
+    };
+    let mut wide = text.encode_utf16().collect::<Vec<_>>();
+    wide.push(0);
+    decrypted.zeroize();
+    Ok(Zeroizing::new(wide))
 }
 
 #[allow(unsafe_code)]

@@ -1,0 +1,618 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::ffi::c_void;
+use std::fs::File;
+use std::mem::size_of;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
+
+use thiserror::Error;
+use windows_sys::Win32::Foundation::{
+    GetLastError, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+};
+use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING,
+};
+use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::Threading::{
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    UpdateProcThreadAttribute,
+};
+
+use crate::runner_protocol::{
+    RunnerSpawnRequest, RunnerStdioMode, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
+};
+
+use super::token::RestrictedPrimaryToken;
+
+pub(super) struct SpawnedProcess {
+    process: OwnedHandle,
+    process_id: u32,
+    stdin: Option<OwnedHandle>,
+    stdout: Option<OwnedHandle>,
+    stderr: Option<OwnedHandle>,
+    finished: bool,
+}
+
+struct PreparedStandardHandles {
+    child_stdin: OwnedHandle,
+    child_stdout: OwnedHandle,
+    child_stderr: OwnedHandle,
+    runner_stdin: Option<OwnedHandle>,
+    runner_stdout: Option<OwnedHandle>,
+    runner_stderr: Option<OwnedHandle>,
+}
+
+struct AnonymousPipe {
+    read: OwnedHandle,
+    write: OwnedHandle,
+}
+
+struct ProcessAttributeList {
+    storage: Vec<usize>,
+    initialized: bool,
+}
+
+#[derive(Debug, Error)]
+pub(super) enum ProcessStartError {
+    #[error("spawn request has no command")]
+    EmptyCommand,
+    #[error("spawn request {field} contains an embedded NUL")]
+    EmbeddedNul { field: &'static str },
+    #[error("spawn request environment block is not double-NUL terminated")]
+    InvalidEnvironmentBlock,
+    #[error("spawn request working directory is empty")]
+    EmptyWorkingDirectory,
+    #[error("spawn request private desktop name is empty")]
+    EmptyDesktopName,
+    #[error("parent-supplied Job Object handle is invalid")]
+    InvalidJobHandle,
+    #[error("failed to create an anonymous {stream} pipe: Windows error {code}")]
+    PipeCreate { stream: &'static str, code: u32 },
+    #[error("failed to remove inheritance from the runner side of {stream}: Windows error {code}")]
+    PipeInheritance { stream: &'static str, code: u32 },
+    #[error("failed to open NUL for child {stream}: Windows error {code}")]
+    NullOpen { stream: &'static str, code: u32 },
+    #[error("failed to size the process attribute list: Windows error {code}")]
+    AttributeListSize { code: u32 },
+    #[error("failed to initialize the process attribute list: Windows error {code}")]
+    AttributeListInitialize { code: u32 },
+    #[error("failed to install the explicit standard-handle list: Windows error {code}")]
+    HandleListApply { code: u32 },
+    #[error("failed to install atomic Job Object assignment: Windows error {code}")]
+    JobListApply { code: u32 },
+    #[error("CreateProcessAsUserW failed: Windows error {code}")]
+    ProcessCreate { code: u32 },
+    #[error("Windows returned no process or thread handle for the child")]
+    MissingProcessHandle,
+    #[error("waiting for the restricted process failed: Windows error {code}")]
+    ProcessWait { code: u32 },
+    #[error("waiting for the restricted process returned unexpected status {result:#x}")]
+    UnexpectedWait { result: u32 },
+    #[error("reading the restricted process exit code failed: Windows error {code}")]
+    ExitCodeRead { code: u32 },
+}
+
+impl SpawnedProcess {
+    #[allow(unsafe_code)]
+    pub(super) fn start(
+        token: &RestrictedPrimaryToken,
+        request: RunnerSpawnRequest,
+    ) -> Result<Self, ProcessStartError> {
+        validate_request(&request)?;
+        let mut command_line = command_line(&request.command);
+        command_line.push(0);
+        let mut application = request.command[0].clone();
+        application.push(0);
+        let mut working_directory = request.working_directory;
+        working_directory.push(0);
+        let mut desktop = request.desktop_name;
+        desktop.push(0);
+        let standard = PreparedStandardHandles::new(&request.stdio)?;
+        let job_value =
+            usize::try_from(request.job_handle).map_err(|_| ProcessStartError::InvalidJobHandle)?;
+        let job_handle = job_value as *mut c_void;
+        if job_handle.is_null() || job_handle == INVALID_HANDLE_VALUE {
+            return Err(ProcessStartError::InvalidJobHandle);
+        }
+        let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
+        let child_handles = [
+            standard.child_stdin.as_raw_handle(),
+            standard.child_stdout.as_raw_handle(),
+            standard.child_stderr.as_raw_handle(),
+        ];
+        let mut attributes = ProcessAttributeList::new(2)?;
+        attributes.apply_handles(&child_handles)?;
+        attributes.apply_job(job.as_raw_handle())?;
+        let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = child_handles[0];
+        startup.StartupInfo.hStdOutput = child_handles[1];
+        startup.StartupInfo.hStdError = child_handles[2];
+        startup.StartupInfo.lpDesktop = desktop.as_mut_ptr();
+        startup.lpAttributeList = attributes.as_mut_ptr();
+        let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe {
+            CreateProcessAsUserW(
+                token.raw(),
+                application.as_ptr(),
+                command_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                request.environment_block.as_ptr().cast(),
+                working_directory.as_ptr(),
+                &startup.StartupInfo,
+                &mut process,
+            )
+        } == 0
+        {
+            return Err(ProcessStartError::ProcessCreate {
+                code: unsafe { GetLastError() },
+            });
+        }
+        if process.hProcess.is_null() || process.hThread.is_null() || process.dwProcessId == 0 {
+            if !process.hProcess.is_null() {
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(process.hProcess);
+                }
+            }
+            if !process.hThread.is_null() {
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(process.hThread);
+                }
+            }
+            return Err(ProcessStartError::MissingProcessHandle);
+        }
+        let process_handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess as RawHandle) };
+        let _thread = unsafe { OwnedHandle::from_raw_handle(process.hThread as RawHandle) };
+        drop(job);
+        Ok(Self {
+            process: process_handle,
+            process_id: process.dwProcessId,
+            stdin: standard.runner_stdin,
+            stdout: standard.runner_stdout,
+            stderr: standard.runner_stderr,
+            finished: false,
+        })
+    }
+
+    pub(super) const fn id(&self) -> u32 {
+        self.process_id
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn take_stdin(&mut self) -> Option<File> {
+        self.stdin
+            .take()
+            .map(|handle| unsafe { File::from_raw_handle(handle.into_raw_handle()) })
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn take_stdout(&mut self) -> Option<File> {
+        self.stdout
+            .take()
+            .map(|handle| unsafe { File::from_raw_handle(handle.into_raw_handle()) })
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn take_stderr(&mut self) -> Option<File> {
+        self.stderr
+            .take()
+            .map(|handle| unsafe { File::from_raw_handle(handle.into_raw_handle()) })
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn wait(&mut self) -> Result<u32, ProcessStartError> {
+        let wait = unsafe {
+            windows_sys::Win32::System::Threading::WaitForSingleObject(
+                self.process.as_raw_handle() as _,
+                windows_sys::Win32::System::Threading::INFINITE,
+            )
+        };
+        if wait == windows_sys::Win32::Foundation::WAIT_FAILED {
+            return Err(ProcessStartError::ProcessWait {
+                code: unsafe { GetLastError() },
+            });
+        }
+        if wait != windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
+            return Err(ProcessStartError::UnexpectedWait { result: wait });
+        }
+        let mut exit_code = 0;
+        if unsafe {
+            windows_sys::Win32::System::Threading::GetExitCodeProcess(
+                self.process.as_raw_handle() as _,
+                &mut exit_code,
+            )
+        } == 0
+        {
+            return Err(ProcessStartError::ExitCodeRead {
+                code: unsafe { GetLastError() },
+            });
+        }
+        self.finished = true;
+        Ok(exit_code)
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for SpawnedProcess {
+    fn drop(&mut self) {
+        if !self.finished {
+            unsafe {
+                windows_sys::Win32::System::Threading::TerminateProcess(
+                    self.process.as_raw_handle() as _,
+                    125,
+                );
+                windows_sys::Win32::System::Threading::WaitForSingleObject(
+                    self.process.as_raw_handle() as _,
+                    5_000,
+                );
+            }
+        }
+    }
+}
+
+impl PreparedStandardHandles {
+    fn new(plan: &crate::runner_protocol::RunnerStdioPlan) -> Result<Self, ProcessStartError> {
+        let (child_stdin, runner_stdin) = input_handles(plan.stdin)?;
+        let (child_stdout, runner_stdout) = output_handles("stdout", plan.stdout)?;
+        let (child_stderr, runner_stderr) = output_handles("stderr", plan.stderr)?;
+        Ok(Self {
+            child_stdin,
+            child_stdout,
+            child_stderr,
+            runner_stdin,
+            runner_stdout,
+            runner_stderr,
+        })
+    }
+}
+
+impl ProcessAttributeList {
+    #[allow(unsafe_code)]
+    fn new(attribute_count: u32) -> Result<Self, ProcessStartError> {
+        let mut bytes = 0usize;
+        let first = unsafe {
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), attribute_count, 0, &mut bytes)
+        };
+        if first != 0 || bytes == 0 {
+            return Err(ProcessStartError::AttributeListSize {
+                code: unsafe { GetLastError() },
+            });
+        }
+        let words = bytes.div_ceil(size_of::<usize>());
+        let mut list = Self {
+            storage: vec![0usize; words],
+            initialized: false,
+        };
+        if unsafe {
+            InitializeProcThreadAttributeList(list.as_mut_ptr(), attribute_count, 0, &mut bytes)
+        } == 0
+        {
+            return Err(ProcessStartError::AttributeListInitialize {
+                code: unsafe { GetLastError() },
+            });
+        }
+        list.initialized = true;
+        Ok(list)
+    }
+
+    #[allow(unsafe_code)]
+    fn apply_handles(&mut self, handles: &[*mut c_void]) -> Result<(), ProcessStartError> {
+        if unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                handles.as_ptr().cast(),
+                std::mem::size_of_val(handles),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        } == 0
+        {
+            return Err(ProcessStartError::HandleListApply {
+                code: unsafe { GetLastError() },
+            });
+        }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn apply_job(&mut self, job: *mut c_void) -> Result<(), ProcessStartError> {
+        if unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                (&raw const job).cast(),
+                size_of::<*mut c_void>(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        } == 0
+        {
+            return Err(ProcessStartError::JobListApply {
+                code: unsafe { GetLastError() },
+            });
+        }
+        Ok(())
+    }
+
+    fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.storage.as_mut_ptr().cast()
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for ProcessAttributeList {
+    fn drop(&mut self) {
+        if self.initialized {
+            unsafe {
+                DeleteProcThreadAttributeList(self.as_mut_ptr());
+            }
+        }
+    }
+}
+
+impl ProcessStartError {
+    pub(super) const fn stage(&self) -> WindowsRunnerFailureStage {
+        match self {
+            Self::InvalidJobHandle | Self::JobListApply { .. } => WindowsRunnerFailureStage::Job,
+            Self::EmptyCommand
+            | Self::EmbeddedNul { .. }
+            | Self::InvalidEnvironmentBlock
+            | Self::EmptyWorkingDirectory
+            | Self::EmptyDesktopName => WindowsRunnerFailureStage::Request,
+            Self::PipeCreate { .. }
+            | Self::PipeInheritance { .. }
+            | Self::NullOpen { .. }
+            | Self::AttributeListSize { .. }
+            | Self::AttributeListInitialize { .. }
+            | Self::HandleListApply { .. }
+            | Self::ProcessCreate { .. }
+            | Self::MissingProcessHandle => WindowsRunnerFailureStage::Process,
+            Self::ProcessWait { .. } | Self::UnexpectedWait { .. } | Self::ExitCodeRead { .. } => {
+                WindowsRunnerFailureStage::Wait
+            }
+        }
+    }
+
+    pub(super) const fn failure_code(&self) -> WindowsRunnerFailureCode {
+        match self {
+            Self::EmptyCommand
+            | Self::EmbeddedNul { .. }
+            | Self::InvalidEnvironmentBlock
+            | Self::EmptyWorkingDirectory
+            | Self::EmptyDesktopName => WindowsRunnerFailureCode::RequestField,
+            Self::InvalidJobHandle => WindowsRunnerFailureCode::JobHandleInvalid,
+            Self::PipeCreate { .. } | Self::PipeInheritance { .. } | Self::NullOpen { .. } => {
+                WindowsRunnerFailureCode::StandardStreamPrepare
+            }
+            Self::AttributeListSize { .. } | Self::AttributeListInitialize { .. } => {
+                WindowsRunnerFailureCode::AttributeListCreate
+            }
+            Self::HandleListApply { .. } => WindowsRunnerFailureCode::HandleListApply,
+            Self::JobListApply { .. } => WindowsRunnerFailureCode::JobListApply,
+            Self::ProcessCreate { .. } | Self::MissingProcessHandle => {
+                WindowsRunnerFailureCode::ProcessStart
+            }
+            Self::ProcessWait { .. } | Self::UnexpectedWait { .. } => {
+                WindowsRunnerFailureCode::ProcessWait
+            }
+            Self::ExitCodeRead { .. } => WindowsRunnerFailureCode::ExitCodeRead,
+        }
+    }
+
+    pub(super) const fn native_code(&self) -> Option<u32> {
+        match self {
+            Self::PipeCreate { code, .. }
+            | Self::PipeInheritance { code, .. }
+            | Self::NullOpen { code, .. }
+            | Self::AttributeListSize { code }
+            | Self::AttributeListInitialize { code }
+            | Self::HandleListApply { code }
+            | Self::JobListApply { code }
+            | Self::ProcessCreate { code }
+            | Self::ProcessWait { code }
+            | Self::ExitCodeRead { code } => Some(*code),
+            Self::EmptyCommand
+            | Self::EmbeddedNul { .. }
+            | Self::InvalidEnvironmentBlock
+            | Self::EmptyWorkingDirectory
+            | Self::EmptyDesktopName
+            | Self::InvalidJobHandle
+            | Self::MissingProcessHandle
+            | Self::UnexpectedWait { .. } => None,
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn input_handles(
+    mode: RunnerStdioMode,
+) -> Result<(OwnedHandle, Option<OwnedHandle>), ProcessStartError> {
+    match mode {
+        RunnerStdioMode::Null => Ok((open_null("stdin", FILE_GENERIC_READ)?, None)),
+        RunnerStdioMode::Inherit | RunnerStdioMode::Pipe => {
+            let pipe = anonymous_pipe("stdin")?;
+            clear_inheritance("stdin", &pipe.write)?;
+            Ok((pipe.read, Some(pipe.write)))
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn output_handles(
+    stream: &'static str,
+    mode: RunnerStdioMode,
+) -> Result<(OwnedHandle, Option<OwnedHandle>), ProcessStartError> {
+    match mode {
+        RunnerStdioMode::Null => Ok((open_null(stream, FILE_GENERIC_WRITE)?, None)),
+        RunnerStdioMode::Inherit | RunnerStdioMode::Pipe => {
+            let pipe = anonymous_pipe(stream)?;
+            clear_inheritance(stream, &pipe.read)?;
+            Ok((pipe.write, Some(pipe.read)))
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn anonymous_pipe(stream: &'static str) -> Result<AnonymousPipe, ProcessStartError> {
+    let security = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: 1,
+    };
+    let mut read = std::ptr::null_mut();
+    let mut write = std::ptr::null_mut();
+    if unsafe { CreatePipe(&mut read, &mut write, &security, 0) } == 0 {
+        return Err(ProcessStartError::PipeCreate {
+            stream,
+            code: unsafe { GetLastError() },
+        });
+    }
+    Ok(AnonymousPipe {
+        read: unsafe { OwnedHandle::from_raw_handle(read as RawHandle) },
+        write: unsafe { OwnedHandle::from_raw_handle(write as RawHandle) },
+    })
+}
+
+#[allow(unsafe_code)]
+fn clear_inheritance(stream: &'static str, handle: &OwnedHandle) -> Result<(), ProcessStartError> {
+    if unsafe { SetHandleInformation(handle.as_raw_handle() as _, HANDLE_FLAG_INHERIT, 0) } == 0 {
+        Err(ProcessStartError::PipeInheritance {
+            stream,
+            code: unsafe { GetLastError() },
+        })
+    } else {
+        Ok(())
+    }
+}
+
+#[allow(unsafe_code)]
+fn open_null(stream: &'static str, access: u32) -> Result<OwnedHandle, ProcessStartError> {
+    let name = "NUL\0".encode_utf16().collect::<Vec<_>>();
+    let security = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: 1,
+    };
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security,
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        Err(ProcessStartError::NullOpen {
+            stream,
+            code: unsafe { GetLastError() },
+        })
+    } else {
+        Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
+    }
+}
+
+fn validate_request(request: &RunnerSpawnRequest) -> Result<(), ProcessStartError> {
+    if request.command.is_empty() || request.command[0].is_empty() {
+        return Err(ProcessStartError::EmptyCommand);
+    }
+    if request.command.iter().any(|argument| argument.contains(&0)) {
+        return Err(ProcessStartError::EmbeddedNul { field: "command" });
+    }
+    if request.working_directory.is_empty() {
+        return Err(ProcessStartError::EmptyWorkingDirectory);
+    }
+    if request.working_directory.contains(&0) {
+        return Err(ProcessStartError::EmbeddedNul {
+            field: "working directory",
+        });
+    }
+    if request.desktop_name.is_empty() {
+        return Err(ProcessStartError::EmptyDesktopName);
+    }
+    if request.desktop_name.contains(&0) {
+        return Err(ProcessStartError::EmbeddedNul {
+            field: "private desktop",
+        });
+    }
+    if request.environment_block.len() < 2 || !request.environment_block.ends_with(&[0, 0]) {
+        return Err(ProcessStartError::InvalidEnvironmentBlock);
+    }
+    Ok(())
+}
+
+fn command_line(arguments: &[Vec<u16>]) -> Vec<u16> {
+    let mut result = Vec::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        if index != 0 {
+            result.push(b' ' as u16);
+        }
+        quote_argument(argument, &mut result);
+    }
+    result
+}
+
+fn quote_argument(argument: &[u16], output: &mut Vec<u16>) {
+    let quote = b'"' as u16;
+    let slash = b'\\' as u16;
+    let needs_quotes = argument.is_empty()
+        || argument
+            .iter()
+            .any(|unit| matches!(*unit, 0x09 | 0x20 | 0x22));
+    if !needs_quotes {
+        output.extend_from_slice(argument);
+        return;
+    }
+    output.push(quote);
+    let mut slashes = 0usize;
+    for unit in argument.iter().copied() {
+        if unit == slash {
+            slashes += 1;
+        } else if unit == quote {
+            output.extend(std::iter::repeat_n(slash, slashes * 2 + 1));
+            output.push(quote);
+            slashes = 0;
+        } else {
+            output.extend(std::iter::repeat_n(slash, slashes));
+            output.push(unit);
+            slashes = 0;
+        }
+    }
+    output.extend(std::iter::repeat_n(slash, slashes * 2));
+    output.push(quote);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_line;
+
+    #[test]
+    fn command_line_uses_windows_backslash_quote_rules() {
+        let arguments = [
+            r"C:\Program Files\tool.exe".encode_utf16().collect(),
+            r#"plain\"quoted"#.encode_utf16().collect(),
+            r"ends with\\".encode_utf16().collect(),
+            Vec::new(),
+        ];
+        let actual = String::from_utf16(&command_line(&arguments)).expect("valid UTF-16");
+
+        assert_eq!(
+            actual,
+            r#""C:\Program Files\tool.exe" "plain\\\"quoted" "ends with\\\\" """#
+        );
+    }
+}

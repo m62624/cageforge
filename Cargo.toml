@@ -65,4 +65,5 @@ jsonschema = { version = "0.49.9", default-features = false }
 schemars = "1.2.2"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+zeroize = "1.8.2"
 pkg-config = "0.3.34"

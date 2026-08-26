@@ -28,8 +28,13 @@ pub(super) struct InstalledRunnerIdentity {
     manifest: RunnerManifest,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AuthenticatedRunnerAccount {
+pub(super) struct AuthenticatedRunnerAccount {
+    kind: RunnerAccountKind,
+    sid: String,
+}
+
+#[derive(PartialEq, Eq)]
+enum RunnerAccountKind {
     Offline,
     Online,
 }
@@ -158,11 +163,16 @@ impl InstalledRunnerIdentity {
 }
 
 impl AuthenticatedRunnerAccount {
-    pub(super) const fn matches(self, requested: RunnerAccount) -> bool {
+    pub(super) const fn matches(&self, requested: RunnerAccount) -> bool {
         matches!(
-            (self, requested),
-            (Self::Offline, RunnerAccount::Offline) | (Self::Online, RunnerAccount::Online)
+            (&self.kind, requested),
+            (RunnerAccountKind::Offline, RunnerAccount::Offline)
+                | (RunnerAccountKind::Online, RunnerAccount::Online)
         )
+    }
+
+    pub(super) fn sid(&self) -> &str {
+        &self.sid
     }
 }
 
@@ -224,12 +234,18 @@ pub(super) fn authenticate_transport(
         .user_sid
         .eq_ignore_ascii_case(&installed.manifest.offline_sid)
     {
-        Ok(AuthenticatedRunnerAccount::Offline)
+        Ok(AuthenticatedRunnerAccount {
+            kind: RunnerAccountKind::Offline,
+            sid: installed.manifest.offline_sid.clone(),
+        })
     } else if runner
         .user_sid
         .eq_ignore_ascii_case(&installed.manifest.online_sid)
     {
-        Ok(AuthenticatedRunnerAccount::Online)
+        Ok(AuthenticatedRunnerAccount {
+            kind: RunnerAccountKind::Online,
+            sid: installed.manifest.online_sid.clone(),
+        })
     } else {
         Err(RunnerAuthenticationError::RunnerAccountMismatch)
     }

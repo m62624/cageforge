@@ -9,6 +9,7 @@ use thiserror::Error;
 
 pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 1;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_RUNNER_OUTPUT_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RunnerFrame {
@@ -33,10 +34,8 @@ pub(crate) enum RunnerMessage {
         stream: RunnerOutputStream,
         bytes: Vec<u8>,
     },
-    Terminate,
     Exited {
         exit_code: u32,
-        timed_out: bool,
     },
     Failed {
         failure: WindowsRunnerFailure,
@@ -52,7 +51,6 @@ pub(crate) struct RunnerSpawnRequest {
     pub(crate) route_sid: Option<String>,
     pub(crate) account: RunnerAccount,
     pub(crate) stdio: RunnerStdioPlan,
-    pub(crate) timeout_millis: Option<u64>,
     pub(crate) job_handle: u64,
     pub(crate) desktop_name: Vec<u16>,
 }
@@ -287,7 +285,6 @@ impl RunnerMessage {
             Self::Stdin { .. } => "stdin",
             Self::CloseStdin => "close_stdin",
             Self::Output { .. } => "output",
-            Self::Terminate => "terminate",
             Self::Exited { .. } => "exited",
             Self::Failed { .. } => "failed",
         }
@@ -373,7 +370,6 @@ mod tests {
                 stdout: RunnerStdioMode::Pipe,
                 stderr: RunnerStdioMode::Inherit,
             },
-            timeout_millis: Some(5_000),
             job_handle: 0x1234_5678,
             desktop_name: "Cageforge-test".encode_utf16().collect(),
         };
@@ -404,7 +400,7 @@ mod tests {
     fn protocol_version_mismatch_is_typed() {
         let frame = RunnerFrame {
             version: RUNNER_PROTOCOL_VERSION + 1,
-            message: RunnerMessage::Terminate,
+            message: RunnerMessage::CloseStdin,
         };
         let payload = serde_json::to_vec(&frame).expect("encode mismatched frame");
         let mut encoded = (payload.len() as u32).to_le_bytes().to_vec();

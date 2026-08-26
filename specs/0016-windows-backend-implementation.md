@@ -118,8 +118,18 @@ sandbox account. The token:
 - includes only the capability SIDs required by this request;
 - includes one random network-route restricting SID when proxy routing is
   active;
-- excludes the route SID from the default object DACL; and
+- keeps the logon SID and request capability SIDs as the complete default
+  object DACL, excluding both the route SID and `Everyone`; and
 - cannot inherit an administrator token or the real user's identity.
+
+The runner reads the completed token back before process creation. Token user,
+canonical restricting-SID set, default-DACL ACE set and masks, and enabled
+privileges must exactly match the requested boundary. `Everyone` remains a
+restricting SID because Windows restricted-token access checks require the
+normal and restricting passes to retain operating-system compatibility; it is
+not an object-creation grant. Any extra enabled privilege, duplicate canonical
+SID, route/default-DACL overlap, or Windows-canonicalized ACL difference fails
+before the child starts.
 
 Every restricted process is assigned atomically at creation to a fresh Job
 Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Cageforge does not
@@ -181,6 +191,10 @@ handle reaches the user command.
 
 `WindowsChild` owns the Job Object and every runtime resource. `kill`, timeout,
 drop, and failed setup terminate the complete job and reap the primary process.
+Timeout enforcement belongs to the trusted parent and is not delegated to a
+runner request field or runner-side timer. The runner closes its assign-only Job
+handle immediately after atomic child creation, so parent death also closes the
+last Job handle and activates `KILL_ON_JOB_CLOSE`.
 Exit status, signal-equivalent termination, timeout, and setup failure remain
 distinguishable.
 
@@ -452,12 +466,13 @@ refresh fallback, ConPTY, filesystem-helper aliases, or cloned secret-bearing
 protocol requests.
 
 The installed runner manifest is versioned and binds the setup owner SID,
-managed-group SID, both dedicated account SIDs, and the staged runner digest.
-Its digest is committed in the final setup marker. The runner directory and
-executable grant the managed group exactly read/execute access, while the
-manifest grants that group exactly read access; owner, Administrators, and
-SYSTEM retain full control. Every one of these protected DACLs and manifest
-fields is read back before setup is accepted. The runner obtains the manifest
+managed-group name and SID, both dedicated account names and SIDs, and the
+staged runner digest. Its digest is committed in the final setup marker. The
+runner directory and executable grant the managed group exactly read/execute
+access, while the manifest grants that group exactly read access; owner,
+Administrators, and SYSTEM retain full control. Every one of these protected
+DACLs and manifest fields is read back before setup is accepted. The runner
+obtains the manifest
 only from the protected directory containing its own verified executable, so a
 copied binary and attacker-selected manifest cannot establish a trusted
 endpoint.

@@ -237,6 +237,12 @@ pub enum WindowsSetupVerificationError {
         /// Native Win32 code.
         code: u32,
     },
+    /// A decrypted credential is empty, contains NUL, or is not valid UTF-8.
+    #[error("decrypted {component} Windows sandbox credential has invalid encoding")]
+    CredentialEncoding {
+        /// Offline or online credential role.
+        component: &'static str,
+    },
     /// A decrypted credential record names a different sandbox account.
     #[error("protected Windows credential identity does not match the setup marker")]
     CredentialIdentityMismatch,
