@@ -380,6 +380,9 @@ The Cageforge setup protocol retains the following boundaries:
   baseline checks only that the returned user-scope string contains the SID;
   Cageforge intentionally rejects extra principals and semantically different
   scopes while accepting equivalent Windows canonicalization;
+- the firewall COM apartment outlives every policy, rule-collection, and rule
+  interface acquired from it; teardown never calls `CoUninitialize` while a
+  dependent COM interface can still execute `Release`;
 - WFP provider, sublayer, and every account-scoped filter are persistent,
   stable Cageforge objects and are read back before marker commit; and
 - setup is committed only after all native state is effective.

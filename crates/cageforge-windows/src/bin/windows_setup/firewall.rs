@@ -49,7 +49,7 @@ pub(super) fn install_and_verify(
     progress: &mut dyn FnMut(SetupStage, &str),
 ) -> NativeSetupResult<String> {
     progress(SetupStage::Firewall, "initializing firewall COM apartment");
-    let apartment = initialize_com()?;
+    let _apartment = initialize_com()?;
     progress(SetupStage::Firewall, "opening firewall policy");
     let policy: INetFwPolicy2 =
         unsafe { CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER) }.map_err(
@@ -124,14 +124,16 @@ pub(super) fn install_and_verify(
     for spec in &specs {
         ensure_rule(&rules, spec, progress)?;
     }
-    progress(SetupStage::Firewall, "closing firewall COM apartment");
-    drop(apartment);
+    progress(
+        SetupStage::Firewall,
+        "completed firewall policy verification",
+    );
     Ok(policy_id)
 }
 
 #[allow(unsafe_code)]
 pub(super) fn remove(owner_sid: &str) -> NativeSetupResult<()> {
-    let apartment = initialize_com()?;
+    let _apartment = initialize_com()?;
     let policy: INetFwPolicy2 =
         unsafe { CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER) }.map_err(
             |error| {
@@ -163,7 +165,6 @@ pub(super) fn remove(owner_sid: &str) -> NativeSetupResult<()> {
             })?;
         }
     }
-    drop(apartment);
     Ok(())
 }
 

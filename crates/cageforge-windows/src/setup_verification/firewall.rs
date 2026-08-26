@@ -53,7 +53,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
             },
         );
     }
-    let apartment = initialize_com()?;
+    let _apartment = initialize_com()?;
     let policy: INetFwPolicy2 =
         unsafe { CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER) }.map_err(
             |error| WindowsSetupVerificationError::FirewallPolicyRead {
@@ -109,7 +109,6 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
             .map_err(|_| rule_mismatch(spec, "COM interface", "INetFwRule3", "unsupported"))?;
         verify_rule(&rule, spec)?;
     }
-    drop(apartment);
     Ok(())
 }
 
