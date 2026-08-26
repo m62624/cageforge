@@ -304,7 +304,13 @@ fn capability_state_model_failure(
         | crate::capability_state::CapabilityStateError::MissingAclMutation
         | crate::capability_state::CapabilityStateError::AclObjectIdentityMismatch { .. }
         | crate::capability_state::CapabilityStateError::AclBeforeMismatch { .. }
-        | crate::capability_state::CapabilityStateError::AclMutationDrift { .. } => {
+        | crate::capability_state::CapabilityStateError::AclMutationDrift { .. }
+        | crate::capability_state::CapabilityStateError::PendingMaterialization { .. }
+        | crate::capability_state::CapabilityStateError::MissingMaterialization
+        | crate::capability_state::CapabilityStateError::DuplicateMaterializedObject
+        | crate::capability_state::CapabilityStateError::NonCanonicalMaterializedOrder
+        | crate::capability_state::CapabilityStateError::InvalidMaterialization
+        | crate::capability_state::CapabilityStateError::MaterializationDrift { .. } => {
             SetupFailureCode::CapabilityStateDecode
         }
     };

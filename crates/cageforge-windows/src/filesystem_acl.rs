@@ -4,34 +4,43 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::mem::{offset_of, size_of};
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
+use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::{Path, PathBuf};
 
 use cageforge_path::{NativePathKey, is_within, paths_equal};
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{
+    ERROR_ALREADY_EXISTS, ERROR_SUCCESS, GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSidToSidW, DENY_ACCESS, EXPLICIT_ACCESS_W, GetSecurityInfo, REVOKE_ACCESS,
-    SE_FILE_OBJECT, SET_ACCESS, SetEntriesInAclW, SetSecurityInfo, TRUSTEE_IS_SID,
-    TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, DENY_ACCESS,
+    EXPLICIT_ACCESS_W, GetSecurityInfo, REVOKE_ACCESS, SDDL_REVISION_1, SE_FILE_OBJECT, SET_ACCESS,
+    SetEntriesInAclW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
     CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation,
-    GetLengthSid, GetSecurityDescriptorControl, INHERIT_ONLY_ACE, INHERITED_ACE, InitializeAcl,
-    IsValidSid, OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+    GetSecurityDescriptorOwner, INHERIT_ONLY_ACE, INHERITED_ACE, InitializeAcl, IsValidSid,
+    OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+    UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD,
-    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_ATTRIBUTES,
-    FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
 };
 
 use crate::capability_state::{
-    CapabilityRole, CapabilityStateError, PersistedDacl, PersistedFileIdentity,
+    CapabilityRole, CapabilityStateError, MaterializationEvidence, MaterializationRecovery,
+    PersistedDacl, PersistedFileIdentity,
 };
 use crate::capability_store::{
     CapabilityStateSession, CapabilityStateStore, CapabilityStateStoreError,
@@ -54,6 +63,7 @@ const WRITE_DENY_MASK: u32 = FILE_GENERIC_WRITE
     | WRITE_DAC
     | WRITE_OWNER;
 const SUBTREE_INHERITANCE: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+const MATERIALIZATION_MARKER_NAME: &str = ".cageforge-materialized-path";
 
 pub(crate) struct FilesystemAclEnforcement {
     authorities: FilesystemAuthorities,
@@ -137,6 +147,17 @@ struct OwnedAclBuffer {
     storage: Vec<u32>,
 }
 
+struct MaterializedMissingPaths {
+    retained_paths: Vec<ValidatedPath>,
+}
+
+struct CreationSecurityDescriptor {
+    descriptor: LocalSecurityDescriptor,
+    snapshot: PersistedDacl,
+}
+
+struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AclAccessMode {
     Allow,
@@ -216,6 +237,35 @@ pub(crate) enum FilesystemAclError {
     },
     #[error("filesystem ACL scan encountered reparse point {path:?}")]
     ReparsePoint { path: PathBuf },
+    #[error("failed to generate a cryptographically random missing-path marker: {source}")]
+    MaterializationRandom {
+        #[source]
+        source: getrandom::Error,
+    },
+    #[error("failed to build the owner-only materialization descriptor: Windows error {code}")]
+    MaterializationDescriptor { code: u32 },
+    #[error("missing filesystem target changed before materialization at {path:?}")]
+    MaterializationRace { path: PathBuf },
+    #[error("failed to create protected missing-path directory {path:?}: Windows error {code}")]
+    MaterializationCreate { path: PathBuf, code: u32 },
+    #[error("failed to create protected missing-path marker {path:?}: Windows error {code}")]
+    MaterializationMarkerCreate { path: PathBuf, code: u32 },
+    #[error("failed to write protected missing-path marker {path:?}: {source}")]
+    MaterializationMarkerWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to read protected missing-path marker {path:?}: {source}")]
+    MaterializationMarkerRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("protected missing-path marker content differs at {path:?}")]
+    MaterializationMarkerMismatch { path: PathBuf },
+    #[error("protected materialized object owner differs at {path:?}")]
+    MaterializationOwnerMismatch { path: PathBuf },
     #[error("failed to enumerate filesystem ACL subtree {path:?}: {source}")]
     Enumerate {
         path: PathBuf,

@@ -14,7 +14,9 @@ use windows_sys::Win32::System::IO::OVERLAPPED;
 
 use crate::capability_state::{
     AclMutationRecovery, CAPABILITY_LOCK_NAME, CAPABILITY_STATE_NAME, CapabilityRole,
-    CapabilityState, CapabilityStateError, ManagedAclObject, PersistedDacl, PersistedFileIdentity,
+    CapabilityState, CapabilityStateError, ManagedAclObject, MaterializationEvidence,
+    MaterializationRecovery, MaterializedObject, PendingMaterializationView, PersistedDacl,
+    PersistedFileIdentity,
 };
 use crate::error::WindowsSetupVerificationError;
 
@@ -179,6 +181,10 @@ impl CapabilityStateStore {
 }
 
 impl CapabilityStateSession<'_> {
+    pub(crate) fn owner_sid(&self) -> &str {
+        &self.store.owner_sid
+    }
+
     pub(crate) fn ensure_authorities(
         &mut self,
         profile_sha256: &str,
@@ -240,6 +246,45 @@ impl CapabilityStateSession<'_> {
 
     pub(crate) fn managed_acl_objects(&self) -> &[ManagedAclObject] {
         self.state.managed_acl_objects()
+    }
+
+    pub(crate) fn materialized_object(&self, path: &Path) -> Option<&MaterializedObject> {
+        self.state.materialized_object(path)
+    }
+
+    pub(crate) fn pending_materialization_path(&self) -> Option<&Path> {
+        self.state.pending_materialization_path()
+    }
+
+    pub(crate) fn pending_materialization(&self) -> Option<PendingMaterializationView<'_>> {
+        self.state.pending_materialization()
+    }
+
+    pub(crate) fn begin_materialization(
+        &mut self,
+        path: PathBuf,
+        descriptor: PersistedDacl,
+        marker_path: PathBuf,
+        marker_descriptor: PersistedDacl,
+        marker_nonce: [u8; 32],
+    ) -> Result<(), CapabilityStateStoreError> {
+        self.state.begin_materialization(
+            path,
+            descriptor,
+            marker_path,
+            marker_descriptor,
+            marker_nonce,
+        )?;
+        self.persist()
+    }
+
+    pub(crate) fn resolve_materialization(
+        &mut self,
+        evidence: Option<MaterializationEvidence>,
+    ) -> Result<MaterializationRecovery, CapabilityStateStoreError> {
+        let recovery = self.state.resolve_materialization(evidence)?;
+        self.persist()?;
+        Ok(recovery)
     }
 
     pub(crate) fn finish(self) -> Result<(), CapabilityStateStoreError> {

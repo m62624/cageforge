@@ -15,7 +15,7 @@ use windows_sys::Win32::Security::{ACL, IsValidAcl, IsValidSid};
 
 pub(crate) const CAPABILITY_STATE_NAME: &str = "capabilities.json";
 pub(crate) const CAPABILITY_LOCK_NAME: &str = "capabilities.lock";
-const CAPABILITY_STATE_VERSION: u32 = 2;
+const CAPABILITY_STATE_VERSION: u32 = 3;
 const READ_BASE_SUBAUTHORITY: &str = "1";
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -25,6 +25,8 @@ pub(crate) struct CapabilityState {
     entries: Vec<FilesystemCapability>,
     acl_objects: Vec<ManagedAclObject>,
     pending_acl_mutation: Option<PendingAclMutation>,
+    materialized_objects: Vec<MaterializedObject>,
+    pending_materialization: Option<PendingMaterialization>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +56,42 @@ struct PendingAclMutation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct MaterializedObject {
+    path: PathBuf,
+    identity: PersistedFileIdentity,
+    descriptor: PersistedDacl,
+    marker_path: PathBuf,
+    marker_identity: PersistedFileIdentity,
+    marker_descriptor: PersistedDacl,
+    marker_nonce: [u8; 32],
+}
+
+pub(crate) struct MaterializationEvidence {
+    identity: PersistedFileIdentity,
+    descriptor: PersistedDacl,
+    marker_identity: PersistedFileIdentity,
+    marker_descriptor: PersistedDacl,
+    marker_nonce: [u8; 32],
+}
+
+pub(crate) struct PendingMaterializationView<'state> {
+    path: &'state Path,
+    descriptor: &'state PersistedDacl,
+    marker_path: &'state Path,
+    marker_descriptor: &'state PersistedDacl,
+    marker_nonce: &'state [u8; 32],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PendingMaterialization {
+    path: PathBuf,
+    descriptor: PersistedDacl,
+    marker_path: PathBuf,
+    marker_descriptor: PersistedDacl,
+    marker_nonce: [u8; 32],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct PersistedFileIdentity {
     volume_serial_number: u64,
     file_id: [u8; 16],
@@ -76,6 +114,12 @@ pub(crate) enum CapabilityRole {
 pub(crate) enum AclMutationRecovery {
     Prior,
     Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MaterializationRecovery {
+    Absent,
+    Present,
 }
 
 struct LocalSid(*mut c_void);
@@ -141,6 +185,18 @@ pub(crate) enum CapabilityStateError {
     AclBeforeMismatch { path: PathBuf },
     #[error("pending ACL mutation for {path:?} matches neither its before nor after descriptor")]
     AclMutationDrift { path: PathBuf },
+    #[error("a filesystem materialization journal is already pending for {path:?}")]
+    PendingMaterialization { path: PathBuf },
+    #[error("no filesystem materialization journal is pending")]
+    MissingMaterialization,
+    #[error("capability-SID state repeats one materialized filesystem object")]
+    DuplicateMaterializedObject,
+    #[error("capability-SID state materialized objects are not in canonical path order")]
+    NonCanonicalMaterializedOrder,
+    #[error("capability-SID state contains an incomplete materialization record")]
+    InvalidMaterialization,
+    #[error("materialized filesystem object at {path:?} failed identity or marker verification")]
+    MaterializationDrift { path: PathBuf },
 }
 
 impl CapabilityState {
@@ -151,6 +207,8 @@ impl CapabilityState {
             entries: Vec::new(),
             acl_objects: Vec::new(),
             pending_acl_mutation: None,
+            materialized_objects: Vec::new(),
+            pending_materialization: None,
         };
         state.validate()?;
         Ok(state)
@@ -317,6 +375,103 @@ impl CapabilityState {
         &self.acl_objects
     }
 
+    pub(crate) fn materialized_object(&self, path: &Path) -> Option<&MaterializedObject> {
+        let key = NativePathKey::new(path);
+        self.materialized_objects
+            .iter()
+            .find(|object| NativePathKey::new(&object.path) == key)
+    }
+
+    pub(crate) fn pending_materialization_path(&self) -> Option<&Path> {
+        self.pending_materialization
+            .as_ref()
+            .map(|pending| pending.path.as_path())
+    }
+
+    pub(crate) fn pending_materialization(&self) -> Option<PendingMaterializationView<'_>> {
+        self.pending_materialization
+            .as_ref()
+            .map(|pending| PendingMaterializationView {
+                path: &pending.path,
+                descriptor: &pending.descriptor,
+                marker_path: &pending.marker_path,
+                marker_descriptor: &pending.marker_descriptor,
+                marker_nonce: &pending.marker_nonce,
+            })
+    }
+
+    pub(crate) fn begin_materialization(
+        &mut self,
+        path: PathBuf,
+        descriptor: PersistedDacl,
+        marker_path: PathBuf,
+        marker_descriptor: PersistedDacl,
+        marker_nonce: [u8; 32],
+    ) -> Result<(), CapabilityStateError> {
+        if let Some(pending) = &self.pending_acl_mutation {
+            return Err(CapabilityStateError::PendingAclMutation {
+                path: pending.path.clone(),
+            });
+        }
+        if let Some(pending) = &self.pending_materialization {
+            return Err(CapabilityStateError::PendingMaterialization {
+                path: pending.path.clone(),
+            });
+        }
+        if self.materialized_object(&path).is_some() {
+            return Err(CapabilityStateError::DuplicateMaterializedObject);
+        }
+        validate_materialization_paths(&path, &marker_path)?;
+        descriptor.validate()?;
+        marker_descriptor.validate()?;
+        self.pending_materialization = Some(PendingMaterialization {
+            path,
+            descriptor,
+            marker_path,
+            marker_descriptor,
+            marker_nonce,
+        });
+        self.validate()
+    }
+
+    pub(crate) fn resolve_materialization(
+        &mut self,
+        evidence: Option<MaterializationEvidence>,
+    ) -> Result<MaterializationRecovery, CapabilityStateError> {
+        let pending = self
+            .pending_materialization
+            .take()
+            .ok_or(CapabilityStateError::MissingMaterialization)?;
+        let recovery = match evidence {
+            None => MaterializationRecovery::Absent,
+            Some(evidence)
+                if evidence.descriptor == pending.descriptor
+                    && evidence.marker_descriptor == pending.marker_descriptor
+                    && evidence.marker_nonce == pending.marker_nonce =>
+            {
+                self.materialized_objects.push(MaterializedObject {
+                    path: pending.path,
+                    identity: evidence.identity,
+                    descriptor: evidence.descriptor,
+                    marker_path: pending.marker_path,
+                    marker_identity: evidence.marker_identity,
+                    marker_descriptor: evidence.marker_descriptor,
+                    marker_nonce: evidence.marker_nonce,
+                });
+                self.materialized_objects
+                    .sort_by_key(materialized_object_key);
+                MaterializationRecovery::Present
+            }
+            Some(_) => {
+                let path = pending.path.clone();
+                self.pending_materialization = Some(pending);
+                return Err(CapabilityStateError::MaterializationDrift { path });
+            }
+        };
+        self.validate()?;
+        Ok(recovery)
+    }
+
     fn validate(&self) -> Result<(), CapabilityStateError> {
         if self.version != CAPABILITY_STATE_VERSION {
             return Err(CapabilityStateError::Version {
@@ -377,6 +532,39 @@ impl CapabilityState {
         }
         if let Some(pending) = &self.pending_acl_mutation {
             pending.validate(&self.acl_objects)?;
+        }
+        let mut materialized_paths = BTreeSet::new();
+        let mut materialized_identities = BTreeSet::new();
+        let mut previous_materialized = None;
+        for object in &self.materialized_objects {
+            object.validate()?;
+            let key = materialized_object_key(object);
+            if previous_materialized
+                .as_ref()
+                .is_some_and(|previous| previous >= &key)
+            {
+                return Err(CapabilityStateError::NonCanonicalMaterializedOrder);
+            }
+            previous_materialized = Some(key.clone());
+            if !materialized_paths.insert(key)
+                || !materialized_paths.insert(NativePathKey::new(&object.marker_path))
+                || !materialized_identities.insert((
+                    object.identity.volume_serial_number,
+                    object.identity.file_id,
+                ))
+                || !materialized_identities.insert((
+                    object.marker_identity.volume_serial_number,
+                    object.marker_identity.file_id,
+                ))
+            {
+                return Err(CapabilityStateError::DuplicateMaterializedObject);
+            }
+        }
+        if self.pending_acl_mutation.is_some() && self.pending_materialization.is_some() {
+            return Err(CapabilityStateError::InvalidMaterialization);
+        }
+        if let Some(pending) = &self.pending_materialization {
+            pending.validate(&self.materialized_objects)?;
         }
         Ok(())
     }
@@ -451,6 +639,103 @@ impl PendingAclMutation {
                     return Err(CapabilityStateError::InvalidAclMutation);
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+impl MaterializedObject {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn identity(&self) -> &PersistedFileIdentity {
+        &self.identity
+    }
+
+    pub(crate) fn descriptor(&self) -> &PersistedDacl {
+        &self.descriptor
+    }
+
+    pub(crate) fn marker_path(&self) -> &Path {
+        &self.marker_path
+    }
+
+    pub(crate) fn marker_identity(&self) -> &PersistedFileIdentity {
+        &self.marker_identity
+    }
+
+    pub(crate) fn marker_descriptor(&self) -> &PersistedDacl {
+        &self.marker_descriptor
+    }
+
+    pub(crate) const fn marker_nonce(&self) -> &[u8; 32] {
+        &self.marker_nonce
+    }
+
+    fn validate(&self) -> Result<(), CapabilityStateError> {
+        validate_materialization_paths(&self.path, &self.marker_path)?;
+        self.descriptor.validate()?;
+        self.marker_descriptor.validate()?;
+        if self.identity == self.marker_identity || self.marker_nonce.iter().all(|byte| *byte == 0)
+        {
+            return Err(CapabilityStateError::InvalidMaterialization);
+        }
+        Ok(())
+    }
+}
+
+impl MaterializationEvidence {
+    pub(crate) fn new(
+        identity: PersistedFileIdentity,
+        descriptor: PersistedDacl,
+        marker_identity: PersistedFileIdentity,
+        marker_descriptor: PersistedDacl,
+        marker_nonce: [u8; 32],
+    ) -> Self {
+        Self {
+            identity,
+            descriptor,
+            marker_identity,
+            marker_descriptor,
+            marker_nonce,
+        }
+    }
+}
+
+impl PendingMaterializationView<'_> {
+    pub(crate) fn path(&self) -> &Path {
+        self.path
+    }
+
+    pub(crate) const fn descriptor(&self) -> &PersistedDacl {
+        self.descriptor
+    }
+
+    pub(crate) fn marker_path(&self) -> &Path {
+        self.marker_path
+    }
+
+    pub(crate) const fn marker_descriptor(&self) -> &PersistedDacl {
+        self.marker_descriptor
+    }
+
+    pub(crate) const fn marker_nonce(&self) -> &[u8; 32] {
+        self.marker_nonce
+    }
+}
+
+impl PendingMaterialization {
+    fn validate(&self, objects: &[MaterializedObject]) -> Result<(), CapabilityStateError> {
+        validate_materialization_paths(&self.path, &self.marker_path)?;
+        self.descriptor.validate()?;
+        self.marker_descriptor.validate()?;
+        if self.marker_nonce.iter().all(|byte| *byte == 0)
+            || objects
+                .iter()
+                .any(|object| NativePathKey::new(&object.path) == NativePathKey::new(&self.path))
+        {
+            return Err(CapabilityStateError::InvalidMaterialization);
         }
         Ok(())
     }
@@ -556,6 +841,21 @@ fn validate_root(path: &Path) -> Result<(), CapabilityStateError> {
     Ok(())
 }
 
+fn validate_materialization_paths(
+    path: &Path,
+    marker_path: &Path,
+) -> Result<(), CapabilityStateError> {
+    validate_root(path)?;
+    validate_root(marker_path)?;
+    if marker_path
+        .parent()
+        .is_none_or(|parent| NativePathKey::new(parent) != NativePathKey::new(path))
+    {
+        return Err(CapabilityStateError::InvalidMaterialization);
+    }
+    Ok(())
+}
+
 fn authority_key(
     profile_sha256: &str,
     role: &CapabilityRole,
@@ -573,6 +873,10 @@ fn entry_key(entry: &FilesystemCapability) -> (String, u8, NativePathKey) {
 }
 
 fn managed_acl_key(object: &ManagedAclObject) -> NativePathKey {
+    NativePathKey::new(&object.path)
+}
+
+fn materialized_object_key(object: &MaterializedObject) -> NativePathKey {
     NativePathKey::new(&object.path)
 }
 
