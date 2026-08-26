@@ -55,7 +55,10 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/core/src/exec.rs` | `crates/cageforge-backend-api` | Execution boundary consumers audited; process lifecycle remains backend-owned |
 | `codex-rs/exec-server/src/process_sandbox.rs` | `crates/cageforge-backend-api` | Prepared sandbox request flow audited; JSON-RPC and Codex protocol types excluded |
 | `codex-rs/exec-server/src/local_process.rs` | `crates/cageforge-backend-api` | Local process lifecycle consumer audited; PTY, telemetry, and session state excluded |
-| `codex-rs/sandboxing`, `codex-rs/linux-sandbox`, `codex-rs/windows-sandbox-rs`, `codex-rs/bwrap` | Future native backend crates | Planned; not imported |
+| `codex-rs/sandboxing`, `codex-rs/linux-sandbox`, `codex-rs/bwrap` | Native Linux backend and future native backend review | Behavior-tracked; independently implemented where present |
+| `codex-rs/windows-sandbox-rs` | `crates/cageforge-windows` | Elevated native behavior tracked for Specification 0016; independent implementation, not imported |
+| `codex-rs/network-proxy/src/windows_tcp_attribution.rs` | `crates/cageforge-windows` | Windows TCP owner and restricting-SID route behavior tracked; independent implementation, not imported |
+| `codex-rs/network-proxy/src/windows_proxy_ingress.rs` | `crates/cageforge-windows` | Per-execution Windows proxy route isolation tracked; independent implementation, not imported |
 | `codex-rs/vendor/bubblewrap` | `crates/cageforge-bwrap/vendor/bubblewrap` | Behavior comparison only; not the source of the bundled component |
 
 ## Bundled third-party source

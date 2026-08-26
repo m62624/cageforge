@@ -157,6 +157,21 @@ These rules are mandatory:
     upstream sources solely to compile the original Bubblewrap binary; only
     the surrounding Cageforge build integration may be changed, subject to the
     separate provenance and licensing rules.
+19. Treat the elevated Windows sandbox as one indivisible native security
+    boundary. Do not add or silently select the weaker current-user restricted
+    token fallback. Restricted launches must use the provisioned offline or
+    online sandbox identity, a request-specific restricted token, atomic Job
+    Object assignment with kill-on-close and no breakaway, a private desktop,
+    and an explicit inherited-handle list. Offline networking requires verified
+    firewall and WFP state; WFP failure is fatal. Proxy-routed launches must add
+    one random route SID to `TokenRestrictedSids` without adding it to the
+    token's default DACL. Windows ingress must attribute the accepted reversed
+    TCP four-tuple to one PID, inspect that process token, and select exactly one
+    registered route SID before entering the authenticated Cageforge gateway.
+    Missing, duplicate, stale, or unattributable routes fail closed. Keep these
+    invariants, setup read-back, helper authentication, and cleanup tests in
+    sync with `specs/0016-windows-backend-implementation.md` whenever the
+    Windows backend changes.
 
 ## Specification ordering
 
