@@ -53,8 +53,8 @@ concurrency:
 #    or CI input changes. An OS-specific crate selects only its own target.
 # 4. Manual PR labels sandbox-linux, sandbox-macos, and sandbox-windows force
 #    the requested lane. Labels are never applied automatically by the labeler.
-# 5. macOS/Windows target lanes run their host checks now and report the missing
-#    native enforcement crate until those crates are introduced.
+# 5. The Windows target lane runs every cageforge-windows feature combination
+#    and its native tests. macOS still reports its missing native backend.
 
 jobs:
   changes:
@@ -358,17 +358,21 @@ jobs:
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
-      - name: Run native Windows backend when available
+      - name: Lint Windows backend in every feature mode
         shell: bash
         run: |
           set -euo pipefail
-          if cargo metadata --no-deps --format-version 1 | grep -q '"name":"cageforge-windows"'; then
-            cargo fmt --package cageforge-windows -- --check
-            cargo clippy -p cageforge-windows --all-targets -- -D warnings
-            cargo test -p cageforge-windows
-          else
-            echo "::notice::cageforge-windows is not in this workspace yet; no native Windows enforcement crate was run."
-          fi
+          cargo fmt --package cageforge-windows -- --check
+          cargo clippy -p cageforge-windows --all-targets --no-default-features -- -D warnings
+          cargo clippy -p cageforge-windows --all-targets --features bundled-helpers -- -D warnings
+          cargo clippy -p cageforge-windows --all-targets --all-features -- -D warnings
+      - name: Test Windows backend in every feature mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cageforge-windows --no-default-features
+          cargo test -p cageforge-windows --features bundled-helpers
+          cargo test -p cageforge-windows --all-features
 
   feature-surface:
     name: "feature combinations (build target: Linux)"
@@ -424,6 +428,9 @@ jobs:
           cargo check -p cageforge-linux --target x86_64-pc-windows-msvc --bin cageforge-linux-helper
           cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --all-features --all-targets
           cargo check -p cageforge-network-proxy --target x86_64-pc-windows-msvc --no-default-features --all-targets
+          cargo check -p cageforge-windows --target x86_64-pc-windows-msvc --no-default-features --all-targets
+          cargo check -p cageforge-windows --target x86_64-pc-windows-msvc --features bundled-helpers --all-targets
+          cargo check -p cageforge-windows --target x86_64-pc-windows-msvc --all-features --all-targets
       - name: Cross-check ARM64 Linux backend and proxy surfaces
         run: |
           cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --lib --all-targets --no-default-features
