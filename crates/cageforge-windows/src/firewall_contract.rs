@@ -1,50 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::c_void;
-use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
-use windows_sys::Win32::Foundation::{HLOCAL, LocalFree};
-use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, SDDL_REVISION_1,
-};
-use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, EqualSid, GetAce, GetSecurityDescriptorDacl, IsValidAcl,
-    IsValidSecurityDescriptor, IsValidSid, PSECURITY_DESCRIPTOR, PSID,
-};
-use windows_sys::Win32::System::Com::COM_RIGHTS_EXECUTE;
-use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
 #[derive(Eq, PartialEq)]
 struct AddressSet {
     ipv4: Vec<(u32, u32)>,
     ipv6: Vec<(u128, u128)>,
-}
-
-struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
-
-struct LocalSid(PSID);
-
-#[allow(unsafe_code)]
-impl Drop for LocalSecurityDescriptor {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                LocalFree(self.0 as HLOCAL);
-            }
-        }
-    }
-}
-
-#[allow(unsafe_code)]
-impl Drop for LocalSid {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                LocalFree(self.0 as HLOCAL);
-            }
-        }
-    }
 }
 
 pub(crate) fn address_sets_match(actual: &str, expected: &str) -> bool {
@@ -59,63 +20,30 @@ pub(crate) fn port_sets_match(actual: &str, expected: &str) -> bool {
         .is_some_and(|(actual, expected)| actual == expected)
 }
 
-#[allow(unsafe_code)]
 pub(crate) fn local_user_scope_matches(actual: &str, expected_sid: &str) -> bool {
-    let actual_wide = wide(actual);
-    let mut descriptor = std::ptr::null_mut();
-    if unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            actual_wide.as_ptr(),
-            SDDL_REVISION_1,
-            &mut descriptor,
-            std::ptr::null_mut(),
-        )
-    } == 0
-        || descriptor.is_null()
-    {
+    let Some((_, dacl)) = actual.split_once("D:") else {
+        return false;
+    };
+    let Some(open) = dacl.find('(') else {
+        return false;
+    };
+    if !matches!(dacl[..open].trim(), "" | "P") {
         return false;
     }
-    let descriptor = LocalSecurityDescriptor(descriptor);
-    if unsafe { IsValidSecurityDescriptor(descriptor.0) } == 0 {
+    let Some(close) = dacl[open + 1..].find(')').map(|close| open + 1 + close) else {
+        return false;
+    };
+    if !dacl[close + 1..].trim().is_empty() {
         return false;
     }
-
-    let sid_wide = wide(expected_sid);
-    let mut sid = std::ptr::null_mut();
-    if unsafe { ConvertStringSidToSidW(sid_wide.as_ptr(), &mut sid) } == 0 || sid.is_null() {
-        return false;
-    }
-    let sid = LocalSid(sid);
-
-    let mut present = 0;
-    let mut dacl = std::ptr::null_mut();
-    let mut defaulted = 0;
-    if unsafe { GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted) }
-        == 0
-        || present == 0
-        || dacl.is_null()
-        || unsafe { IsValidAcl(dacl) } == 0
-        || unsafe { (*dacl).AceCount } != 1
-    {
-        return false;
-    }
-
-    let mut raw_ace = std::ptr::null_mut();
-    if unsafe { GetAce(dacl, 0, &mut raw_ace) } == 0 || raw_ace.is_null() {
-        return false;
-    }
-    let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
-    if unsafe { (*ace).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
-        || unsafe { (*ace).Header.AceFlags } != 0
-        || usize::from(unsafe { (*ace).Header.AceSize }) < size_of::<ACCESS_ALLOWED_ACE>()
-        || unsafe { (*ace).Mask } != COM_RIGHTS_EXECUTE
-    {
-        return false;
-    }
-    let actual_sid = unsafe { (&raw mut (*ace).SidStart).cast::<c_void>() };
-    unsafe {
-        IsValidSid(actual_sid) != 0 && IsValidSid(sid.0) != 0 && EqualSid(actual_sid, sid.0) != 0
-    }
+    let fields = dacl[open + 1..close].split(';').collect::<Vec<_>>();
+    fields.len() == 6
+        && fields[0].eq_ignore_ascii_case("A")
+        && fields[1].is_empty()
+        && (fields[2].eq_ignore_ascii_case("CC") || matches!(fields[2], "0x1" | "0X1" | "1"))
+        && fields[3].is_empty()
+        && fields[4].is_empty()
+        && fields[5].eq_ignore_ascii_case(expected_sid)
 }
 
 fn canonical_address_set(value: &str) -> Option<AddressSet> {
@@ -252,13 +180,9 @@ where
     merged
 }
 
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{address_sets_match, port_sets_match};
+    use super::{address_sets_match, local_user_scope_matches, port_sets_match};
 
     #[test]
     fn address_comparison_accepts_equivalent_windows_canonicalization() {
@@ -288,5 +212,22 @@ mod tests {
     fn port_comparison_uses_the_complete_set() {
         assert!(port_sets_match("1-3,4,6-65535", "1-4,6-65535"));
         assert!(!port_sets_match("1-5,7-65535", "1-4,6-65535"));
+    }
+
+    #[test]
+    fn local_user_scope_requires_one_exact_allow_ace() {
+        let sid = "S-1-5-21-1-2-3-1001";
+        assert!(local_user_scope_matches(
+            "O:LSD:(A;;CC;;;S-1-5-21-1-2-3-1001)",
+            sid
+        ));
+        assert!(!local_user_scope_matches(
+            "O:LSD:(A;;CC;;;S-1-5-21-1-2-3-1001)(A;;CC;;;WD)",
+            sid
+        ));
+        assert!(!local_user_scope_matches(
+            "O:LSD:(A;;CC;;;S-1-5-21-1-2-3-10010)",
+            sid
+        ));
     }
 }

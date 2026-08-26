@@ -421,6 +421,19 @@ pub enum WindowsSetupError {
         #[source]
         source: io::Error,
     },
+    /// The helper exited before creating its mandatory structured response.
+    #[error(
+        "Windows setup helper exited with code {exit_code:#x} without creating response {path:?}: {source}"
+    )]
+    HelperResponseMissing {
+        /// Expected response file path.
+        path: PathBuf,
+        /// Native helper process exit code, including NTSTATUS-style crash values.
+        exit_code: u32,
+        /// Filesystem error proving that the response is absent.
+        #[source]
+        source: io::Error,
+    },
     /// The structured setup response could not be read.
     #[error("failed to read Windows setup response {path:?}: {source}")]
     ResponseRead {

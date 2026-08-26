@@ -360,11 +360,22 @@ impl WindowsSetup {
                 });
             }
         };
-        let response_bytes =
-            fs::read(&response_path).map_err(|source| WindowsSetupError::ResponseRead {
-                path: response_path.clone(),
-                source,
-            })?;
+        let response_bytes = match fs::read(&response_path) {
+            Ok(response) => response,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                return Err(WindowsSetupError::HelperResponseMissing {
+                    path: response_path,
+                    exit_code,
+                    source,
+                });
+            }
+            Err(source) => {
+                return Err(WindowsSetupError::ResponseRead {
+                    path: response_path.clone(),
+                    source,
+                });
+            }
+        };
         let response: SetupResponse =
             serde_json::from_slice(&response_bytes).map_err(|source| {
                 WindowsSetupError::ResponseDecode {
