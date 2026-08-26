@@ -9,7 +9,7 @@ description = "Linux native backend for Cageforge process sandboxing"
 readme = "README.md"
 
 [package.metadata.docs.rs]
-targets = []
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 [features]
 default = []
