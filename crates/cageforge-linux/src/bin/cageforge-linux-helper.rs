@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
+
 #[cfg(target_os = "linux")]
 #[path = "../helper_protocol.rs"]
 mod helper_protocol;

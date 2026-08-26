@@ -11,6 +11,7 @@
 #![cfg(target_os = "linux")]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
+#![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
 mod backend;
 mod bwrap;
