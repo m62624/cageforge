@@ -16,16 +16,19 @@ use windows_sys::Win32::NetworkManagement::NetManagement::{
     NetUserSetInfo, UF_ACCOUNTDISABLE, UF_DONT_EXPIRE_PASSWD, UF_LOCKOUT, UF_NORMAL_ACCOUNT,
     UF_SCRIPT, USER_INFO_1, USER_INFO_1003, USER_INFO_1008, USER_PRIV_USER,
 };
-use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
+use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
+use windows_sys::Win32::Security::{LookupAccountNameW, LookupAccountSidW, SID_NAME_USE};
 
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts};
 
 const MANAGED_GROUP_COMMENT: &str = "Cageforge Windows sandbox identities (managed)";
+const BUILTIN_USERS_SID: &str = "S-1-5-32-545";
 
 struct NetApiBuffer(*mut u8);
+
+struct LocalSid(*mut c_void);
 
 #[allow(unsafe_code)]
 impl Drop for NetApiBuffer {
@@ -33,6 +36,17 @@ impl Drop for NetApiBuffer {
         if !self.0.is_null() {
             unsafe {
                 NetApiBufferFree(self.0.cast());
+            }
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for LocalSid {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                LocalFree(self.0 as HLOCAL);
             }
         }
     }
@@ -51,6 +65,9 @@ pub(super) fn provision(request: &SetupRequest) -> NativeSetupResult<Provisioned
     ensure_user(&online_name, &online_password, SetupStage::OnlineAccount)?;
     ensure_member(&group_name, &offline_name, SetupStage::OfflineAccount)?;
     ensure_member(&group_name, &online_name, SetupStage::OnlineAccount)?;
+    let users_group = account_name_for_sid(BUILTIN_USERS_SID)?;
+    ensure_member(&users_group, &offline_name, SetupStage::OfflineAccount)?;
+    ensure_member(&users_group, &online_name, SetupStage::OnlineAccount)?;
 
     let offline_sid = account_sid(&offline_name, SetupStage::OfflineAccount)?;
     let online_sid = account_sid(&online_name, SetupStage::OnlineAccount)?;
@@ -409,6 +426,77 @@ fn account_sid(account: &str, stage: SetupStage) -> NativeSetupResult<String> {
         ));
     }
     sid_to_string(sid.as_mut_ptr().cast(), stage)
+}
+
+#[allow(unsafe_code)]
+fn account_name_for_sid(sid: &str) -> NativeSetupResult<String> {
+    let sid_wide = wide(sid);
+    let mut parsed_sid = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_wide.as_ptr(), &mut parsed_sid) } == 0 {
+        return Err(NativeSetupFailure::new(
+            SetupStage::ManagedGroup,
+            SetupFailureCode::GroupMembership,
+            Some(unsafe { GetLastError() }),
+            format!("failed to parse required built-in group SID {sid}"),
+        ));
+    }
+    let parsed_sid = LocalSid(parsed_sid);
+    let mut name_length = 0u32;
+    let mut domain_length = 0u32;
+    let mut sid_type: SID_NAME_USE = 0;
+    let initial = unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            parsed_sid.0,
+            std::ptr::null_mut(),
+            &mut name_length,
+            std::ptr::null_mut(),
+            &mut domain_length,
+            &mut sid_type,
+        )
+    };
+    let initial_error = unsafe { GetLastError() };
+    if initial != 0 || initial_error != ERROR_INSUFFICIENT_BUFFER {
+        return Err(NativeSetupFailure::new(
+            SetupStage::ManagedGroup,
+            SetupFailureCode::GroupMembership,
+            Some(initial_error),
+            format!("failed to query the localized name for built-in group SID {sid}"),
+        ));
+    }
+    let mut name = vec![0u16; name_length as usize];
+    let mut domain = vec![0u16; domain_length as usize];
+    if unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            parsed_sid.0,
+            name.as_mut_ptr(),
+            &mut name_length,
+            domain.as_mut_ptr(),
+            &mut domain_length,
+            &mut sid_type,
+        )
+    } == 0
+    {
+        return Err(NativeSetupFailure::new(
+            SetupStage::ManagedGroup,
+            SetupFailureCode::GroupMembership,
+            Some(unsafe { GetLastError() }),
+            format!("failed to resolve the localized name for built-in group SID {sid}"),
+        ));
+    }
+    name.truncate(name_length as usize);
+    while name.last() == Some(&0) {
+        name.pop();
+    }
+    String::from_utf16(&name).map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::ManagedGroup,
+            SetupFailureCode::GroupMembership,
+            None,
+            format!("Windows returned an invalid built-in group name for SID {sid}: {error}"),
+        )
+    })
 }
 
 #[allow(unsafe_code)]
