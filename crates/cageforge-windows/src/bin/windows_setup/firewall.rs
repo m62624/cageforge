@@ -46,8 +46,11 @@ impl Drop for ComApartment {
 pub(super) fn install_and_verify(
     request: &SetupRequest,
     offline_sid: &str,
+    progress: &mut dyn FnMut(SetupStage, &str),
 ) -> NativeSetupResult<String> {
+    progress(SetupStage::Firewall, "initializing firewall COM apartment");
     let apartment = initialize_com()?;
+    progress(SetupStage::Firewall, "opening firewall policy");
     let policy: INetFwPolicy2 =
         unsafe { CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER) }.map_err(
             |error| {
@@ -58,6 +61,10 @@ pub(super) fn install_and_verify(
                 )
             },
         )?;
+    progress(
+        SetupStage::Firewall,
+        "reading effective firewall policy state",
+    );
     let modify_state = unsafe { policy.LocalPolicyModifyState() }.map_err(|error| {
         firewall_error(
             SetupFailureCode::FirewallPolicyAccess,
@@ -72,6 +79,7 @@ pub(super) fn install_and_verify(
             "local firewall rules are overridden or ineffective for an active profile",
         ));
     }
+    progress(SetupStage::Firewall, "opening firewall rule collection");
     let rules = unsafe { policy.Rules() }.map_err(|error| {
         firewall_error(
             SetupFailureCode::FirewallPolicyAccess,
@@ -114,8 +122,9 @@ pub(super) fn install_and_verify(
         },
     ];
     for spec in &specs {
-        ensure_rule(&rules, spec)?;
+        ensure_rule(&rules, spec, progress)?;
     }
+    progress(SetupStage::Firewall, "closing firewall COM apartment");
     drop(apartment);
     Ok(policy_id)
 }
@@ -173,7 +182,12 @@ fn initialize_com() -> NativeSetupResult<ComApartment> {
 }
 
 #[allow(unsafe_code)]
-fn ensure_rule(rules: &INetFwRules, spec: &RuleSpec) -> NativeSetupResult<()> {
+fn ensure_rule(
+    rules: &INetFwRules,
+    spec: &RuleSpec,
+    progress: &mut dyn FnMut(SetupStage, &str),
+) -> NativeSetupResult<()> {
+    report_rule(progress, spec, "looking up");
     let name = BSTR::from(spec.name.as_str());
     let rule = match unsafe { rules.Item(&name) } {
         Ok(rule) => rule.cast::<INetFwRule3>().map_err(|error| {
@@ -197,7 +211,7 @@ fn ensure_rule(rules: &INetFwRules, spec: &RuleSpec) -> NativeSetupResult<()> {
                         )
                     },
                 )?;
-            configure_rule(&rule, spec)?;
+            configure_rule(&rule, spec, progress)?;
             let base: INetFwRule = rule.cast().map_err(|error| {
                 firewall_error(
                     SetupFailureCode::FirewallRuleCreate,
@@ -205,6 +219,7 @@ fn ensure_rule(rules: &INetFwRules, spec: &RuleSpec) -> NativeSetupResult<()> {
                     format!("failed to convert firewall rule {:?}: {error}", spec.name),
                 )
             })?;
+            report_rule(progress, spec, "adding");
             unsafe { rules.Add(&base) }.map_err(|error| {
                 firewall_error(
                     SetupFailureCode::FirewallRuleCreate,
@@ -215,42 +230,57 @@ fn ensure_rule(rules: &INetFwRules, spec: &RuleSpec) -> NativeSetupResult<()> {
             rule
         }
     };
-    configure_rule(&rule, spec)?;
-    verify_rule(&rule, spec)
+    configure_rule(&rule, spec, progress)?;
+    verify_rule(&rule, spec, progress)
 }
 
 #[allow(unsafe_code)]
-fn configure_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
-    let configure = || -> windows::core::Result<()> {
-        unsafe {
-            rule.SetName(&BSTR::from(spec.name.as_str()))?;
-            rule.SetDescription(&BSTR::from(spec.description.as_str()))?;
-            rule.SetDirection(NET_FW_RULE_DIR_OUT)?;
-            rule.SetAction(NET_FW_ACTION_BLOCK)?;
-            rule.SetEnabled(VARIANT_TRUE)?;
-            rule.SetProfiles(NET_FW_PROFILE2_ALL.0)?;
-            rule.SetProtocol(spec.protocol)?;
-            rule.SetRemoteAddresses(&BSTR::from(spec.remote_addresses))?;
-            if spec.protocol == NET_FW_IP_PROTOCOL_TCP.0
-                || spec.protocol == NET_FW_IP_PROTOCOL_UDP.0
-            {
-                rule.SetRemotePorts(&BSTR::from(spec.remote_ports.as_deref().unwrap_or("*")))?;
-            }
-            rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_sddl.as_str()))?;
-        }
-        Ok(())
-    };
-    configure().map_err(|error| {
-        firewall_error(
-            SetupFailureCode::FirewallRuleConfigure,
-            error.code().0 as u32,
-            format!("failed to configure firewall rule {:?}: {error}", spec.name),
-        )
-    })
+fn configure_rule(
+    rule: &INetFwRule3,
+    spec: &RuleSpec,
+    progress: &mut dyn FnMut(SetupStage, &str),
+) -> NativeSetupResult<()> {
+    report_rule(progress, spec, "setting name");
+    unsafe { rule.SetName(&BSTR::from(spec.name.as_str())) }
+        .map_err(|error| configure_failure(spec, "name", error))?;
+    report_rule(progress, spec, "setting description");
+    unsafe { rule.SetDescription(&BSTR::from(spec.description.as_str())) }
+        .map_err(|error| configure_failure(spec, "description", error))?;
+    report_rule(progress, spec, "setting direction");
+    unsafe { rule.SetDirection(NET_FW_RULE_DIR_OUT) }
+        .map_err(|error| configure_failure(spec, "direction", error))?;
+    report_rule(progress, spec, "setting action");
+    unsafe { rule.SetAction(NET_FW_ACTION_BLOCK) }
+        .map_err(|error| configure_failure(spec, "action", error))?;
+    report_rule(progress, spec, "setting enabled state");
+    unsafe { rule.SetEnabled(VARIANT_TRUE) }
+        .map_err(|error| configure_failure(spec, "enabled state", error))?;
+    report_rule(progress, spec, "setting profiles");
+    unsafe { rule.SetProfiles(NET_FW_PROFILE2_ALL.0) }
+        .map_err(|error| configure_failure(spec, "profiles", error))?;
+    report_rule(progress, spec, "setting protocol");
+    unsafe { rule.SetProtocol(spec.protocol) }
+        .map_err(|error| configure_failure(spec, "protocol", error))?;
+    report_rule(progress, spec, "setting remote addresses");
+    unsafe { rule.SetRemoteAddresses(&BSTR::from(spec.remote_addresses)) }
+        .map_err(|error| configure_failure(spec, "remote addresses", error))?;
+    if spec.protocol == NET_FW_IP_PROTOCOL_TCP.0 || spec.protocol == NET_FW_IP_PROTOCOL_UDP.0 {
+        report_rule(progress, spec, "setting remote ports");
+        unsafe { rule.SetRemotePorts(&BSTR::from(spec.remote_ports.as_deref().unwrap_or("*"))) }
+            .map_err(|error| configure_failure(spec, "remote ports", error))?;
+    }
+    report_rule(progress, spec, "setting local user authorization");
+    unsafe { rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_sddl.as_str())) }
+        .map_err(|error| configure_failure(spec, "local user authorization", error))
 }
 
 #[allow(unsafe_code)]
-fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
+fn verify_rule(
+    rule: &INetFwRule3,
+    spec: &RuleSpec,
+    progress: &mut dyn FnMut(SetupStage, &str),
+) -> NativeSetupResult<()> {
+    report_rule(progress, spec, "reading name");
     let actual_name = unsafe { rule.Name() }
         .map(|value| value.to_string())
         .map_err(|error| read_back_failure(spec, "name", error))?;
@@ -262,6 +292,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         actual_name == spec.name,
     )?;
 
+    report_rule(progress, spec, "reading description");
     let actual_description = unsafe { rule.Description() }
         .map(|value| value.to_string())
         .map_err(|error| read_back_failure(spec, "description", error))?;
@@ -273,6 +304,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         actual_description == spec.description,
     )?;
 
+    report_rule(progress, spec, "reading direction");
     let actual_direction =
         unsafe { rule.Direction() }.map_err(|error| read_back_failure(spec, "direction", error))?;
     require_property(
@@ -283,6 +315,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         actual_direction == NET_FW_RULE_DIR_OUT,
     )?;
 
+    report_rule(progress, spec, "reading action");
     let actual_action =
         unsafe { rule.Action() }.map_err(|error| read_back_failure(spec, "action", error))?;
     require_property(
@@ -293,6 +326,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         actual_action == NET_FW_ACTION_BLOCK,
     )?;
 
+    report_rule(progress, spec, "reading enabled state");
     let actual_enabled =
         unsafe { rule.Enabled() }.map_err(|error| read_back_failure(spec, "enabled", error))?;
     require_property(
@@ -303,6 +337,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         actual_enabled == VARIANT_TRUE,
     )?;
 
+    report_rule(progress, spec, "reading profiles");
     let actual_profiles =
         unsafe { rule.Profiles() }.map_err(|error| read_back_failure(spec, "profiles", error))?;
     require_property(
@@ -313,6 +348,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         actual_profiles == NET_FW_PROFILE2_ALL.0,
     )?;
 
+    report_rule(progress, spec, "reading protocol");
     let actual_protocol =
         unsafe { rule.Protocol() }.map_err(|error| read_back_failure(spec, "protocol", error))?;
     require_property(
@@ -323,6 +359,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         actual_protocol == spec.protocol,
     )?;
 
+    report_rule(progress, spec, "reading remote addresses");
     let actual_addresses = unsafe { rule.RemoteAddresses() }
         .map(|value| value.to_string())
         .map_err(|error| read_back_failure(spec, "remote addresses", error))?;
@@ -336,6 +373,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
 
     if spec.protocol == NET_FW_IP_PROTOCOL_TCP.0 || spec.protocol == NET_FW_IP_PROTOCOL_UDP.0 {
         let expected_ports = spec.remote_ports.as_deref().unwrap_or("*");
+        report_rule(progress, spec, "reading remote ports");
         let actual_ports = unsafe { rule.RemotePorts() }
             .map(|value| value.to_string())
             .map_err(|error| read_back_failure(spec, "remote ports", error))?;
@@ -348,6 +386,7 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         )?;
     }
 
+    report_rule(progress, spec, "reading local user authorization");
     let actual_user = unsafe { rule.LocalUserAuthorizedList() }
         .map(|value| value.to_string())
         .map_err(|error| read_back_failure(spec, "local user authorization", error))?;
@@ -358,7 +397,30 @@ fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
         &actual_user,
         local_user_scope_matches(&actual_user, &spec.offline_sid),
     )?;
+    report_rule(progress, spec, "verified");
     Ok(())
+}
+
+fn report_rule(progress: &mut dyn FnMut(SetupStage, &str), spec: &RuleSpec, operation: &str) {
+    progress(
+        SetupStage::Firewall,
+        &format!("{operation} firewall rule {}", spec.name),
+    );
+}
+
+fn configure_failure(
+    spec: &RuleSpec,
+    property: &'static str,
+    error: windows::core::Error,
+) -> NativeSetupFailure {
+    firewall_error(
+        SetupFailureCode::FirewallRuleConfigure,
+        error.code().0 as u32,
+        format!(
+            "failed to configure firewall rule {:?} property {property:?}: {error}",
+            spec.name
+        ),
+    )
 }
 
 fn read_back_failure(

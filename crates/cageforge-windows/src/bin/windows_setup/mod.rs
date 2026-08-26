@@ -116,7 +116,8 @@ fn install(
         SetupStage::Firewall,
         "installing and verifying firewall policy",
     );
-    let firewall_policy_id = firewall::install_and_verify(request, &accounts.offline_sid)?;
+    let firewall_policy_id =
+        firewall::install_and_verify(request, &accounts.offline_sid, progress)?;
     progress(SetupStage::Wfp, "installing WFP policy");
     let wfp_provider_id = wfp::install_and_verify(
         &request.owner_sid,
