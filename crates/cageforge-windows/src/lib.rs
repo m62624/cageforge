@@ -15,17 +15,24 @@
 mod config;
 mod error;
 mod setup;
+mod setup_protocol;
+mod setup_state;
+mod setup_verification;
 mod win;
 
 pub use config::{
-    SetupHelperSource, WindowsBackendConfig, WindowsBackendConfigError, WindowsSetupConfig,
-    WindowsStateDirectorySource,
+    CommandRunnerSource, SetupHelperSource, WindowsBackendConfig, WindowsBackendConfigError,
+    WindowsSetupConfig, WindowsStateDirectorySource,
 };
 pub use error::{
     WindowsAccountLookupError, WindowsAccountVerificationError, WindowsBackendError,
     WindowsFilesystemShapeError, WindowsNetworkCombinationError, WindowsSetupError,
+    WindowsSetupVerificationError,
 };
 pub use setup::{
     WindowsSandboxAccounts, WindowsSetup, WindowsSetupDetails, WindowsSetupStaleReason,
     WindowsSetupStatus,
+};
+pub use setup_protocol::{
+    SetupFailureCode as WindowsSetupFailureCode, SetupStage as WindowsSetupStage,
 };

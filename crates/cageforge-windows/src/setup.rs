@@ -6,17 +6,24 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::config::{WindowsSetupConfig, WindowsStateDirectorySource};
+use crate::config::{
+    CommandRunnerSource, SetupHelperSource, WindowsSetupConfig, WindowsStateDirectorySource,
+};
 use crate::error::WindowsSetupError;
+use crate::setup_protocol::{
+    SETUP_PROTOCOL_VERSION, SetupOperation, SetupOutcome, SetupRequest, SetupResponse,
+};
+use crate::setup_state::{SETUP_STATE_VERSION, SetupMarker};
 
 /// Current on-disk Windows setup contract version.
-pub const WINDOWS_SETUP_VERSION: u32 = 1;
+pub const WINDOWS_SETUP_VERSION: u32 = SETUP_STATE_VERSION;
 const STATE_PARENT: &str = "Cageforge";
 const STATE_COMPONENT: &str = "windows-sandbox";
 const MARKER_NAME: &str = "setup.json";
+const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
+const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
 
 /// Dedicated local identities used by the elevated Windows boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,10 +43,12 @@ pub struct WindowsSetupDetails {
     owner_sid: String,
     state_directory: PathBuf,
     accounts: WindowsSandboxAccounts,
+    proxy_ports: Vec<u16>,
     firewall_policy_id: String,
     wfp_provider_id: String,
     setup_helper_sha256: String,
     command_runner_sha256: String,
+    credential_sha256: String,
 }
 
 /// Current state of elevated Windows provisioning.
@@ -86,27 +95,6 @@ pub enum WindowsSetupStaleReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsSetup {
     config: WindowsSetupConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct SetupMarker {
-    version: u32,
-    owner_sid: String,
-    accounts: SetupMarkerAccounts,
-    firewall_policy_id: String,
-    wfp_provider_id: String,
-    setup_helper_sha256: String,
-    command_runner_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct SetupMarkerAccounts {
-    offline_name: String,
-    offline_sid: String,
-    online_name: String,
-    online_sid: String,
-    group_name: String,
-    group_sid: String,
 }
 
 impl WindowsSandboxAccounts {
@@ -162,6 +150,11 @@ impl WindowsSetupDetails {
         &self.accounts
     }
 
+    /// Returns the fixed IPv4 loopback ingress ports opened for this owner.
+    pub fn proxy_ports(&self) -> &[u16] {
+        &self.proxy_ports
+    }
+
     /// Returns the stable identifier of the installed offline firewall policy.
     pub fn firewall_policy_id(&self) -> &str {
         &self.firewall_policy_id
@@ -180,6 +173,11 @@ impl WindowsSetupDetails {
     /// Returns the SHA-256 digest recorded for the installed command runner.
     pub fn command_runner_sha256(&self) -> &str {
         &self.command_runner_sha256
+    }
+
+    /// Returns the SHA-256 digest of the protected credential record.
+    pub fn credential_sha256(&self) -> &str {
+        &self.credential_sha256
     }
 }
 
@@ -255,6 +253,7 @@ impl WindowsSetup {
         }
         let details = marker.into_details(state_directory);
         verify_accounts(&details)?;
+        crate::setup_verification::verify(&details)?;
         Ok(WindowsSetupStatus::Ready(Box::new(details)))
     }
 
@@ -269,6 +268,133 @@ impl WindowsSetup {
         }
     }
 
+    /// Runs the administrator-approved helper and verifies the completed setup.
+    ///
+    /// The helper is elevated through the Windows `runas` shell verb. Cancelling
+    /// the UAC prompt is returned as [`WindowsSetupError::ElevationCanceled`].
+    pub fn install(&self) -> Result<WindowsSetupDetails, WindowsSetupError> {
+        self.run_helper(SetupOperation::Install)?;
+        self.verify()
+    }
+
+    /// Explicitly removes only the owner-scoped Cageforge setup objects.
+    ///
+    /// Cleanup refuses to recursively delete unknown state. Unexpected files
+    /// therefore produce a typed helper failure instead of widening deletion.
+    pub fn uninstall(&self) -> Result<(), WindowsSetupError> {
+        self.run_helper(SetupOperation::Uninstall)?;
+        match self.status()? {
+            WindowsSetupStatus::Missing { .. } => Ok(()),
+            WindowsSetupStatus::Stale { .. } | WindowsSetupStatus::Ready(_) => {
+                Err(WindowsSetupError::HelperExitMismatch { exit_code: 0 })
+            }
+        }
+    }
+
+    fn run_helper(&self, operation: SetupOperation) -> Result<(), WindowsSetupError> {
+        let owner_sid = crate::win::current_user_sid()
+            .map_err(|source| WindowsSetupError::CurrentUserSid { source })?;
+        let state_directory = self.state_directory_for(&owner_sid)?;
+        let helper_path = self.resolve_setup_helper()?;
+        let runner_path = self.resolve_command_runner()?;
+        let helper_sha256 = file_digest(&helper_path)?;
+        let runner_sha256 = file_digest(&runner_path)?;
+        let proxy_ports = proxy_ports_for_current_owner(&state_directory);
+        let request = SetupRequest {
+            version: SETUP_PROTOCOL_VERSION,
+            operation,
+            owner_sid,
+            state_directory,
+            setup_helper_sha256: helper_sha256,
+            command_runner_source: runner_path,
+            command_runner_sha256: runner_sha256,
+            proxy_ports,
+        };
+        let transport = tempfile::Builder::new()
+            .prefix("cageforge-windows-setup-")
+            .tempdir()
+            .map_err(|error| WindowsSetupError::RequestWrite {
+                path: std::env::temp_dir(),
+                detail: error.to_string(),
+            })?;
+        let request_path = transport.path().join("request.json");
+        let response_path = transport.path().join("response.json");
+        let encoded =
+            serde_json::to_vec(&request).map_err(|error| WindowsSetupError::RequestWrite {
+                path: request_path.clone(),
+                detail: error.to_string(),
+            })?;
+        fs::write(&request_path, encoded).map_err(|error| WindowsSetupError::RequestWrite {
+            path: request_path.clone(),
+            detail: error.to_string(),
+        })?;
+        let arguments = [
+            "--request".to_string(),
+            request_path.to_string_lossy().into_owned(),
+            "--response".to_string(),
+            response_path.to_string_lossy().into_owned(),
+        ];
+        let elevated = crate::win::current_process_is_elevated().map_err(|source| {
+            WindowsSetupError::HelperLaunch {
+                path: helper_path.clone(),
+                source,
+            }
+        })?;
+        let launched = if elevated {
+            std::process::Command::new(&helper_path)
+                .args(&arguments)
+                .status()
+                .map(|status| status.code().map_or(125, |code| code as u32))
+        } else {
+            crate::win::run_elevated(&helper_path, &arguments)
+        };
+        let exit_code = match launched {
+            Ok(code) => code,
+            Err(source) if source.raw_os_error() == Some(1223) => {
+                return Err(WindowsSetupError::ElevationCanceled);
+            }
+            Err(source) => {
+                return Err(WindowsSetupError::HelperLaunch {
+                    path: helper_path,
+                    source,
+                });
+            }
+        };
+        let response_bytes =
+            fs::read(&response_path).map_err(|source| WindowsSetupError::ResponseRead {
+                path: response_path.clone(),
+                source,
+            })?;
+        let response: SetupResponse =
+            serde_json::from_slice(&response_bytes).map_err(|source| {
+                WindowsSetupError::ResponseDecode {
+                    path: response_path,
+                    source,
+                }
+            })?;
+        if response.version != SETUP_PROTOCOL_VERSION {
+            return Err(WindowsSetupError::ResponseVersionMismatch {
+                expected: SETUP_PROTOCOL_VERSION,
+                actual: response.version,
+            });
+        }
+        match response.outcome {
+            SetupOutcome::Complete if exit_code == 0 => Ok(()),
+            SetupOutcome::Complete => Err(WindowsSetupError::HelperExitMismatch { exit_code }),
+            SetupOutcome::Failed {
+                stage,
+                code,
+                native_code,
+                detail,
+            } => Err(WindowsSetupError::HelperFailed {
+                stage,
+                code,
+                native_code,
+                detail,
+            }),
+        }
+    }
+
     fn state_directory_for(&self, owner_sid: &str) -> Result<PathBuf, WindowsSetupError> {
         let base = match self.config.state_directory_source() {
             WindowsStateDirectorySource::ProgramData => crate::win::program_data_directory()
@@ -278,6 +404,24 @@ impl WindowsSetup {
             WindowsStateDirectorySource::Explicit(path) => path.clone(),
         };
         Ok(base.join(owner_key(owner_sid)))
+    }
+
+    fn resolve_setup_helper(&self) -> Result<PathBuf, WindowsSetupError> {
+        resolve_resource(
+            self.config.setup_helper_source(),
+            SETUP_HELPER_NAME,
+            "bundled Windows setup helper is not staged in this build",
+        )
+    }
+
+    fn resolve_command_runner(&self) -> Result<PathBuf, WindowsSetupError> {
+        match self.config.command_runner_source() {
+            CommandRunnerSource::Bundled => Err(WindowsSetupError::HelperUnavailable {
+                detail: "bundled Windows command runner is not staged in this build".to_string(),
+            }),
+            CommandRunnerSource::Sibling => sibling_resource(COMMAND_RUNNER_NAME),
+            CommandRunnerSource::Explicit(path) => Ok(path.clone()),
+        }
     }
 }
 
@@ -295,10 +439,12 @@ impl SetupMarker {
                 group_name: self.accounts.group_name,
                 group_sid: self.accounts.group_sid,
             },
+            proxy_ports: self.proxy_ports,
             firewall_policy_id: self.firewall_policy_id,
             wfp_provider_id: self.wfp_provider_id,
             setup_helper_sha256: self.setup_helper_sha256,
             command_runner_sha256: self.command_runner_sha256,
+            credential_sha256: self.credential_sha256,
         }
     }
 }
@@ -341,10 +487,14 @@ fn verify_accounts(details: &WindowsSetupDetails) -> Result<(), WindowsSetupErro
                 source,
             })?;
         if !actual_sid.eq_ignore_ascii_case(expected_sid) {
-            return Err(WindowsSetupError::NativeVerification {
-                component: label,
-                detail: format!("expected SID {expected_sid}, found {actual_sid}"),
-            });
+            return Err(
+                crate::error::WindowsSetupVerificationError::AccountSidMismatch {
+                    component: label,
+                    expected: expected_sid.to_string(),
+                    actual: actual_sid,
+                }
+                .into(),
+            );
         }
     }
     for account in [accounts.offline_name(), accounts.online_name()] {
@@ -363,4 +513,49 @@ fn stale_error(reason: WindowsSetupStaleReason) -> WindowsSetupError {
         }
         WindowsSetupStaleReason::AccountIdentity => WindowsSetupError::AccountIdentityMismatch,
     }
+}
+
+fn resolve_resource(
+    source: &SetupHelperSource,
+    sibling_name: &str,
+    bundled_error: &str,
+) -> Result<PathBuf, WindowsSetupError> {
+    match source {
+        SetupHelperSource::Bundled => Err(WindowsSetupError::HelperUnavailable {
+            detail: bundled_error.to_string(),
+        }),
+        SetupHelperSource::Sibling => sibling_resource(sibling_name),
+        SetupHelperSource::Explicit(path) => Ok(path.clone()),
+    }
+}
+
+fn sibling_resource(name: &str) -> Result<PathBuf, WindowsSetupError> {
+    let executable =
+        std::env::current_exe().map_err(|error| WindowsSetupError::HelperUnavailable {
+            detail: format!("failed to resolve current executable: {error}"),
+        })?;
+    let parent = executable
+        .parent()
+        .ok_or_else(|| WindowsSetupError::HelperUnavailable {
+            detail: format!("current executable has no parent directory: {executable:?}"),
+        })?;
+    Ok(parent.join(name))
+}
+
+fn file_digest(path: &Path) -> Result<String, WindowsSetupError> {
+    let bytes = fs::read(path).map_err(|source| WindowsSetupError::HelperResourceRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn proxy_ports_for_current_owner(state_directory: &Path) -> Vec<u16> {
+    let digest = Sha256::digest(state_directory.as_os_str().to_string_lossy().as_bytes());
+    let offset = u16::from_be_bytes([digest[0], digest[1]]) % 8_000;
+    let first = 49_152 + offset * 2;
+    vec![first, first + 1]
 }

@@ -9,6 +9,8 @@ use cageforge_backend_api::{BackendCapability, BackendContractError};
 use cageforge_policy::{FilesystemMode, NetworkMode};
 use thiserror::Error;
 
+use crate::setup_protocol::{SetupFailureCode, SetupStage};
+
 /// Failure while resolving one Windows account or group SID.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WindowsAccountLookupError {
@@ -102,11 +104,13 @@ pub enum WindowsAccountVerificationError {
         /// Required Cageforge group.
         group: String,
     },
-    /// The account is a direct or indirect administrator.
-    #[error("sandbox account {account:?} is a member of Administrators")]
-    AdministratorMembership {
+    /// The account belongs directly or indirectly to a privileged local group.
+    #[error("sandbox account {account:?} is a member of privileged local group {group_sid}")]
+    PrivilegedGroupMembership {
         /// Sandbox account name.
         account: String,
+        /// Well-known SID of the rejected privileged local group.
+        group_sid: String,
     },
 }
 
@@ -144,6 +148,163 @@ pub enum WindowsNetworkCombinationError {
     /// Restricted filesystem enforcement cannot be performed under the current identity.
     #[error("restricted Windows filesystem enforcement requires a provisioned sandbox identity")]
     RestrictedFilesystemWithCurrentIdentity,
+}
+
+/// Read-back failure for one mandatory elevated setup component.
+#[derive(Debug, Error)]
+pub enum WindowsSetupVerificationError {
+    /// The marker does not contain exactly two usable ingress ports.
+    #[error("Windows setup marker has invalid proxy ingress ports: {ports:?}")]
+    InvalidProxyPorts {
+        /// Rejected marker ports.
+        ports: Vec<u16>,
+    },
+    /// A live account or group SID differs from the committed marker.
+    #[error("Windows setup SID mismatch for {component}: expected {expected}, found {actual}")]
+    AccountSidMismatch {
+        /// Account or group role.
+        component: &'static str,
+        /// SID committed by setup.
+        expected: String,
+        /// SID resolved during read-back.
+        actual: String,
+    },
+    /// Required LSA rights could not be enumerated.
+    #[error("failed to enumerate Windows account rights for {account:?}: error {code}")]
+    AccountRightsRead {
+        /// Sandbox account SID.
+        account: String,
+        /// Native Win32 code mapped from NTSTATUS.
+        code: u32,
+    },
+    /// A sandbox account lacks one mandatory logon right.
+    #[error("Windows sandbox account {account:?} is missing required right {right}")]
+    MissingAccountRight {
+        /// Sandbox account SID.
+        account: String,
+        /// Required LSA right.
+        right: &'static str,
+    },
+    /// A protected setup path DACL could not be read.
+    #[error("failed to read protected Windows setup DACL {path:?}: error {code}")]
+    ProtectedAclRead {
+        /// State, credential, marker, or helper path.
+        path: PathBuf,
+        /// Native Win32 code.
+        code: u32,
+    },
+    /// A protected setup path does not have the required owner/Admin/SYSTEM DACL.
+    #[error("protected Windows setup DACL mismatch at {path:?}: {actual}")]
+    ProtectedAclMismatch {
+        /// State, credential, marker, or helper path.
+        path: PathBuf,
+        /// Read-back SDDL.
+        actual: String,
+    },
+    /// The protected credential record could not be read.
+    #[error("failed to read protected Windows credentials {path:?}: {source}")]
+    CredentialRead {
+        /// Credential record path.
+        path: PathBuf,
+        /// Filesystem failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The protected credential record could not be decoded.
+    #[error("failed to decode protected Windows credentials {path:?}: {source}")]
+    CredentialDecode {
+        /// Credential record path.
+        path: PathBuf,
+        /// JSON failure.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// A staged resource or credential record digest differs from the marker.
+    #[error("Windows setup digest mismatch for {component}: expected {expected}, found {actual}")]
+    DigestMismatch {
+        /// Credential, setup-helper, or command-runner role.
+        component: &'static str,
+        /// Digest committed by setup.
+        expected: String,
+        /// Digest computed during read-back.
+        actual: String,
+    },
+    /// DPAPI could not decrypt a committed sandbox credential.
+    #[error("failed to decrypt {component} Windows sandbox credential: error {code}")]
+    CredentialDecrypt {
+        /// Offline or online credential role.
+        component: &'static str,
+        /// Native Win32 code.
+        code: u32,
+    },
+    /// A decrypted credential record names a different sandbox account.
+    #[error("protected Windows credential identity does not match the setup marker")]
+    CredentialIdentityMismatch,
+    /// A staged helper resource could not be read.
+    #[error("failed to read staged Windows setup resource {path:?}: {source}")]
+    ResourceRead {
+        /// Staged resource path.
+        path: PathBuf,
+        /// Filesystem failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Windows Firewall COM initialization failed.
+    #[error("failed to initialize COM for Windows Firewall read-back: HRESULT {code:#x}")]
+    FirewallComInitialization {
+        /// Native HRESULT.
+        code: i32,
+    },
+    /// Windows Firewall policy could not be queried.
+    #[error("failed to query effective Windows Firewall policy: HRESULT {code:#x}")]
+    FirewallPolicyRead {
+        /// Native HRESULT or modify-state value.
+        code: i32,
+    },
+    /// Group Policy prevents local firewall rules from being effective.
+    #[error("local Windows Firewall policy is ineffective (state {state})")]
+    FirewallPolicyIneffective {
+        /// `NET_FW_MODIFY_STATE` value.
+        state: i32,
+    },
+    /// One mandatory firewall rule is absent.
+    #[error("mandatory Windows Firewall rule is missing: {name}")]
+    FirewallRuleMissing {
+        /// Stable owner-scoped rule name.
+        name: String,
+    },
+    /// One mandatory firewall rule differs from its complete expected state.
+    #[error("Windows Firewall rule read-back mismatch: {name}")]
+    FirewallRuleMismatch {
+        /// Stable owner-scoped rule name.
+        name: String,
+    },
+    /// The WFP engine could not be opened for read-back.
+    #[error("failed to open WFP for setup read-back: error {code:#x}")]
+    WfpEngineOpen {
+        /// Native WFP code.
+        code: u32,
+    },
+    /// The persistent Cageforge WFP provider is absent or stale.
+    #[error("Cageforge WFP provider failed read-back: error {code:#x}")]
+    WfpProvider {
+        /// Zero for a field mismatch, otherwise a native WFP code.
+        code: u32,
+    },
+    /// The persistent Cageforge WFP sublayer is absent or stale.
+    #[error("Cageforge WFP sublayer failed read-back: error {code:#x}")]
+    WfpSublayer {
+        /// Zero for a field mismatch, otherwise a native WFP code.
+        code: u32,
+    },
+    /// One owner-scoped WFP filter is absent or stale.
+    #[error("Cageforge WFP filter {name:?} failed read-back: error {code:#x}")]
+    WfpFilter {
+        /// Stable owner-scoped filter name.
+        name: String,
+        /// Zero for a field mismatch, otherwise a native WFP code.
+        code: u32,
+    },
 }
 
 /// Provisioning, marker, account, firewall, or WFP verification failure.
@@ -205,14 +366,9 @@ pub enum WindowsSetupError {
     /// Deterministic account names do not match the marker.
     #[error("Windows setup account identity does not match its owner SID")]
     AccountIdentityMismatch,
-    /// Setup read-back found an ineffective native component.
-    #[error("Windows setup verification failed for {component}: {detail}")]
-    NativeVerification {
-        /// Native component name.
-        component: &'static str,
-        /// Stable diagnostic.
-        detail: String,
-    },
+    /// Mandatory native setup read-back failed.
+    #[error(transparent)]
+    Verification(#[from] WindowsSetupVerificationError),
     /// A setup account or group SID could not be resolved.
     #[error("Windows setup account lookup failed for {component}: {source}")]
     AccountLookup {
@@ -231,14 +387,76 @@ pub enum WindowsSetupError {
         /// Resolution diagnostic.
         detail: String,
     },
+    /// A helper resource could not be read for digest pinning.
+    #[error("failed to read Windows setup resource {path:?}: {source}")]
+    HelperResourceRead {
+        /// Setup helper or command-runner path.
+        path: PathBuf,
+        /// Filesystem failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The versioned setup request could not be written.
+    #[error("failed to write Windows setup request {path:?}: {detail}")]
+    RequestWrite {
+        /// Request file path.
+        path: PathBuf,
+        /// Filesystem or serialization failure rendered as stable text.
+        detail: String,
+    },
+    /// The elevated helper could not be launched or waited for.
+    #[error("failed to run elevated Windows setup helper {path:?}: {source}")]
+    HelperLaunch {
+        /// Selected helper executable.
+        path: PathBuf,
+        /// Shell elevation or process wait failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The structured setup response could not be read.
+    #[error("failed to read Windows setup response {path:?}: {source}")]
+    ResponseRead {
+        /// Response file path.
+        path: PathBuf,
+        /// Filesystem failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The structured setup response was malformed.
+    #[error("failed to decode Windows setup response {path:?}: {source}")]
+    ResponseDecode {
+        /// Response file path.
+        path: PathBuf,
+        /// JSON failure.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The setup response protocol version does not match the request.
+    #[error("Windows setup response version mismatch: expected {expected}, found {actual}")]
+    ResponseVersionMismatch {
+        /// Required helper protocol version.
+        expected: u32,
+        /// Returned helper protocol version.
+        actual: u32,
+    },
+    /// The helper returned a failing process status without a typed failure.
+    #[error("Windows setup helper exited with code {exit_code} after reporting success")]
+    HelperExitMismatch {
+        /// Native process exit code.
+        exit_code: u32,
+    },
     /// UAC elevation was cancelled.
     #[error("Windows elevated setup was cancelled by the user")]
     ElevationCanceled,
     /// The setup helper failed.
-    #[error("Windows setup helper failed during {stage}: {detail}")]
+    #[error("Windows setup helper failed during {stage:?} ({code:?}): {detail}")]
     HelperFailed {
         /// Versioned helper stage.
-        stage: String,
+        stage: SetupStage,
+        /// Stable helper failure classification.
+        code: SetupFailureCode,
+        /// Native Win32, HRESULT, NetAPI, NTSTATUS-mapped, or WFP code.
+        native_code: Option<u32>,
         /// Helper diagnostic.
         detail: String,
     },

@@ -5,7 +5,7 @@
 use std::ffi::{OsString, c_void};
 use std::io;
 use std::mem::{offset_of, size_of};
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::PathBuf;
 
@@ -17,11 +17,16 @@ use windows_sys::Win32::NetworkManagement::NetManagement::{
 };
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{
-    GetTokenInformation, LookupAccountNameW, SID_NAME_USE, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    GetTokenInformation, LookupAccountNameW, SID_NAME_USE, TOKEN_ELEVATION, TOKEN_QUERY,
+    TOKEN_USER, TokenElevation, TokenUser,
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+use windows_sys::Win32::UI::Shell::{
+    FOLDERID_ProgramData, KF_FLAG_DEFAULT, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    SHGetKnownFolderPath, ShellExecuteExW,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
 
@@ -110,6 +115,36 @@ pub(crate) fn current_user_sid() -> io::Result<String> {
 }
 
 #[allow(unsafe_code)]
+pub(crate) fn current_process_is_elevated() -> io::Result<bool> {
+    let mut token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut returned = 0u32;
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle() as _,
+            TokenElevation,
+            (&raw mut elevation).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if returned < size_of::<TOKEN_ELEVATION>() as u32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned a truncated token-elevation record",
+        ));
+    }
+    Ok(elevation.TokenIsElevated != 0)
+}
+
+#[allow(unsafe_code)]
 pub(crate) fn account_sid(account_name: &str) -> Result<String, WindowsAccountLookupError> {
     let name = to_wide(account_name);
     let mut sid_length = 0u32;
@@ -179,15 +214,77 @@ pub(crate) fn verify_sandbox_account(
             group: required_group_name.to_string(),
         });
     }
-    if group_sids
-        .iter()
-        .any(|sid| sid.eq_ignore_ascii_case("S-1-5-32-544"))
-    {
-        return Err(WindowsAccountVerificationError::AdministratorMembership {
+    if let Some(group_sid) = group_sids.iter().find(|sid| is_privileged_group_sid(sid)) {
+        return Err(WindowsAccountVerificationError::PrivilegedGroupMembership {
             account: account_name.to_string(),
+            group_sid: group_sid.clone(),
         });
     }
     Ok(())
+}
+
+#[allow(unsafe_code)]
+pub(crate) fn run_elevated(executable: &std::path::Path, arguments: &[String]) -> io::Result<u32> {
+    use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, INFINITE, WaitForSingleObject,
+    };
+
+    let verb = to_wide("runas");
+    let executable = executable
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let parameters = to_wide(
+        &arguments
+            .iter()
+            .map(|value| quote_argument(value))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    let mut execute = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        hwnd: std::ptr::null_mut(),
+        lpVerb: verb.as_ptr(),
+        lpFile: executable.as_ptr(),
+        lpParameters: parameters.as_ptr(),
+        lpDirectory: std::ptr::null(),
+        nShow: SW_SHOWNORMAL,
+        hInstApp: std::ptr::null_mut(),
+        lpIDList: std::ptr::null_mut(),
+        lpClass: std::ptr::null(),
+        hkeyClass: std::ptr::null_mut(),
+        dwHotKey: 0,
+        Anonymous: Default::default(),
+        hProcess: std::ptr::null_mut(),
+    };
+    if unsafe { ShellExecuteExW(&mut execute) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if execute.hProcess.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "elevated setup returned no process handle",
+        ));
+    }
+    let process = unsafe { OwnedHandle::from_raw_handle(execute.hProcess as RawHandle) };
+    let wait = unsafe { WaitForSingleObject(process.as_raw_handle() as _, INFINITE) };
+    if wait == WAIT_FAILED {
+        return Err(io::Error::last_os_error());
+    }
+    if wait != WAIT_OBJECT_0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unexpected elevated setup wait result {wait:#x}"),
+        ));
+    }
+    let mut exit_code = 0u32;
+    if unsafe { GetExitCodeProcess(process.as_raw_handle() as _, &mut exit_code) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(exit_code)
 }
 
 #[allow(unsafe_code)]
@@ -321,6 +418,20 @@ fn aligned_buffer(byte_length: usize) -> io::Result<Vec<usize>> {
     Ok(vec![0; byte_length.div_ceil(size_of::<usize>())])
 }
 
+fn is_privileged_group_sid(sid: &str) -> bool {
+    matches!(
+        sid.to_ascii_uppercase().as_str(),
+        "S-1-5-32-544"
+            | "S-1-5-32-548"
+            | "S-1-5-32-549"
+            | "S-1-5-32-550"
+            | "S-1-5-32-551"
+            | "S-1-5-32-552"
+            | "S-1-5-32-556"
+            | "S-1-5-32-578"
+    )
+}
+
 #[allow(unsafe_code)]
 fn wide_ptr_to_string(value: *const u16) -> Option<String> {
     if value.is_null() {
@@ -338,4 +449,25 @@ fn wide_ptr_to_string(value: *const u16) -> Option<String> {
 
 fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn quote_argument(value: &str) -> String {
+    let mut quoted = String::from('"');
+    let mut backslashes = 0usize;
+    for character in value.chars() {
+        if character == '\\' {
+            backslashes += 1;
+        } else if character == '"' {
+            quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+            quoted.push('"');
+            backslashes = 0;
+        } else {
+            quoted.extend(std::iter::repeat_n('\\', backslashes));
+            quoted.push(character);
+            backslashes = 0;
+        }
+    }
+    quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
+    quoted.push('"');
+    quoted
 }

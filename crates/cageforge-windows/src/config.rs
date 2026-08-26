@@ -21,6 +21,7 @@ pub struct WindowsBackendConfig {
 pub struct WindowsSetupConfig {
     state_directory: WindowsStateDirectorySource,
     setup_helper: SetupHelperSource,
+    command_runner: CommandRunnerSource,
 }
 
 /// How Cageforge locates its protected Windows setup state.
@@ -43,6 +44,17 @@ pub enum SetupHelperSource {
     Explicit(PathBuf),
 }
 
+/// How Cageforge locates the authenticated sandbox command runner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandRunnerSource {
+    /// Materialize the command runner embedded by the `bundled-helpers` feature.
+    Bundled,
+    /// Use `cageforge-windows-command-runner.exe` next to the current executable.
+    Sibling,
+    /// Use this explicitly selected command-runner executable.
+    Explicit(PathBuf),
+}
+
 /// Invalid Windows backend configuration.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WindowsBackendConfigError {
@@ -59,6 +71,12 @@ pub enum WindowsBackendConfigError {
     #[error("Windows setup helper path must be absolute: {path:?}")]
     RelativeSetupHelper {
         /// Rejected helper path.
+        path: PathBuf,
+    },
+    /// A command-runner path must be an absolute Windows path.
+    #[error("Windows command runner path must be absolute: {path:?}")]
+    RelativeCommandRunner {
+        /// Rejected command-runner path.
         path: PathBuf,
     },
 }
@@ -119,6 +137,7 @@ impl Default for WindowsSetupConfig {
         Self {
             state_directory: WindowsStateDirectorySource::ProgramData,
             setup_helper: SetupHelperSource::Bundled,
+            command_runner: CommandRunnerSource::Bundled,
         }
     }
 }
@@ -190,6 +209,44 @@ impl WindowsSetupConfig {
         match &self.setup_helper {
             SetupHelperSource::Bundled | SetupHelperSource::Sibling => None,
             SetupHelperSource::Explicit(path) => Some(path),
+        }
+    }
+
+    /// Uses the command runner next to the current executable.
+    pub fn with_sibling_command_runner(mut self) -> Self {
+        self.command_runner = CommandRunnerSource::Sibling;
+        self
+    }
+
+    /// Uses the command runner embedded by the `bundled-helpers` feature.
+    pub fn with_bundled_command_runner(mut self) -> Self {
+        self.command_runner = CommandRunnerSource::Bundled;
+        self
+    }
+
+    /// Uses an explicitly selected command runner.
+    pub fn with_command_runner_path(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, WindowsBackendConfigError> {
+        let path = path.into();
+        if !path.is_absolute() {
+            return Err(WindowsBackendConfigError::RelativeCommandRunner { path });
+        }
+        self.command_runner = CommandRunnerSource::Explicit(path);
+        Ok(self)
+    }
+
+    /// Returns how the command runner is selected.
+    pub const fn command_runner_source(&self) -> &CommandRunnerSource {
+        &self.command_runner
+    }
+
+    /// Returns an explicit command-runner path, if configured.
+    pub fn command_runner_path(&self) -> Option<&Path> {
+        match &self.command_runner {
+            CommandRunnerSource::Bundled | CommandRunnerSource::Sibling => None,
+            CommandRunnerSource::Explicit(path) => Some(path),
         }
     }
 }
