@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::ffi::c_void;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
@@ -7,20 +8,26 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::path::{Component, Path};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GENERIC_WRITE, GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_ALREADY_EXISTS, GENERIC_ALL, GENERIC_WRITE, GetLastError, HLOCAL, INVALID_HANDLE_VALUE,
+    LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, GetSecurityInfo,
     SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, GetAce,
+    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, INHERIT_ONLY_ACE,
+    IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY,
+    TokenElevation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, READ_CONTROL,
+    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+    READ_CONTROL,
 };
+use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
@@ -372,7 +379,7 @@ fn verify_descriptor_value(
     }
     let value = LocalWideString(value);
     let actual = wide_pointer_to_string(value.0);
-    if !protected_dacl_matches(&actual, owner_sid, inherit) {
+    if !protected_dacl_matches(descriptor.0, owner_sid, inherit) {
         return Err(NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::DirectoryAcl,
@@ -383,27 +390,85 @@ fn verify_descriptor_value(
     Ok(())
 }
 
-fn protected_dacl_matches(actual: &str, owner_sid: &str, inherit: bool) -> bool {
-    let Some(body) = actual.strip_prefix("D:P") else {
+#[allow(unsafe_code)]
+fn protected_dacl_matches(
+    descriptor: PSECURITY_DESCRIPTOR,
+    owner_sid: &str,
+    inherit: bool,
+) -> bool {
+    if unsafe { IsValidSecurityDescriptor(descriptor) } == 0 {
         return false;
-    };
-    let body = body.strip_prefix("AI").unwrap_or(body);
-    let Some(body) = body
-        .strip_prefix('(')
-        .and_then(|value| value.strip_suffix(')'))
-    else {
+    }
+    let mut control = 0u16;
+    let mut revision = 0u32;
+    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+        || control & SE_DACL_PROTECTED == 0
+    {
         return false;
-    };
-    let mut actual_aces = body.split(")(").collect::<Vec<_>>();
+    }
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut dacl = std::ptr::null_mut();
+    if unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) }
+        == 0
+        || present == 0
+        || dacl.is_null()
+    {
+        return false;
+    }
+    let inherited_flags = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
+    let principals = ["S-1-5-18", "S-1-5-32-544", owner_sid];
+    let mut expected_aces = principals
+        .iter()
+        .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
+        .collect::<Vec<_>>();
+    if inherit {
+        expected_aces.extend(
+            principals
+                .iter()
+                .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
+        );
+    }
+    if unsafe { (*dacl).AceCount } as usize != expected_aces.len() {
+        return false;
+    }
+    let mut actual_aces = Vec::with_capacity(expected_aces.len());
+    for index in 0..expected_aces.len() {
+        let mut raw_ace = std::ptr::null_mut();
+        if unsafe { GetAce(dacl, index as u32, &mut raw_ace) } == 0 || raw_ace.is_null() {
+            return false;
+        }
+        let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
+        if unsafe { (*ace).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
+            || (unsafe { (*ace).Header.AceSize } as usize)
+                < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+        {
+            return false;
+        }
+        let sid = unsafe { (&raw mut (*ace).SidStart).cast::<c_void>() };
+        if unsafe { IsValidSid(sid) } == 0 {
+            return false;
+        }
+        let Some(sid) = sid_string(sid) else {
+            return false;
+        };
+        actual_aces.push((sid, unsafe { (*ace).Header.AceFlags }, unsafe {
+            (*ace).Mask
+        }));
+    }
     actual_aces.sort_unstable();
-    let flags = if inherit { "OICI" } else { "" };
-    let mut expected_aces = [
-        format!("A;{flags};GA;;;SY"),
-        format!("A;{flags};GA;;;BA"),
-        format!("A;{flags};GA;;;{owner_sid}"),
-    ];
     expected_aces.sort_unstable();
     actual_aces == expected_aces
+}
+
+#[allow(unsafe_code)]
+fn sid_string(sid: *mut c_void) -> Option<String> {
+    let mut value = std::ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(sid, &mut value) } == 0 {
+        return None;
+    }
+    let value = LocalWideString(value);
+    Some(wide_pointer_to_string(value.0))
 }
 
 #[allow(unsafe_code)]
