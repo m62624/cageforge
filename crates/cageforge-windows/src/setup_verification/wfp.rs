@@ -32,17 +32,17 @@ use crate::setup::WindowsSetupDetails;
 const PROVIDER_KEY: GUID = GUID::from_u128(0x6d27a6ef_979d_42bf_97e7_6c7a61c86281);
 const SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8213_6db9db995224);
 
-enum ConditionExpectation {
-    User,
-    Protocol(u8),
-    RemotePort(u16),
-}
-
 struct FilterExpectation {
     key: GUID,
     name: String,
     layer_key: GUID,
     conditions: Vec<ConditionExpectation>,
+}
+
+enum ConditionExpectation {
+    User,
+    Protocol(u8),
+    RemotePort(u16),
 }
 
 struct Engine(HANDLE);
@@ -57,6 +57,30 @@ impl Drop for Engine {
         unsafe {
             FwpmEngineClose0(self.0);
         }
+    }
+}
+
+impl Engine {
+    #[allow(unsafe_code)]
+    fn open() -> Result<Self, WindowsSetupVerificationError> {
+        let name = wide("Cageforge Windows sandbox WFP verification");
+        let mut session: FWPM_SESSION0 = unsafe { zeroed() };
+        session.displayData.name = name.as_ptr().cast_mut();
+        session.txnWaitTimeoutInMSec = INFINITE;
+        let mut handle = std::ptr::null_mut();
+        let status = unsafe {
+            FwpmEngineOpen0(
+                std::ptr::null(),
+                RPC_C_AUTHN_DEFAULT as u32,
+                std::ptr::null(),
+                &session,
+                &mut handle,
+            )
+        };
+        if status != 0 {
+            return Err(WindowsSetupVerificationError::WfpEngineOpen { code: status });
+        }
+        Ok(Self(handle))
     }
 }
 
@@ -109,30 +133,6 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
         verify_filter(&engine, &filter, details.accounts().offline_sid())?;
     }
     Ok(())
-}
-
-impl Engine {
-    #[allow(unsafe_code)]
-    fn open() -> Result<Self, WindowsSetupVerificationError> {
-        let name = wide("Cageforge Windows sandbox WFP verification");
-        let mut session: FWPM_SESSION0 = unsafe { zeroed() };
-        session.displayData.name = name.as_ptr().cast_mut();
-        session.txnWaitTimeoutInMSec = INFINITE;
-        let mut handle = std::ptr::null_mut();
-        let status = unsafe {
-            FwpmEngineOpen0(
-                std::ptr::null(),
-                RPC_C_AUTHN_DEFAULT as u32,
-                std::ptr::null(),
-                &session,
-                &mut handle,
-            )
-        };
-        if status != 0 {
-            return Err(WindowsSetupVerificationError::WfpEngineOpen { code: status });
-        }
-        Ok(Self(handle))
-    }
 }
 
 #[allow(unsafe_code)]

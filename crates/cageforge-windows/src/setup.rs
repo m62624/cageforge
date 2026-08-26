@@ -25,32 +25,6 @@ const MARKER_NAME: &str = "setup.json";
 const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
 const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
 
-/// Dedicated local identities used by the elevated Windows boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowsSandboxAccounts {
-    offline_name: String,
-    offline_sid: String,
-    online_name: String,
-    online_sid: String,
-    group_name: String,
-    group_sid: String,
-}
-
-/// Read-back details for one current elevated Windows installation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowsSetupDetails {
-    version: u32,
-    owner_sid: String,
-    state_directory: PathBuf,
-    accounts: WindowsSandboxAccounts,
-    proxy_ports: Vec<u16>,
-    firewall_policy_id: String,
-    wfp_provider_id: String,
-    setup_helper_sha256: String,
-    command_runner_sha256: String,
-    credential_sha256: String,
-}
-
 /// Current state of elevated Windows provisioning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsSetupStatus {
@@ -68,6 +42,32 @@ pub enum WindowsSetupStatus {
     },
     /// Marker and native account state passed read-back.
     Ready(Box<WindowsSetupDetails>),
+}
+
+/// Read-back details for one current elevated Windows installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsSetupDetails {
+    version: u32,
+    owner_sid: String,
+    state_directory: PathBuf,
+    accounts: WindowsSandboxAccounts,
+    proxy_ports: Vec<u16>,
+    firewall_policy_id: String,
+    wfp_provider_id: String,
+    setup_helper_sha256: String,
+    command_runner_sha256: String,
+    credential_sha256: String,
+}
+
+/// Dedicated local identities used by the elevated Windows boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsSandboxAccounts {
+    offline_name: String,
+    offline_sid: String,
+    online_name: String,
+    online_sid: String,
+    group_name: String,
+    group_sid: String,
 }
 
 /// Why an existing Windows setup marker is stale.
@@ -95,38 +95,6 @@ pub enum WindowsSetupStaleReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsSetup {
     config: WindowsSetupConfig,
-}
-
-impl WindowsSandboxAccounts {
-    /// Returns the account used for disabled and proxy-routed networking.
-    pub fn offline_name(&self) -> &str {
-        &self.offline_name
-    }
-
-    /// Returns the offline account SID captured during setup.
-    pub fn offline_sid(&self) -> &str {
-        &self.offline_sid
-    }
-
-    /// Returns the account used for unrestricted direct networking.
-    pub fn online_name(&self) -> &str {
-        &self.online_name
-    }
-
-    /// Returns the online account SID captured during setup.
-    pub fn online_sid(&self) -> &str {
-        &self.online_sid
-    }
-
-    /// Returns the Cageforge-managed local group name.
-    pub fn group_name(&self) -> &str {
-        &self.group_name
-    }
-
-    /// Returns the managed group SID captured during setup.
-    pub fn group_sid(&self) -> &str {
-        &self.group_sid
-    }
 }
 
 impl WindowsSetupDetails {
@@ -178,6 +146,38 @@ impl WindowsSetupDetails {
     /// Returns the SHA-256 digest of the protected credential record.
     pub fn credential_sha256(&self) -> &str {
         &self.credential_sha256
+    }
+}
+
+impl WindowsSandboxAccounts {
+    /// Returns the account used for disabled and proxy-routed networking.
+    pub fn offline_name(&self) -> &str {
+        &self.offline_name
+    }
+
+    /// Returns the offline account SID captured during setup.
+    pub fn offline_sid(&self) -> &str {
+        &self.offline_sid
+    }
+
+    /// Returns the account used for unrestricted direct networking.
+    pub fn online_name(&self) -> &str {
+        &self.online_name
+    }
+
+    /// Returns the online account SID captured during setup.
+    pub fn online_sid(&self) -> &str {
+        &self.online_sid
+    }
+
+    /// Returns the Cageforge-managed local group name.
+    pub fn group_name(&self) -> &str {
+        &self.group_name
+    }
+
+    /// Returns the managed group SID captured during setup.
+    pub fn group_sid(&self) -> &str {
+        &self.group_sid
     }
 }
 

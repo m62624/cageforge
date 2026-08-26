@@ -42,18 +42,18 @@ use super::{NativeSetupFailure, NativeSetupResult};
 const PROVIDER_KEY: GUID = GUID::from_u128(0x6d27a6ef_979d_42bf_97e7_6c7a61c86281);
 const SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8213_6db9db995224);
 
-enum ConditionSpec {
-    User,
-    Protocol(u8),
-    RemotePort(u16),
-}
-
 struct FilterSpec {
     key: GUID,
     name: String,
     description: String,
     layer_key: GUID,
     conditions: Vec<ConditionSpec>,
+}
+
+enum ConditionSpec {
+    User,
+    Protocol(u8),
+    RemotePort(u16),
 }
 
 struct Engine {
@@ -83,6 +83,49 @@ impl Drop for Engine {
     }
 }
 
+impl Engine {
+    #[allow(unsafe_code)]
+    fn open() -> NativeSetupResult<Self> {
+        let session_name = wide("Cageforge Windows sandbox WFP setup");
+        let mut session: FWPM_SESSION0 = unsafe { zeroed() };
+        session.displayData = FWPM_DISPLAY_DATA0 {
+            name: session_name.as_ptr().cast_mut(),
+            description: std::ptr::null_mut(),
+        };
+        session.txnWaitTimeoutInMSec = INFINITE;
+        let mut handle = std::ptr::null_mut();
+        let status = unsafe {
+            FwpmEngineOpen0(
+                std::ptr::null(),
+                RPC_C_AUTHN_DEFAULT as u32,
+                std::ptr::null(),
+                &session,
+                &mut handle,
+            )
+        };
+        wfp_status(
+            status,
+            SetupFailureCode::WfpEngineOpen,
+            "failed to open the Windows Filtering Platform engine",
+        )?;
+        Ok(Self { handle })
+    }
+
+    #[allow(unsafe_code)]
+    fn begin_transaction(&self) -> NativeSetupResult<Transaction<'_>> {
+        let status = unsafe { FwpmTransactionBegin0(self.handle, 0) };
+        wfp_status(
+            status,
+            SetupFailureCode::WfpTransaction,
+            "failed to begin the WFP setup transaction",
+        )?;
+        Ok(Transaction {
+            engine: self,
+            committed: false,
+        })
+    }
+}
+
 #[allow(unsafe_code)]
 impl Drop for Transaction<'_> {
     fn drop(&mut self) {
@@ -94,6 +137,20 @@ impl Drop for Transaction<'_> {
     }
 }
 
+impl Transaction<'_> {
+    #[allow(unsafe_code)]
+    fn commit(&mut self) -> NativeSetupResult<()> {
+        let status = unsafe { FwpmTransactionCommit0(self.engine.handle) };
+        wfp_status(
+            status,
+            SetupFailureCode::WfpTransaction,
+            "failed to commit the WFP setup transaction",
+        )?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
 #[allow(unsafe_code)]
 impl Drop for UserCondition {
     fn drop(&mut self) {
@@ -102,6 +159,50 @@ impl Drop for UserCondition {
                 LocalFree(self.descriptor as HLOCAL);
             }
         }
+    }
+}
+
+impl UserCondition {
+    #[allow(unsafe_code)]
+    fn new(account: &str) -> NativeSetupResult<Self> {
+        let account_wide = wide(account);
+        let mut access: EXPLICIT_ACCESS_W = unsafe { zeroed() };
+        unsafe {
+            BuildExplicitAccessWithNameW(
+                &mut access,
+                account_wide.as_ptr(),
+                FWP_ACTRL_MATCH_FILTER,
+                GRANT_ACCESS,
+                0,
+            );
+        }
+        let mut descriptor = std::ptr::null_mut();
+        let mut descriptor_length = 0u32;
+        let status = unsafe {
+            BuildSecurityDescriptorW(
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+                &access,
+                0,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                &mut descriptor_length,
+                &mut descriptor,
+            )
+        };
+        wfp_status(
+            status,
+            SetupFailureCode::WfpFilter,
+            format!("failed to build WFP user condition for {account:?}"),
+        )?;
+        Ok(Self {
+            descriptor,
+            blob: FWP_BYTE_BLOB {
+                size: descriptor_length,
+                data: descriptor.cast::<u8>(),
+            },
+        })
     }
 }
 
@@ -177,107 +278,6 @@ pub(super) fn remove(owner_sid: &str) -> NativeSetupResult<()> {
         )?;
     }
     transaction.commit()
-}
-
-impl Engine {
-    #[allow(unsafe_code)]
-    fn open() -> NativeSetupResult<Self> {
-        let session_name = wide("Cageforge Windows sandbox WFP setup");
-        let mut session: FWPM_SESSION0 = unsafe { zeroed() };
-        session.displayData = FWPM_DISPLAY_DATA0 {
-            name: session_name.as_ptr().cast_mut(),
-            description: std::ptr::null_mut(),
-        };
-        session.txnWaitTimeoutInMSec = INFINITE;
-        let mut handle = std::ptr::null_mut();
-        let status = unsafe {
-            FwpmEngineOpen0(
-                std::ptr::null(),
-                RPC_C_AUTHN_DEFAULT as u32,
-                std::ptr::null(),
-                &session,
-                &mut handle,
-            )
-        };
-        wfp_status(
-            status,
-            SetupFailureCode::WfpEngineOpen,
-            "failed to open the Windows Filtering Platform engine",
-        )?;
-        Ok(Self { handle })
-    }
-
-    #[allow(unsafe_code)]
-    fn begin_transaction(&self) -> NativeSetupResult<Transaction<'_>> {
-        let status = unsafe { FwpmTransactionBegin0(self.handle, 0) };
-        wfp_status(
-            status,
-            SetupFailureCode::WfpTransaction,
-            "failed to begin the WFP setup transaction",
-        )?;
-        Ok(Transaction {
-            engine: self,
-            committed: false,
-        })
-    }
-}
-
-impl Transaction<'_> {
-    #[allow(unsafe_code)]
-    fn commit(&mut self) -> NativeSetupResult<()> {
-        let status = unsafe { FwpmTransactionCommit0(self.engine.handle) };
-        wfp_status(
-            status,
-            SetupFailureCode::WfpTransaction,
-            "failed to commit the WFP setup transaction",
-        )?;
-        self.committed = true;
-        Ok(())
-    }
-}
-
-impl UserCondition {
-    #[allow(unsafe_code)]
-    fn new(account: &str) -> NativeSetupResult<Self> {
-        let account_wide = wide(account);
-        let mut access: EXPLICIT_ACCESS_W = unsafe { zeroed() };
-        unsafe {
-            BuildExplicitAccessWithNameW(
-                &mut access,
-                account_wide.as_ptr(),
-                FWP_ACTRL_MATCH_FILTER,
-                GRANT_ACCESS,
-                0,
-            );
-        }
-        let mut descriptor = std::ptr::null_mut();
-        let mut descriptor_length = 0u32;
-        let status = unsafe {
-            BuildSecurityDescriptorW(
-                std::ptr::null(),
-                std::ptr::null(),
-                1,
-                &access,
-                0,
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                &mut descriptor_length,
-                &mut descriptor,
-            )
-        };
-        wfp_status(
-            status,
-            SetupFailureCode::WfpFilter,
-            format!("failed to build WFP user condition for {account:?}"),
-        )?;
-        Ok(Self {
-            descriptor,
-            blob: FWP_BYTE_BLOB {
-                size: descriptor_length,
-                data: descriptor.cast::<u8>(),
-            },
-        })
-    }
 }
 
 #[allow(unsafe_code)]
