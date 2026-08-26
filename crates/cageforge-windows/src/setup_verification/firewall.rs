@@ -14,6 +14,7 @@ use windows::Win32::System::Com::{
 use windows::core::{BSTR, Interface};
 
 use crate::error::WindowsSetupVerificationError;
+use crate::firewall_contract::{address_sets_match, local_user_scope_matches, port_sets_match};
 use crate::setup::WindowsSetupDetails;
 
 const LOOPBACK_ADDRESSES: &str = "127.0.0.0/8,::/127";
@@ -21,6 +22,7 @@ const NON_LOOPBACK_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.
 
 struct RuleExpectation {
     name: String,
+    description: &'static str,
     protocol: i32,
     remote_addresses: &'static str,
     remote_ports: Option<String>,
@@ -42,9 +44,14 @@ impl Drop for ComApartment {
 pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVerificationError> {
     let expected_policy_id = policy_id(details.owner_sid());
     if details.firewall_policy_id() != expected_policy_id {
-        return Err(WindowsSetupVerificationError::FirewallRuleMismatch {
-            name: details.firewall_policy_id().to_string(),
-        });
+        return Err(
+            WindowsSetupVerificationError::FirewallRulePropertyMismatch {
+                name: details.firewall_policy_id().to_string(),
+                property: "owner-scoped policy identifier",
+                expected: expected_policy_id,
+                actual: details.firewall_policy_id().to_string(),
+            },
+        );
     }
     let apartment = initialize_com()?;
     let policy: INetFwPolicy2 =
@@ -70,6 +77,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     let specs = [
         RuleExpectation {
             name: format!("{expected_policy_id}.non-loopback"),
+            description: "Cageforge offline sandbox - block non-loopback outbound",
             protocol: NET_FW_IP_PROTOCOL_ANY.0,
             remote_addresses: NON_LOOPBACK_ADDRESSES,
             remote_ports: None,
@@ -77,6 +85,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
         },
         RuleExpectation {
             name: format!("{expected_policy_id}.loopback-udp"),
+            description: "Cageforge offline sandbox - block loopback UDP",
             protocol: NET_FW_IP_PROTOCOL_UDP.0,
             remote_addresses: LOOPBACK_ADDRESSES,
             remote_ports: None,
@@ -84,6 +93,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
         },
         RuleExpectation {
             name: format!("{expected_policy_id}.loopback-tcp"),
+            description: "Cageforge offline sandbox - block loopback TCP except ingress",
             protocol: NET_FW_IP_PROTOCOL_TCP.0,
             remote_addresses: LOOPBACK_ADDRESSES,
             remote_ports: Some(blocked_port_complement(details.proxy_ports())),
@@ -96,9 +106,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
                 name: spec.name.clone(),
             })?
             .cast::<INetFwRule3>()
-            .map_err(|_| WindowsSetupVerificationError::FirewallRuleMismatch {
-                name: spec.name.clone(),
-            })?;
+            .map_err(|_| rule_mismatch(spec, "COM interface", "INetFwRule3", "unsupported"))?;
         verify_rule(&rule, spec)?;
     }
     drop(apartment);
@@ -122,25 +130,157 @@ fn verify_rule(
     rule: &INetFwRule3,
     expected: &RuleExpectation,
 ) -> Result<(), WindowsSetupVerificationError> {
-    let matches = unsafe { rule.Name() }.is_ok_and(|value| value == expected.name.as_str())
-        && unsafe { rule.Direction() }.ok() == Some(NET_FW_RULE_DIR_OUT)
-        && unsafe { rule.Action() }.ok() == Some(NET_FW_ACTION_BLOCK)
-        && unsafe { rule.Enabled() }.ok() == Some(VARIANT_TRUE)
-        && unsafe { rule.Profiles() }.ok() == Some(NET_FW_PROFILE2_ALL.0)
-        && unsafe { rule.Protocol() }.ok() == Some(expected.protocol)
-        && unsafe { rule.RemoteAddresses() }.is_ok_and(|value| value == expected.remote_addresses)
-        && match &expected.remote_ports {
-            Some(ports) => unsafe { rule.RemotePorts() }.is_ok_and(|value| value == ports.as_str()),
-            None => true,
-        }
-        && unsafe { rule.LocalUserAuthorizedList() }
-            .is_ok_and(|value| value.to_string().contains(&expected.offline_sid));
+    let actual_name = unsafe { rule.Name() }
+        .map(|value| value.to_string())
+        .map_err(|error| property_read_failure(expected, "name", error.code().0))?;
+    require_property(
+        expected,
+        "name",
+        &expected.name,
+        &actual_name,
+        actual_name == expected.name,
+    )?;
+
+    let actual_description = unsafe { rule.Description() }
+        .map(|value| value.to_string())
+        .map_err(|error| property_read_failure(expected, "description", error.code().0))?;
+    require_property(
+        expected,
+        "description",
+        expected.description,
+        &actual_description,
+        actual_description == expected.description,
+    )?;
+
+    let actual_direction = unsafe { rule.Direction() }
+        .map_err(|error| property_read_failure(expected, "direction", error.code().0))?;
+    require_property(
+        expected,
+        "direction",
+        &NET_FW_RULE_DIR_OUT.0.to_string(),
+        &actual_direction.0.to_string(),
+        actual_direction == NET_FW_RULE_DIR_OUT,
+    )?;
+
+    let actual_action = unsafe { rule.Action() }
+        .map_err(|error| property_read_failure(expected, "action", error.code().0))?;
+    require_property(
+        expected,
+        "action",
+        &NET_FW_ACTION_BLOCK.0.to_string(),
+        &actual_action.0.to_string(),
+        actual_action == NET_FW_ACTION_BLOCK,
+    )?;
+
+    let actual_enabled = unsafe { rule.Enabled() }
+        .map_err(|error| property_read_failure(expected, "enabled", error.code().0))?;
+    require_property(
+        expected,
+        "enabled",
+        &VARIANT_TRUE.0.to_string(),
+        &actual_enabled.0.to_string(),
+        actual_enabled == VARIANT_TRUE,
+    )?;
+
+    let actual_profiles = unsafe { rule.Profiles() }
+        .map_err(|error| property_read_failure(expected, "profiles", error.code().0))?;
+    require_property(
+        expected,
+        "profiles",
+        &NET_FW_PROFILE2_ALL.0.to_string(),
+        &actual_profiles.to_string(),
+        actual_profiles == NET_FW_PROFILE2_ALL.0,
+    )?;
+
+    let actual_protocol = unsafe { rule.Protocol() }
+        .map_err(|error| property_read_failure(expected, "protocol", error.code().0))?;
+    require_property(
+        expected,
+        "protocol",
+        &expected.protocol.to_string(),
+        &actual_protocol.to_string(),
+        actual_protocol == expected.protocol,
+    )?;
+
+    let actual_addresses = unsafe { rule.RemoteAddresses() }
+        .map(|value| value.to_string())
+        .map_err(|error| property_read_failure(expected, "remote addresses", error.code().0))?;
+    require_property(
+        expected,
+        "remote addresses",
+        expected.remote_addresses,
+        &actual_addresses,
+        address_sets_match(&actual_addresses, expected.remote_addresses),
+    )?;
+
+    if expected.protocol == NET_FW_IP_PROTOCOL_TCP.0
+        || expected.protocol == NET_FW_IP_PROTOCOL_UDP.0
+    {
+        let expected_ports = expected.remote_ports.as_deref().unwrap_or("*");
+        let actual_ports = unsafe { rule.RemotePorts() }
+            .map(|value| value.to_string())
+            .map_err(|error| property_read_failure(expected, "remote ports", error.code().0))?;
+        require_property(
+            expected,
+            "remote ports",
+            expected_ports,
+            &actual_ports,
+            port_sets_match(&actual_ports, expected_ports),
+        )?;
+    }
+
+    let actual_user = unsafe { rule.LocalUserAuthorizedList() }
+        .map(|value| value.to_string())
+        .map_err(|error| {
+            property_read_failure(expected, "local user authorization", error.code().0)
+        })?;
+    require_property(
+        expected,
+        "local user authorization",
+        &format!("one COM_RIGHTS_EXECUTE ACE for {}", expected.offline_sid),
+        &actual_user,
+        local_user_scope_matches(&actual_user, &expected.offline_sid),
+    )
+}
+
+fn property_read_failure(
+    expected: &RuleExpectation,
+    property: &'static str,
+    code: i32,
+) -> WindowsSetupVerificationError {
+    rule_mismatch(
+        expected,
+        property,
+        "readable COM property",
+        &format!("HRESULT {code:#x}"),
+    )
+}
+
+fn require_property(
+    expected: &RuleExpectation,
+    property: &'static str,
+    expected_value: &str,
+    actual: &str,
+    matches: bool,
+) -> Result<(), WindowsSetupVerificationError> {
     if matches {
         Ok(())
     } else {
-        Err(WindowsSetupVerificationError::FirewallRuleMismatch {
-            name: expected.name.clone(),
-        })
+        Err(rule_mismatch(expected, property, expected_value, actual))
+    }
+}
+
+fn rule_mismatch(
+    expected: &RuleExpectation,
+    property: &'static str,
+    expected_value: &str,
+    actual: &str,
+) -> WindowsSetupVerificationError {
+    WindowsSetupVerificationError::FirewallRulePropertyMismatch {
+        name: expected.name.clone(),
+        property,
+        expected: expected_value.to_string(),
+        actual: actual.to_string(),
     }
 }
 

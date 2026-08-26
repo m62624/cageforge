@@ -273,11 +273,19 @@ pub enum WindowsSetupVerificationError {
         /// Stable owner-scoped rule name.
         name: String,
     },
-    /// One mandatory firewall rule differs from its complete expected state.
-    #[error("Windows Firewall rule read-back mismatch: {name}")]
-    FirewallRuleMismatch {
+    /// One property of a mandatory firewall rule differs from its expected state.
+    #[error(
+        "Windows Firewall rule {name:?} property {property:?} mismatch: expected {expected:?}, found {actual:?}"
+    )]
+    FirewallRulePropertyMismatch {
         /// Stable owner-scoped rule name.
         name: String,
+        /// Exact COM property or semantic security scope that differs.
+        property: &'static str,
+        /// Canonical expected value or security invariant.
+        expected: String,
+        /// Value returned by Windows Firewall read-back.
+        actual: String,
     },
     /// The WFP engine could not be opened for read-back.
     #[error("failed to open WFP for setup read-back: error {code:#x}")]

@@ -7,6 +7,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[path = "../firewall_contract.rs"]
+mod firewall_contract;
 #[path = "../setup_protocol.rs"]
 mod setup_protocol;
 #[path = "../setup_state.rs"]

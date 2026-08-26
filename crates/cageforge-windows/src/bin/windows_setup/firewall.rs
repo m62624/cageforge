@@ -13,6 +13,7 @@ use windows::Win32::System::Com::{
 };
 use windows::core::{BSTR, Interface};
 
+use crate::firewall_contract::{address_sets_match, local_user_scope_matches, port_sets_match};
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult};
@@ -230,8 +231,10 @@ fn configure_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> 
             rule.SetProfiles(NET_FW_PROFILE2_ALL.0)?;
             rule.SetProtocol(spec.protocol)?;
             rule.SetRemoteAddresses(&BSTR::from(spec.remote_addresses))?;
-            if let Some(remote_ports) = &spec.remote_ports {
-                rule.SetRemotePorts(&BSTR::from(remote_ports.as_str()))?;
+            if spec.protocol == NET_FW_IP_PROTOCOL_TCP.0
+                || spec.protocol == NET_FW_IP_PROTOCOL_UDP.0
+            {
+                rule.SetRemotePorts(&BSTR::from(spec.remote_ports.as_deref().unwrap_or("*")))?;
             }
             rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_sddl.as_str()))?;
         }
@@ -248,46 +251,150 @@ fn configure_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> 
 
 #[allow(unsafe_code)]
 fn verify_rule(rule: &INetFwRule3, spec: &RuleSpec) -> NativeSetupResult<()> {
-    let actual_name = unsafe { rule.Name() };
-    let actual_direction = unsafe { rule.Direction() };
-    let actual_action = unsafe { rule.Action() };
-    let actual_enabled = unsafe { rule.Enabled() };
-    let actual_profiles = unsafe { rule.Profiles() };
-    let actual_protocol = unsafe { rule.Protocol() };
-    let actual_addresses = unsafe { rule.RemoteAddresses() };
-    let actual_ports = if spec.remote_ports.is_some() {
-        Some(unsafe { rule.RemotePorts() })
+    let actual_name = unsafe { rule.Name() }
+        .map(|value| value.to_string())
+        .map_err(|error| read_back_failure(spec, "name", error))?;
+    require_property(
+        spec,
+        "name",
+        &spec.name,
+        &actual_name,
+        actual_name == spec.name,
+    )?;
+
+    let actual_description = unsafe { rule.Description() }
+        .map(|value| value.to_string())
+        .map_err(|error| read_back_failure(spec, "description", error))?;
+    require_property(
+        spec,
+        "description",
+        &spec.description,
+        &actual_description,
+        actual_description == spec.description,
+    )?;
+
+    let actual_direction =
+        unsafe { rule.Direction() }.map_err(|error| read_back_failure(spec, "direction", error))?;
+    require_property(
+        spec,
+        "direction",
+        &NET_FW_RULE_DIR_OUT.0.to_string(),
+        &actual_direction.0.to_string(),
+        actual_direction == NET_FW_RULE_DIR_OUT,
+    )?;
+
+    let actual_action =
+        unsafe { rule.Action() }.map_err(|error| read_back_failure(spec, "action", error))?;
+    require_property(
+        spec,
+        "action",
+        &NET_FW_ACTION_BLOCK.0.to_string(),
+        &actual_action.0.to_string(),
+        actual_action == NET_FW_ACTION_BLOCK,
+    )?;
+
+    let actual_enabled =
+        unsafe { rule.Enabled() }.map_err(|error| read_back_failure(spec, "enabled", error))?;
+    require_property(
+        spec,
+        "enabled",
+        &VARIANT_TRUE.0.to_string(),
+        &actual_enabled.0.to_string(),
+        actual_enabled == VARIANT_TRUE,
+    )?;
+
+    let actual_profiles =
+        unsafe { rule.Profiles() }.map_err(|error| read_back_failure(spec, "profiles", error))?;
+    require_property(
+        spec,
+        "profiles",
+        &NET_FW_PROFILE2_ALL.0.to_string(),
+        &actual_profiles.to_string(),
+        actual_profiles == NET_FW_PROFILE2_ALL.0,
+    )?;
+
+    let actual_protocol =
+        unsafe { rule.Protocol() }.map_err(|error| read_back_failure(spec, "protocol", error))?;
+    require_property(
+        spec,
+        "protocol",
+        &spec.protocol.to_string(),
+        &actual_protocol.to_string(),
+        actual_protocol == spec.protocol,
+    )?;
+
+    let actual_addresses = unsafe { rule.RemoteAddresses() }
+        .map(|value| value.to_string())
+        .map_err(|error| read_back_failure(spec, "remote addresses", error))?;
+    require_property(
+        spec,
+        "remote addresses",
+        spec.remote_addresses,
+        &actual_addresses,
+        address_sets_match(&actual_addresses, spec.remote_addresses),
+    )?;
+
+    if spec.protocol == NET_FW_IP_PROTOCOL_TCP.0 || spec.protocol == NET_FW_IP_PROTOCOL_UDP.0 {
+        let expected_ports = spec.remote_ports.as_deref().unwrap_or("*");
+        let actual_ports = unsafe { rule.RemotePorts() }
+            .map(|value| value.to_string())
+            .map_err(|error| read_back_failure(spec, "remote ports", error))?;
+        require_property(
+            spec,
+            "remote ports",
+            expected_ports,
+            &actual_ports,
+            port_sets_match(&actual_ports, expected_ports),
+        )?;
+    }
+
+    let actual_user = unsafe { rule.LocalUserAuthorizedList() }
+        .map(|value| value.to_string())
+        .map_err(|error| read_back_failure(spec, "local user authorization", error))?;
+    require_property(
+        spec,
+        "local user authorization",
+        &format!("one COM_RIGHTS_EXECUTE ACE for {}", spec.offline_sid),
+        &actual_user,
+        local_user_scope_matches(&actual_user, &spec.offline_sid),
+    )?;
+    Ok(())
+}
+
+fn read_back_failure(
+    spec: &RuleSpec,
+    property: &'static str,
+    error: windows::core::Error,
+) -> NativeSetupFailure {
+    firewall_error(
+        SetupFailureCode::FirewallRuleReadBack,
+        error.code().0 as u32,
+        format!(
+            "failed to read firewall rule {:?} property {property:?}: {error}",
+            spec.name
+        ),
+    )
+}
+
+fn require_property(
+    spec: &RuleSpec,
+    property: &'static str,
+    expected: &str,
+    actual: &str,
+    matches: bool,
+) -> NativeSetupResult<()> {
+    if matches {
+        Ok(())
     } else {
-        None
-    };
-    let actual_user = unsafe { rule.LocalUserAuthorizedList() };
-    let mismatch = actual_name.as_ref().map(BSTR::to_string).ok() != Some(spec.name.clone())
-        || actual_direction.ok() != Some(NET_FW_RULE_DIR_OUT)
-        || actual_action.ok() != Some(NET_FW_ACTION_BLOCK)
-        || actual_enabled.ok() != Some(VARIANT_TRUE)
-        || actual_profiles.ok() != Some(NET_FW_PROFILE2_ALL.0)
-        || actual_protocol.ok() != Some(spec.protocol)
-        || actual_addresses.as_ref().map(BSTR::to_string).ok()
-            != Some(spec.remote_addresses.to_string())
-        || actual_ports
-            .as_ref()
-            .map(|value| value.as_ref().map(BSTR::to_string).ok())
-            != spec.remote_ports.as_ref().map(|value| Some(value.clone()))
-        || !actual_user
-            .as_ref()
-            .map(BSTR::to_string)
-            .is_ok_and(|value| value.contains(&spec.offline_sid));
-    if mismatch {
-        return Err(firewall_error(
+        Err(firewall_error(
             SetupFailureCode::FirewallRuleReadBack,
             0,
             format!(
-                "firewall rule {:?} failed complete read-back verification",
+                "firewall rule {:?} property {property:?} mismatch: expected {expected:?}, found {actual:?}",
                 spec.name
             ),
-        ));
+        ))
     }
-    Ok(())
 }
 
 fn blocked_port_complement(allowed_ports: &[u16]) -> String {

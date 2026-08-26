@@ -367,6 +367,12 @@ The Cageforge setup protocol retains the following boundaries:
   if disabled, locked, or directly or indirectly administrative;
 - firewall changes must apply to every active profile and each installed rule
   is read back by its stable Cageforge name and complete enforcement fields;
+- firewall address and port read-back compares canonical interval sets rather
+  than COM-preserved spelling, and the local-user scope must contain exactly
+  one `COM_RIGHTS_EXECUTE` allow ACE for the offline account SID. The frozen
+  baseline checks only that the returned user-scope string contains the SID;
+  Cageforge intentionally rejects extra principals and semantically different
+  scopes while accepting equivalent Windows canonicalization;
 - WFP provider, sublayer, and every account-scoped filter are persistent,
   stable Cageforge objects and are read back before marker commit; and
 - setup is committed only after all native state is effective.
