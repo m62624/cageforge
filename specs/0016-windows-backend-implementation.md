@@ -335,3 +335,33 @@ review includes:
 
 Product logging, metrics, ConPTY, Git-specific injection, profile aliases,
 automatic fallback, and Codex home conventions are intentionally excluded.
+
+### 12.1 Provisioning review record
+
+The setup implementation was reviewed line by line against the frozen versions
+of `src/setup.rs`, `src/setup_error.rs`, `src/identity.rs`, `src/dpapi.rs`,
+`src/wfp.rs`, `src/wfp/filter_specs.rs`, `src/wfp_setup.rs`,
+`src/bin/setup_main/win.rs`, `src/bin/setup_main/win/sandbox_users.rs`, and
+`src/bin/setup_main/win/firewall.rs` under `codex-rs/windows-sandbox-rs`.
+The Cageforge setup protocol retains the following boundaries:
+
+- setup state is per signed-in owner and cannot be shared merely because two
+  callers choose the same directory;
+- an incomplete or malformed marker is never readiness evidence;
+- independent random credentials are rotated on every successful reconcile,
+  protected with machine-scope DPAPI, and stored behind an explicit protected
+  DACL;
+- local users are ordinary users, belong to the managed group, and are rejected
+  if disabled, locked, or directly or indirectly administrative;
+- firewall changes must apply to every active profile and each installed rule
+  is read back by its stable Cageforge name and complete enforcement fields;
+- WFP provider, sublayer, and every account-scoped filter are persistent,
+  stable Cageforge objects and are read back before marker commit; and
+- setup is committed only after all native state is effective.
+
+Intentional differences are exact typed errors instead of product error codes,
+owner-SID-derived account and object identities instead of machine-global Codex
+names, checked group-membership updates, a required `SeBatchLogonRight`, fatal
+WFP failure, and no telemetry or product directory conventions. The
+Cageforge-authored implementation uses the Windows APIs directly and does not
+copy the reviewed source files.
