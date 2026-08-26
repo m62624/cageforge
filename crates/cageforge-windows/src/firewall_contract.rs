@@ -125,12 +125,16 @@ fn canonical_address_set(value: &str) -> Option<AddressSet> {
         if token.is_empty() {
             return None;
         }
-        if let Some((address, prefix)) = token.split_once('/') {
+        if let Some((address, mask)) = token.split_once('/') {
             let address = address.parse::<IpAddr>().ok()?;
-            let prefix = prefix.parse::<u8>().ok()?;
             match address {
-                IpAddr::V4(address) => ipv4.push(ipv4_prefix(address, prefix)?),
-                IpAddr::V6(address) => ipv6.push(ipv6_prefix(address, prefix)?),
+                IpAddr::V4(address) => {
+                    let prefix = ipv4_prefix_length(mask)?;
+                    ipv4.push(ipv4_prefix(address, prefix)?);
+                }
+                IpAddr::V6(address) => {
+                    ipv6.push(ipv6_prefix(address, mask.parse::<u8>().ok()?)?);
+                }
             }
         } else if let Some((start, end)) = token.split_once('-') {
             match (start.parse::<IpAddr>().ok()?, end.parse::<IpAddr>().ok()?) {
@@ -202,6 +206,20 @@ fn ipv4_prefix(address: Ipv4Addr, prefix: u8) -> Option<(u32, u32)> {
     Some((start, start | !mask))
 }
 
+fn ipv4_prefix_length(value: &str) -> Option<u8> {
+    if let Ok(prefix) = value.parse::<u8>() {
+        return (prefix <= 32).then_some(prefix);
+    }
+    let mask = u32::from(value.parse::<Ipv4Addr>().ok()?);
+    let prefix = mask.leading_ones() as u8;
+    let canonical = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    (mask == canonical).then_some(prefix)
+}
+
 fn ipv6_prefix(address: Ipv6Addr, prefix: u8) -> Option<(u128, u128)> {
     if prefix > 128 {
         return None;
@@ -245,8 +263,16 @@ mod tests {
     #[test]
     fn address_comparison_accepts_equivalent_windows_canonicalization() {
         assert!(address_sets_match(
-            "::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff,0.0.0.0/1,128.0.0.0/1,::",
-            "0.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+            "127.0.0.0/255.0.0.0,::/127",
+            "127.0.0.0/8,::/127"
+        ));
+    }
+
+    #[test]
+    fn address_comparison_rejects_a_non_contiguous_ipv4_mask() {
+        assert!(!address_sets_match(
+            "127.0.0.0/255.0.255.0,::/127",
+            "127.0.0.0/8,::/127"
         ));
     }
 
