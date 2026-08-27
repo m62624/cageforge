@@ -17,6 +17,7 @@ use crate::runner_protocol::{
     WindowsRunnerFailureCode, WindowsRunnerFailureStage, WindowsRunnerProtocolError,
 };
 use crate::runner_session::RunnerSessionError;
+use crate::runner_stdio::WindowsStandardStreamError;
 use crate::setup_protocol::{SetupFailureCode, SetupStage};
 
 /// Failure while resolving one Windows account or group SID.
@@ -620,6 +621,9 @@ pub enum WindowsBackendError {
     /// The bounded parent-runner protocol failed.
     #[error(transparent)]
     RunnerProtocol(#[from] WindowsRunnerProtocolError),
+    /// Preparing or duplicating an explicit standard-stream handle failed.
+    #[error(transparent)]
+    StandardStream(#[from] WindowsStandardStreamError),
     /// The parent-owned Job or runner process boundary failed.
     #[error("Windows parent process boundary failed: {source}")]
     RunnerBoundary {
@@ -684,6 +688,7 @@ impl WindowsBackendError {
     pub(crate) fn runner_session(source: RunnerSessionError) -> Self {
         match source {
             RunnerSessionError::Launch(source) => Self::runner_launch(source),
+            RunnerSessionError::StandardStream(source) => Self::StandardStream(source),
             RunnerSessionError::Protocol(source) => Self::runner_protocol(source),
             RunnerSessionError::Boundary(source) => Self::RunnerBoundary {
                 source: Box::new(source),

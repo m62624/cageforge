@@ -2,14 +2,11 @@
 
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read, Write};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
 
 use crate::runner_protocol::{
-    MAX_RUNNER_OUTPUT_CHUNK_BYTES, RunnerMessage, RunnerOutputStream, WindowsRunnerFailure,
-    WindowsRunnerFailureCode, WindowsRunnerFailureStage, WindowsRunnerProtocolError, read_frame,
-    write_frame,
+    RunnerMessage, WindowsRunnerFailure, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
+    WindowsRunnerProtocolError, read_frame, write_frame,
 };
 
 mod identity;
@@ -81,130 +78,6 @@ impl AuthenticatedTransport {
     }
 }
 
-fn spawn_output_reader(
-    mut reader: File,
-    response: Arc<Mutex<File>>,
-    stream: RunnerOutputStream,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut buffer = vec![0u8; MAX_RUNNER_OUTPUT_CHUNK_BYTES];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(length) => {
-                    let message = RunnerMessage::Output {
-                        stream,
-                        bytes: buffer[..length].to_vec(),
-                    };
-                    let Ok(mut response) = response.lock() else {
-                        break;
-                    };
-                    if write_frame(&mut *response, message).is_err() {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    report_async_failure(
-                        &response,
-                        WindowsRunnerFailure::new(
-                            WindowsRunnerFailureStage::Wait,
-                            WindowsRunnerFailureCode::ResponseFrame,
-                            error
-                                .raw_os_error()
-                                .and_then(|code| u32::try_from(code).ok()),
-                            format!("failed to read restricted process {stream:?}: {error}"),
-                        ),
-                    );
-                    break;
-                }
-            }
-        }
-    })
-}
-
-fn spawn_control_reader(mut request: File, response: Arc<Mutex<File>>, mut stdin: Option<File>) {
-    std::thread::spawn(move || {
-        loop {
-            let message = match read_frame(&mut request) {
-                Ok(message) => message,
-                Err(error) => {
-                    if error
-                        .source()
-                        .and_then(|source| source.downcast_ref::<std::io::Error>())
-                        .is_some_and(|source| source.kind() == std::io::ErrorKind::UnexpectedEof)
-                    {
-                        break;
-                    }
-                    report_async_failure(
-                        &response,
-                        WindowsRunnerFailure::new(
-                            WindowsRunnerFailureStage::Request,
-                            WindowsRunnerFailureCode::RequestFrame,
-                            None,
-                            error.to_string(),
-                        ),
-                    );
-                    break;
-                }
-            };
-            match message {
-                RunnerMessage::Stdin { bytes } if bytes.len() <= MAX_RUNNER_OUTPUT_CHUNK_BYTES => {
-                    let Some(writer) = stdin.as_mut() else {
-                        report_async_failure(
-                            &response,
-                            WindowsRunnerFailure::new(
-                                WindowsRunnerFailureStage::Request,
-                                WindowsRunnerFailureCode::RequestField,
-                                None,
-                                "stdin data received for a closed or null stream",
-                            ),
-                        );
-                        break;
-                    };
-                    if let Err(error) = writer.write_all(&bytes) {
-                        report_async_failure(
-                            &response,
-                            WindowsRunnerFailure::new(
-                                WindowsRunnerFailureStage::Wait,
-                                WindowsRunnerFailureCode::StandardStreamPrepare,
-                                error
-                                    .raw_os_error()
-                                    .and_then(|code| u32::try_from(code).ok()),
-                                format!("failed to write restricted process stdin: {error}"),
-                            ),
-                        );
-                        break;
-                    }
-                }
-                RunnerMessage::CloseStdin => {
-                    stdin = None;
-                }
-                other => {
-                    report_async_failure(
-                        &response,
-                        WindowsRunnerFailure::new(
-                            WindowsRunnerFailureStage::Request,
-                            WindowsRunnerFailureCode::RequestFrame,
-                            None,
-                            format!(
-                                "unexpected {} message during process lifecycle",
-                                other.kind()
-                            ),
-                        ),
-                    );
-                    break;
-                }
-            }
-        }
-    });
-}
-
-fn report_async_failure(response: &Mutex<File>, failure: WindowsRunnerFailure) {
-    if let Ok(mut response) = response.lock() {
-        let _ = write_frame(&mut *response, RunnerMessage::Failed { failure });
-    }
-}
-
 pub(super) fn run() -> ExitCode {
     let arguments = match RunnerArguments::parse() {
         Ok(arguments) => arguments,
@@ -223,7 +96,7 @@ pub(super) fn run() -> ExitCode {
     let message = match read_frame(&mut transport.request) {
         Ok(message) => message,
         Err(error) => {
-            let failure = WindowsRunnerFailure::new(
+            let failure = runner_failure(
                 WindowsRunnerFailureStage::Request,
                 WindowsRunnerFailureCode::RequestFrame,
                 error
@@ -241,7 +114,7 @@ pub(super) fn run() -> ExitCode {
             phase: "initial spawn request",
             actual: message.kind(),
         };
-        let failure = WindowsRunnerFailure::new(
+        let failure = runner_failure(
             WindowsRunnerFailureStage::Request,
             WindowsRunnerFailureCode::RequestFrame,
             None,
@@ -250,7 +123,7 @@ pub(super) fn run() -> ExitCode {
         return transport.fail(failure);
     };
     if !transport.account.matches(request.account) {
-        let failure = WindowsRunnerFailure::new(
+        let failure = runner_failure(
             WindowsRunnerFailureStage::Request,
             WindowsRunnerFailureCode::RequestedAccountMismatch,
             None,
@@ -265,7 +138,7 @@ pub(super) fn run() -> ExitCode {
     ) {
         Ok(token) => token,
         Err(error) => {
-            let failure = WindowsRunnerFailure::new(
+            let failure = runner_failure(
                 error.stage(),
                 error.failure_code(),
                 error.native_code(),
@@ -277,7 +150,7 @@ pub(super) fn run() -> ExitCode {
     let mut process = match process::SpawnedProcess::start(&token, request) {
         Ok(process) => process,
         Err(error) => {
-            let failure = WindowsRunnerFailure::new(
+            let failure = runner_failure(
                 error.stage(),
                 error.failure_code(),
                 error.native_code(),
@@ -286,14 +159,13 @@ pub(super) fn run() -> ExitCode {
             return transport.fail(failure);
         }
     };
-
     if let Err(error) = write_frame(
         &mut transport.response,
         RunnerMessage::Spawned {
             process_id: process.id(),
         },
     ) {
-        let failure = WindowsRunnerFailure::new(
+        let failure = runner_failure(
             WindowsRunnerFailureStage::Process,
             WindowsRunnerFailureCode::ResponseFrame,
             None,
@@ -301,55 +173,37 @@ pub(super) fn run() -> ExitCode {
         );
         return transport.fail(failure);
     }
-    let response = Arc::new(Mutex::new(transport.response));
-    let stdout = process.take_stdout().map(|reader| {
-        spawn_output_reader(reader, Arc::clone(&response), RunnerOutputStream::Stdout)
-    });
-    let stderr = process.take_stderr().map(|reader| {
-        spawn_output_reader(reader, Arc::clone(&response), RunnerOutputStream::Stderr)
-    });
-    spawn_control_reader(
-        transport.request,
-        Arc::clone(&response),
-        process.take_stdin(),
-    );
     let exit_code = match process.wait() {
         Ok(exit_code) => exit_code,
         Err(error) => {
-            report_async_failure(
-                &response,
-                WindowsRunnerFailure::new(
-                    error.stage(),
-                    error.failure_code(),
-                    error.native_code(),
-                    error.to_string(),
-                ),
+            let failure = runner_failure(
+                error.stage(),
+                error.failure_code(),
+                error.native_code(),
+                error.to_string(),
             );
-            return ExitCode::from(125);
+            return transport.fail(failure);
         }
     };
-    for reader in [stdout, stderr].into_iter().flatten() {
-        if reader.join().is_err() {
-            report_async_failure(
-                &response,
-                WindowsRunnerFailure::new(
-                    WindowsRunnerFailureStage::Wait,
-                    WindowsRunnerFailureCode::ResponseFrame,
-                    None,
-                    "restricted process output reader panicked",
-                ),
-            );
-            return ExitCode::from(125);
-        }
-    }
-    let Ok(mut response) = response.lock() else {
-        return ExitCode::from(125);
-    };
-    match write_frame(&mut *response, RunnerMessage::Exited { exit_code }) {
+    match write_frame(&mut transport.response, RunnerMessage::Exited { exit_code }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("cageforge-windows-command-runner: failed to report process exit: {error}");
             ExitCode::from(125)
         }
+    }
+}
+
+fn runner_failure(
+    stage: WindowsRunnerFailureStage,
+    code: WindowsRunnerFailureCode,
+    native_code: Option<u32>,
+    detail: impl Into<String>,
+) -> WindowsRunnerFailure {
+    WindowsRunnerFailure {
+        stage,
+        code,
+        native_code,
+        detail: detail.into(),
     }
 }

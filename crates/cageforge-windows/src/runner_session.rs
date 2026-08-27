@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Authenticated parent-runner session, standard-stream proxying, and lifecycle.
+//! Authenticated parent-runner session and complete process lifecycle.
 
 use std::fs::File;
-use std::io::{self, Read, Stderr, Stdout, Write};
+use std::io::Read;
 use std::os::windows::io::AsRawHandle;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,19 +11,19 @@ use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use cageforge_command::StdioSpec;
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, GetLastError};
-use windows_sys::Win32::System::IO::CancelSynchronousIo;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
 use crate::runner_launch::{RunnerLaunch, RunnerLaunchError};
 use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError};
-use crate::runner_pipe::duplicate_current_thread_handle;
 use crate::runner_protocol::{
-    MAX_RUNNER_FRAME_BYTES, MAX_RUNNER_OUTPUT_CHUNK_BYTES, RunnerMessage, RunnerOutputStream,
-    RunnerSpawnRequest, RunnerStdioMode, WindowsRunnerFailure, WindowsRunnerProtocolError,
-    read_frame, write_frame,
+    MAX_RUNNER_FRAME_BYTES, RunnerAccount, RunnerMessage, RunnerSpawnRequest,
+    RunnerStandardHandles, WindowsRunnerFailure, WindowsRunnerProtocolError, read_frame,
+    write_frame,
 };
+use crate::runner_stdio::{ParentStdio, WindowsStandardStreamError};
 
 const SPAWN_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -32,45 +32,27 @@ const POLL_INTERVAL: Duration = Duration::from_millis(2);
 pub(crate) struct RunnerSession {
     launch: RunnerLaunch,
     process_id: u32,
-    stdin: Option<RunnerInput>,
-    stdout: Option<RunnerOutput>,
-    stderr: Option<RunnerOutput>,
-    inherited_stdin: Option<InheritedStdinForwarder>,
+    stdin: Option<File>,
+    stdout: Option<File>,
+    stderr: Option<File>,
     terminal: mpsc::Receiver<RunnerTerminal>,
     dispatcher: Option<JoinHandle<()>>,
     watchdog: Option<TimeoutWatchdog>,
     finished: bool,
 }
 
-pub(crate) struct RunnerInput {
-    writer: Option<File>,
-}
-
-pub(crate) struct RunnerOutput {
-    reader: ChannelReader,
-}
-
-struct ChannelReader {
-    receiver: mpsc::Receiver<Vec<u8>>,
-    current: Vec<u8>,
-    offset: usize,
-}
-
-struct InheritedStdinForwarder {
-    thread_handle: std::os::windows::io::OwnedHandle,
-    join: Option<JoinHandle<()>>,
+pub(crate) struct PendingRunnerSpawnRequest {
+    pub(crate) command: Vec<Vec<u16>>,
+    pub(crate) working_directory: Vec<u16>,
+    pub(crate) environment_block: Vec<u16>,
+    pub(crate) capability_sids: Vec<String>,
+    pub(crate) route_sid: Option<String>,
+    pub(crate) account: RunnerAccount,
 }
 
 struct TimeoutWatchdog {
     cancel: mpsc::SyncSender<()>,
     join: Option<JoinHandle<()>>,
-}
-
-enum OutputTarget {
-    Pipe(mpsc::Sender<Vec<u8>>),
-    InheritStdout(Stdout),
-    InheritStderr(Stderr),
-    Null,
 }
 
 enum RunnerTerminal {
@@ -83,6 +65,8 @@ enum RunnerTerminal {
 pub(crate) enum RunnerSessionError {
     #[error(transparent)]
     Launch(#[from] RunnerLaunchError),
+    #[error(transparent)]
+    StandardStream(#[from] WindowsStandardStreamError),
     #[error(transparent)]
     Protocol(#[from] WindowsRunnerProtocolError),
     #[error(transparent)]
@@ -106,26 +90,10 @@ pub(crate) enum RunnerSessionError {
     UnexpectedHandshakeMessage { actual: &'static str },
     #[error("authenticated runner sent {actual} during the command lifecycle")]
     UnexpectedLifecycleMessage { actual: &'static str },
-    #[error("authenticated runner output for {stream:?} exceeded the protocol chunk bound")]
-    OversizedOutput { stream: RunnerOutputStream },
-    #[error("failed to forward inherited {stream}: {source}")]
-    InheritedOutput {
-        stream: &'static str,
-        #[source]
-        source: io::Error,
-    },
     #[error("authenticated runner lifecycle channel closed without a terminal result")]
     LifecycleClosed,
     #[error("authenticated runner lifecycle dispatcher panicked")]
     DispatcherPanic,
-    #[error("inherited standard-input forwarder panicked")]
-    StdinForwarderPanic,
-    #[error("failed to duplicate the inherited-stdin thread handle: Windows error {code}")]
-    StdinThreadHandle { code: u32 },
-    #[error("inherited-stdin thread ended before publishing its cancellation handle")]
-    StdinThreadMissing,
-    #[error("failed to cancel inherited standard-input forwarding: Windows error {code}")]
-    StdinCancel { code: u32 },
     #[error("timeout watchdog panicked")]
     WatchdogPanic,
     #[error("the authenticated command runner did not exit after reporting command completion")]
@@ -141,18 +109,30 @@ pub(crate) enum RunnerSessionError {
 impl RunnerSession {
     pub(crate) fn start(
         mut launch: RunnerLaunch,
-        mut request: RunnerSpawnRequest,
+        request: PendingRunnerSpawnRequest,
+        stdio_spec: StdioSpec,
         timeout: Option<Duration>,
     ) -> Result<Self, RunnerSessionError> {
-        request.job_handle = launch.job_handle;
-        request.desktop_name = launch.desktop_name().to_vec();
-        let stdio = request.stdio;
         let boundary = launch.boundary();
+        let stdio = match ParentStdio::prepare(stdio_spec, &boundary) {
+            Ok(stdio) => stdio,
+            Err(error) => {
+                let _ = boundary.terminate(125);
+                return Err(error.into());
+            }
+        };
+        let (standard_handles, stdin, stdout, stderr) = stdio.into_parts();
+        let request = request.bind(
+            standard_handles,
+            launch.job_handle,
+            launch.desktop_name().to_vec(),
+        );
         let mut request_pipe = launch.take_request()?;
         if let Err(error) = write_frame(&mut request_pipe, RunnerMessage::Spawn { request }) {
             let _ = boundary.terminate(125);
             return Err(error.into());
         }
+        drop(request_pipe);
         let mut response_pipe = launch.take_response()?;
         let message =
             match read_frame_until(&mut response_pipe, Instant::now() + SPAWN_HANDSHAKE_TIMEOUT) {
@@ -178,24 +158,6 @@ impl RunnerSession {
             let _ = boundary.terminate(125);
             return Err(error.into());
         }
-        let (stdout, stdout_target) = output_target(stdio.stdout, RunnerOutputStream::Stdout);
-        let (stderr, stderr_target) = output_target(stdio.stderr, RunnerOutputStream::Stderr);
-        let (stdin, inherited_stdin) = match stdio.stdin {
-            RunnerStdioMode::Pipe => (
-                Some(RunnerInput {
-                    writer: Some(request_pipe),
-                }),
-                None,
-            ),
-            RunnerStdioMode::Inherit => match InheritedStdinForwarder::start(request_pipe) {
-                Ok(forwarder) => (None, Some(forwarder)),
-                Err(error) => {
-                    let _ = boundary.terminate(125);
-                    return Err(error);
-                }
-            },
-            RunnerStdioMode::Null => (None, None),
-        };
         let (terminal_sender, terminal) = mpsc::channel();
         let timed_out = Arc::new(AtomicBool::new(false));
         let watchdog = timeout.map(|duration| {
@@ -210,8 +172,6 @@ impl RunnerSession {
         let dispatcher = std::thread::spawn(move || {
             dispatch_responses(
                 response_pipe,
-                stdout_target,
-                stderr_target,
                 boundary,
                 timed_out,
                 watchdog_cancel,
@@ -224,7 +184,6 @@ impl RunnerSession {
             stdin,
             stdout,
             stderr,
-            inherited_stdin,
             terminal,
             dispatcher: Some(dispatcher),
             watchdog,
@@ -236,16 +195,20 @@ impl RunnerSession {
         self.process_id
     }
 
-    pub(crate) fn stdin(&mut self) -> Option<&mut RunnerInput> {
+    pub(crate) fn stdin(&mut self) -> Option<&mut File> {
         self.stdin.as_mut()
     }
 
-    pub(crate) fn stdout(&mut self) -> Option<&mut RunnerOutput> {
+    pub(crate) fn stdout(&mut self) -> Option<&mut File> {
         self.stdout.as_mut()
     }
 
-    pub(crate) fn stderr(&mut self) -> Option<&mut RunnerOutput> {
+    pub(crate) fn stderr(&mut self) -> Option<&mut File> {
         self.stderr.as_mut()
+    }
+
+    pub(crate) fn close_stdin(&mut self) {
+        self.stdin = None;
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>, RunnerSessionError> {
@@ -285,10 +248,7 @@ impl RunnerSession {
     }
 
     fn finish_inner(&mut self, terminal: RunnerTerminal) -> Result<ExitStatus, RunnerSessionError> {
-        self.stdin = None;
-        if let Some(mut forwarder) = self.inherited_stdin.take() {
-            forwarder.stop()?;
-        }
+        self.close_stdin();
         if let Some(mut watchdog) = self.watchdog.take() {
             watchdog.stop()?;
         }
@@ -317,123 +277,24 @@ impl RunnerSession {
     }
 }
 
-impl Write for RunnerInput {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let length = buffer.len().min(MAX_RUNNER_OUTPUT_CHUNK_BYTES);
-        let Some(writer) = self.writer.as_mut() else {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "sandbox stdin is closed",
-            ));
-        };
-        write_frame(
-            writer,
-            RunnerMessage::Stdin {
-                bytes: buffer[..length].to_vec(),
-            },
-        )
-        .map_err(io::Error::other)?;
-        Ok(length)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self.writer.as_mut() {
-            Some(writer) => writer.flush(),
-            None => Ok(()),
+impl PendingRunnerSpawnRequest {
+    fn bind(
+        self,
+        standard_handles: RunnerStandardHandles,
+        job_handle: u64,
+        desktop_name: Vec<u16>,
+    ) -> RunnerSpawnRequest {
+        RunnerSpawnRequest {
+            command: self.command,
+            working_directory: self.working_directory,
+            environment_block: self.environment_block,
+            capability_sids: self.capability_sids,
+            route_sid: self.route_sid,
+            account: self.account,
+            standard_handles,
+            job_handle,
+            desktop_name,
         }
-    }
-}
-
-impl RunnerInput {
-    pub(crate) fn close(&mut self) -> Result<(), WindowsRunnerProtocolError> {
-        if let Some(mut writer) = self.writer.take() {
-            write_frame(&mut writer, RunnerMessage::CloseStdin)?;
-        }
-        Ok(())
-    }
-}
-
-impl Read for RunnerOutput {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.reader.read(buffer)
-    }
-}
-
-impl Read for ChannelReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        while self.offset == self.current.len() {
-            match self.receiver.recv() {
-                Ok(chunk) => {
-                    self.current = chunk;
-                    self.offset = 0;
-                }
-                Err(_) => return Ok(0),
-            }
-        }
-        let length = buffer.len().min(self.current.len() - self.offset);
-        buffer[..length].copy_from_slice(&self.current[self.offset..self.offset + length]);
-        self.offset += length;
-        Ok(length)
-    }
-}
-
-impl InheritedStdinForwarder {
-    fn start(mut writer: File) -> Result<Self, RunnerSessionError> {
-        let (handle_sender, handle_receiver) = mpsc::sync_channel(1);
-        let join = std::thread::spawn(move || {
-            let handle = duplicate_current_thread_handle()
-                .map_err(|code| RunnerSessionError::StdinThreadHandle { code });
-            if handle_sender.send(handle).is_err() {
-                return;
-            }
-            let mut input = io::stdin();
-            let mut buffer = vec![0u8; MAX_RUNNER_OUTPUT_CHUNK_BYTES];
-            loop {
-                match input.read(&mut buffer) {
-                    Ok(0) => {
-                        let _ = write_frame(&mut writer, RunnerMessage::CloseStdin);
-                        break;
-                    }
-                    Ok(length) => {
-                        if write_frame(
-                            &mut writer,
-                            RunnerMessage::Stdin {
-                                bytes: buffer[..length].to_vec(),
-                            },
-                        )
-                        .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        let thread_handle = handle_receiver
-            .recv()
-            .map_err(|_| RunnerSessionError::StdinThreadMissing)??;
-        Ok(Self {
-            thread_handle,
-            join: Some(join),
-        })
-    }
-
-    #[allow(unsafe_code)]
-    fn stop(&mut self) -> Result<(), RunnerSessionError> {
-        if unsafe { CancelSynchronousIo(self.thread_handle.as_raw_handle() as _) } == 0 {
-            let code = unsafe { GetLastError() };
-            if code != ERROR_NOT_FOUND {
-                return Err(RunnerSessionError::StdinCancel { code });
-            }
-        }
-        if self.join.take().is_some_and(|join| join.join().is_err()) {
-            return Err(RunnerSessionError::StdinForwarderPanic);
-        }
-        Ok(())
     }
 }
 
@@ -471,43 +332,12 @@ impl TimeoutWatchdog {
     }
 }
 
-impl OutputTarget {
-    fn write(&mut self, bytes: Vec<u8>) -> Result<(), RunnerSessionError> {
-        match self {
-            Self::Pipe(sender) => {
-                let _ = sender.send(bytes);
-                Ok(())
-            }
-            Self::InheritStdout(stdout) => stdout
-                .write_all(&bytes)
-                .and_then(|()| stdout.flush())
-                .map_err(|source| RunnerSessionError::InheritedOutput {
-                    stream: "stdout",
-                    source,
-                }),
-            Self::InheritStderr(stderr) => stderr
-                .write_all(&bytes)
-                .and_then(|()| stderr.flush())
-                .map_err(|source| RunnerSessionError::InheritedOutput {
-                    stream: "stderr",
-                    source,
-                }),
-            Self::Null => Err(RunnerSessionError::UnexpectedLifecycleMessage {
-                actual: "output for a null stream",
-            }),
-        }
-    }
-}
-
 impl Drop for RunnerSession {
     fn drop(&mut self) {
         if !self.finished {
             let _ = self.launch.boundary().terminate(125);
         }
-        self.stdin = None;
-        if let Some(mut forwarder) = self.inherited_stdin.take() {
-            let _ = forwarder.stop();
-        }
+        self.close_stdin();
         if let Some(mut watchdog) = self.watchdog.take() {
             let _ = watchdog.stop();
         }
@@ -517,106 +347,45 @@ impl Drop for RunnerSession {
     }
 }
 
-fn output_target(
-    mode: RunnerStdioMode,
-    stream: RunnerOutputStream,
-) -> (Option<RunnerOutput>, OutputTarget) {
-    match mode {
-        RunnerStdioMode::Pipe => {
-            let (sender, receiver) = mpsc::channel();
-            (
-                Some(RunnerOutput {
-                    reader: ChannelReader {
-                        receiver,
-                        current: Vec::new(),
-                        offset: 0,
-                    },
-                }),
-                OutputTarget::Pipe(sender),
-            )
-        }
-        RunnerStdioMode::Inherit => match stream {
-            RunnerOutputStream::Stdout => (None, OutputTarget::InheritStdout(io::stdout())),
-            RunnerOutputStream::Stderr => (None, OutputTarget::InheritStderr(io::stderr())),
-        },
-        RunnerStdioMode::Null => (None, OutputTarget::Null),
-    }
-}
-
 fn dispatch_responses(
     mut response: File,
-    mut stdout: OutputTarget,
-    mut stderr: OutputTarget,
     boundary: Arc<BoundaryTerminator>,
     timed_out: Arc<AtomicBool>,
     watchdog_cancel: Option<mpsc::SyncSender<()>>,
     terminal: mpsc::Sender<RunnerTerminal>,
 ) {
-    let mut output_error = None;
-    loop {
-        let message = match read_frame(&mut response) {
-            Ok(message) => message,
-            Err(error) => {
-                if timed_out.load(Ordering::Acquire) {
-                    return;
-                }
-                let _ = boundary.terminate(125);
-                let _ = terminal.send(RunnerTerminal::Failed(error.into()));
+    let message = match read_frame(&mut response) {
+        Ok(message) => message,
+        Err(error) => {
+            if timed_out.load(Ordering::Acquire) {
                 return;
             }
-        };
-        match message {
-            RunnerMessage::Output { stream, bytes } => {
-                if bytes.len() > MAX_RUNNER_OUTPUT_CHUNK_BYTES {
-                    let _ = boundary.terminate(125);
-                    let _ = terminal.send(RunnerTerminal::Failed(
-                        RunnerSessionError::OversizedOutput { stream },
-                    ));
-                    return;
-                }
-                let target = match stream {
-                    RunnerOutputStream::Stdout => &mut stdout,
-                    RunnerOutputStream::Stderr => &mut stderr,
-                };
-                if let Err(error) = target.write(bytes)
-                    && output_error.is_none()
-                {
-                    output_error = Some(error);
-                }
-            }
-            RunnerMessage::Exited { exit_code } => {
-                if let Some(cancel) = watchdog_cancel {
-                    let _ = cancel.try_send(());
-                }
-                if timed_out.load(Ordering::Acquire) {
-                    return;
-                }
-                let terminal_value = output_error
-                    .map(RunnerTerminal::Failed)
-                    .unwrap_or(RunnerTerminal::Exited(exit_code));
-                let _ = terminal.send(terminal_value);
-                return;
-            }
-            RunnerMessage::Failed { failure } => {
-                if let Some(cancel) = watchdog_cancel {
-                    let _ = cancel.try_send(());
-                }
-                if timed_out.load(Ordering::Acquire) {
-                    return;
-                }
-                let _ = boundary.terminate(125);
-                let _ = terminal.send(RunnerTerminal::Failed(runner_failure(failure)));
-                return;
-            }
-            other => {
-                let _ = boundary.terminate(125);
-                let _ = terminal.send(RunnerTerminal::Failed(
-                    RunnerSessionError::UnexpectedLifecycleMessage {
-                        actual: other.kind(),
-                    },
-                ));
-                return;
-            }
+            let _ = boundary.terminate(125);
+            let _ = terminal.send(RunnerTerminal::Failed(error.into()));
+            return;
+        }
+    };
+    if let Some(cancel) = watchdog_cancel {
+        let _ = cancel.try_send(());
+    }
+    if timed_out.load(Ordering::Acquire) {
+        return;
+    }
+    match message {
+        RunnerMessage::Exited { exit_code } => {
+            let _ = terminal.send(RunnerTerminal::Exited(exit_code));
+        }
+        RunnerMessage::Failed { failure } => {
+            let _ = boundary.terminate(125);
+            let _ = terminal.send(RunnerTerminal::Failed(runner_failure(failure)));
+        }
+        other => {
+            let _ = boundary.terminate(125);
+            let _ = terminal.send(RunnerTerminal::Failed(
+                RunnerSessionError::UnexpectedLifecycleMessage {
+                    actual: other.kind(),
+                },
+            ));
         }
     }
 }

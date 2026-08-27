@@ -228,6 +228,20 @@ boundary. The runner supplies those handles through the process handle-list
 attribute; no transport, token, job, desktop, setup, or unrelated inheritable
 handle reaches the user command.
 
+The trusted parent prepares all three standard streams only after the exact
+runner process has connected to both identity-bound pipes. Pipe mode creates an
+anonymous pipe with no inheritable parent handle and retains only the caller's
+endpoint. Null mode opens `NUL` in the required direction. Inherit mode reads
+the current process's exact standard handle and fails if none is associated.
+For every mode the parent duplicates only the child endpoint into its pinned
+runner-process handle with `bInheritHandle=TRUE`; the authenticated request
+contains the three target-process handle values but never stream bytes. The
+runner rejects null, invalid, repeated, non-inheritable, unexpectedly flagged,
+or Job-aliasing values before taking ownership, then places exactly those three
+handles in `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. Runner exit closes every
+duplicate on a failed request, while `WindowsChild` owns pipe endpoints directly
+and therefore has no unbounded output queue or blocking stdio-forwarder thread.
+
 `WindowsChild` owns the Job Object and every runtime resource. `kill`, timeout,
 drop, and failed setup terminate the complete job and reap the primary process.
 Timeout enforcement belongs to the trusted parent and is not delegated to a
@@ -415,7 +429,9 @@ portable transformation and cannot be removed by the user command request.
 
 Inherited, null, and piped stdio use an explicit handle list. No unrelated
 inheritable handle may cross the boundary. Pipe readers and writers are owned
-by `WindowsChild` and close deterministically on timeout and drop.
+by `WindowsChild` and close deterministically on timeout and drop. Standard
+stream content is not part of the authenticated runner protocol: the protocol
+reports only spawn, typed failure, and exit lifecycle state.
 
 ## 9. Capabilities and native validation
 
@@ -550,8 +566,9 @@ copy the reviewed source files.
 
 The process-boundary design was reviewed line by line against the frozen
 versions of `src/token.rs`, `src/token_tests.rs`, `src/process.rs`,
-`src/proc_thread_attr.rs`, `src/desktop.rs`, `src/elevated/ipc_framed.rs`,
-`src/elevated/runner_pipe.rs`, `src/elevated/runner_client.rs`,
+`src/proc_thread_attr.rs`, `src/desktop.rs`, `src/stdio_bridge.rs`,
+`src/elevated/ipc_framed.rs`, `src/elevated/runner_pipe.rs`,
+`src/elevated/runner_client.rs`,
 `src/elevated_impl.rs`, and `src/bin/command_runner/win.rs` under
 `codex-rs/windows-sandbox-rs`, plus `src/win/job.rs` under
 `codex-rs/utils/pty`.
@@ -575,6 +592,16 @@ implementation's shared sandbox-group deny-read state. It also does not retain
 Codex permission profiles, command schemas, logging, credential
 refresh fallback, ConPTY, filesystem-helper aliases, or cloned secret-bearing
 protocol requests.
+
+The frozen direct-process path supplies standard streams with
+`STARTF_USESTDHANDLES` and an explicit process handle list; Cageforge retains
+that native boundary. The frozen elevated unified-exec path instead transports
+stdin and output as framed messages and includes PTY and product request state.
+Cageforge intentionally does not retain that transport. Parent-prepared HANDLE
+duplication gives the reusable library the same direct `Read`/`Write` child
+surface as `cageforge-linux`, prevents undrained output from accumulating in an
+unbounded runner channel, and keeps slow inherited output outside the trusted
+lifecycle-response dispatcher.
 
 The installed runner manifest is versioned and binds the setup owner SID,
 managed-group name and SID, both dedicated account names and SIDs, and the

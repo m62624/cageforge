@@ -14,8 +14,7 @@ use cageforge_backend_api::{
     PreparedBackendRequest, SandboxBackend,
 };
 use cageforge_command::{
-    CoreEnvironment, EnvironmentBase, EnvironmentInput, EnvironmentNameKey, StdioMode,
-    TimeoutPolicy,
+    CoreEnvironment, EnvironmentBase, EnvironmentInput, EnvironmentNameKey, TimeoutPolicy,
 };
 use cageforge_policy::{FilesystemMode, NetworkMode};
 
@@ -29,8 +28,8 @@ use crate::filesystem_plan::{FilesystemPlan, FilesystemPlanError};
 use crate::network::{ProxyAddresses, WindowsProxyIngress, WindowsProxyRoute};
 use crate::process::WindowsChild;
 use crate::runner_launch::RunnerLaunch;
-use crate::runner_protocol::{RunnerAccount, RunnerSpawnRequest, RunnerStdioMode, RunnerStdioPlan};
-use crate::runner_session::RunnerSession;
+use crate::runner_protocol::RunnerAccount;
+use crate::runner_session::{PendingRunnerSpawnRequest, RunnerSession};
 use crate::setup::{WindowsSetup, WindowsSetupDetails};
 use crate::setup_verification::credentials::{AccountCredential, SandboxCredentials};
 
@@ -143,9 +142,10 @@ impl WindowsBackend {
             apply_proxy_environment(&mut environment, route.addresses());
         }
         let timeout = timeout(&prepared, self)?;
+        let stdio = prepared.stdio(self)?;
         let credential = self.credential(plan.account);
         let route_sid = network_route.as_ref().map(|route| route.sid().to_string());
-        let request = RunnerSpawnRequest {
+        let request = PendingRunnerSpawnRequest {
             command: encode_command(command.program(), command.args())?,
             working_directory: encode_field(
                 "working directory",
@@ -155,9 +155,6 @@ impl WindowsBackend {
             capability_sids: enforcement.token_sids().to_vec(),
             route_sid,
             account: plan.account,
-            stdio: stdio_plan(prepared.stdio(self)?),
-            job_handle: 0,
-            desktop_name: Vec::new(),
         };
         let launch = RunnerLaunch::start(
             &self.command_runner,
@@ -166,7 +163,7 @@ impl WindowsBackend {
             self.setup.owner_sid(),
         )
         .map_err(WindowsBackendError::runner_launch)?;
-        let session = RunnerSession::start(launch, request, timeout)
+        let session = RunnerSession::start(launch, request, stdio, timeout)
             .map_err(WindowsBackendError::runner_session)?;
         Ok(WindowsChild::new(session, enforcement, network_route))
     }
@@ -335,22 +332,6 @@ fn timeout<'request>(
         TimeoutPolicy::BackendDefault => Ok(Some(backend.config.default_timeout())),
         TimeoutPolicy::Limit(timeout) => Ok(Some(timeout)),
         TimeoutPolicy::Disabled => Ok(None),
-    }
-}
-
-fn stdio_plan(stdio: cageforge_command::StdioSpec) -> RunnerStdioPlan {
-    RunnerStdioPlan {
-        stdin: stdio_mode(stdio.stdin()),
-        stdout: stdio_mode(stdio.stdout()),
-        stderr: stdio_mode(stdio.stderr()),
-    }
-}
-
-const fn stdio_mode(mode: StdioMode) -> RunnerStdioMode {
-    match mode {
-        StdioMode::Inherit => RunnerStdioMode::Inherit,
-        StdioMode::Null => RunnerStdioMode::Null,
-        StdioMode::Pipe => RunnerStdioMode::Pipe,
     }
 }
 

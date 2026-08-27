@@ -44,7 +44,6 @@ pub(crate) struct RunnerLaunch {
     pub(crate) job_handle: u64,
     desktop: ParentDesktop,
     boundary: Arc<BoundaryTerminator>,
-    runner_process_id: u32,
 }
 
 struct SuspendedRunner {
@@ -180,7 +179,6 @@ impl RunnerLaunch {
         runner.resume()?;
         request.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT)?;
         response.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT)?;
-        let runner_process_id = runner.process_id;
         let boundary = Arc::new(BoundaryTerminator::new(job, &runner.process)?);
         runner.released = true;
         Ok(Self {
@@ -189,12 +187,7 @@ impl RunnerLaunch {
             job_handle,
             desktop,
             boundary,
-            runner_process_id,
         })
-    }
-
-    pub(crate) const fn runner_process_id(&self) -> u32 {
-        self.runner_process_id
     }
 
     pub(crate) fn desktop_name(&self) -> &[u16] {

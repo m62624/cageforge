@@ -34,6 +34,7 @@ mod runner_pipe;
 mod runner_protocol;
 mod runner_resource_security;
 mod runner_session;
+mod runner_stdio;
 mod setup;
 mod setup_protocol;
 mod setup_state;
@@ -59,6 +60,7 @@ pub use runner_protocol::{
     WindowsRunnerFailure, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
     WindowsRunnerProtocolError,
 };
+pub use runner_stdio::WindowsStandardStreamError;
 pub use setup::{
     WindowsSandboxAccounts, WindowsSetup, WindowsSetupDetails, WindowsSetupStaleReason,
     WindowsSetupStatus,

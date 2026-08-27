@@ -372,27 +372,6 @@ fn duplicate_current_thread(
 }
 
 #[allow(unsafe_code)]
-pub(crate) fn duplicate_current_thread_handle() -> Result<OwnedHandle, u32> {
-    let mut duplicate = std::ptr::null_mut();
-    if unsafe {
-        DuplicateHandle(
-            GetCurrentProcess(),
-            GetCurrentThread(),
-            GetCurrentProcess(),
-            &mut duplicate,
-            0,
-            0,
-            DUPLICATE_SAME_ACCESS,
-        )
-    } == 0
-    {
-        Err(unsafe { GetLastError() })
-    } else {
-        Ok(unsafe { OwnedHandle::from_raw_handle(duplicate as RawHandle) })
-    }
-}
-
-#[allow(unsafe_code)]
 fn connect_and_verify(
     handle: usize,
     direction: ParentPipeDirection,

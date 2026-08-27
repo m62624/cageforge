@@ -52,12 +52,10 @@ impl WindowsChild {
         self.session.stderr().map(|output| output as &mut dyn Read)
     }
 
-    /// Closes piped standard input and sends an authenticated EOF request.
+    /// Closes piped standard input so the child observes end-of-file.
     pub fn close_stdin(&mut self) -> Result<(), WindowsBackendError> {
-        match self.session.stdin() {
-            Some(input) => input.close().map_err(WindowsBackendError::runner_protocol),
-            None => Ok(()),
-        }
+        self.session.close_stdin();
+        Ok(())
     }
 
     /// Checks whether the command has exited without blocking.

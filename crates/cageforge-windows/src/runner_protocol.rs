@@ -7,9 +7,8 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 2;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const MAX_RUNNER_OUTPUT_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RunnerFrame {
@@ -20,26 +19,10 @@ pub(crate) struct RunnerFrame {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RunnerMessage {
-    Spawn {
-        request: RunnerSpawnRequest,
-    },
-    Spawned {
-        process_id: u32,
-    },
-    Stdin {
-        bytes: Vec<u8>,
-    },
-    CloseStdin,
-    Output {
-        stream: RunnerOutputStream,
-        bytes: Vec<u8>,
-    },
-    Exited {
-        exit_code: u32,
-    },
-    Failed {
-        failure: WindowsRunnerFailure,
-    },
+    Spawn { request: RunnerSpawnRequest },
+    Spawned { process_id: u32 },
+    Exited { exit_code: u32 },
+    Failed { failure: WindowsRunnerFailure },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -50,16 +33,16 @@ pub(crate) struct RunnerSpawnRequest {
     pub(crate) capability_sids: Vec<String>,
     pub(crate) route_sid: Option<String>,
     pub(crate) account: RunnerAccount,
-    pub(crate) stdio: RunnerStdioPlan,
+    pub(crate) standard_handles: RunnerStandardHandles,
     pub(crate) job_handle: u64,
     pub(crate) desktop_name: Vec<u16>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct RunnerStdioPlan {
-    pub(crate) stdin: RunnerStdioMode,
-    pub(crate) stdout: RunnerStdioMode,
-    pub(crate) stderr: RunnerStdioMode,
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RunnerStandardHandles {
+    pub(crate) stdin: u64,
+    pub(crate) stdout: u64,
+    pub(crate) stderr: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,21 +50,6 @@ pub(crate) struct RunnerStdioPlan {
 pub(crate) enum RunnerAccount {
     Offline,
     Online,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RunnerStdioMode {
-    Inherit,
-    Null,
-    Pipe,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RunnerOutputStream {
-    Stdout,
-    Stderr,
 }
 
 /// Native command-runner stage that rejected or failed an operation.
@@ -154,7 +122,7 @@ pub enum WindowsRunnerFailureCode {
     HandleListApply,
     /// Atomic Job Object assignment could not be installed.
     JobListApply,
-    /// A standard stream pipe or `NUL` handle could not be prepared.
+    /// A parent-duplicated standard handle was invalid or not inheritable.
     StandardStreamPrepare,
     /// `CreateProcessAsUserW` rejected the prepared process.
     ProcessStart,
@@ -171,10 +139,10 @@ pub enum WindowsRunnerFailureCode {
 /// Structured failure returned by the authenticated Windows command runner.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowsRunnerFailure {
-    stage: WindowsRunnerFailureStage,
-    code: WindowsRunnerFailureCode,
-    native_code: Option<u32>,
-    detail: String,
+    pub(crate) stage: WindowsRunnerFailureStage,
+    pub(crate) code: WindowsRunnerFailureCode,
+    pub(crate) native_code: Option<u32>,
+    pub(crate) detail: String,
 }
 
 /// Failure while encoding or decoding the bounded command-runner protocol.
@@ -241,21 +209,18 @@ pub enum WindowsRunnerProtocolError {
     },
 }
 
-impl WindowsRunnerFailure {
-    pub(crate) fn new(
-        stage: WindowsRunnerFailureStage,
-        code: WindowsRunnerFailureCode,
-        native_code: Option<u32>,
-        detail: impl Into<String>,
-    ) -> Self {
-        Self {
-            stage,
-            code,
-            native_code,
-            detail: detail.into(),
+impl RunnerMessage {
+    pub(crate) const fn kind(&self) -> &'static str {
+        match self {
+            Self::Spawn { .. } => "spawn",
+            Self::Spawned { .. } => "spawned",
+            Self::Exited { .. } => "exited",
+            Self::Failed { .. } => "failed",
         }
     }
+}
 
+impl WindowsRunnerFailure {
     /// Returns the native runner stage that failed.
     pub const fn stage(&self) -> WindowsRunnerFailureStage {
         self.stage
@@ -274,20 +239,6 @@ impl WindowsRunnerFailure {
     /// Returns the bounded diagnostic supplied by the runner.
     pub fn detail(&self) -> &str {
         &self.detail
-    }
-}
-
-impl RunnerMessage {
-    pub(crate) const fn kind(&self) -> &'static str {
-        match self {
-            Self::Spawn { .. } => "spawn",
-            Self::Spawned { .. } => "spawned",
-            Self::Stdin { .. } => "stdin",
-            Self::CloseStdin => "close_stdin",
-            Self::Output { .. } => "output",
-            Self::Exited { .. } => "exited",
-            Self::Failed { .. } => "failed",
-        }
     }
 }
 
@@ -352,8 +303,8 @@ pub(crate) fn read_frame(
 mod tests {
     use super::{
         MAX_RUNNER_FRAME_BYTES, RUNNER_PROTOCOL_VERSION, RunnerAccount, RunnerFrame, RunnerMessage,
-        RunnerSpawnRequest, RunnerStdioMode, RunnerStdioPlan, WindowsRunnerProtocolError,
-        read_frame, write_frame,
+        RunnerSpawnRequest, RunnerStandardHandles, WindowsRunnerProtocolError, read_frame,
+        write_frame,
     };
 
     #[test]
@@ -365,10 +316,10 @@ mod tests {
             capability_sids: vec!["S-1-5-21-1-2-3-4".to_string()],
             route_sid: Some("S-1-5-21-5-6-7-8".to_string()),
             account: RunnerAccount::Offline,
-            stdio: RunnerStdioPlan {
-                stdin: RunnerStdioMode::Pipe,
-                stdout: RunnerStdioMode::Pipe,
-                stderr: RunnerStdioMode::Inherit,
+            standard_handles: RunnerStandardHandles {
+                stdin: 0x1111,
+                stdout: 0x2222,
+                stderr: 0x3333,
             },
             job_handle: 0x1234_5678,
             desktop_name: "Cageforge-test".encode_utf16().collect(),
@@ -382,6 +333,9 @@ mod tests {
 
         assert_eq!(request.command[0], vec![0xd800]);
         assert_eq!(request.job_handle, 0x1234_5678);
+        assert_eq!(request.standard_handles.stdin, 0x1111);
+        assert_eq!(request.standard_handles.stdout, 0x2222);
+        assert_eq!(request.standard_handles.stderr, 0x3333);
         assert_eq!(request.route_sid.as_deref(), Some("S-1-5-21-5-6-7-8"));
     }
 
@@ -400,7 +354,7 @@ mod tests {
     fn protocol_version_mismatch_is_typed() {
         let frame = RunnerFrame {
             version: RUNNER_PROTOCOL_VERSION + 1,
-            message: RunnerMessage::CloseStdin,
+            message: RunnerMessage::Exited { exit_code: 0 },
         };
         let payload = serde_json::to_vec(&frame).expect("encode mismatched frame");
         let mut encoded = (payload.len() as u32).to_le_bytes().to_vec();

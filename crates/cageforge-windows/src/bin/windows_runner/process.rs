@@ -1,20 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::c_void;
-use std::fs::File;
 use std::mem::size_of;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{
-    GetLastError, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    GetHandleInformation, GetLastError, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
-};
-use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
@@ -24,7 +17,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::runner_protocol::{
-    RunnerSpawnRequest, RunnerStdioMode, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
+    RunnerSpawnRequest, RunnerStandardHandles, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
 };
 
 use super::token::RestrictedPrimaryToken;
@@ -32,24 +25,13 @@ use super::token::RestrictedPrimaryToken;
 pub(super) struct SpawnedProcess {
     process: OwnedHandle,
     process_id: u32,
-    stdin: Option<OwnedHandle>,
-    stdout: Option<OwnedHandle>,
-    stderr: Option<OwnedHandle>,
     finished: bool,
 }
 
 struct PreparedStandardHandles {
-    child_stdin: OwnedHandle,
-    child_stdout: OwnedHandle,
-    child_stderr: OwnedHandle,
-    runner_stdin: Option<OwnedHandle>,
-    runner_stdout: Option<OwnedHandle>,
-    runner_stderr: Option<OwnedHandle>,
-}
-
-struct AnonymousPipe {
-    read: OwnedHandle,
-    write: OwnedHandle,
+    stdin: OwnedHandle,
+    stdout: OwnedHandle,
+    stderr: OwnedHandle,
 }
 
 struct ProcessAttributeList {
@@ -71,12 +53,23 @@ pub(super) enum ProcessStartError {
     EmptyDesktopName,
     #[error("parent-supplied Job Object handle is invalid")]
     InvalidJobHandle,
-    #[error("failed to create an anonymous {stream} pipe: Windows error {code}")]
-    PipeCreate { stream: &'static str, code: u32 },
-    #[error("failed to remove inheritance from the runner side of {stream}: Windows error {code}")]
-    PipeInheritance { stream: &'static str, code: u32 },
-    #[error("failed to open NUL for child {stream}: Windows error {code}")]
-    NullOpen { stream: &'static str, code: u32 },
+    #[error("parent-supplied {stream} handle does not fit the runner architecture")]
+    StandardHandleWidth { stream: &'static str },
+    #[error("parent-supplied {stream} handle is null or invalid")]
+    InvalidStandardHandle { stream: &'static str },
+    #[error("parent supplied the same runner handle for {first} and {second}")]
+    DuplicateStandardHandle {
+        first: &'static str,
+        second: &'static str,
+    },
+    #[error("parent-supplied {stream} handle aliases the Job Object handle")]
+    StandardHandleMatchesJob { stream: &'static str },
+    #[error("failed to inspect parent-supplied {stream}: Windows error {code}")]
+    StandardHandleInspect { stream: &'static str, code: u32 },
+    #[error("parent-supplied {stream} is not marked inheritable")]
+    StandardHandleNotInheritable { stream: &'static str },
+    #[error("parent-supplied {stream} has unexpected handle flags {flags:#x}")]
+    UnexpectedStandardHandleFlags { stream: &'static str, flags: u32 },
     #[error("failed to size the process attribute list: Windows error {code}")]
     AttributeListSize { code: u32 },
     #[error("failed to initialize the process attribute list: Windows error {code}")]
@@ -112,19 +105,15 @@ impl SpawnedProcess {
         working_directory.push(0);
         let mut desktop = request.desktop_name;
         desktop.push(0);
-        let standard = PreparedStandardHandles::new(&request.stdio)?;
         let job_value =
             usize::try_from(request.job_handle).map_err(|_| ProcessStartError::InvalidJobHandle)?;
         let job_handle = job_value as *mut c_void;
         if job_handle.is_null() || job_handle == INVALID_HANDLE_VALUE {
             return Err(ProcessStartError::InvalidJobHandle);
         }
+        let standard = PreparedStandardHandles::new(request.standard_handles, job_value)?;
         let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
-        let child_handles = [
-            standard.child_stdin.as_raw_handle(),
-            standard.child_stdout.as_raw_handle(),
-            standard.child_stderr.as_raw_handle(),
-        ];
+        let child_handles = standard.raw_handles();
         let mut attributes = ProcessAttributeList::new(2)?;
         attributes.apply_handles(&child_handles)?;
         attributes.apply_job(job.as_raw_handle())?;
@@ -176,36 +165,12 @@ impl SpawnedProcess {
         Ok(Self {
             process: process_handle,
             process_id: process.dwProcessId,
-            stdin: standard.runner_stdin,
-            stdout: standard.runner_stdout,
-            stderr: standard.runner_stderr,
             finished: false,
         })
     }
 
     pub(super) const fn id(&self) -> u32 {
         self.process_id
-    }
-
-    #[allow(unsafe_code)]
-    pub(super) fn take_stdin(&mut self) -> Option<File> {
-        self.stdin
-            .take()
-            .map(|handle| unsafe { File::from_raw_handle(handle.into_raw_handle()) })
-    }
-
-    #[allow(unsafe_code)]
-    pub(super) fn take_stdout(&mut self) -> Option<File> {
-        self.stdout
-            .take()
-            .map(|handle| unsafe { File::from_raw_handle(handle.into_raw_handle()) })
-    }
-
-    #[allow(unsafe_code)]
-    pub(super) fn take_stderr(&mut self) -> Option<File> {
-        self.stderr
-            .take()
-            .map(|handle| unsafe { File::from_raw_handle(handle.into_raw_handle()) })
     }
 
     #[allow(unsafe_code)]
@@ -241,37 +206,34 @@ impl SpawnedProcess {
     }
 }
 
-#[allow(unsafe_code)]
-impl Drop for SpawnedProcess {
-    fn drop(&mut self) {
-        if !self.finished {
-            unsafe {
-                windows_sys::Win32::System::Threading::TerminateProcess(
-                    self.process.as_raw_handle() as _,
-                    125,
-                );
-                windows_sys::Win32::System::Threading::WaitForSingleObject(
-                    self.process.as_raw_handle() as _,
-                    5_000,
-                );
-            }
-        }
-    }
-}
-
 impl PreparedStandardHandles {
-    fn new(plan: &crate::runner_protocol::RunnerStdioPlan) -> Result<Self, ProcessStartError> {
-        let (child_stdin, runner_stdin) = input_handles(plan.stdin)?;
-        let (child_stdout, runner_stdout) = output_handles("stdout", plan.stdout)?;
-        let (child_stderr, runner_stderr) = output_handles("stderr", plan.stderr)?;
+    #[allow(unsafe_code)]
+    fn new(handles: RunnerStandardHandles, job: usize) -> Result<Self, ProcessStartError> {
+        let stdin = standard_handle_value("stdin", handles.stdin)?;
+        let stdout = standard_handle_value("stdout", handles.stdout)?;
+        let stderr = standard_handle_value("stderr", handles.stderr)?;
+        reject_duplicate("stdin", stdin, "stdout", stdout)?;
+        reject_duplicate("stdin", stdin, "stderr", stderr)?;
+        reject_duplicate("stdout", stdout, "stderr", stderr)?;
+        for (stream, handle) in [("stdin", stdin), ("stdout", stdout), ("stderr", stderr)] {
+            if handle as usize == job {
+                return Err(ProcessStartError::StandardHandleMatchesJob { stream });
+            }
+            validate_inheritable_handle(stream, handle)?;
+        }
         Ok(Self {
-            child_stdin,
-            child_stdout,
-            child_stderr,
-            runner_stdin,
-            runner_stdout,
-            runner_stderr,
+            stdin: unsafe { OwnedHandle::from_raw_handle(stdin as RawHandle) },
+            stdout: unsafe { OwnedHandle::from_raw_handle(stdout as RawHandle) },
+            stderr: unsafe { OwnedHandle::from_raw_handle(stderr as RawHandle) },
         })
+    }
+
+    fn raw_handles(&self) -> [*mut c_void; 3] {
+        [
+            self.stdin.as_raw_handle(),
+            self.stdout.as_raw_handle(),
+            self.stderr.as_raw_handle(),
+        ]
     }
 }
 
@@ -352,6 +314,24 @@ impl ProcessAttributeList {
 }
 
 #[allow(unsafe_code)]
+impl Drop for SpawnedProcess {
+    fn drop(&mut self) {
+        if !self.finished {
+            unsafe {
+                windows_sys::Win32::System::Threading::TerminateProcess(
+                    self.process.as_raw_handle() as _,
+                    125,
+                );
+                windows_sys::Win32::System::Threading::WaitForSingleObject(
+                    self.process.as_raw_handle() as _,
+                    5_000,
+                );
+            }
+        }
+    }
+}
+
+#[allow(unsafe_code)]
 impl Drop for ProcessAttributeList {
     fn drop(&mut self) {
         if self.initialized {
@@ -370,11 +350,15 @@ impl ProcessStartError {
             | Self::EmbeddedNul { .. }
             | Self::InvalidEnvironmentBlock
             | Self::EmptyWorkingDirectory
-            | Self::EmptyDesktopName => WindowsRunnerFailureStage::Request,
-            Self::PipeCreate { .. }
-            | Self::PipeInheritance { .. }
-            | Self::NullOpen { .. }
-            | Self::AttributeListSize { .. }
+            | Self::EmptyDesktopName
+            | Self::StandardHandleWidth { .. }
+            | Self::InvalidStandardHandle { .. }
+            | Self::DuplicateStandardHandle { .. }
+            | Self::StandardHandleMatchesJob { .. }
+            | Self::StandardHandleInspect { .. }
+            | Self::StandardHandleNotInheritable { .. }
+            | Self::UnexpectedStandardHandleFlags { .. } => WindowsRunnerFailureStage::Request,
+            Self::AttributeListSize { .. }
             | Self::AttributeListInitialize { .. }
             | Self::HandleListApply { .. }
             | Self::ProcessCreate { .. }
@@ -393,7 +377,13 @@ impl ProcessStartError {
             | Self::EmptyWorkingDirectory
             | Self::EmptyDesktopName => WindowsRunnerFailureCode::RequestField,
             Self::InvalidJobHandle => WindowsRunnerFailureCode::JobHandleInvalid,
-            Self::PipeCreate { .. } | Self::PipeInheritance { .. } | Self::NullOpen { .. } => {
+            Self::StandardHandleWidth { .. }
+            | Self::InvalidStandardHandle { .. }
+            | Self::DuplicateStandardHandle { .. }
+            | Self::StandardHandleMatchesJob { .. }
+            | Self::StandardHandleInspect { .. }
+            | Self::StandardHandleNotInheritable { .. }
+            | Self::UnexpectedStandardHandleFlags { .. } => {
                 WindowsRunnerFailureCode::StandardStreamPrepare
             }
             Self::AttributeListSize { .. } | Self::AttributeListInitialize { .. } => {
@@ -413,9 +403,7 @@ impl ProcessStartError {
 
     pub(super) const fn native_code(&self) -> Option<u32> {
         match self {
-            Self::PipeCreate { code, .. }
-            | Self::PipeInheritance { code, .. }
-            | Self::NullOpen { code, .. }
+            Self::StandardHandleInspect { code, .. }
             | Self::AttributeListSize { code }
             | Self::AttributeListInitialize { code }
             | Self::HandleListApply { code }
@@ -429,101 +417,64 @@ impl ProcessStartError {
             | Self::EmptyWorkingDirectory
             | Self::EmptyDesktopName
             | Self::InvalidJobHandle
+            | Self::StandardHandleWidth { .. }
+            | Self::InvalidStandardHandle { .. }
+            | Self::DuplicateStandardHandle { .. }
+            | Self::StandardHandleMatchesJob { .. }
+            | Self::StandardHandleNotInheritable { .. }
+            | Self::UnexpectedStandardHandleFlags { .. }
             | Self::MissingProcessHandle
             | Self::UnexpectedWait { .. } => None,
         }
     }
 }
 
-#[allow(unsafe_code)]
-fn input_handles(
-    mode: RunnerStdioMode,
-) -> Result<(OwnedHandle, Option<OwnedHandle>), ProcessStartError> {
-    match mode {
-        RunnerStdioMode::Null => Ok((open_null("stdin", FILE_GENERIC_READ)?, None)),
-        RunnerStdioMode::Inherit | RunnerStdioMode::Pipe => {
-            let pipe = anonymous_pipe("stdin")?;
-            clear_inheritance("stdin", &pipe.write)?;
-            Ok((pipe.read, Some(pipe.write)))
-        }
-    }
-}
-
-#[allow(unsafe_code)]
-fn output_handles(
+fn standard_handle_value(
     stream: &'static str,
-    mode: RunnerStdioMode,
-) -> Result<(OwnedHandle, Option<OwnedHandle>), ProcessStartError> {
-    match mode {
-        RunnerStdioMode::Null => Ok((open_null(stream, FILE_GENERIC_WRITE)?, None)),
-        RunnerStdioMode::Inherit | RunnerStdioMode::Pipe => {
-            let pipe = anonymous_pipe(stream)?;
-            clear_inheritance(stream, &pipe.read)?;
-            Ok((pipe.write, Some(pipe.read)))
-        }
+    value: u64,
+) -> Result<*mut c_void, ProcessStartError> {
+    let value =
+        usize::try_from(value).map_err(|_| ProcessStartError::StandardHandleWidth { stream })?;
+    let handle = value as *mut c_void;
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        Err(ProcessStartError::InvalidStandardHandle { stream })
+    } else {
+        Ok(handle)
     }
 }
 
-#[allow(unsafe_code)]
-fn anonymous_pipe(stream: &'static str) -> Result<AnonymousPipe, ProcessStartError> {
-    let security = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: std::ptr::null_mut(),
-        bInheritHandle: 1,
-    };
-    let mut read = std::ptr::null_mut();
-    let mut write = std::ptr::null_mut();
-    if unsafe { CreatePipe(&mut read, &mut write, &security, 0) } == 0 {
-        return Err(ProcessStartError::PipeCreate {
-            stream,
-            code: unsafe { GetLastError() },
-        });
-    }
-    Ok(AnonymousPipe {
-        read: unsafe { OwnedHandle::from_raw_handle(read as RawHandle) },
-        write: unsafe { OwnedHandle::from_raw_handle(write as RawHandle) },
-    })
-}
-
-#[allow(unsafe_code)]
-fn clear_inheritance(stream: &'static str, handle: &OwnedHandle) -> Result<(), ProcessStartError> {
-    if unsafe { SetHandleInformation(handle.as_raw_handle() as _, HANDLE_FLAG_INHERIT, 0) } == 0 {
-        Err(ProcessStartError::PipeInheritance {
-            stream,
-            code: unsafe { GetLastError() },
-        })
+fn reject_duplicate(
+    first: &'static str,
+    first_handle: *mut c_void,
+    second: &'static str,
+    second_handle: *mut c_void,
+) -> Result<(), ProcessStartError> {
+    if first_handle == second_handle {
+        Err(ProcessStartError::DuplicateStandardHandle { first, second })
     } else {
         Ok(())
     }
 }
 
 #[allow(unsafe_code)]
-fn open_null(stream: &'static str, access: u32) -> Result<OwnedHandle, ProcessStartError> {
-    let name = "NUL\0".encode_utf16().collect::<Vec<_>>();
-    let security = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: std::ptr::null_mut(),
-        bInheritHandle: 1,
-    };
-    let handle = unsafe {
-        CreateFileW(
-            name.as_ptr(),
-            access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            &security,
-            OPEN_EXISTING,
-            0,
-            std::ptr::null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        Err(ProcessStartError::NullOpen {
+fn validate_inheritable_handle(
+    stream: &'static str,
+    handle: *mut c_void,
+) -> Result<(), ProcessStartError> {
+    let mut flags = 0;
+    if unsafe { GetHandleInformation(handle, &mut flags) } == 0 {
+        return Err(ProcessStartError::StandardHandleInspect {
             stream,
             code: unsafe { GetLastError() },
-        })
-    } else {
-        Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
+        });
     }
+    if flags & HANDLE_FLAG_INHERIT == 0 {
+        return Err(ProcessStartError::StandardHandleNotInheritable { stream });
+    }
+    if flags != HANDLE_FLAG_INHERIT {
+        return Err(ProcessStartError::UnexpectedStandardHandleFlags { stream, flags });
+    }
+    Ok(())
 }
 
 fn validate_request(request: &RunnerSpawnRequest) -> Result<(), ProcessStartError> {
@@ -598,7 +549,9 @@ fn quote_argument(argument: &[u16], output: &mut Vec<u16>) {
 
 #[cfg(test)]
 mod tests {
-    use super::command_line;
+    use std::ffi::c_void;
+
+    use super::{ProcessStartError, command_line, reject_duplicate, standard_handle_value};
 
     #[test]
     fn command_line_uses_windows_backslash_quote_rules() {
@@ -614,5 +567,25 @@ mod tests {
             actual,
             r#""C:\Program Files\tool.exe" "plain\\\"quoted" "ends with\\\\" """#
         );
+    }
+
+    #[test]
+    fn standard_handle_values_reject_null_invalid_and_aliases_before_ownership() {
+        assert!(matches!(
+            standard_handle_value("stdin", 0),
+            Err(ProcessStartError::InvalidStandardHandle { stream: "stdin" })
+        ));
+        assert!(matches!(
+            reject_duplicate(
+                "stdin",
+                0x1234usize as *mut c_void,
+                "stdout",
+                0x1234usize as *mut c_void,
+            ),
+            Err(ProcessStartError::DuplicateStandardHandle {
+                first: "stdin",
+                second: "stdout"
+            })
+        ));
     }
 }

@@ -39,24 +39,21 @@ journal, and transactional creation of missing protected paths. The public
 network checkpoint contains fixed exclusive IPv4 ingress listeners, bounded
 exact reversed-four-tuple PID attribution, process-handle pinning, one random
 route SID per routed launch, exact one-route selection, and the independent
-`cageforge-network-proxy` gateway. These paths cross-compile, but they are not
-native Windows evidence until the Windows Server 2025 black-box job passes.
+`cageforge-network-proxy` gateway. Standard streams are now prepared by the
+trusted parent, duplicated into the pinned runner process, and passed to the
+user process only through its explicit handle list; `WindowsChild` owns direct
+pipe endpoints and the lifecycle protocol carries no stream data. These paths
+cross-compile, but they are not native Windows evidence until the Windows
+Server 2025 black-box job passes.
 
-Three boundaries remain active and unfinished:
+Two boundaries remain active and unfinished:
 
 1. Setup uninstall does not yet restore every journaled host ACL or remove
    materialized paths by recorded handle identity. Add lifecycle coordination,
    restore ACLs before deleting sandbox accounts, and remove only exact
    marker/directory objects deepest-first. Interrupted cleanup must be safely
    resumable and must never adopt or delete a replacement object.
-2. Standard streams still travel as output and stdin frames through the runner
-   protocol. Replace that checkpoint with parent-prepared `Pipe`, `Null`, and
-   `Inherit` handles duplicated into the already authenticated runner process,
-   then pass only those handles to the user process through
-   `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. Keep parent pipe ends in
-   `WindowsChild`. This removes unbounded output buffering and avoids a host
-   `stdout` write blocking runner lifecycle supervision.
-3. Native setup, filesystem, process-tree, stdio, timeout, direct-network, and
+2. Native setup, filesystem, process-tree, stdio, timeout, direct-network, and
    routed-network behavior still needs complete Windows Server 2025 black-box
    coverage. Cross-target compilation is only a development check.
 
@@ -69,55 +66,42 @@ recorded continuation checkpoint.
 
 ## Required implementation order
 
-### 1. Finish transactional missing-path materialization
+### 1. Finish transactional ACL and materialization cleanup
 
-Complete this before applying ACL operations or wiring the public backend.
+Creation and recovery are connected to filesystem enforcement. Complete the
+remaining inverse lifecycle without weakening their identity contract.
 
-1. Recover any pending ACL mutation while holding `CapabilityStateSession`.
-2. Recover any pending materialization before beginning another mutation.
-3. Build an owner-only, protected security descriptor for the setup owner,
-   Administrators, and SYSTEM. Attach it atomically at object creation; never
-   create a permissive object and tighten it afterwards.
-4. For each missing `ReadOnly` or `Protected` target, walk from its validated
-   existing anchor one path component at a time. Reject parent traversal,
-   reparse points, replacement, and an unexpected pre-existing component.
-5. Before creating a component, durably record the target path, exact expected
-   DACL, fixed marker path, marker DACL, and a cryptographically random 32-byte
-   nonce in the capability-state write-ahead journal.
-6. Create the directory with `CreateDirectoryW` and the protected creation
-   descriptor. Create `.cageforge-materialized-path` with `CreateFileW` and
-   `CREATE_NEW`, write the nonce, and durably flush it.
-7. Reopen and pin both directory and marker without delete sharing. Verify the
-   final path, absence of a reparse point, stable file identities, owner SID,
-   exact DACL bytes and protection bit, and exact marker contents.
-8. Commit `MaterializationEvidence` only after all checks pass. If the target is
-   absent during recovery, clear the pending entry. If it is present and every
-   recorded property matches, commit it. Any third state is drift and must fail
-   closed with a typed error.
-9. Reuse an existing component only when capability state already records the
-   same path and the live object and marker still match. Never adopt an
-   arbitrary lookalike directory.
-10. Retain the pinned target and marker handles for the whole child lifetime.
-    This prevents deletion or replacement and keeps the marker directory
-    non-empty.
-11. Add the materialized targets to ACL planning: missing read-only targets get
-    the profile write deny and missing protected targets get the full deny.
-    Preserve foundation and deny continuation across protected descendants.
-12. Add state-model tests for absent recovery, matching recovery, nonce drift,
-    descriptor drift, duplicate identity, noncanonical order, and overlapping
-    nested targets. Add native tests for creation races, marker replacement,
-    reparse-point replacement, and crash recovery.
-13. Implement uninstall/cleanup only with the same recorded identities. Restore
-    managed ACLs first, then remove markers and empty materialized directories
-    deepest-first. Never delete an object whose identity or current descriptor
-    differs from the journal.
-
+1. Coordinate uninstall and runtime enforcement with the same protected
+   cross-process lock and an explicit active-child lifecycle record. Uninstall
+   must not revoke an ACL or delete a materialized path while any child still
+   depends on it.
+2. Recover and complete interrupted ACL restoration before deleting any setup
+   identity, helper, firewall rule, or WFP object.
+3. For every managed ACL object, reopen without following reparse points and
+   verify canonical final path, volume serial, 128-bit file identity, current
+   descriptor bytes, and protection bit before restoring the journaled original
+   descriptor through that same handle.
+4. Restore managed ACLs in dependency-safe order and durably remove each state
+   record only after exact read-back of the original descriptor.
+5. Remove materialized markers and directories deepest-first only after exact
+   path, identity, owner, descriptor, nonce, and non-reparse verification.
+   Delete the marker through its pinned identity, then remove only an empty
+   directory with the recorded identity.
+6. Treat replacement, third-state descriptor drift, a missing marker, a changed
+   nonce, unexpected descendants, or an active child as a typed fail-closed
+   cleanup result. Never force-delete or adopt a lookalike object.
+7. Make interrupted cleanup resumable from the durable state and verify that a
+   second uninstall converges without touching unrelated host objects.
+8. Add state-model and native tests for active-child exclusion, partial ACL
+   restoration, process interruption at every cleanup checkpoint, marker and
+   directory replacement, non-empty directories, reparse substitution, and
+   idempotent retry.
 Update the materialization section of specification 0016 before considering
 this phase complete. The state version, setup-created initial state, decoder,
 recovery, and cleanup must advance atomically; do not leave a version bump that
 the installed setup lifecycle cannot safely recover or remove.
 
-### 2. Wire the public backend and child lifecycle
+### 2. Finish the public backend and child lifecycle
 
 Implement `WindowsBackend`, the backend-bound prepared request handoff, and
 `WindowsChild` in the same integration shape as `cageforge-linux`.
@@ -131,9 +115,10 @@ Implement `WindowsBackend`, the backend-bound prepared request handoff, and
 - The runner must use the verified sandbox account, restricted token, private
   desktop, Job Object, explicit handle list, and parent-process constraints
   already implemented in this crate.
-- Standard input/output/error handles must be duplicated only into the verified
-  runner PID and passed to the user process only through the explicit handle
-  list. Do not put secrets or authentication material in argv or environment.
+- Keep the completed standard-stream boundary intact: prepare handles in the
+  parent, duplicate only into the pinned authenticated runner process, reject
+  malformed or aliased values in the runner, and expose only direct pipe
+  endpoints from `WindowsChild`. Do not restore framed stdio forwarding.
 - `WindowsChild` must retain the process, Job Object, ACL/materialization
   handles, runner session, desktop, proxy route, and every other enforcement
   resource. `kill`, timeout, wait, and `Drop` must terminate the complete Job

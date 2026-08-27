@@ -82,6 +82,16 @@ pub(crate) enum ParentJobError {
     Terminate { code: u32 },
 }
 
+#[derive(Debug, Error)]
+pub(crate) enum RunnerHandleDuplicateError {
+    #[error(
+        "failed to duplicate a standard handle into the authenticated runner: Windows error {code}"
+    )]
+    Duplicate { code: u32 },
+    #[error("Windows returned an invalid standard handle duplicated into the authenticated runner")]
+    InvalidDuplicate,
+}
+
 impl BoundaryTerminator {
     #[allow(unsafe_code)]
     pub(crate) fn new(
@@ -150,6 +160,34 @@ impl BoundaryTerminator {
             }),
             result => Err(ParentBoundaryError::RunnerWaitUnexpected { result }),
         }
+    }
+
+    #[allow(unsafe_code)]
+    pub(crate) fn duplicate_inheritable_handle(
+        &self,
+        source: RawHandle,
+    ) -> Result<u64, RunnerHandleDuplicateError> {
+        let mut duplicate = std::ptr::null_mut();
+        if unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                source as _,
+                self.runner_process.as_raw_handle() as _,
+                &mut duplicate,
+                0,
+                1,
+                DUPLICATE_SAME_ACCESS,
+            )
+        } == 0
+        {
+            return Err(RunnerHandleDuplicateError::Duplicate {
+                code: unsafe { GetLastError() },
+            });
+        }
+        if duplicate.is_null() {
+            return Err(RunnerHandleDuplicateError::InvalidDuplicate);
+        }
+        Ok(duplicate as usize as u64)
     }
 
     #[allow(unsafe_code)]
