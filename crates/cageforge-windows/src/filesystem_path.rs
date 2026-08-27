@@ -16,7 +16,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FileAttributeTagInfo, GetFileInformationByHandleEx,
-    GetFinalPathNameByHandleW, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_DOS, WRITE_DAC,
+    GetFinalPathNameByHandleW, GetLongPathNameW, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_DOS,
+    WRITE_DAC,
 };
 
 pub(crate) struct ValidatedPath {
@@ -51,6 +52,10 @@ pub(crate) enum ValidatedPathError {
     FinalPathRead { path: PathBuf, code: u32 },
     #[error("Windows returned an invalid final handle-path length for {path:?}")]
     FinalPathLength { path: PathBuf },
+    #[error("failed to expand Windows short names in {path:?}: Windows error {code}")]
+    LongPathRead { path: PathBuf, code: u32 },
+    #[error("Windows returned an invalid expanded path length for {path:?}")]
+    LongPathLength { path: PathBuf },
     #[error(
         "Windows final handle path differs from the requested enforcement path: requested {requested:?}, final {final_path:?}"
     )]
@@ -79,6 +84,10 @@ impl ValidatedPath {
             READ_CONTROL | FILE_GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
         )
+    }
+
+    pub(crate) fn open_file_for_execution(path: &Path) -> Result<Self, ValidatedPathError> {
+        Self::open(path, READ_CONTROL | FILE_GENERIC_READ, FILE_SHARE_READ)
     }
 
     pub(crate) fn open_for_cleanup(path: &Path) -> Result<Self, ValidatedPathError> {
@@ -142,7 +151,8 @@ impl ValidatedPath {
         reject_reparse_point(path, handle.as_raw_handle() as _)?;
         let identity = object_identity(path, handle.as_raw_handle() as _)?;
         let final_path = final_path(path, handle.as_raw_handle() as _)?;
-        if !paths_equal(path, &final_path) {
+        let expanded_path = long_path(path)?;
+        if !paths_equal(&expanded_path, &final_path) {
             return Err(ValidatedPathError::FinalPathMismatch {
                 requested: path.to_path_buf(),
                 final_path,
@@ -154,6 +164,37 @@ impl ValidatedPath {
             identity,
         })
     }
+}
+
+#[allow(unsafe_code)]
+fn long_path(path: &Path) -> Result<PathBuf, ValidatedPathError> {
+    let input = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let required = unsafe { GetLongPathNameW(input.as_ptr(), std::ptr::null_mut(), 0) };
+    if required == 0 {
+        return Err(ValidatedPathError::LongPathRead {
+            path: path.to_path_buf(),
+            code: unsafe { GetLastError() },
+        });
+    }
+    let mut buffer = vec![0; required as usize];
+    let length = unsafe { GetLongPathNameW(input.as_ptr(), buffer.as_mut_ptr(), required) };
+    if length == 0 {
+        return Err(ValidatedPathError::LongPathRead {
+            path: path.to_path_buf(),
+            code: unsafe { GetLastError() },
+        });
+    }
+    if length >= required {
+        return Err(ValidatedPathError::LongPathLength {
+            path: path.to_path_buf(),
+        });
+    }
+    buffer.truncate(length as usize);
+    Ok(PathBuf::from(OsString::from_wide(&buffer)))
 }
 
 impl FilesystemObjectIdentity {

@@ -466,6 +466,14 @@ pub enum WindowsSetupError {
         #[source]
         source: io::Error,
     },
+    /// A setup executable source was not one stable non-reparse file.
+    #[error("Windows setup resource {path:?} is not safe to execute or stage: {detail}")]
+    HelperResourceUnsafe {
+        /// Rejected setup helper or command-runner path.
+        path: PathBuf,
+        /// Exact lexical, reparse-point, identity, or final-path mismatch.
+        detail: String,
+    },
     /// The versioned setup request could not be written.
     #[error("failed to write Windows setup request {path:?}: {detail}")]
     RequestWrite {

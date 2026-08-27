@@ -3,7 +3,7 @@
 //! Versioned elevated-setup discovery and read-back.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -16,6 +16,7 @@ use crate::config::{
 };
 use crate::error::WindowsSetupError;
 use crate::filesystem_acl::FilesystemAclEnforcement;
+use crate::filesystem_path::ValidatedPath;
 use crate::setup_protocol::{
     SETUP_PROTOCOL_VERSION, SetupOperation, SetupOutcome, SetupRequest, SetupResponse,
 };
@@ -337,10 +338,14 @@ impl WindowsSetup {
         let owner_sid = crate::win::current_user_sid()
             .map_err(|source| WindowsSetupError::CurrentUserSid { source })?;
         let state_directory = self.state_directory_for(&owner_sid)?;
-        let helper_path = self.resolve_setup_helper()?;
-        let runner_path = self.resolve_command_runner()?;
-        let helper_sha256 = file_digest(&helper_path)?;
-        let runner_sha256 = file_digest(&runner_path)?;
+        let helper_source = self.resolve_setup_helper()?;
+        let runner_source = self.resolve_command_runner()?;
+        let helper = pin_setup_resource(&helper_source)?;
+        let runner = pin_setup_resource(&runner_source)?;
+        let helper_path = helper.final_path().to_path_buf();
+        let runner_path = runner.final_path().to_path_buf();
+        let helper_sha256 = file_digest(&helper, &helper_path)?;
+        let runner_sha256 = file_digest(&runner, &runner_path)?;
         let proxy_ports = proxy_ports_for_current_owner(&state_directory);
         let request = SetupRequest {
             version: SETUP_PROTOCOL_VERSION,
@@ -366,22 +371,7 @@ impl WindowsSetup {
                 path: request_path.clone(),
                 detail: error.to_string(),
             })?;
-        let mut request_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .share_mode(FILE_SHARE_READ)
-            .open(&request_path)
-            .map_err(|error| WindowsSetupError::RequestWrite {
-                path: request_path.clone(),
-                detail: error.to_string(),
-            })?;
-        request_file
-            .write_all(&encoded)
-            .and_then(|()| request_file.sync_all())
-            .map_err(|error| WindowsSetupError::RequestWrite {
-                path: request_path.clone(),
-                detail: error.to_string(),
-            })?;
+        let _request_file = write_pinned_setup_request(&request_path, &encoded)?;
         let arguments = [
             "--request".to_string(),
             request_path.to_string_lossy().into_owned(),
@@ -611,12 +601,59 @@ fn sibling_resource(name: &str) -> Result<PathBuf, WindowsSetupError> {
     Ok(parent.join(name))
 }
 
-fn file_digest(path: &Path) -> Result<String, WindowsSetupError> {
-    let bytes = fs::read(path).map_err(|source| WindowsSetupError::HelperResourceRead {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    Ok(Sha256::digest(bytes)
+fn pin_setup_resource(path: &Path) -> Result<ValidatedPath, WindowsSetupError> {
+    ValidatedPath::open_file_for_execution(path).map_err(|error| {
+        WindowsSetupError::HelperResourceUnsafe {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        }
+    })
+}
+
+fn write_pinned_setup_request(path: &Path, encoded: &[u8]) -> Result<fs::File, WindowsSetupError> {
+    let mut request_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(path)
+        .map_err(|error| WindowsSetupError::RequestWrite {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        })?;
+    request_file
+        .write_all(encoded)
+        .and_then(|()| request_file.sync_all())
+        .map_err(|error| WindowsSetupError::RequestWrite {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        })?;
+    Ok(request_file)
+}
+
+fn file_digest(resource: &ValidatedPath, path: &Path) -> Result<String, WindowsSetupError> {
+    let mut file =
+        resource
+            .try_clone_file()
+            .map_err(|source| WindowsSetupError::HelperResourceRead {
+                path: path.to_path_buf(),
+                source,
+            })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let read =
+            file.read(&mut buffer)
+                .map_err(|source| WindowsSetupError::HelperResourceRead {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
@@ -627,4 +664,56 @@ fn proxy_ports_for_current_owner(state_directory: &Path) -> Vec<u16> {
     let offset = u16::from_be_bytes([digest[0], digest[1]]) % 8_000;
     let first = 49_152 + offset * 2;
     vec![first, first + 1]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+
+    use super::{pin_setup_resource, write_pinned_setup_request};
+
+    #[test]
+    fn pinned_setup_resource_cannot_be_rewritten_or_replaced() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("helper.exe");
+        fs::write(&path, b"verified helper").expect("write helper fixture");
+
+        let resource = pin_setup_resource(&path).expect("pin helper fixture");
+        let write_error = fs::write(&path, b"replacement").expect_err("rewrite must be excluded");
+        let delete_error = fs::remove_file(&path).expect_err("replacement must be excluded");
+
+        assert_eq!(
+            write_error.raw_os_error(),
+            Some(ERROR_SHARING_VIOLATION as i32)
+        );
+        assert_eq!(
+            delete_error.raw_os_error(),
+            Some(ERROR_SHARING_VIOLATION as i32)
+        );
+        drop(resource);
+        fs::remove_file(path).expect("pin release permits cleanup");
+    }
+
+    #[test]
+    fn pinned_setup_request_cannot_be_rewritten_or_replaced() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("request.json");
+
+        let request = write_pinned_setup_request(&path, b"request").expect("pin request fixture");
+        let write_error = fs::write(&path, b"replacement").expect_err("rewrite must be excluded");
+        let delete_error = fs::remove_file(&path).expect_err("replacement must be excluded");
+
+        assert_eq!(
+            write_error.raw_os_error(),
+            Some(ERROR_SHARING_VIOLATION as i32)
+        );
+        assert_eq!(
+            delete_error.raw_os_error(),
+            Some(ERROR_SHARING_VIOLATION as i32)
+        );
+        drop(request);
+        fs::remove_file(path).expect("pin release permits cleanup");
+    }
 }

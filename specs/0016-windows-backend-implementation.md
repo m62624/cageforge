@@ -157,7 +157,12 @@ helper with `runas`; UAC cancellation and every helper stage remain distinct
 typed errors. The caller creates the versioned request with `create_new`, flushes
 it durably, and retains a handle that shares only read access until the elevated
 helper exits. No same-user process can rewrite, rename, delete, or replace the
-request between parent-side digest calculation and elevated consumption.
+request between parent-side digest calculation and elevated consumption. It
+also opens both executable sources without write or delete sharing, rejects a
+reparse point or final-path mismatch, hashes the pinned handles, launches the
+helper by that verified final path, and retains both handles until staging
+finishes. Replacing a helper or runner pathname after verification therefore
+cannot redirect elevation or persistent installation.
 
 The helper records a non-secret native-operation checkpoint beside its
 structured response before entering each setup boundary. If Windows terminates
@@ -303,6 +308,12 @@ Windows filesystem enforcement combines:
 - persistent state reconciliation for ACEs that must survive descendants; and
 - reparse-point and final-handle validation before a path can participate in
   an ACL plan.
+
+Handle validation expands only filesystem-provided short-name aliases through
+`GetLongPathNameW` before comparing them with `GetFinalPathNameByHandleW`.
+Consequently a legitimate 8.3 spelling such as `RUNNER~1` resolves to the same
+object identity, while a symlink or junction that redirects any component still
+produces a different final path and fails closed.
 
 A deny ACE for the profile-guard SID must not remain effective inside a
 more-specific writable carve-out. Windows evaluates a matching deny before an
