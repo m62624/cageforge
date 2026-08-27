@@ -297,6 +297,19 @@ last Job handle and activates `KILL_ON_JOB_CLOSE`.
 Exit status, signal-equivalent termination, timeout, and setup failure remain
 distinguishable.
 
+An explicit `WindowsChild::kill` cancels the parent timeout watchdog before it
+terminates the Job Object and runner. A subsequent `wait` reports the dedicated
+termination exit status even though forced runner shutdown necessarily closes
+the lifecycle pipe without a final frame. If the watchdog already committed a
+timeout, timeout remains authoritative and must not be relabelled as an
+explicit kill.
+
+Every terminal `wait` or `try_wait` result, including timeout, runner failure,
+and network-runtime failure, releases the route, pinned filesystem objects, and
+active-child lease after the complete process boundary has been terminated.
+Returning a typed error must not leave uninstall blocked until the caller drops
+an otherwise finished `WindowsChild`.
+
 ## 6. Filesystem lowering
 
 The backend consumes both layers returned by

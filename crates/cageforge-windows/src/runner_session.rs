@@ -38,6 +38,8 @@ pub(crate) struct RunnerSession {
     terminal: mpsc::Receiver<RunnerTerminal>,
     dispatcher: Option<JoinHandle<()>>,
     watchdog: Option<TimeoutWatchdog>,
+    timed_out: Arc<AtomicBool>,
+    explicit_exit_code: Option<u32>,
     finished: bool,
 }
 
@@ -169,11 +171,12 @@ impl RunnerSession {
             )
         });
         let watchdog_cancel = watchdog.as_ref().map(|watchdog| watchdog.cancel.clone());
+        let dispatcher_timed_out = Arc::clone(&timed_out);
         let dispatcher = std::thread::spawn(move || {
             dispatch_responses(
                 response_pipe,
                 boundary,
-                timed_out,
+                dispatcher_timed_out,
                 watchdog_cancel,
                 terminal_sender,
             );
@@ -187,6 +190,8 @@ impl RunnerSession {
             terminal,
             dispatcher: Some(dispatcher),
             watchdog,
+            timed_out,
+            explicit_exit_code: None,
             finished: false,
         })
     }
@@ -234,7 +239,17 @@ impl RunnerSession {
     }
 
     pub(crate) fn kill(&mut self) -> Result<(), RunnerSessionError> {
+        if self.finished {
+            return Err(RunnerSessionError::LifecycleConsumed);
+        }
+        self.close_stdin();
+        if let Some(mut watchdog) = self.watchdog.take() {
+            watchdog.stop()?;
+        }
         self.launch.boundary().terminate(1)?;
+        if !self.timed_out.load(Ordering::Acquire) {
+            self.explicit_exit_code = Some(1);
+        }
         Ok(())
     }
 
@@ -256,6 +271,9 @@ impl RunnerSession {
             && dispatcher.join().is_err()
         {
             return Err(RunnerSessionError::DispatcherPanic);
+        }
+        if let Some(exit_code) = self.explicit_exit_code.take() {
+            return Ok(exit_status(exit_code));
         }
         match terminal {
             RunnerTerminal::Exited(exit_code) => {

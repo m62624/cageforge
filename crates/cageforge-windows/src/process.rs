@@ -66,7 +66,7 @@ impl WindowsChild {
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, WindowsBackendError> {
         if let Err(error) = self.check_network_health() {
             let _ = self.session.kill();
-            self.network_route.take();
+            self.release_completed_boundaries();
             return Err(error);
         }
         match self.session.try_wait() {
@@ -77,7 +77,7 @@ impl WindowsChild {
             Ok(None) => Ok(None),
             Err(error) => {
                 let _ = self.session.kill();
-                self.network_route.take();
+                self.release_completed_boundaries();
                 Err(WindowsBackendError::runner_session(error))
             }
         }
@@ -93,13 +93,17 @@ impl WindowsChild {
                 thread::sleep(Duration::from_millis(5));
             }
         }
-        match self.session.wait() {
+        let result = match self.session.wait() {
             Ok(status) => {
                 self.release_completed_boundaries();
                 Ok(status)
             }
             Err(error) => Err(WindowsBackendError::runner_session(error)),
+        };
+        if result.is_err() {
+            self.release_completed_boundaries();
         }
+        result
     }
 
     /// Terminates the complete parent-owned Job Object and command runner.

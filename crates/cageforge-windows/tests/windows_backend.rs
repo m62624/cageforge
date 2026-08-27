@@ -228,7 +228,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     );
     assert_eq!(access_stdout, "denied");
 
-    let command = CommandSpec::new(powershell)
+    let command = CommandSpec::new(&powershell)
         .expect("PowerShell command")
         .with_args([
             "-NoLogo",
@@ -258,6 +258,39 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
 
     child.kill().expect("terminate complete sandbox job");
     let _ = child.wait().expect("reap terminated sandbox job");
+
+    let timeout_backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(Duration::from_millis(100))
+            .expect("non-zero timeout"),
+    )
+    .expect("timeout backend");
+    let timeout_command = CommandSpec::new(&powershell)
+        .expect("PowerShell command")
+        .with_args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ])
+        .expect("PowerShell arguments");
+    let (timeout_command, timeout_effective, timeout_context) =
+        restricted_request(workspace.path(), timeout_command);
+    let timeout_prepared = timeout_backend
+        .prepare(
+            BackendRequest::new(&timeout_command, &timeout_effective),
+            &timeout_context,
+        )
+        .expect("prepare timed launch");
+    let mut timeout_child = timeout_backend
+        .spawn(timeout_prepared)
+        .expect("spawn timed child");
+    assert!(matches!(
+        timeout_child.wait(),
+        Err(WindowsBackendError::ProcessTimedOut)
+    ));
 
     setup.uninstall().expect("explicit setup cleanup");
     cleanup.armed = false;
