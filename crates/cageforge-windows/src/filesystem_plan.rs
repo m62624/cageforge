@@ -759,6 +759,7 @@ mod tests {
                     BackendCapability::WorkingDirectory,
                     BackendCapability::StdioInherit,
                     BackendCapability::StdioNull,
+                    BackendCapability::StdioPipe,
                     BackendCapability::TimeoutBackendDefault,
                     BackendCapability::FilesystemRestricted,
                     BackendCapability::FilesystemScopes,

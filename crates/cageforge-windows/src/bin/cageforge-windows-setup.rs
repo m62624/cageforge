@@ -8,6 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[path = "../capability_lock.rs"]
+mod capability_lock;
 #[path = "../capability_state.rs"]
 mod capability_state;
 #[path = "../capability_state_setup.rs"]

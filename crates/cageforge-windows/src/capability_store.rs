@@ -2,22 +2,20 @@
 
 //! Serialized multi-process access to protected capability-SID state.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, GetLastError};
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, MOVEFILE_WRITE_THROUGH,
-    MoveFileExW, REPLACEFILE_WRITE_THROUGH, ReplaceFileW, UnlockFileEx,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, MOVEFILE_WRITE_THROUGH,
+    MoveFileExW, REPLACEFILE_WRITE_THROUGH, ReplaceFileW,
 };
-use windows_sys::Win32::System::IO::OVERLAPPED;
 
+use crate::capability_lock::{CapabilityLock, CapabilityLockError};
 use crate::capability_state::{
     CAPABILITY_LOCK_NAME, CAPABILITY_STATE_NAME, CapabilityRole, CapabilityState,
     CapabilityStateError, ManagedAclObject, MaterializedObject, PersistedDacl,
@@ -29,34 +27,23 @@ use crate::capability_state_runtime::{
 };
 use crate::error::WindowsSetupVerificationError;
 
-const STATE_LOCK_OFFSET: u32 = 0;
-const ACTIVE_LIFETIME_LOCK_OFFSET: u32 = 1;
-const LOCK_LENGTH: u32 = 1;
-
 pub(crate) struct CapabilityStateStore {
     state_path: PathBuf,
     lock_path: PathBuf,
     owner_sid: String,
 }
 
-pub(crate) struct CapabilityStateLock {
-    file: File,
-    overlapped: OVERLAPPED,
-    purpose: &'static str,
-    locked: bool,
-}
-
 pub(crate) struct CapabilityActiveLease {
-    _lock: CapabilityStateLock,
+    _lock: CapabilityLock,
 }
 
 pub(crate) struct CapabilityUninstallGuard {
-    _lock: CapabilityStateLock,
+    lock: CapabilityLock,
 }
 
 pub(crate) struct CapabilityStateSession<'store> {
     store: &'store CapabilityStateStore,
-    lock: CapabilityStateLock,
+    lock: CapabilityLock,
     state: CapabilityState,
 }
 
@@ -68,16 +55,8 @@ pub(crate) enum CapabilityStateStoreError {
     Transition(#[from] CapabilityStateTransitionError),
     #[error(transparent)]
     Security(#[from] WindowsSetupVerificationError),
-    #[error("failed to open protected capability-SID lock file {path:?}: {source}")]
-    LockOpen {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("failed to acquire the {purpose} capability lock: Windows error {code}")]
-    LockAcquire { purpose: &'static str, code: u32 },
-    #[error("failed to release the {purpose} capability lock: Windows error {code}")]
-    LockRelease { purpose: &'static str, code: u32 },
+    #[error(transparent)]
+    Lock(#[from] CapabilityLockError),
     #[error("cannot launch a Windows sandbox while setup uninstall is active")]
     UninstallInProgress,
     #[error("cannot uninstall Windows setup while a sandbox child is active")]
@@ -133,18 +112,13 @@ impl CapabilityStateStore {
         &self,
     ) -> Result<CapabilityActiveLease, CapabilityStateStoreError> {
         self.verify_lock_path()?;
-        match CapabilityStateLock::acquire(
-            &self.lock_path,
-            ACTIVE_LIFETIME_LOCK_OFFSET,
-            false,
-            true,
-            "active-sandbox lifetime",
-        ) {
-            Err(CapabilityStateStoreError::LockAcquire {
+        match CapabilityLock::acquire(&self.lock_path, 1, false, true, "active-sandbox lifetime") {
+            Err(CapabilityLockError::Acquire {
                 code: ERROR_LOCK_VIOLATION,
                 ..
             }) => Err(CapabilityStateStoreError::UninstallInProgress),
-            result => result.map(|lock| CapabilityActiveLease { _lock: lock }),
+            Err(error) => Err(error.into()),
+            Ok(lock) => Ok(CapabilityActiveLease { _lock: lock }),
         }
     }
 
@@ -152,18 +126,13 @@ impl CapabilityStateStore {
         &self,
     ) -> Result<CapabilityUninstallGuard, CapabilityStateStoreError> {
         self.verify_lock_path()?;
-        match CapabilityStateLock::acquire(
-            &self.lock_path,
-            ACTIVE_LIFETIME_LOCK_OFFSET,
-            true,
-            true,
-            "setup-uninstall exclusion",
-        ) {
-            Err(CapabilityStateStoreError::LockAcquire {
+        match CapabilityLock::acquire(&self.lock_path, 1, true, true, "setup-uninstall exclusion") {
+            Err(CapabilityLockError::Acquire {
                 code: ERROR_LOCK_VIOLATION,
                 ..
             }) => Err(CapabilityStateStoreError::ActiveChildren),
-            result => result.map(|lock| CapabilityUninstallGuard { _lock: lock }),
+            Err(error) => Err(error.into()),
+            Ok(lock) => Ok(CapabilityUninstallGuard { lock }),
         }
     }
 
@@ -177,15 +146,10 @@ impl CapabilityStateStore {
         })
     }
 
-    fn lock(&self) -> Result<CapabilityStateLock, CapabilityStateStoreError> {
+    fn lock(&self) -> Result<CapabilityLock, CapabilityStateStoreError> {
         self.verify_lock_path()?;
-        CapabilityStateLock::acquire(
-            &self.lock_path,
-            STATE_LOCK_OFFSET,
-            true,
-            false,
-            "capability-state mutation",
-        )
+        CapabilityLock::acquire(&self.lock_path, 0, true, false, "capability-state mutation")
+            .map_err(Into::into)
     }
 
     fn verify_lock_path(&self) -> Result<(), CapabilityStateStoreError> {
@@ -392,93 +356,9 @@ fn wide_path(path: &Path) -> Vec<u16> {
         .collect()
 }
 
-impl CapabilityStateLock {
-    #[allow(unsafe_code)]
-    fn acquire(
-        path: &Path,
-        offset: u32,
-        exclusive: bool,
-        fail_immediately: bool,
-        purpose: &'static str,
-    ) -> Result<Self, CapabilityStateStoreError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(path)
-            .map_err(|source| CapabilityStateStoreError::LockOpen {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        let mut overlapped = OVERLAPPED::default();
-        overlapped.Anonymous.Anonymous.Offset = offset;
-        let mut flags = 0;
-        if exclusive {
-            flags |= LOCKFILE_EXCLUSIVE_LOCK;
-        }
-        if fail_immediately {
-            flags |= LOCKFILE_FAIL_IMMEDIATELY;
-        }
-        if unsafe {
-            LockFileEx(
-                file.as_raw_handle() as _,
-                flags,
-                0,
-                LOCK_LENGTH,
-                0,
-                &mut overlapped,
-            )
-        } == 0
-        {
-            return Err(CapabilityStateStoreError::LockAcquire {
-                purpose,
-                code: unsafe { GetLastError() },
-            });
-        }
-        Ok(Self {
-            file,
-            overlapped,
-            purpose,
-            locked: true,
-        })
-    }
-
-    #[allow(unsafe_code)]
-    pub(crate) fn release(mut self) -> Result<(), CapabilityStateStoreError> {
-        if unsafe {
-            UnlockFileEx(
-                self.file.as_raw_handle() as _,
-                0,
-                LOCK_LENGTH,
-                0,
-                &mut self.overlapped,
-            )
-        } == 0
-        {
-            return Err(CapabilityStateStoreError::LockRelease {
-                purpose: self.purpose,
-                code: unsafe { GetLastError() },
-            });
-        }
-        self.locked = false;
-        Ok(())
-    }
-}
-
-#[allow(unsafe_code)]
-impl Drop for CapabilityStateLock {
-    fn drop(&mut self) {
-        if self.locked {
-            unsafe {
-                UnlockFileEx(
-                    self.file.as_raw_handle() as _,
-                    0,
-                    LOCK_LENGTH,
-                    0,
-                    &mut self.overlapped,
-                );
-            }
-        }
+impl CapabilityUninstallGuard {
+    pub(crate) fn release(self) {
+        drop(self.lock);
     }
 }
 
@@ -624,7 +504,8 @@ impl CapabilityStateSession<'_> {
     }
 
     pub(crate) fn finish(self) -> Result<(), CapabilityStateStoreError> {
-        self.lock.release()
+        drop(self.lock);
+        Ok(())
     }
 
     fn persist(&self) -> Result<(), CapabilityStateStoreError> {

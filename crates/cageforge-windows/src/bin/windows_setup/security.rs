@@ -240,6 +240,14 @@ pub(super) fn create_protected_file(path: &Path, owner_sid: &str) -> NativeSetup
     )
 }
 
+pub(super) fn verify_owner_file(path: &Path, owner_sid: &str) -> NativeSetupResult<()> {
+    verify_descriptor(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit: false },
+    )
+}
+
 #[allow(unsafe_code)]
 pub(super) fn create_runner_executable(
     path: &Path,

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const SETUP_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const SETUP_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SetupRequest {
@@ -171,4 +171,6 @@ pub enum SetupFailureCode {
     CommandRunnerInstall,
     /// Explicit setup cleanup failed.
     Cleanup,
+    /// A live sandbox child still owns the setup lifetime boundary.
+    ActiveSandboxes,
 }

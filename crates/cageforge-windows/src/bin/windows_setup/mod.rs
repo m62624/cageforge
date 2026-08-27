@@ -3,6 +3,9 @@
 use std::fs;
 use std::io::Write;
 
+use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
+
+use crate::capability_lock::{CapabilityLock, CapabilityLockError};
 use crate::setup_protocol::{SetupFailureCode, SetupOperation, SetupRequest, SetupStage};
 use crate::setup_state::{SETUP_STATE_VERSION, SetupMarker, SetupMarkerAccounts};
 
@@ -311,6 +314,38 @@ fn capability_state_model_failure(
 }
 
 fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
+    let lock_path = request
+        .state_directory
+        .join(crate::capability_state::CAPABILITY_LOCK_NAME);
+    security::verify_owner_file(&lock_path, &request.owner_sid)?;
+    let uninstall_guard = match CapabilityLock::acquire(
+        &lock_path,
+        1,
+        true,
+        true,
+        "elevated setup-uninstall exclusion",
+    ) {
+        Err(CapabilityLockError::Acquire {
+            code: ERROR_LOCK_VIOLATION,
+            ..
+        }) => {
+            return Err(NativeSetupFailure::new(
+                SetupStage::Uninstall,
+                SetupFailureCode::ActiveSandboxes,
+                Some(ERROR_LOCK_VIOLATION),
+                "refusing to remove Windows setup while a sandbox child is active",
+            ));
+        }
+        Err(error) => {
+            return Err(NativeSetupFailure::new(
+                SetupStage::Uninstall,
+                SetupFailureCode::Cleanup,
+                capability_lock_native_code(&error),
+                error.to_string(),
+            ));
+        }
+        Ok(guard) => guard,
+    };
     require_completed_filesystem_cleanup(request)?;
     firewall::remove(&request.owner_sid)?;
     wfp::remove(&request.owner_sid)?;
@@ -322,9 +357,6 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
             .join(crate::capability_state::CAPABILITY_STATE_NAME),
         request.state_directory.join("capabilities.json.next"),
         request.state_directory.join("capabilities.json.backup"),
-        request
-            .state_directory
-            .join(crate::capability_state::CAPABILITY_LOCK_NAME),
         request.state_directory.join("credentials.json.dpapi"),
         request
             .state_directory
@@ -352,6 +384,15 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
             }
         }
     }
+    fs::remove_file(&lock_path).map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::Uninstall,
+            SetupFailureCode::Cleanup,
+            error.raw_os_error().map(|code| code as u32),
+            format!("failed to remove setup lock file {lock_path:?}: {error}"),
+        )
+    })?;
+    drop(uninstall_guard);
     for directory in [
         request.state_directory.join("bin"),
         request.state_directory.clone(),
@@ -372,13 +413,43 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
     Ok(())
 }
 
+fn capability_lock_native_code(error: &CapabilityLockError) -> Option<u32> {
+    match error {
+        CapabilityLockError::Open { source, .. } => source.raw_os_error().map(|code| code as u32),
+        CapabilityLockError::Acquire { code, .. } => Some(*code),
+    }
+}
+
 fn require_completed_filesystem_cleanup(request: &SetupRequest) -> NativeSetupResult<()> {
     let path = request
         .state_directory
         .join(crate::capability_state::CAPABILITY_STATE_NAME);
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+    let backup = path.with_extension("json.backup");
+    let (selected, bytes) = match fs::read(&path) {
+        Ok(bytes) => (path.clone(), bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::read(&backup) {
+            Ok(bytes) => (backup, bytes),
+            Err(backup_error) if backup_error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(NativeSetupFailure::new(
+                    SetupStage::Uninstall,
+                    SetupFailureCode::Cleanup,
+                    None,
+                    format!(
+                        "refusing to remove Windows setup because capability state and its recovery backup are absent: {path:?}"
+                    ),
+                ));
+            }
+            Err(backup_error) => {
+                return Err(NativeSetupFailure::new(
+                    SetupStage::Uninstall,
+                    SetupFailureCode::Cleanup,
+                    backup_error.raw_os_error().map(|code| code as u32),
+                    format!(
+                        "failed to read capability-state recovery backup before uninstall {backup:?}: {backup_error}"
+                    ),
+                ));
+            }
+        },
         Err(error) => {
             return Err(NativeSetupFailure::new(
                 SetupStage::Uninstall,
@@ -388,6 +459,7 @@ fn require_completed_filesystem_cleanup(request: &SetupRequest) -> NativeSetupRe
             ));
         }
     };
+    security::verify_owner_file(&selected, &request.owner_sid)?;
     let state = crate::capability_state::CapabilityState::decode(&bytes)
         .map_err(capability_state_model_failure)?;
     if state.filesystem_cleanup_complete() {

@@ -2,11 +2,13 @@
 
 //! Versioned elevated-setup discovery and read-back.
 
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
 use crate::capability_store::{CapabilityStateStore, CapabilityStateStoreError};
 use crate::config::{
@@ -294,7 +296,7 @@ impl WindowsSetup {
             .map_err(|source| WindowsSetupError::CurrentUserSid { source })?;
         let state_directory = self.state_directory_for(&owner_sid)?;
         let uninstall_guard = match fs::symlink_metadata(&state_directory) {
-            Err(source) if source.kind() == io::ErrorKind::NotFound => None,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(source) => {
                 return Err(WindowsSetupError::StateRead {
                     path: state_directory,
@@ -318,18 +320,17 @@ impl WindowsSetup {
                         source: Box::new(source),
                     }
                 })?;
-                Some(guard)
+                guard
             }
         };
+        uninstall_guard.release();
         self.run_helper(SetupOperation::Uninstall)?;
-        let status = match self.status()? {
+        match self.status()? {
             WindowsSetupStatus::Missing { .. } => Ok(()),
             WindowsSetupStatus::Stale { .. } | WindowsSetupStatus::Ready(_) => {
                 Err(WindowsSetupError::HelperExitMismatch { exit_code: 0 })
             }
-        };
-        drop(uninstall_guard);
-        status
+        }
     }
 
     fn run_helper(&self, operation: SetupOperation) -> Result<(), WindowsSetupError> {
@@ -365,10 +366,22 @@ impl WindowsSetup {
                 path: request_path.clone(),
                 detail: error.to_string(),
             })?;
-        fs::write(&request_path, encoded).map_err(|error| WindowsSetupError::RequestWrite {
-            path: request_path.clone(),
-            detail: error.to_string(),
-        })?;
+        let mut request_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&request_path)
+            .map_err(|error| WindowsSetupError::RequestWrite {
+                path: request_path.clone(),
+                detail: error.to_string(),
+            })?;
+        request_file
+            .write_all(&encoded)
+            .and_then(|()| request_file.sync_all())
+            .map_err(|error| WindowsSetupError::RequestWrite {
+                path: request_path.clone(),
+                detail: error.to_string(),
+            })?;
         let arguments = [
             "--request".to_string(),
             request_path.to_string_lossy().into_owned(),
@@ -437,6 +450,10 @@ impl WindowsSetup {
         match response.outcome {
             SetupOutcome::Complete if exit_code == 0 => Ok(()),
             SetupOutcome::Complete => Err(WindowsSetupError::HelperExitMismatch { exit_code }),
+            SetupOutcome::Failed {
+                code: crate::setup_protocol::SetupFailureCode::ActiveSandboxes,
+                ..
+            } => Err(WindowsSetupError::ActiveSandboxes),
             SetupOutcome::Failed {
                 stage,
                 code,

@@ -243,6 +243,10 @@ fn absent_setup_is_reported_without_creating_host_state() {
         }
     );
     assert!(!state_directory.exists());
+    setup
+        .uninstall()
+        .expect("uninstalling absent setup is a no-op");
+    assert!(!state_directory.exists());
 }
 
 #[test]

@@ -15,6 +15,7 @@
 
 mod account_identity;
 mod backend;
+mod capability_lock;
 mod capability_state;
 mod capability_state_runtime;
 mod capability_store;

@@ -124,7 +124,14 @@ exclusively and without waiting before it may acquire byte zero. Parallel
 sandboxes therefore remain concurrent, while uninstall returns a typed active-
 child error without touching ACLs, materialized paths, accounts, firewall, or
 WFP state. A completed child releases pinned filesystem handles before its
-shared lifetime lock.
+shared lifetime lock. The unelevated caller restores filesystem state while it
+owns the exclusive range, then releases it only to cross the UAC boundary. The
+elevated helper must reacquire that same exclusive range without waiting before
+it mutates accounts, firewall, WFP, or setup files. A launch in the handoff
+window therefore makes uninstall fail closed. The helper verifies the lock-file
+owner and protected DACL, accepts a missing primary capability record only when
+the protected durable backup is present and valid, and unlinks the lock while
+still holding it so no backend can enter after native teardown begins.
 
 Every persistent ACL mutation uses the same record as a write-ahead journal.
 Before `SetSecurityInfo`, Cageforge stores the canonical path, volume serial,
@@ -147,7 +154,10 @@ other profile's ACL boundary.
 `WindowsBackend::new` performs read-only setup verification. It does not launch
 UAC automatically. `WindowsSetup::install` may launch the signed sibling setup
 helper with `runas`; UAC cancellation and every helper stage remain distinct
-typed errors.
+typed errors. The caller creates the versioned request with `create_new`, flushes
+it durably, and retains a handle that shares only read access until the elevated
+helper exits. No same-user process can rewrite, rename, delete, or replace the
+request between parent-side digest calculation and elevated consumption.
 
 The helper records a non-secret native-operation checkpoint beside its
 structured response before entering each setup boundary. If Windows terminates
