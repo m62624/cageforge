@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const SETUP_PROTOCOL_VERSION: u32 = 2;
+pub(crate) const SETUP_PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SetupRequest {
@@ -137,6 +137,10 @@ pub enum SetupFailureCode {
     FirewallPolicyAccess,
     /// Group Policy prevents local firewall rules from taking effect.
     FirewallPolicyIneffective,
+    /// Windows returned an empty or unknown active-profile mask.
+    FirewallActiveProfilesInvalid,
+    /// Windows Firewall is disabled for one active profile.
+    FirewallProfileDisabled,
     /// A firewall rule could not be created.
     FirewallRuleCreate,
     /// A firewall rule could not be configured.

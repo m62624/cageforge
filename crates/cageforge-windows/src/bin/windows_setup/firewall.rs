@@ -5,7 +5,7 @@ use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::{
     INetFwPolicy2, INetFwRule, INetFwRule3, INetFwRules, NET_FW_ACTION_BLOCK,
     NET_FW_IP_PROTOCOL_ANY, NET_FW_IP_PROTOCOL_TCP, NET_FW_IP_PROTOCOL_UDP, NET_FW_MODIFY_STATE_OK,
-    NET_FW_PROFILE2_ALL, NET_FW_RULE_DIR_OUT, NetFwPolicy2, NetFwRule,
+    NET_FW_PROFILE_TYPE2, NET_FW_PROFILE2_ALL, NET_FW_RULE_DIR_OUT, NetFwPolicy2, NetFwRule,
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -13,7 +13,9 @@ use windows::Win32::System::Com::{
 };
 use windows::core::{BSTR, Interface};
 
-use crate::firewall_contract::{address_sets_match, local_user_scope_matches, port_sets_match};
+use crate::firewall_contract::{
+    active_firewall_profiles, address_sets_match, local_user_scope_matches, port_sets_match,
+};
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult};
@@ -79,6 +81,7 @@ pub(super) fn install_and_verify(
             "local firewall rules are overridden or ineffective for an active profile",
         ));
     }
+    verify_active_profiles_enabled(&policy)?;
     progress(SetupStage::Firewall, "opening firewall rule collection");
     let rules = unsafe { policy.Rules() }.map_err(|error| {
         firewall_error(
@@ -129,6 +132,44 @@ pub(super) fn install_and_verify(
         "completed firewall policy verification",
     );
     Ok(policy_id)
+}
+
+#[allow(unsafe_code)]
+fn verify_active_profiles_enabled(policy: &INetFwPolicy2) -> NativeSetupResult<()> {
+    let mask = unsafe { policy.CurrentProfileTypes() }.map_err(|error| {
+        firewall_error(
+            SetupFailureCode::FirewallPolicyAccess,
+            error.code().0 as u32,
+            format!("failed to query active Windows Firewall profiles: {error}"),
+        )
+    })?;
+    let profiles = active_firewall_profiles(mask).ok_or_else(|| {
+        firewall_error(
+            SetupFailureCode::FirewallActiveProfilesInvalid,
+            mask as u32,
+            format!("Windows Firewall returned invalid active-profile mask {mask:#x}"),
+        )
+    })?;
+    for profile in profiles {
+        let enabled = unsafe { policy.get_FirewallEnabled(NET_FW_PROFILE_TYPE2(profile)) }
+            .map_err(|error| {
+                firewall_error(
+                    SetupFailureCode::FirewallPolicyAccess,
+                    error.code().0 as u32,
+                    format!(
+                        "failed to query Windows Firewall enabled state for active profile {profile:#x}: {error}"
+                    ),
+                )
+            })?;
+        if enabled != VARIANT_TRUE {
+            return Err(firewall_error(
+                SetupFailureCode::FirewallProfileDisabled,
+                profile as u32,
+                format!("Windows Firewall is disabled for active profile {profile:#x}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[allow(unsafe_code)]

@@ -329,6 +329,18 @@ pub enum WindowsSetupVerificationError {
         /// `NET_FW_MODIFY_STATE` value.
         state: i32,
     },
+    /// Windows returned no known active firewall profiles or unknown profile bits.
+    #[error("Windows Firewall returned invalid active-profile mask {mask:#x}")]
+    FirewallActiveProfilesInvalid {
+        /// Raw `INetFwPolicy2::CurrentProfileTypes` bitmask.
+        mask: i32,
+    },
+    /// Windows Firewall is disabled for one currently active profile.
+    #[error("Windows Firewall is disabled for active profile {profile:#x}")]
+    FirewallProfileDisabled {
+        /// One `NET_FW_PROFILE_TYPE2` bit.
+        profile: i32,
+    },
     /// One mandatory firewall rule is absent.
     #[error("mandatory Windows Firewall rule is missing: {name}")]
     FirewallRuleMissing {

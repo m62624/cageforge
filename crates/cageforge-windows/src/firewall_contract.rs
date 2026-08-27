@@ -8,6 +8,23 @@ struct AddressSet {
     ipv6: Vec<(u128, u128)>,
 }
 
+const DOMAIN_PROFILE: i32 = 1;
+const PRIVATE_PROFILE: i32 = 2;
+const PUBLIC_PROFILE: i32 = 4;
+const KNOWN_PROFILES: i32 = DOMAIN_PROFILE | PRIVATE_PROFILE | PUBLIC_PROFILE;
+
+pub(crate) fn active_firewall_profiles(mask: i32) -> Option<Vec<i32>> {
+    if mask == 0 || mask & !KNOWN_PROFILES != 0 {
+        return None;
+    }
+    Some(
+        [DOMAIN_PROFILE, PRIVATE_PROFILE, PUBLIC_PROFILE]
+            .into_iter()
+            .filter(|profile| mask & profile != 0)
+            .collect(),
+    )
+}
+
 pub(crate) fn address_sets_match(actual: &str, expected: &str) -> bool {
     canonical_address_set(actual)
         .zip(canonical_address_set(expected))
@@ -182,7 +199,23 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{address_sets_match, local_user_scope_matches, port_sets_match};
+    use super::{
+        active_firewall_profiles, address_sets_match, local_user_scope_matches, port_sets_match,
+    };
+
+    #[test]
+    fn active_firewall_profiles_reject_empty_or_unknown_policy_state() {
+        assert_eq!(active_firewall_profiles(0), None);
+        assert_eq!(active_firewall_profiles(8), None);
+        assert_eq!(active_firewall_profiles(1 | 8), None);
+    }
+
+    #[test]
+    fn active_firewall_profiles_preserve_every_known_active_profile() {
+        assert_eq!(active_firewall_profiles(1), Some(vec![1]));
+        assert_eq!(active_firewall_profiles(2 | 4), Some(vec![2, 4]));
+        assert_eq!(active_firewall_profiles(1 | 2 | 4), Some(vec![1, 2, 4]));
+    }
 
     #[test]
     fn address_comparison_accepts_equivalent_windows_canonicalization() {

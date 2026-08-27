@@ -482,6 +482,8 @@ advertised.
 
 Offline setup must prove all of the following:
 
+- Windows Firewall is enabled for every current domain, private, or public
+  profile, and an empty or unknown current-profile mask fails closed;
 - non-loopback outbound traffic is blocked for every active firewall profile;
 - UDP loopback is blocked;
 - TCP loopback is blocked except for the configured Cageforge ingress ports;
@@ -630,7 +632,7 @@ review includes:
 | `windows-sandbox-rs/src/desktop.rs` | Private desktop for each launch | Private desktop is mandatory initially |
 | `windows-sandbox-rs/src/identity.rs`, `setup.rs`, and setup helper | Versioned users, protected credentials, ACL/firewall reconciliation | Upstream fixed account names become user-SID-scoped Cageforge identities; library does not silently launch weaker fallback |
 | `windows-sandbox-rs/src/acl.rs`, `deny_read_*`, `allow.rs`, and `audit.rs` | Capability ACEs, deny-read/write and persistent reconciliation | Handle-based reparse/TOCTOU validation; profile-scoped identities; protected-DACL writable boundaries preserve inheritable denies without deny/allow ordering or finite branch snapshots; no time-bounded best-effort security scan |
-| `windows-sandbox-rs/src/wfp.rs` and setup firewall module | Offline-account firewall and WFP filters | WFP failure is fatal and all configured policy is read back |
+| `windows-sandbox-rs/src/wfp.rs` and setup firewall module | Offline-account firewall and WFP filters | WFP failure is fatal, all configured policy is read back, and every active firewall profile must itself be enabled |
 | `network-proxy/src/windows_tcp_attribution.rs` and `windows_proxy_ingress.rs` | IPv4 four-tuple PID attribution and random restricting-SID routing | IPv4-only ingress is explicit and the route feeds the independent Cageforge gateway authentication contract |
 | `windows-sandbox-rs/src/elevated/*` and command runner | Dedicated-user helper transport and lifecycle | Versioned minimal protocol with no Codex command/profile types |
 
@@ -654,8 +656,13 @@ The Cageforge setup protocol retains the following boundaries:
   DACL;
 - local users are ordinary users, belong to the managed group, and are rejected
   if disabled, locked, or directly or indirectly administrative;
-- firewall changes must apply to every active profile and each installed rule
-  is read back by its stable Cageforge name and complete enforcement fields;
+- firewall changes must apply to every active profile, Windows Firewall must be
+  enabled for each current domain/private/public profile, and each installed
+  rule is read back by its stable Cageforge name and complete enforcement
+  fields. An empty or unknown active-profile mask is rejected. The frozen
+  baseline verifies local-policy effectiveness but does not separately reject
+  disabled active profiles; Cageforge does because installed block rules cannot
+  enforce offline isolation while their profile is disabled;
 - firewall address and port read-back compares canonical interval sets rather
   than COM-preserved spelling, and the local-user scope must contain exactly
   one `COM_RIGHTS_EXECUTE` allow ACE for the offline account SID. The frozen

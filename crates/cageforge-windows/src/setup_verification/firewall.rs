@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::{
     INetFwPolicy2, INetFwRule3, NET_FW_ACTION_BLOCK, NET_FW_IP_PROTOCOL_ANY,
-    NET_FW_IP_PROTOCOL_TCP, NET_FW_IP_PROTOCOL_UDP, NET_FW_MODIFY_STATE_OK, NET_FW_PROFILE2_ALL,
-    NET_FW_RULE_DIR_OUT, NetFwPolicy2,
+    NET_FW_IP_PROTOCOL_TCP, NET_FW_IP_PROTOCOL_UDP, NET_FW_MODIFY_STATE_OK, NET_FW_PROFILE_TYPE2,
+    NET_FW_PROFILE2_ALL, NET_FW_RULE_DIR_OUT, NetFwPolicy2,
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -14,7 +14,9 @@ use windows::Win32::System::Com::{
 use windows::core::{BSTR, Interface};
 
 use crate::error::WindowsSetupVerificationError;
-use crate::firewall_contract::{address_sets_match, local_user_scope_matches, port_sets_match};
+use crate::firewall_contract::{
+    active_firewall_profiles, address_sets_match, local_user_scope_matches, port_sets_match,
+};
 use crate::setup::WindowsSetupDetails;
 
 const LOOPBACK_ADDRESSES: &str = "127.0.0.0/8,::/127";
@@ -68,6 +70,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     if state != NET_FW_MODIFY_STATE_OK {
         return Err(WindowsSetupVerificationError::FirewallPolicyIneffective { state: state.0 });
     }
+    verify_active_profiles_enabled(&policy)?;
     let rules = unsafe { policy.Rules() }.map_err(|error| {
         WindowsSetupVerificationError::FirewallPolicyRead {
             code: error.code().0,
@@ -108,6 +111,29 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
             .cast::<INetFwRule3>()
             .map_err(|_| rule_mismatch(spec, "COM interface", "INetFwRule3", "unsupported"))?;
         verify_rule(&rule, spec)?;
+    }
+    Ok(())
+}
+
+#[allow(unsafe_code)]
+fn verify_active_profiles_enabled(
+    policy: &INetFwPolicy2,
+) -> Result<(), WindowsSetupVerificationError> {
+    let mask = unsafe { policy.CurrentProfileTypes() }.map_err(|error| {
+        WindowsSetupVerificationError::FirewallPolicyRead {
+            code: error.code().0,
+        }
+    })?;
+    let profiles = active_firewall_profiles(mask)
+        .ok_or(WindowsSetupVerificationError::FirewallActiveProfilesInvalid { mask })?;
+    for profile in profiles {
+        let enabled = unsafe { policy.get_FirewallEnabled(NET_FW_PROFILE_TYPE2(profile)) }
+            .map_err(|error| WindowsSetupVerificationError::FirewallPolicyRead {
+                code: error.code().0,
+            })?;
+        if enabled != VARIANT_TRUE {
+            return Err(WindowsSetupVerificationError::FirewallProfileDisabled { profile });
+        }
     }
     Ok(())
 }
