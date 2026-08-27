@@ -6,7 +6,8 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{
@@ -14,7 +15,8 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
     JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
     SetInformationJobObject, TerminateJobObject,
 };
@@ -89,6 +91,14 @@ pub(crate) enum ParentJobError {
     InvalidDuplicate,
     #[error("failed to terminate the complete Windows Job Object: Windows error {code}")]
     Terminate { code: u32 },
+    #[error("failed to read active Windows Job Object processes: Windows error {code}")]
+    ActiveProcessRead { code: u32 },
+    #[error("Windows returned a truncated Job Object accounting record")]
+    ActiveProcessReadBack,
+    #[error(
+        "the terminated Windows Job Object still contains {active_processes} active processes after the safety deadline"
+    )]
+    TerminationTimeout { active_processes: u32 },
 }
 
 #[derive(Debug, Error)]
@@ -240,7 +250,7 @@ impl BoundaryTerminator {
         }
     }
 
-    fn terminate_job(&self, exit_code: u32) -> Result<(), ParentBoundaryError> {
+    pub(crate) fn terminate_job(&self, exit_code: u32) -> Result<(), ParentBoundaryError> {
         let mut job = self
             .job
             .lock()
@@ -368,12 +378,11 @@ impl ParentJob {
     #[allow(unsafe_code)]
     pub(crate) fn terminate(&self, exit_code: u32) -> Result<(), ParentJobError> {
         if unsafe { TerminateJobObject(self.handle.as_raw_handle() as _, exit_code) } == 0 {
-            Err(ParentJobError::Terminate {
+            return Err(ParentJobError::Terminate {
                 code: unsafe { GetLastError() },
-            })
-        } else {
-            Ok(())
+            });
         }
+        self.wait_until_empty(Duration::from_secs(5))
     }
 
     #[allow(unsafe_code)]
@@ -421,5 +430,43 @@ impl ParentJob {
             return Err(ParentJobError::UiLimitMismatch);
         }
         Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn active_processes(&self) -> Result<u32, ParentJobError> {
+        let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        let mut returned = 0;
+        if unsafe {
+            QueryInformationJobObject(
+                self.handle.as_raw_handle() as _,
+                JobObjectBasicAccountingInformation,
+                (&raw mut accounting).cast(),
+                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                &mut returned,
+            )
+        } == 0
+        {
+            return Err(ParentJobError::ActiveProcessRead {
+                code: unsafe { GetLastError() },
+            });
+        }
+        if returned < size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32 {
+            return Err(ParentJobError::ActiveProcessReadBack);
+        }
+        Ok(accounting.ActiveProcesses)
+    }
+
+    fn wait_until_empty(&self, timeout: Duration) -> Result<(), ParentJobError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let active_processes = self.active_processes()?;
+            if active_processes == 0 {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(ParentJobError::TerminationTimeout { active_processes });
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
     }
 }

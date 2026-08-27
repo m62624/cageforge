@@ -277,6 +277,7 @@ impl RunnerSession {
         }
         match terminal {
             RunnerTerminal::Exited(exit_code) => {
+                self.launch.boundary().terminate_job(exit_code)?;
                 let Some(runner_exit) = self.launch.boundary().wait_runner(RUNNER_EXIT_TIMEOUT)?
                 else {
                     return Err(RunnerSessionError::RunnerExitTimeout);

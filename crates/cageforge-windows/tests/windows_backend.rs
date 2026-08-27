@@ -228,6 +228,45 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     );
     assert_eq!(access_stdout, "denied");
 
+    let descendant_ready = workspace.path().join("descendant-ready.txt");
+    let descendant_marker = workspace.path().join("descendant-escaped.txt");
+    let environment = EnvironmentSpec::inherit_core()
+        .with_var("CAGEFORGE_DESCENDANT_READY", descendant_ready.as_os_str())
+        .expect("descendant readiness environment")
+        .with_var("CAGEFORGE_DESCENDANT_MARKER", descendant_marker.as_os_str())
+        .expect("descendant marker environment");
+    let descendant_probe = CommandSpec::new(&powershell)
+        .expect("PowerShell command")
+        .with_args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$program = Join-Path $PSHOME 'powershell.exe'; $script = '[IO.File]::WriteAllText($env:CAGEFORGE_DESCENDANT_READY, ''ready''); Start-Sleep -Seconds 2; [IO.File]::WriteAllText($env:CAGEFORGE_DESCENDANT_MARKER, ''escaped'')'; $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script)); $descendant = Start-Process -FilePath $program -ArgumentList \"-NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded\" -PassThru; $deadline = [DateTime]::UtcNow.AddSeconds(10); while (-not [IO.File]::Exists($env:CAGEFORGE_DESCENDANT_READY) -and -not $descendant.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 10 }; if (-not [IO.File]::Exists($env:CAGEFORGE_DESCENDANT_READY)) { exit 93 }",
+        ])
+        .expect("PowerShell descendant arguments");
+    let (command, effective, context) =
+        restricted_request_with_environment(workspace.path(), descendant_probe, environment);
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare descendant probe");
+    let mut descendant_child = backend
+        .spawn(prepared)
+        .expect("spawn descendant lifecycle probe");
+    let status = descendant_child
+        .wait()
+        .expect("wait for root process and complete Job Object");
+    assert!(status.success(), "descendant probe root failed: {status}");
+    assert!(
+        descendant_ready.is_file(),
+        "descendant did not reach the pre-exit synchronization point"
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        !descendant_marker.exists(),
+        "a descendant survived the completed WindowsChild boundary"
+    );
+
     let command = CommandSpec::new(&powershell)
         .expect("PowerShell command")
         .with_args([

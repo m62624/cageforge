@@ -326,6 +326,15 @@ active-child lease after the complete process boundary has been terminated.
 Returning a typed error must not leave uninstall blocked until the caller drops
 an otherwise finished `WindowsChild`.
 
+The trusted parent queries `JobObjectBasicAccountingInformation` after every
+normal, explicit-kill, timeout, failure, and drop termination path and does not
+release the active-child lease until `ActiveProcesses` is zero. A successful
+root-process exit is therefore not treated as completion while a descendant is
+still assigned to the Job Object. The frozen upstream process paths retain Job
+Object ownership but do not expose this library lifecycle invariant; Cageforge
+adds the bounded empty-job read-back because callers may invoke uninstall as
+soon as `WindowsChild::wait` returns.
+
 ## 6. Filesystem lowering
 
 The backend consumes both layers returned by
