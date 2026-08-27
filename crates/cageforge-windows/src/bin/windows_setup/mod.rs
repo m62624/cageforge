@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Write;
 
 use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
+use zeroize::Zeroizing;
 
 use crate::capability_lock::{CapabilityLock, CapabilityLockError};
 use crate::setup_protocol::{SetupFailureCode, SetupOperation, SetupRequest, SetupStage};
@@ -27,10 +28,10 @@ pub(super) struct NativeSetupFailure {
 pub(super) struct ProvisionedAccounts {
     pub(super) offline_name: String,
     pub(super) offline_sid: String,
-    pub(super) offline_password: String,
+    pub(super) offline_password: Zeroizing<String>,
     pub(super) online_name: String,
     pub(super) online_sid: String,
-    pub(super) online_password: String,
+    pub(super) online_password: Zeroizing<String>,
     pub(super) group_name: String,
     pub(super) group_sid: String,
 }

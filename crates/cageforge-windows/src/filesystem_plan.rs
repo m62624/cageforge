@@ -53,6 +53,8 @@ struct FilesystemPlanCollector<'scope, 'request, B: SandboxBackend> {
 
 struct PendingFilesystemTarget {
     path: ValidatedPath,
+    policy_path: PathBuf,
+    decision: FilesystemDecision,
     origins: TargetOrigins,
 }
 
@@ -363,15 +365,35 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
         path: &Path,
         origins: TargetOrigins,
     ) -> Result<(), FilesystemPlanError> {
+        self.insert_existing_with_policy_path(path, path, origins)
+    }
+
+    fn insert_existing_with_policy_path(
+        &mut self,
+        path: &Path,
+        policy_path: &Path,
+        origins: TargetOrigins,
+    ) -> Result<(), FilesystemPlanError> {
+        let decision = self
+            .prepared
+            .filesystem_access_for_path(self.backend, policy_path)?;
+        if decision == FilesystemDecision::ExternallyEnforced {
+            return Err(FilesystemPlanError::ExternalPath {
+                path: policy_path.to_path_buf(),
+            });
+        }
         let validated = ValidatedPath::open_for_acl(path)?;
         let key = NativePathKey::new(validated.final_path());
         if let Some(existing) = self.pending.get_mut(&key) {
+            existing.decision = combine_local_decisions(existing.decision, decision)?;
             existing.origins.merge(origins);
         } else {
             self.pending.insert(
                 key,
                 PendingFilesystemTarget {
                     path: validated,
+                    policy_path: policy_path.to_path_buf(),
+                    decision,
                     origins,
                 },
             );
@@ -406,37 +428,46 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
         if !self.readable_platform_base {
             return Err(FilesystemPlanError::MissingReadablePlatformBase);
         }
-        let preliminary = self.classify_pending()?;
-        let write_roots = preliminary
-            .iter()
-            .filter(|target| target.access == FilesystemPlanAccess::WriteRoot)
-            .map(|target| target.path.final_path().to_path_buf())
+        self.validate_pending()?;
+        let write_roots = self
+            .pending
+            .values()
+            .filter(|target| target.decision == FilesystemDecision::Write)
+            .map(|target| {
+                (
+                    target.path.final_path().to_path_buf(),
+                    target.policy_path.clone(),
+                )
+            })
             .collect::<Vec<_>>();
-        drop(preliminary);
 
-        for root in &write_roots {
+        for (root, policy_root) in &write_roots {
             let protected_paths = self
                 .protected_relative_paths
                 .values()
                 .cloned()
                 .collect::<Vec<_>>();
             for protected in protected_paths {
-                let path = root.join(protected);
+                let path = root.join(&protected);
+                let policy_path = policy_root.join(protected);
                 match self
                     .prepared
-                    .filesystem_access_for_path(self.backend, &path)?
+                    .filesystem_access_for_path(self.backend, &policy_path)?
                 {
                     FilesystemDecision::Write => {
-                        return Err(FilesystemPlanError::ProtectedPathWritable { path });
+                        return Err(FilesystemPlanError::ProtectedPathWritable {
+                            path: policy_path,
+                        });
                     }
                     FilesystemDecision::ExternallyEnforced => {
-                        return Err(FilesystemPlanError::ExternalPath { path });
+                        return Err(FilesystemPlanError::ExternalPath { path: policy_path });
                     }
                     FilesystemDecision::Read | FilesystemDecision::Deny => {}
                 }
                 match fs::symlink_metadata(&path) {
-                    Ok(_) => self.insert_existing(
+                    Ok(_) => self.insert_existing_with_policy_path(
                         &path,
+                        &policy_path,
                         TargetOrigins {
                             protected: true,
                             ..TargetOrigins::default()
@@ -478,32 +509,17 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
     }
 
     fn classify_pending(&self) -> Result<Vec<FilesystemPlanTarget>, FilesystemPlanError> {
-        let mut decisions = Vec::with_capacity(self.pending.len());
+        self.validate_pending()?;
         let mut write_roots = Vec::new();
         for pending in self.pending.values() {
-            let path = pending.path.final_path();
-            let decision = self
-                .prepared
-                .filesystem_access_for_path(self.backend, path)?;
-            if decision == FilesystemDecision::Write {
-                if pending.origins.protected {
-                    return Err(FilesystemPlanError::ProtectedPathWritable {
-                        path: path.to_path_buf(),
-                    });
-                }
-                if pending.origins.read_only {
-                    return Err(FilesystemPlanError::ReadOnlyPolicyMismatch {
-                        path: path.to_path_buf(),
-                    });
-                }
-                write_roots.push(path.to_path_buf());
+            if pending.decision == FilesystemDecision::Write {
+                write_roots.push(pending.path.final_path().to_path_buf());
             }
-            decisions.push(decision);
         }
         let mut targets = Vec::with_capacity(self.pending.len());
-        for (pending, decision) in self.pending.values().zip(decisions) {
+        for pending in self.pending.values() {
             let path = pending.path.final_path();
-            let access = match decision {
+            let access = match pending.decision {
                 FilesystemDecision::Write => FilesystemPlanAccess::WriteRoot,
                 FilesystemDecision::Read
                     if write_roots.iter().any(|root| is_within(path, root)) =>
@@ -526,6 +542,28 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
         }
         Ok(targets)
     }
+
+    fn validate_pending(&self) -> Result<(), FilesystemPlanError> {
+        for pending in self.pending.values() {
+            let path = pending.path.final_path();
+            if pending.decision == FilesystemDecision::Write && pending.origins.protected {
+                return Err(FilesystemPlanError::ProtectedPathWritable {
+                    path: path.to_path_buf(),
+                });
+            }
+            if pending.decision == FilesystemDecision::Write && pending.origins.read_only {
+                return Err(FilesystemPlanError::ReadOnlyPolicyMismatch {
+                    path: path.to_path_buf(),
+                });
+            }
+            if pending.decision == FilesystemDecision::ExternallyEnforced {
+                return Err(FilesystemPlanError::ExternalPath {
+                    path: path.to_path_buf(),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 impl TargetOrigins {
@@ -534,6 +572,16 @@ impl TargetOrigins {
         self.read_only |= other.read_only;
         self.glob |= other.glob;
         self.protected |= other.protected;
+    }
+}
+
+fn combine_local_decisions(
+    left: FilesystemDecision,
+    right: FilesystemDecision,
+) -> Result<FilesystemDecision, FilesystemPlanError> {
+    match (left.as_access_mode(), right.as_access_mode()) {
+        (Some(left), Some(right)) => Ok(left.most_restrictive(right).into()),
+        _ => Err(FilesystemPlanError::ExternalOwnership),
     }
 }
 
@@ -737,13 +785,15 @@ mod tests {
     use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
     use cageforge_path::paths_equal;
     use cageforge_policy::{
-        AccessMode, FilesystemPolicy, FilesystemRule, NetworkPolicy, PathResolutionContext,
-        PathSelector, SandboxPolicy,
+        AccessMode, FilesystemDecision, FilesystemPolicy, FilesystemRule, NetworkPolicy,
+        PathResolutionContext, PathSelector, SandboxPolicy,
     };
     use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
     use pretty_assertions::{assert_eq, assert_ne};
 
-    use super::{FilesystemPlan, FilesystemPlanAccess};
+    use super::{
+        FilesystemPlan, FilesystemPlanAccess, FilesystemPlanError, combine_local_decisions,
+    };
 
     struct TestBackend {
         identity: BackendIdentity,
@@ -786,6 +836,31 @@ mod tests {
         fn capabilities(&self) -> BackendCapabilities {
             self.capabilities.clone()
         }
+    }
+
+    #[test]
+    fn native_alias_decisions_merge_most_restrictively() {
+        assert_eq!(
+            combine_local_decisions(FilesystemDecision::Write, FilesystemDecision::Read)
+                .expect("local decisions"),
+            FilesystemDecision::Read
+        );
+        assert_eq!(
+            combine_local_decisions(FilesystemDecision::Write, FilesystemDecision::Deny)
+                .expect("local decisions"),
+            FilesystemDecision::Deny
+        );
+    }
+
+    #[test]
+    fn native_alias_decision_rejects_external_ownership() {
+        assert!(matches!(
+            combine_local_decisions(
+                FilesystemDecision::Read,
+                FilesystemDecision::ExternallyEnforced
+            ),
+            Err(FilesystemPlanError::ExternalOwnership)
+        ));
     }
 
     #[test]

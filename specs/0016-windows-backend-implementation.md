@@ -88,6 +88,10 @@ Setup also:
 9. verifies the effective account, ACL, firewall, and WFP state by reading it
    back.
 
+Plaintext account passwords are held only in zeroizing setup and runtime
+buffers. They are never cloned into protocol messages, logs, environment
+variables, command lines, setup markers, or public status values.
+
 WFP installation is mandatory in Cageforge. The frozen Codex baseline logs WFP
 failure and continues setup; Cageforge intentionally fails closed because its
 backend advertises the complete elevated network boundary.
@@ -314,6 +318,14 @@ Handle validation expands only filesystem-provided short-name aliases through
 Consequently a legitimate 8.3 spelling such as `RUNNER~1` resolves to the same
 object identity, while a symlink or junction that redirects any component still
 produces a different final path and fails closed.
+
+The lexical spelling used for the complete composed policy decision remains
+bound to the validated native object. Handle canonicalization must not feed a
+different spelling back into the lexical policy evaluator, because a valid 8.3
+alias would otherwise become an unmatched deny after it was safely opened.
+When several policy spellings resolve to the same stable object, their local
+decisions are merged explicitly as deny over read over write. The final native
+path remains the sole ACL, containment, profile-digest, and object-identity key.
 
 A deny ACE for the profile-guard SID must not remain effective inside a
 more-specific writable carve-out. Windows evaluates a matching deny before an
@@ -695,6 +707,11 @@ read-back before launch. It intentionally replaces path-based
 `SetNamedSecurityInfoW` mutation with `GetSecurityInfo` and `SetSecurityInfo` on
 the same validated handle, rejects reparse-point and final-path changes, and
 uses profile-scoped guards rather than a machine-global deny-read principal.
+The frozen implementation canonicalizes existing allow roots before ACL
+planning. Cageforge retains that short-name acceptance without accepting
+reparse traversal: it binds the composed lexical decision to a non-reparse
+handle, expands only filesystem short names for equality, and merges duplicate
+spellings by the most restrictive local result.
 Writable descendants below a deny use protected-DACL inheritance boundaries;
 the frozen implementation instead materializes deny targets and relies on
 separate capability SIDs and ACL ordering without representing this nested

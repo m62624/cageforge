@@ -18,6 +18,7 @@ use windows_sys::Win32::NetworkManagement::NetManagement::{
 };
 use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 use windows_sys::Win32::Security::{LookupAccountNameW, LookupAccountSidW, SID_NAME_USE};
+use zeroize::Zeroizing;
 
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
@@ -258,7 +259,7 @@ fn ensure_group(name: &str) -> NativeSetupResult<()> {
 #[allow(unsafe_code)]
 fn ensure_user(name: &str, password: &str, stage: SetupStage) -> NativeSetupResult<()> {
     let name_wide = wide(name);
-    let password_wide = wide(password);
+    let password_wide = Zeroizing::new(wide(password));
     let info = USER_INFO_1 {
         usri1_name: name_wide.as_ptr().cast_mut(),
         usri1_password: password_wide.as_ptr().cast_mut(),
@@ -357,9 +358,9 @@ fn ensure_member(group: &str, account: &str, stage: SetupStage) -> NativeSetupRe
     ))
 }
 
-fn random_password(stage: SetupStage) -> NativeSetupResult<String> {
-    let mut bytes = [0u8; 32];
-    fill(&mut bytes).map_err(|error| {
+fn random_password(stage: SetupStage) -> NativeSetupResult<Zeroizing<String>> {
+    let mut bytes = Zeroizing::new([0u8; 32]);
+    fill(bytes.as_mut()).map_err(|error| {
         NativeSetupFailure::new(
             stage,
             SetupFailureCode::RandomCredential,
@@ -367,15 +368,17 @@ fn random_password(stage: SetupStage) -> NativeSetupResult<String> {
             format!("cryptographic password generation failed: {error}"),
         )
     })?;
-    let random_hex = bytes
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<String>();
+    let random_hex = Zeroizing::new(
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>(),
+    );
     // Preserve 256 bits of operating-system entropy while constructively
     // satisfying the built-in Windows upper/lower/digit/symbol policy. Pure
     // hexadecimal is long but has only two character classes and is rejected
     // by Windows Server 2025 as NERR_PasswordTooShort.
-    Ok(format!("A!a0{random_hex}"))
+    Ok(Zeroizing::new(format!("A!a0{}", random_hex.as_str())))
 }
 
 #[allow(unsafe_code)]
