@@ -184,7 +184,8 @@ sandbox account. The token:
 - applies restricting-SID access checks to reads and writes rather than using
   the upstream `WRITE_RESTRICTED` optimization;
 - retains only `SeChangeNotifyPrivilege` when Windows requires traversal;
-- includes only the capability SIDs required by this request;
+- includes only the capability SIDs required by this request and the
+  launch-unique logon SID needed by the private desktop;
 - includes one random network-route restricting SID when proxy routing is
   active;
 - keeps the logon SID and request capability SIDs as the complete default
@@ -193,12 +194,14 @@ sandbox account. The token:
 
 The runner reads the completed token back before process creation. Token user,
 canonical restricting-SID set, default-DACL ACE set and masks, and enabled
-privileges must exactly match the requested boundary. `Everyone` remains a
-restricting SID because Windows restricted-token access checks require the
-normal and restricting passes to retain operating-system compatibility; it is
-not an object-creation grant. Any extra enabled privilege, duplicate canonical
-SID, route/default-DACL overlap, or Windows-canonicalized ACL difference fails
-before the child starts.
+privileges must exactly match the requested boundary. Neither the token-user
+SID nor `Everyone` is a restricting SID: without upstream `WRITE_RESTRICTED`,
+either identity would let pre-existing host ACEs satisfy the restricting pass
+for reads and defeat the policy's default deny outside its native roots. The
+launch-unique logon SID remains only for objects explicitly created for that
+logon, including the private desktop. Any extra enabled privilege, duplicate
+canonical SID, route/default-DACL overlap, or Windows-canonicalized ACL
+difference fails before the child starts.
 
 Every restricted process is assigned atomically at creation to a fresh Job
 Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and every
@@ -645,8 +648,8 @@ versions of `src/token.rs`, `src/token_tests.rs`, `src/process.rs`,
 
 The Cageforge boundary retains the dedicated-account runner, bounded framed
 transport, exact runner-PID pipe attribution, `CreateRestrictedToken` with
-maximum privileges disabled and the LUA restriction, capability and token-
-user restricting SIDs, route SIDs excluded from the default object DACL,
+maximum privileges disabled and the LUA restriction, capability and
+launch-logon restricting SIDs, route SIDs excluded from the default object DACL,
 `SeChangeNotifyPrivilege` as the sole re-enabled privilege,
 `CreateProcessAsUserW`, an explicit handle list, a private desktop, atomic Job
 Object assignment through `PROC_THREAD_ATTRIBUTE_JOB_LIST`, and complete tree
@@ -659,7 +662,11 @@ desktop mandatory, and returns stage-specific typed
 protocol, token, desktop, job, process, wait, and termination failures. It does
 not set `WRITE_RESTRICTED`: the full restricting set participates in read and
 write checks, which permits profile-scoped deny-read ACLs instead of the frozen
-implementation's shared sandbox-group deny-read state. It also does not retain
+implementation's shared sandbox-group deny-read state. Unlike the frozen
+elevated token, Cageforge excludes both the dedicated token-user SID and
+`Everyone` from that set; retaining either without `WRITE_RESTRICTED` would
+turn ordinary host read ACEs into authorization outside the prepared roots. It
+also does not retain
 Codex permission profiles, command schemas, logging, credential
 refresh fallback, ConPTY, filesystem-helper aliases, or cloned secret-bearing
 protocol requests.

@@ -28,7 +28,6 @@ use crate::runner_protocol::{WindowsRunnerFailureCode, WindowsRunnerFailureStage
 
 const GENERIC_ALL: u32 = 0x1000_0000;
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
-const EVERYONE_SID: &str = "S-1-1-0";
 
 pub(super) struct RestrictedPrimaryToken {
     handle: OwnedHandle,
@@ -126,9 +125,7 @@ impl RestrictedPrimaryToken {
         let route = route_sid
             .map(|sid| LocalSid::parse("network route", sid))
             .transpose()?;
-        let user = LocalSid::parse("token user", &actual_user_sid)?;
         let logon = LocalSid::parse("logon", &logon_sid)?;
-        let everyone = LocalSid::parse("Everyone", EVERYONE_SID)?;
 
         let mut restricting = capabilities
             .iter()
@@ -137,10 +134,6 @@ impl RestrictedPrimaryToken {
                 Attributes: 0,
             })
             .collect::<Vec<_>>();
-        restricting.push(SID_AND_ATTRIBUTES {
-            Sid: user.0,
-            Attributes: 0,
-        });
         if let Some(route) = &route {
             restricting.push(SID_AND_ATTRIBUTES {
                 Sid: route.0,
@@ -149,10 +142,6 @@ impl RestrictedPrimaryToken {
         }
         restricting.push(SID_AND_ATTRIBUTES {
             Sid: logon.0,
-            Attributes: 0,
-        });
-        restricting.push(SID_AND_ATTRIBUTES {
-            Sid: everyone.0,
             Attributes: 0,
         });
         let expected_restricting = canonical_sid_set(

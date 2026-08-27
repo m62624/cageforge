@@ -41,12 +41,21 @@ fn restricted_request(
     cageforge_policy_compose::EffectiveSandbox,
     PathResolutionContext,
 ) {
-    let environment = EnvironmentSpec::inherit_all();
+    restricted_request_with_environment(workspace, command, EnvironmentSpec::inherit_core())
+}
+
+fn restricted_request_with_environment(
+    workspace: &Path,
+    command: CommandSpec,
+    environment: EnvironmentSpec,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
     let filesystem = FilesystemPolicy::restricted([
         FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
         FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
-        FilesystemRule::new(PathSelector::tmpdir(), AccessMode::Write),
-        FilesystemRule::new(PathSelector::slash_tmp(), AccessMode::Write),
     ])
     .with_additional_protected_relative_path(".cageforge-test-protected")
     .expect("protected test path");
@@ -56,16 +65,11 @@ fn restricted_request(
         .expect("policies compose");
     let windows_directory =
         PathBuf::from(std::env::var_os("WINDIR").expect("Windows test runner must define WINDIR"));
-    let temporary = std::env::temp_dir();
     let context = PathResolutionContext::new()
         .with_workspace_root(workspace.to_path_buf())
         .expect("workspace root")
         .with_minimal_path(windows_directory)
         .expect("Windows runtime scope")
-        .with_tmpdir(temporary.clone())
-        .expect("temporary directory")
-        .with_slash_tmp(temporary)
-        .expect("slash-tmp compatibility directory")
         .with_current_directory(workspace.to_path_buf())
         .expect("current directory");
     let command = CommandRequest::new(command)
@@ -183,6 +187,47 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .join("WindowsPowerShell")
         .join("v1.0")
         .join("powershell.exe");
+
+    let outside_secret = temporary.path().join("outside-secret.txt");
+    fs::write(&outside_secret, b"host secret").expect("outside secret fixture");
+    let environment = EnvironmentSpec::inherit_core()
+        .with_var("CAGEFORGE_DENIED_READ", outside_secret.as_os_str())
+        .expect("denied-read fixture environment");
+    let access_probe = CommandSpec::new(&powershell)
+        .expect("PowerShell command")
+        .with_args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "try { [IO.File]::ReadAllText($env:CAGEFORGE_DENIED_READ) | Out-Null; exit 91 } catch [System.UnauthorizedAccessException] { [Console]::Out.Write('denied') } catch { [Console]::Error.Write($_.Exception.GetType().FullName); exit 92 }",
+        ])
+        .expect("PowerShell arguments");
+    let (command, effective, context) =
+        restricted_request_with_environment(workspace.path(), access_probe, environment);
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare denied-read probe");
+    let mut access_child = backend.spawn(prepared).expect("spawn denied-read probe");
+    let mut access_stdout = String::new();
+    access_child
+        .stdout()
+        .expect("captured probe stdout")
+        .read_to_string(&mut access_stdout)
+        .expect("read probe stdout");
+    let mut access_stderr = String::new();
+    access_child
+        .stderr()
+        .expect("captured probe stderr")
+        .read_to_string(&mut access_stderr)
+        .expect("read probe stderr");
+    let access_status = access_child.wait().expect("wait for denied-read probe");
+    assert!(
+        access_status.success(),
+        "outside read probe failed with {access_status}: {access_stderr}"
+    );
+    assert_eq!(access_stdout, "denied");
+
     let command = CommandSpec::new(powershell)
         .expect("PowerShell command")
         .with_args([
