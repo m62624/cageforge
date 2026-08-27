@@ -130,6 +130,11 @@ impl WindowsBackendConfig {
     pub const fn default_timeout(&self) -> Duration {
         self.default_timeout
     }
+
+    /// Returns the resource limits used by restricted-network gateways.
+    pub const fn network_gateway_config(&self) -> &GatewayConfig {
+        &self.network_gateway
+    }
 }
 
 impl Default for WindowsSetupConfig {

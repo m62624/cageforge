@@ -6,9 +6,17 @@ use std::io;
 use std::path::PathBuf;
 
 use cageforge_backend_api::{BackendCapability, BackendContractError};
+use cageforge_command::CommandError;
 use cageforge_policy::{FilesystemMode, NetworkMode};
 use thiserror::Error;
 
+use crate::filesystem_plan::FilesystemPlanError;
+use crate::network::{WindowsNetworkGatewayError, WindowsNetworkRuntimeError};
+use crate::runner_launch::RunnerLaunchError;
+use crate::runner_protocol::{
+    WindowsRunnerFailureCode, WindowsRunnerFailureStage, WindowsRunnerProtocolError,
+};
+use crate::runner_session::RunnerSessionError;
 use crate::setup_protocol::{SetupFailureCode, SetupStage};
 
 /// Failure while resolving one Windows account or group SID.
@@ -553,6 +561,12 @@ pub enum WindowsBackendError {
     /// The network/filesystem combination cannot be enforced safely.
     #[error(transparent)]
     NetworkCombination(#[from] WindowsNetworkCombinationError),
+    /// Constructing the shared ingress or one isolated policy route failed.
+    #[error(transparent)]
+    NetworkGateway(#[from] WindowsNetworkGatewayError),
+    /// The process-wide proxy ingress failed while a child still depended on it.
+    #[error(transparent)]
+    NetworkRuntime(#[from] WindowsNetworkRuntimeError),
     /// A native capability was deliberately not advertised.
     #[error("Windows backend cannot safely enforce required capability: {capability}")]
     UnsupportedCapability {
@@ -569,13 +583,126 @@ pub enum WindowsBackendError {
         /// Effective network ownership.
         network: NetworkMode,
     },
-    /// A native Windows operation failed.
-    #[error("Windows sandbox operation {operation} failed: {source}")]
-    Native {
-        /// Stable operation label.
-        operation: &'static str,
-        /// Native failure.
+    /// Selecting or transforming the requested environment failed.
+    #[error("failed to prepare the Windows command environment: {source}")]
+    EnvironmentPreparation {
+        /// Portable environment validation failure.
         #[source]
-        source: io::Error,
+        source: CommandError,
     },
+    /// A command, path, or environment value could not be encoded safely.
+    #[error("Windows runner request field {field} contains an embedded NUL")]
+    RequestEncoding {
+        /// Rejected runner request field.
+        field: &'static str,
+    },
+    /// Native filesystem planning failed after portable policy preparation.
+    #[error("failed to plan Windows filesystem enforcement: {source}")]
+    FilesystemPlanning {
+        /// Exact native planning failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// Applying or reconciling native filesystem enforcement failed.
+    #[error("failed to apply Windows filesystem enforcement: {source}")]
+    FilesystemEnforcement {
+        /// Exact ACL, capability-state, or path-validation failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The authenticated dedicated-account runner could not be launched.
+    #[error("failed to launch the authenticated Windows command runner: {source}")]
+    RunnerLaunch {
+        /// Exact pipe, desktop, token, process, or Job preparation failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The bounded parent-runner protocol failed.
+    #[error(transparent)]
+    RunnerProtocol(#[from] WindowsRunnerProtocolError),
+    /// The parent-owned Job or runner process boundary failed.
+    #[error("Windows parent process boundary failed: {source}")]
+    RunnerBoundary {
+        /// Exact Job or process-boundary failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The authenticated runner rejected one native child operation.
+    #[error("Windows command runner failed during {stage:?}/{code:?} ({native_code:?}): {detail}")]
+    RunnerFailure {
+        /// Native runner phase.
+        stage: WindowsRunnerFailureStage,
+        /// Exact rejected operation.
+        code: WindowsRunnerFailureCode,
+        /// Native Win32 code, when supplied by the failed API.
+        native_code: Option<u32>,
+        /// Bounded runner diagnostic.
+        detail: String,
+    },
+    /// The sandboxed command exceeded its prepared timeout.
+    #[error("the sandboxed Windows command exceeded its prepared timeout")]
+    ProcessTimedOut,
+    /// The authenticated runner lifecycle failed outside a typed child operation.
+    #[error("Windows command lifecycle failed: {source}")]
+    RunnerLifecycle {
+        /// Exact transport, standard-stream, timeout, or reaping failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+impl WindowsBackendError {
+    pub(crate) fn environment_preparation(source: CommandError) -> Self {
+        Self::EnvironmentPreparation { source }
+    }
+
+    pub(crate) fn filesystem_planning(source: FilesystemPlanError) -> Self {
+        Self::FilesystemPlanning {
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn filesystem_enforcement<E>(source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::FilesystemEnforcement {
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn runner_launch(source: RunnerLaunchError) -> Self {
+        Self::RunnerLaunch {
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn runner_protocol(source: WindowsRunnerProtocolError) -> Self {
+        Self::RunnerProtocol(source)
+    }
+
+    pub(crate) fn runner_session(source: RunnerSessionError) -> Self {
+        match source {
+            RunnerSessionError::Launch(source) => Self::runner_launch(source),
+            RunnerSessionError::Protocol(source) => Self::runner_protocol(source),
+            RunnerSessionError::Boundary(source) => Self::RunnerBoundary {
+                source: Box::new(source),
+            },
+            RunnerSessionError::RunnerFailure {
+                stage,
+                code,
+                native_code,
+                detail,
+            } => Self::RunnerFailure {
+                stage,
+                code,
+                native_code,
+                detail,
+            },
+            RunnerSessionError::TimedOut => Self::ProcessTimedOut,
+            source => Self::RunnerLifecycle {
+                source: Box::new(source),
+            },
+        }
+    }
 }

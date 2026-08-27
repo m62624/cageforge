@@ -14,6 +14,7 @@
 #![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
 mod account_identity;
+mod backend;
 mod capability_state;
 mod capability_store;
 mod config;
@@ -22,6 +23,9 @@ mod filesystem_acl;
 mod filesystem_path;
 mod filesystem_plan;
 mod firewall_contract;
+mod network;
+mod network_attribution;
+mod process;
 mod runner_desktop;
 mod runner_launch;
 mod runner_manifest;
@@ -36,6 +40,7 @@ mod setup_state;
 mod setup_verification;
 mod win;
 
+pub use backend::WindowsBackend;
 pub use config::{
     CommandRunnerSource, SetupHelperSource, WindowsBackendConfig, WindowsBackendConfigError,
     WindowsSetupConfig, WindowsStateDirectorySource,
@@ -44,6 +49,15 @@ pub use error::{
     WindowsAccountLookupError, WindowsAccountVerificationError, WindowsBackendError,
     WindowsFilesystemShapeError, WindowsNetworkCombinationError, WindowsSetupError,
     WindowsSetupVerificationError,
+};
+pub use network::{
+    WindowsNetworkGatewayError, WindowsNetworkRuntimeError, WindowsNetworkRuntimeFailure,
+};
+pub use network_attribution::WindowsNetworkAttributionError;
+pub use process::WindowsChild;
+pub use runner_protocol::{
+    WindowsRunnerFailure, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
+    WindowsRunnerProtocolError,
 };
 pub use setup::{
     WindowsSandboxAccounts, WindowsSetup, WindowsSetupDetails, WindowsSetupStaleReason,

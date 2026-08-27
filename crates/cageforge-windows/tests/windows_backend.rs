@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use cageforge_windows::{
-    WindowsBackendConfig, WindowsBackendConfigError, WindowsSetup, WindowsSetupConfig,
-    WindowsSetupStatus,
+    WindowsBackend, WindowsBackendConfig, WindowsBackendConfigError, WindowsBackendError,
+    WindowsSetup, WindowsSetupConfig, WindowsSetupError, WindowsSetupStatus,
 };
 use pretty_assertions::assert_eq;
 
@@ -123,5 +123,26 @@ fn absent_setup_is_reported_without_creating_host_state() {
             marker_path: state_directory.join("setup.json"),
         }
     );
+    assert!(!state_directory.exists());
+}
+
+#[test]
+fn backend_requires_verified_setup_without_creating_host_state() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let setup = WindowsSetupConfig::new()
+        .with_state_directory(temporary.path())
+        .expect("absolute state directory");
+    let state_directory = WindowsSetup::new(setup.clone())
+        .state_directory()
+        .expect("resolved state directory");
+
+    let error = WindowsBackend::new(WindowsBackendConfig::new().with_setup(setup))
+        .expect_err("missing setup must reject backend construction");
+
+    assert!(matches!(
+        error,
+        WindowsBackendError::Setup(WindowsSetupError::Missing { path })
+            if path == state_directory.join("setup.json")
+    ));
     assert!(!state_directory.exists());
 }
