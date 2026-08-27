@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::io::Write;
-
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Cryptography::{
@@ -46,31 +44,17 @@ pub(super) fn write_protected(
         )
     })?;
     let path = request.state_directory.join(CREDENTIALS_NAME);
-    let mut file =
-        security::create_protected_file(&path, &request.owner_sid).map_err(|failure| {
-            NativeSetupFailure::new(
-                SetupStage::Credentials,
-                SetupFailureCode::CredentialAcl,
-                failure.native_code,
-                failure.detail,
-            )
-        })?;
-    file.write_all(&encoded).map_err(|error| {
-        NativeSetupFailure::new(
+    security::replace_owner_file(
+        &path,
+        &request.owner_sid,
+        &encoded,
+        security::ProtectedFileWriteContext::new(
             SetupStage::Credentials,
+            SetupFailureCode::CredentialAcl,
             SetupFailureCode::CredentialWrite,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to write protected credentials {path:?}: {error}"),
-        )
-    })?;
-    file.sync_all().map_err(|error| {
-        NativeSetupFailure::new(
-            SetupStage::Credentials,
-            SetupFailureCode::CredentialWrite,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to flush protected credentials {path:?}: {error}"),
-        )
-    })?;
+            "sandbox credential record",
+        ),
+    )?;
     Ok(hex_digest(&encoded))
 }
 

@@ -78,6 +78,10 @@ pub(crate) fn open_directory_for_pin(path: &Path) -> Result<File, SetupPinnedFil
     )
 }
 
+pub(crate) fn verify_open_file_path(path: &Path, file: &File) -> Result<(), SetupPinnedFileError> {
+    verify_open_path(path, file.as_raw_handle() as _, false)
+}
+
 #[allow(unsafe_code)]
 fn open_existing(path: &Path, access: u32, share_mode: u32) -> Result<File, SetupPinnedFileError> {
     open_checked(path, access, share_mode, false)
@@ -110,8 +114,18 @@ fn open_checked(
         });
     }
     let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
-    reject_reparse_point(path, handle.as_raw_handle() as _, require_directory)?;
-    let final_path = final_path(path, handle.as_raw_handle() as _)?;
+    verify_open_path(path, handle.as_raw_handle() as _, require_directory)?;
+    Ok(File::from(handle))
+}
+
+fn verify_open_path(
+    path: &Path,
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    require_directory: bool,
+) -> Result<(), SetupPinnedFileError> {
+    validate_lexical_path(path)?;
+    reject_reparse_point(path, handle, require_directory)?;
+    let final_path = final_path(path, handle)?;
     let expanded_path = long_path(path)?;
     if !paths_equal(&expanded_path, &final_path) {
         return Err(SetupPinnedFileError::FinalPathMismatch {
@@ -119,7 +133,7 @@ fn open_checked(
             final_path,
         });
     }
-    Ok(File::from(handle))
+    Ok(())
 }
 
 fn validate_lexical_path(path: &Path) -> Result<(), SetupPinnedFileError> {

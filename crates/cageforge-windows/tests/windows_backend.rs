@@ -185,7 +185,27 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         WindowsSetupStatus::Ready(_)
     ));
 
+    let credential_path = first.state_directory().join("credentials.json.dpapi");
+    let credential_reparse_target = temporary.path().join("credential-reparse-target.txt");
+    fs::write(&credential_reparse_target, b"must remain unchanged")
+        .expect("credential reparse target");
+    fs::remove_file(&credential_path).expect("remove protected credential fixture");
+    std::os::windows::fs::symlink_file(&credential_reparse_target, &credential_path)
+        .expect("credential file symlink");
+
     let second = setup.install().expect("idempotent elevated setup");
+    assert_eq!(
+        fs::read(&credential_reparse_target).expect("read credential reparse target"),
+        b"must remain unchanged",
+        "elevated setup followed an existing credential reparse point"
+    );
+    assert!(
+        !fs::symlink_metadata(&credential_path)
+            .expect("reconciled credential metadata")
+            .file_type()
+            .is_symlink(),
+        "credential reconciliation retained the attacker-controlled reparse point"
+    );
     assert_eq!(first.owner_sid(), second.owner_sid());
     assert_eq!(first.accounts(), second.accounts());
     assert_eq!(first.proxy_ports(), second.proxy_ports());

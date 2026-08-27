@@ -2,31 +2,35 @@
 
 use std::ffi::c_void;
 use std::fs::File;
+use std::io::Write;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use cageforge_path::paths_equal;
+use getrandom::fill;
 use windows_sys::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GENERIC_ALL, GENERIC_WRITE, GetLastError, HLOCAL, INVALID_HANDLE_VALUE,
-    LocalFree,
+    ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, GENERIC_ALL, GENERIC_WRITE, GetLastError, HLOCAL,
+    INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, GetSecurityInfo,
-    SDDL_REVISION_1, SE_FILE_OBJECT,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+    SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
     GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
     INHERIT_ONLY_ACE, IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
-    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+    TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
-    FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, READ_CONTROL,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+    FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
+    FILE_SHARE_DELETE, FileDispositionInfo, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    MoveFileExW, READ_CONTROL, SetFileInformationByHandle,
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -40,6 +44,19 @@ struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 struct LocalWideString(*mut u16);
 
 struct LocalSid(*mut c_void);
+
+struct PendingProtectedFile {
+    file: File,
+    path: PathBuf,
+    delete_on_drop: bool,
+}
+
+pub(super) struct ProtectedFileWriteContext {
+    stage: SetupStage,
+    acl_code: SetupFailureCode,
+    write_code: SetupFailureCode,
+    label: &'static str,
+}
 
 enum ProtectedDescriptor<'a> {
     SharedStateDirectory,
@@ -78,6 +95,39 @@ impl Drop for LocalSid {
             unsafe {
                 LocalFree(self.0 as HLOCAL);
             }
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for PendingProtectedFile {
+    fn drop(&mut self) {
+        if self.delete_on_drop {
+            let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+            unsafe {
+                SetFileInformationByHandle(
+                    self.file.as_raw_handle() as _,
+                    FileDispositionInfo,
+                    (&raw const disposition).cast(),
+                    size_of::<FILE_DISPOSITION_INFO>() as u32,
+                );
+            }
+        }
+    }
+}
+
+impl ProtectedFileWriteContext {
+    pub(super) const fn new(
+        stage: SetupStage,
+        acl_code: SetupFailureCode,
+        write_code: SetupFailureCode,
+        label: &'static str,
+    ) -> Self {
+        Self {
+            stage,
+            acl_code,
+            write_code,
+            label,
         }
     }
 }
@@ -349,13 +399,18 @@ fn create_or_verify_directory(
     Ok(directory)
 }
 
-#[allow(unsafe_code)]
-pub(super) fn create_protected_file(path: &Path, owner_sid: &str) -> NativeSetupResult<File> {
-    create_file_with_descriptor(
+pub(super) fn replace_owner_file(
+    path: &Path,
+    owner_sid: &str,
+    bytes: &[u8],
+    context: ProtectedFileWriteContext,
+) -> NativeSetupResult<()> {
+    replace_file_with_descriptor(
         path,
         owner_sid,
         &ProtectedDescriptor::OwnerOnly { inherit: false },
-        CREATE_ALWAYS,
+        bytes,
+        &context,
     )
 }
 
@@ -370,39 +425,188 @@ pub(super) fn create_new_protected_file(path: &Path, owner_sid: &str) -> NativeS
 }
 
 pub(super) fn verify_owner_file(path: &Path, owner_sid: &str) -> NativeSetupResult<()> {
-    verify_descriptor(
+    let file = crate::setup_pinned_file::open_for_readback(path).map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::DirectoryAcl,
+            None,
+            format!("protected setup file path is unsafe at {path:?}: {error}"),
+        )
+    })?;
+    verify_file_descriptor(
         path,
+        &file,
         owner_sid,
         &ProtectedDescriptor::OwnerOnly { inherit: false },
     )
 }
 
-#[allow(unsafe_code)]
-pub(super) fn create_runner_executable(
+pub(super) fn replace_runner_executable(
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
-) -> NativeSetupResult<File> {
-    create_file_with_descriptor(
+    bytes: &[u8],
+    context: ProtectedFileWriteContext,
+) -> NativeSetupResult<()> {
+    replace_file_with_descriptor(
         path,
         owner_sid,
         &ProtectedDescriptor::RunnerExecutable { group_sid },
-        CREATE_ALWAYS,
+        bytes,
+        &context,
+    )
+}
+
+pub(super) fn replace_runner_manifest(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+    bytes: &[u8],
+    context: ProtectedFileWriteContext,
+) -> NativeSetupResult<()> {
+    replace_file_with_descriptor(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::RunnerManifest { group_sid },
+        bytes,
+        &context,
     )
 }
 
 #[allow(unsafe_code)]
-pub(super) fn create_runner_manifest(
+fn replace_file_with_descriptor(
     path: &Path,
     owner_sid: &str,
-    group_sid: &str,
-) -> NativeSetupResult<File> {
-    create_file_with_descriptor(
-        path,
-        owner_sid,
-        &ProtectedDescriptor::RunnerManifest { group_sid },
-        CREATE_ALWAYS,
-    )
+    descriptor_kind: &ProtectedDescriptor<'_>,
+    bytes: &[u8],
+    context: &ProtectedFileWriteContext,
+) -> NativeSetupResult<()> {
+    let parent = path.parent().ok_or_else(|| {
+        NativeSetupFailure::new(
+            context.stage,
+            context.acl_code,
+            None,
+            format!("{} path has no parent: {path:?}", context.label),
+        )
+    })?;
+    let _pinned_ancestors = pin_existing_directory_chain(parent).map_err(|failure| {
+        NativeSetupFailure::new(
+            context.stage,
+            context.acl_code,
+            failure.native_code,
+            failure.detail,
+        )
+    })?;
+    let mut pending = create_pending_file(parent, owner_sid, descriptor_kind, context)?;
+    pending.file.write_all(bytes).map_err(|error| {
+        NativeSetupFailure::new(
+            context.stage,
+            context.write_code,
+            error.raw_os_error().map(|code| code as u32),
+            format!("failed to write staged {} {path:?}: {error}", context.label),
+        )
+    })?;
+    pending.file.sync_all().map_err(|error| {
+        NativeSetupFailure::new(
+            context.stage,
+            context.write_code,
+            error.raw_os_error().map(|code| code as u32),
+            format!("failed to flush staged {} {path:?}: {error}", context.label),
+        )
+    })?;
+    let temporary_wide = wide_path(&pending.path);
+    let destination_wide = wide_path(path);
+    if unsafe {
+        MoveFileExW(
+            temporary_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(NativeSetupFailure::new(
+            context.stage,
+            context.write_code,
+            Some(unsafe { GetLastError() }),
+            format!("failed to atomically replace {} {path:?}", context.label),
+        ));
+    }
+    crate::setup_pinned_file::verify_open_file_path(path, &pending.file).map_err(|error| {
+        NativeSetupFailure::new(
+            context.stage,
+            context.acl_code,
+            None,
+            format!(
+                "replaced {} path is unsafe at {path:?}: {error}",
+                context.label
+            ),
+        )
+    })?;
+    verify_file_descriptor(path, &pending.file, owner_sid, descriptor_kind).map_err(|failure| {
+        NativeSetupFailure::new(
+            context.stage,
+            context.acl_code,
+            failure.native_code,
+            failure.detail,
+        )
+    })?;
+    pending.delete_on_drop = false;
+    Ok(())
+}
+
+fn create_pending_file(
+    parent: &Path,
+    owner_sid: &str,
+    descriptor_kind: &ProtectedDescriptor<'_>,
+    context: &ProtectedFileWriteContext,
+) -> NativeSetupResult<PendingProtectedFile> {
+    for _ in 0..16 {
+        let mut nonce = [0u8; 16];
+        fill(&mut nonce).map_err(|error| {
+            NativeSetupFailure::new(
+                context.stage,
+                context.write_code,
+                None,
+                format!("failed to generate staged {} name: {error}", context.label),
+            )
+        })?;
+        let suffix = nonce
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let temporary_path = parent.join(format!(".cageforge-{suffix}.tmp"));
+        match create_file_with_descriptor(&temporary_path, owner_sid, descriptor_kind, CREATE_NEW) {
+            Ok(file) => {
+                return Ok(PendingProtectedFile {
+                    file,
+                    path: temporary_path,
+                    delete_on_drop: true,
+                });
+            }
+            Err(failure)
+                if matches!(
+                    failure.native_code,
+                    Some(ERROR_FILE_EXISTS) | Some(ERROR_ALREADY_EXISTS)
+                ) => {}
+            Err(failure) => {
+                return Err(NativeSetupFailure::new(
+                    context.stage,
+                    context.acl_code,
+                    failure.native_code,
+                    failure.detail,
+                ));
+            }
+        }
+    }
+    Err(NativeSetupFailure::new(
+        context.stage,
+        context.write_code,
+        None,
+        format!(
+            "failed to reserve a unique staged {} name after 16 cryptographic attempts",
+            context.label
+        ),
+    ))
 }
 
 #[allow(unsafe_code)]
@@ -412,6 +616,15 @@ fn create_file_with_descriptor(
     descriptor_kind: &ProtectedDescriptor<'_>,
     creation_disposition: u32,
 ) -> NativeSetupResult<File> {
+    let parent = path.parent().ok_or_else(|| {
+        NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::InvalidStateDirectory,
+            None,
+            format!("protected setup file has no parent: {path:?}"),
+        )
+    })?;
+    let _pinned_ancestors = pin_existing_directory_chain(parent)?;
     let descriptor = security_descriptor(owner_sid, descriptor_kind)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -422,11 +635,11 @@ fn create_file_with_descriptor(
     let handle = unsafe {
         CreateFileW(
             path_wide.as_ptr(),
-            GENERIC_WRITE | READ_CONTROL,
-            0,
+            GENERIC_WRITE | READ_CONTROL | DELETE,
+            FILE_SHARE_DELETE,
             &attributes,
             creation_disposition,
-            FILE_ATTRIBUTE_NORMAL,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
             std::ptr::null_mut(),
         )
     };
@@ -438,7 +651,14 @@ fn create_file_with_descriptor(
         ));
     }
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    apply_descriptor(path, &descriptor)?;
+    crate::setup_pinned_file::verify_open_file_path(path, &file).map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::CredentialAcl,
+            None,
+            format!("protected setup file path is unsafe at {path:?}: {error}"),
+        )
+    })?;
     verify_file_descriptor(path, &file, owner_sid, descriptor_kind)?;
     Ok(file)
 }
@@ -488,94 +708,6 @@ fn security_descriptor(
         ));
     }
     Ok(LocalSecurityDescriptor(descriptor))
-}
-
-#[allow(unsafe_code)]
-fn apply_descriptor(path: &Path, descriptor: &LocalSecurityDescriptor) -> NativeSetupResult<()> {
-    let mut owner = std::ptr::null_mut();
-    let mut owner_defaulted = 0;
-    if unsafe { GetSecurityDescriptorOwner(descriptor.0, &mut owner, &mut owner_defaulted) } == 0
-        || owner.is_null()
-    {
-        return Err(last_error(
-            SetupStage::StateDirectory,
-            SetupFailureCode::DirectoryAcl,
-            "failed to extract the protected setup owner",
-        ));
-    }
-    let mut present = 0;
-    let mut defaulted = 0;
-    let mut dacl = std::ptr::null_mut();
-    if unsafe { GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted) }
-        == 0
-        || present == 0
-        || dacl.is_null()
-    {
-        return Err(last_error(
-            SetupStage::StateDirectory,
-            SetupFailureCode::DirectoryAcl,
-            "failed to extract the protected setup DACL",
-        ));
-    }
-    let path_wide = wide_path(path);
-    let status = unsafe {
-        windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW(
-            path_wide.as_ptr().cast_mut(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION
-                | DACL_SECURITY_INFORMATION
-                | PROTECTED_DACL_SECURITY_INFORMATION,
-            owner,
-            std::ptr::null_mut(),
-            dacl,
-            std::ptr::null(),
-        )
-    };
-    if status != 0 {
-        return Err(NativeSetupFailure::new(
-            SetupStage::StateDirectory,
-            SetupFailureCode::DirectoryAcl,
-            Some(status),
-            format!("failed to apply protected DACL to {path:?}"),
-        ));
-    }
-    Ok(())
-}
-
-#[allow(unsafe_code)]
-fn verify_descriptor(
-    path: &Path,
-    owner_sid: &str,
-    descriptor_kind: &ProtectedDescriptor<'_>,
-) -> NativeSetupResult<()> {
-    let path_wide = wide_path(path);
-    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    let status = unsafe {
-        GetNamedSecurityInfoW(
-            path_wide.as_ptr(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut descriptor,
-        )
-    };
-    if status != 0 {
-        return Err(NativeSetupFailure::new(
-            SetupStage::StateDirectory,
-            SetupFailureCode::DirectoryAcl,
-            Some(status),
-            format!("failed to read back protected DACL from {path:?}"),
-        ));
-    }
-    verify_descriptor_value(
-        path,
-        LocalSecurityDescriptor(descriptor),
-        owner_sid,
-        descriptor_kind,
-    )
 }
 
 #[allow(unsafe_code)]

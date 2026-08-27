@@ -113,6 +113,16 @@ child is created. The shared ProgramData parents grant authenticated users only
 read/traverse access; each owner-scoped state directory remains writable only by
 SYSTEM, Administrators, and that owner.
 
+Elevated reconciliation never opens an existing credential, marker, setup
+helper, command runner, or runner manifest with truncate semantics. It creates a
+cryptographically named sibling with the final descriptor, pins and verifies
+that new file, writes and flushes it, atomically replaces the destination name,
+then verifies the same open handle under its final path. Existing file reparse
+points are replaced as directory entries and are never followed. A failed move
+or read-back marks the still-open staging file for deletion before its handle is
+closed. New capability state and lock files use exclusive creation under the
+same pinned ancestor-chain rule.
+
 Install reconciliation uses the same lifecycle byte-range as uninstall and
 holds it exclusively before reading, replacing, or rotating any capability
 state, credential, helper, account, firewall, or WFP object. An existing lock
@@ -666,6 +676,9 @@ The Cageforge setup protocol retains the following boundaries:
 - state-directory creation is anchored to a handle-pinned, non-reparse ancestor
   chain; the frozen baseline's path-based recursive creation is not retained
   across the elevated Cageforge boundary;
+- setup-owned files are committed from newly created, descriptor-verified
+  sibling handles instead of truncating an existing destination, so a stale or
+  attacker-created reparse point cannot redirect elevated writes;
 - an incomplete or malformed marker is never readiness evidence;
 - independent random credentials are rotated on every successful reconcile,
   protected with machine-scope DPAPI, and stored behind an explicit protected

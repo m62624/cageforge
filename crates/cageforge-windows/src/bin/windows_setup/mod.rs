@@ -195,31 +195,17 @@ fn write_marker(
         )
     })?;
     let path = request.state_directory.join("setup.json");
-    let mut file =
-        security::create_protected_file(&path, &request.owner_sid).map_err(|failure| {
-            NativeSetupFailure::new(
-                SetupStage::Marker,
-                SetupFailureCode::MarkerAcl,
-                failure.native_code,
-                failure.detail,
-            )
-        })?;
-    file.write_all(&encoded).map_err(|error| {
-        NativeSetupFailure::new(
+    security::replace_owner_file(
+        &path,
+        &request.owner_sid,
+        &encoded,
+        security::ProtectedFileWriteContext::new(
             SetupStage::Marker,
+            SetupFailureCode::MarkerAcl,
             SetupFailureCode::MarkerWrite,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to write completed setup marker {path:?}: {error}"),
-        )
-    })?;
-    file.sync_all().map_err(|error| {
-        NativeSetupFailure::new(
-            SetupStage::Marker,
-            SetupFailureCode::MarkerWrite,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to flush completed setup marker {path:?}: {error}"),
-        )
-    })
+            "completed setup marker",
+        ),
+    )
 }
 
 fn prepare_capability_state(request: &SetupRequest) -> NativeSetupResult<()> {

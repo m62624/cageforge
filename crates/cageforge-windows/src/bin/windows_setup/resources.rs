@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs;
-use std::io::Write;
-
 use sha2::{Digest, Sha256};
+use std::fs;
 
 use crate::runner_manifest::{RUNNER_MANIFEST_NAME, RUNNER_MANIFEST_VERSION, RunnerManifest};
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
@@ -93,31 +91,17 @@ fn stage_private_resource(
     bytes: &[u8],
     request: &SetupRequest,
 ) -> NativeSetupResult<()> {
-    let mut file =
-        security::create_protected_file(destination, &request.owner_sid).map_err(|failure| {
-            NativeSetupFailure::new(
-                SetupStage::StateDirectory,
-                SetupFailureCode::CommandRunnerInstall,
-                failure.native_code,
-                failure.detail,
-            )
-        })?;
-    file.write_all(bytes).map_err(|error| {
-        NativeSetupFailure::new(
+    security::replace_owner_file(
+        destination,
+        &request.owner_sid,
+        bytes,
+        security::ProtectedFileWriteContext::new(
             SetupStage::StateDirectory,
             SetupFailureCode::CommandRunnerInstall,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to stage protected Windows helper {destination:?}: {error}"),
-        )
-    })?;
-    file.sync_all().map_err(|error| {
-        NativeSetupFailure::new(
-            SetupStage::StateDirectory,
             SetupFailureCode::CommandRunnerInstall,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to flush protected Windows helper {destination:?}: {error}"),
-        )
-    })
+            "Windows setup helper",
+        ),
+    )
 }
 
 fn stage_runner_resource(
@@ -126,24 +110,18 @@ fn stage_runner_resource(
     request: &SetupRequest,
     group_sid: &str,
 ) -> NativeSetupResult<()> {
-    let mut file = security::create_runner_executable(destination, &request.owner_sid, group_sid)
-        .map_err(resource_install_failure)?;
-    file.write_all(bytes).map_err(|error| {
-        NativeSetupFailure::new(
+    security::replace_runner_executable(
+        destination,
+        &request.owner_sid,
+        group_sid,
+        bytes,
+        security::ProtectedFileWriteContext::new(
             SetupStage::StateDirectory,
             SetupFailureCode::CommandRunnerInstall,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to stage protected Windows command runner {destination:?}: {error}"),
-        )
-    })?;
-    file.sync_all().map_err(|error| {
-        NativeSetupFailure::new(
-            SetupStage::StateDirectory,
             SetupFailureCode::CommandRunnerInstall,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to flush protected Windows command runner {destination:?}: {error}"),
-        )
-    })
+            "Windows command runner",
+        ),
+    )
 }
 
 fn write_runner_manifest(
@@ -171,24 +149,18 @@ fn write_runner_manifest(
         )
     })?;
     let path = bin_directory.join(RUNNER_MANIFEST_NAME);
-    let mut file = security::create_runner_manifest(&path, &request.owner_sid, &accounts.group_sid)
-        .map_err(resource_install_failure)?;
-    file.write_all(&encoded).map_err(|error| {
-        NativeSetupFailure::new(
+    security::replace_runner_manifest(
+        &path,
+        &request.owner_sid,
+        &accounts.group_sid,
+        &encoded,
+        security::ProtectedFileWriteContext::new(
             SetupStage::StateDirectory,
             SetupFailureCode::CommandRunnerInstall,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to write protected command-runner manifest {path:?}: {error}"),
-        )
-    })?;
-    file.sync_all().map_err(|error| {
-        NativeSetupFailure::new(
-            SetupStage::StateDirectory,
             SetupFailureCode::CommandRunnerInstall,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to flush protected command-runner manifest {path:?}: {error}"),
-        )
-    })?;
+            "command-runner manifest",
+        ),
+    )?;
     Ok(hex_digest(&encoded))
 }
 
