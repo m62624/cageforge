@@ -7,6 +7,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::path::{Component, Path};
 
+use cageforge_path::paths_equal;
 use windows_sys::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GENERIC_ALL, GENERIC_WRITE, GetLastError, HLOCAL, INVALID_HANDLE_VALUE,
     LocalFree,
@@ -41,6 +42,7 @@ struct LocalWideString(*mut u16);
 struct LocalSid(*mut c_void);
 
 enum ProtectedDescriptor<'a> {
+    SharedStateDirectory,
     OwnerOnly { inherit: bool },
     RunnerDirectory { group_sid: &'a str },
     RunnerExecutable { group_sid: &'a str },
@@ -166,11 +168,19 @@ pub(super) fn validate_request_boundary(request: &SetupRequest) -> NativeSetupRe
 
 #[allow(unsafe_code)]
 pub(super) fn prepare_state_directory(path: &Path, owner_sid: &str) -> NativeSetupResult<()> {
-    prepare_directory(
-        path,
-        owner_sid,
-        &ProtectedDescriptor::OwnerOnly { inherit: true },
-    )
+    let default = crate::setup_state_path::default_state_directory(owner_sid).map_err(|code| {
+        NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::InvalidStateDirectory,
+            Some(code as u32),
+            "failed to resolve the system ProgramData directory in the elevated helper",
+        )
+    })?;
+    if paths_equal(path, &default) {
+        prepare_default_state_directory(path, owner_sid)
+    } else {
+        prepare_explicit_state_directory(path, owner_sid)
+    }
 }
 
 #[allow(unsafe_code)]
@@ -179,7 +189,7 @@ pub(super) fn prepare_runner_directory(
     owner_sid: &str,
     group_sid: &str,
 ) -> NativeSetupResult<()> {
-    prepare_directory(
+    prepare_child_directory(
         path,
         owner_sid,
         &ProtectedDescriptor::RunnerDirectory { group_sid },
@@ -187,7 +197,82 @@ pub(super) fn prepare_runner_directory(
 }
 
 #[allow(unsafe_code)]
-fn prepare_directory(
+fn prepare_default_state_directory(path: &Path, owner_sid: &str) -> NativeSetupResult<()> {
+    let program_data = crate::setup_state_path::program_data_directory().map_err(|code| {
+        NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::InvalidStateDirectory,
+            Some(code as u32),
+            "failed to resolve the system ProgramData directory in the elevated helper",
+        )
+    })?;
+    let mut pinned = pin_existing_directory_chain(&program_data)?;
+    let cageforge = program_data.join("Cageforge");
+    pinned.push(create_or_verify_directory(
+        &cageforge,
+        owner_sid,
+        &ProtectedDescriptor::SharedStateDirectory,
+    )?);
+    let sandbox = cageforge.join("windows-sandbox");
+    pinned.push(create_or_verify_directory(
+        &sandbox,
+        owner_sid,
+        &ProtectedDescriptor::SharedStateDirectory,
+    )?);
+    pinned.push(create_or_verify_directory(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit: true },
+    )?);
+    Ok(())
+}
+
+fn prepare_explicit_state_directory(path: &Path, owner_sid: &str) -> NativeSetupResult<()> {
+    let base = path.parent().ok_or_else(|| {
+        NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::InvalidStateDirectory,
+            None,
+            format!("explicit setup state directory has no base: {path:?}"),
+        )
+    })?;
+    let mut pinned = match std::fs::symlink_metadata(base) {
+        Ok(_) => pin_existing_directory_chain(base)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = base.parent().ok_or_else(|| {
+                NativeSetupFailure::new(
+                    SetupStage::StateDirectory,
+                    SetupFailureCode::InvalidStateDirectory,
+                    None,
+                    format!("explicit setup state base has no parent: {base:?}"),
+                )
+            })?;
+            let mut pinned = pin_existing_directory_chain(parent)?;
+            pinned.push(create_or_verify_directory(
+                base,
+                owner_sid,
+                &ProtectedDescriptor::OwnerOnly { inherit: true },
+            )?);
+            pinned
+        }
+        Err(error) => {
+            return Err(NativeSetupFailure::new(
+                SetupStage::StateDirectory,
+                SetupFailureCode::InvalidStateDirectory,
+                error.raw_os_error().map(|code| code as u32),
+                format!("failed to inspect explicit setup state base {base:?}: {error}"),
+            ));
+        }
+    };
+    pinned.push(create_or_verify_directory(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit: true },
+    )?);
+    Ok(())
+}
+
+fn prepare_child_directory(
     path: &Path,
     owner_sid: &str,
     descriptor_kind: &ProtectedDescriptor<'_>,
@@ -200,14 +285,39 @@ fn prepare_directory(
             format!("setup state directory has no parent: {path:?}"),
         )
     })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        NativeSetupFailure::new(
-            SetupStage::StateDirectory,
-            SetupFailureCode::DirectoryCreate,
-            error.raw_os_error().map(|code| code as u32),
-            format!("failed to create setup state parent {parent:?}: {error}"),
-        )
-    })?;
+    let _pinned_ancestors = pin_existing_directory_chain(parent)?;
+    create_or_verify_directory(path, owner_sid, descriptor_kind).map(|_| ())
+}
+
+fn pin_existing_directory_chain(path: &Path) -> NativeSetupResult<Vec<File>> {
+    let mut ancestors = path
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    ancestors.reverse();
+    let mut pinned = Vec::with_capacity(ancestors.len());
+    for ancestor in ancestors {
+        let directory =
+            crate::setup_pinned_file::open_directory_for_pin(&ancestor).map_err(|error| {
+                NativeSetupFailure::new(
+                    SetupStage::StateDirectory,
+                    SetupFailureCode::InvalidStateDirectory,
+                    None,
+                    format!("setup directory chain is unsafe at {ancestor:?}: {error}"),
+                )
+            })?;
+        pinned.push(directory);
+    }
+    Ok(pinned)
+}
+
+#[allow(unsafe_code)]
+fn create_or_verify_directory(
+    path: &Path,
+    owner_sid: &str,
+    descriptor_kind: &ProtectedDescriptor<'_>,
+) -> NativeSetupResult<File> {
     let descriptor = security_descriptor(owner_sid, descriptor_kind)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -223,12 +333,20 @@ fn prepare_directory(
                 SetupStage::StateDirectory,
                 SetupFailureCode::DirectoryCreate,
                 Some(code),
-                format!("failed to create protected setup state directory {path:?}"),
+                format!("failed to create protected setup directory {path:?}"),
             ));
         }
     }
-    apply_descriptor(path, &descriptor)?;
-    verify_descriptor(path, owner_sid, descriptor_kind)
+    let directory = crate::setup_pinned_file::open_directory_for_pin(path).map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::InvalidStateDirectory,
+            None,
+            format!("protected setup directory is unsafe at {path:?}: {error}"),
+        )
+    })?;
+    verify_file_descriptor(path, &directory, owner_sid, descriptor_kind)?;
+    Ok(directory)
 }
 
 #[allow(unsafe_code)]
@@ -331,6 +449,9 @@ fn security_descriptor(
     descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> NativeSetupResult<LocalSecurityDescriptor> {
     let sddl = match descriptor_kind {
+        ProtectedDescriptor::SharedStateDirectory => {
+            "O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;AU)".to_string()
+        }
         ProtectedDescriptor::OwnerOnly { inherit } => {
             let inheritance = if *inherit { "OICI" } else { "" };
             format!(
@@ -547,7 +668,14 @@ fn protected_descriptor_matches(
     {
         return false;
     }
-    let Some(expected_owner) = local_sid(owner_sid) else {
+    let expected_owner_sid = match descriptor_kind {
+        ProtectedDescriptor::SharedStateDirectory => "S-1-5-32-544",
+        ProtectedDescriptor::OwnerOnly { .. }
+        | ProtectedDescriptor::RunnerDirectory { .. }
+        | ProtectedDescriptor::RunnerExecutable { .. }
+        | ProtectedDescriptor::RunnerManifest { .. } => owner_sid,
+    };
+    let Some(expected_owner) = local_sid(expected_owner_sid) else {
         return false;
     };
     if unsafe { EqualSid(owner, expected_owner.0) } == 0 {
@@ -571,11 +699,26 @@ fn protected_descriptor_matches(
         return false;
     }
     let principals = ["S-1-5-18", "S-1-5-32-544", owner_sid];
-    let mut expected_aces = principals
-        .iter()
-        .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
-        .collect::<Vec<_>>();
+    let mut expected_aces = match descriptor_kind {
+        ProtectedDescriptor::SharedStateDirectory => vec![
+            ("S-1-5-18".to_string(), 0, FILE_ALL_ACCESS),
+            ("S-1-5-32-544".to_string(), 0, FILE_ALL_ACCESS),
+            (
+                "S-1-5-11".to_string(),
+                0,
+                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            ),
+        ],
+        ProtectedDescriptor::OwnerOnly { .. }
+        | ProtectedDescriptor::RunnerDirectory { .. }
+        | ProtectedDescriptor::RunnerExecutable { .. }
+        | ProtectedDescriptor::RunnerManifest { .. } => principals
+            .iter()
+            .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
+            .collect::<Vec<_>>(),
+    };
     match descriptor_kind {
+        ProtectedDescriptor::SharedStateDirectory => {}
         ProtectedDescriptor::OwnerOnly { inherit: true } => {
             let inherited_flags =
                 (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;

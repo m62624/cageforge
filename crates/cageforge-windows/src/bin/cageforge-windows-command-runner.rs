@@ -7,6 +7,8 @@ use std::process::ExitCode;
 
 #[path = "../account_identity.rs"]
 mod account_identity;
+#[path = "../owner_identity.rs"]
+mod owner_identity;
 #[path = "../runner_manifest.rs"]
 mod runner_manifest;
 #[path = "../runner_protocol.rs"]

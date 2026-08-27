@@ -27,6 +27,7 @@ mod filesystem_plan;
 mod firewall_contract;
 mod network;
 mod network_attribution;
+mod owner_identity;
 mod process;
 mod runner_desktop;
 mod runner_launch;
@@ -40,6 +41,7 @@ mod runner_stdio;
 mod setup;
 mod setup_protocol;
 mod setup_state;
+mod setup_state_path;
 mod setup_verification;
 mod win;
 

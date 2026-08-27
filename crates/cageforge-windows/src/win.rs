@@ -2,12 +2,11 @@
 
 //! Focused owned wrappers around Windows identity and known-folder APIs.
 
-use std::ffi::{OsString, c_void};
+use std::ffi::c_void;
 use std::io;
 use std::mem::{offset_of, size_of};
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-use std::path::PathBuf;
 
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
@@ -20,12 +19,8 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, LookupAccountNameW, SID_NAME_USE, TOKEN_ELEVATION, TOKEN_QUERY,
     TOKEN_USER, TokenElevation, TokenUser,
 };
-use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows_sys::Win32::UI::Shell::{
-    FOLDERID_ProgramData, KF_FLAG_DEFAULT, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-    SHGetKnownFolderPath, ShellExecuteExW,
-};
+use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
@@ -41,38 +36,6 @@ impl Drop for NetApiBuffer {
             }
         }
     }
-}
-
-#[allow(unsafe_code)]
-pub(crate) fn program_data_directory() -> Result<PathBuf, i32> {
-    let mut value = std::ptr::null_mut();
-    let result = unsafe {
-        SHGetKnownFolderPath(
-            &FOLDERID_ProgramData,
-            KF_FLAG_DEFAULT as u32,
-            std::ptr::null_mut(),
-            &mut value,
-        )
-    };
-    if result < 0 {
-        return Err(result);
-    }
-    if value.is_null() {
-        return Err(result);
-    }
-    let path = unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(
-            value, length,
-        )))
-    };
-    unsafe {
-        CoTaskMemFree(value.cast());
-    }
-    Ok(path)
 }
 
 #[allow(unsafe_code)]

@@ -16,6 +16,8 @@ mod capability_state;
 mod capability_state_setup;
 #[path = "../firewall_contract.rs"]
 mod firewall_contract;
+#[path = "../owner_identity.rs"]
+mod owner_identity;
 #[path = "../runner_manifest.rs"]
 mod runner_manifest;
 #[path = "../setup_pinned_file.rs"]
@@ -24,6 +26,8 @@ mod setup_pinned_file;
 mod setup_protocol;
 #[path = "../setup_state.rs"]
 mod setup_state;
+#[path = "../setup_state_path.rs"]
+mod setup_state_path;
 mod windows_setup;
 
 use setup_protocol::{

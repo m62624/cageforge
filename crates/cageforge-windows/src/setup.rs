@@ -24,8 +24,6 @@ use crate::setup_state::{SETUP_STATE_VERSION, SetupMarker};
 
 /// Current on-disk Windows setup contract version.
 pub const WINDOWS_SETUP_VERSION: u32 = SETUP_STATE_VERSION;
-const STATE_PARENT: &str = "Cageforge";
-const STATE_COMPONENT: &str = "windows-sandbox";
 const MARKER_NAME: &str = "setup.json";
 const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
 const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
@@ -460,13 +458,13 @@ impl WindowsSetup {
 
     fn state_directory_for(&self, owner_sid: &str) -> Result<PathBuf, WindowsSetupError> {
         let base = match self.config.state_directory_source() {
-            WindowsStateDirectorySource::ProgramData => crate::win::program_data_directory()
-                .map_err(|code| WindowsSetupError::ProgramDataUnavailable { code })?
-                .join(STATE_PARENT)
-                .join(STATE_COMPONENT),
+            WindowsStateDirectorySource::ProgramData => {
+                return crate::setup_state_path::default_state_directory(owner_sid)
+                    .map_err(|code| WindowsSetupError::ProgramDataUnavailable { code });
+            }
             WindowsStateDirectorySource::Explicit(path) => path.clone(),
         };
-        Ok(base.join(crate::account_identity::owner_key(owner_sid)))
+        Ok(base.join(crate::owner_identity::owner_key(owner_sid)))
     }
 
     fn resolve_setup_helper(&self) -> Result<PathBuf, WindowsSetupError> {

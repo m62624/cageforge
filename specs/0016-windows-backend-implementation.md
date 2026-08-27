@@ -100,6 +100,19 @@ Setup is idempotent. It reconciles stale state without silently deleting
 unrelated accounts, rules, ACLs, or files. Destructive uninstall is a separate
 explicit operation and is not performed by backend construction.
 
+The elevated helper independently resolves the default ProgramData path and
+accepts the caller's requested path as that default only when canonical Windows
+path equality matches. It pins every existing ancestor without delete sharing,
+rejects reparse points and final-path aliases, and creates each missing
+Cageforge-owned directory with its final protected descriptor in the original
+pinned parent. Existing Cageforge-owned directories must already have the exact
+owner and DACL; setup never repairs an arbitrary existing directory by applying
+elevated ACL changes to it. An explicit application-selected base may be used,
+but its existing ancestor chain is pinned and checked before the owner-scoped
+child is created. The shared ProgramData parents grant authenticated users only
+read/traverse access; each owner-scoped state directory remains writable only by
+SYSTEM, Administrators, and that owner.
+
 Install reconciliation uses the same lifecycle byte-range as uninstall and
 holds it exclusively before reading, replacing, or rotating any capability
 state, credential, helper, account, firewall, or WFP object. An existing lock
@@ -650,6 +663,9 @@ The Cageforge setup protocol retains the following boundaries:
 
 - setup state is per signed-in owner and cannot be shared merely because two
   callers choose the same directory;
+- state-directory creation is anchored to a handle-pinned, non-reparse ancestor
+  chain; the frozen baseline's path-based recursive creation is not retained
+  across the elevated Cageforge boundary;
 - an incomplete or malformed marker is never readiness evidence;
 - independent random credentials are rotated on every successful reconcile,
   protected with machine-scope DPAPI, and stored behind an explicit protected

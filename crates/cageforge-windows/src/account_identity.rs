@@ -2,7 +2,7 @@
 
 //! Deterministic binding between one setup owner and its managed accounts.
 
-use sha2::{Digest, Sha256};
+use crate::owner_identity::owner_key;
 
 const ACCOUNT_KEY_LENGTH: usize = 12;
 
@@ -22,13 +22,6 @@ impl ManagedAccountNames {
             group: format!("CgfGrp_{suffix}"),
         }
     }
-}
-
-pub(crate) fn owner_key(owner_sid: &str) -> String {
-    Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

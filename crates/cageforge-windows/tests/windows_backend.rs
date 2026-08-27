@@ -121,6 +121,42 @@ fn setup_configuration_rejects_relative_security_paths() {
 }
 
 #[test]
+fn elevated_setup_rejects_a_reparse_state_root_before_touching_its_target() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let target = temporary.path().join("reparse-target");
+    let selected = temporary.path().join("selected-state-root");
+    fs::create_dir(&target).expect("state-root reparse target");
+    std::os::windows::fs::symlink_dir(&target, &selected).expect("state-root directory symlink");
+    let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
+    let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
+    let config = WindowsSetupConfig::new()
+        .with_state_directory(&selected)
+        .expect("absolute state directory")
+        .with_setup_helper_path(helper)
+        .expect("absolute setup helper")
+        .with_command_runner_path(runner)
+        .expect("absolute command runner");
+    let setup = WindowsSetup::new(config);
+
+    assert!(matches!(
+        setup
+            .install()
+            .expect_err("reparse state root must fail closed"),
+        WindowsSetupError::HelperFailed {
+            code: cageforge_windows::WindowsSetupFailureCode::InvalidStateDirectory,
+            ..
+        }
+    ));
+    assert_eq!(
+        fs::read_dir(&target)
+            .expect("inspect untouched reparse target")
+            .count(),
+        0,
+        "elevated setup followed the reparse root before rejecting it"
+    );
+}
+
+#[test]
 fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
