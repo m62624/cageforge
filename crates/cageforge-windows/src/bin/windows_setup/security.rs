@@ -24,8 +24,8 @@ use windows_sys::Win32::Security::{
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
-    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, READ_CONTROL,
+    CREATE_ALWAYS, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
+    FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, READ_CONTROL,
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -237,6 +237,17 @@ pub(super) fn create_protected_file(path: &Path, owner_sid: &str) -> NativeSetup
         path,
         owner_sid,
         &ProtectedDescriptor::OwnerOnly { inherit: false },
+        CREATE_ALWAYS,
+    )
+}
+
+#[allow(unsafe_code)]
+pub(super) fn create_new_protected_file(path: &Path, owner_sid: &str) -> NativeSetupResult<File> {
+    create_file_with_descriptor(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit: false },
+        CREATE_NEW,
     )
 }
 
@@ -258,6 +269,7 @@ pub(super) fn create_runner_executable(
         path,
         owner_sid,
         &ProtectedDescriptor::RunnerExecutable { group_sid },
+        CREATE_ALWAYS,
     )
 }
 
@@ -271,6 +283,7 @@ pub(super) fn create_runner_manifest(
         path,
         owner_sid,
         &ProtectedDescriptor::RunnerManifest { group_sid },
+        CREATE_ALWAYS,
     )
 }
 
@@ -279,6 +292,7 @@ fn create_file_with_descriptor(
     path: &Path,
     owner_sid: &str,
     descriptor_kind: &ProtectedDescriptor<'_>,
+    creation_disposition: u32,
 ) -> NativeSetupResult<File> {
     let descriptor = security_descriptor(owner_sid, descriptor_kind)?;
     let attributes = SECURITY_ATTRIBUTES {
@@ -293,7 +307,7 @@ fn create_file_with_descriptor(
             GENERIC_WRITE | READ_CONTROL,
             0,
             &attributes,
-            CREATE_ALWAYS,
+            creation_disposition,
             FILE_ATTRIBUTE_NORMAL,
             std::ptr::null_mut(),
         )

@@ -100,6 +100,22 @@ Setup is idempotent. It reconciles stale state without silently deleting
 unrelated accounts, rules, ACLs, or files. Destructive uninstall is a separate
 explicit operation and is not performed by backend construction.
 
+Install reconciliation uses the same lifecycle byte-range as uninstall and
+holds it exclusively before reading, replacing, or rotating any capability
+state, credential, helper, account, firewall, or WFP object. An existing lock
+file is verified and opened without truncation; a first installation creates it
+with the final protected descriptor and never replaces a competing instance.
+Runtime and elevated setup open existing lock and state files with
+`FILE_FLAG_OPEN_REPARSE_POINT`, reject reparse points and final-handle path
+mismatches, retain the checked handle without delete sharing, and acquire range
+locks or read state through that pinned object rather than reopening its name.
+Uninstall marks the pinned lock object for deletion by handle while it still
+owns the exclusive lifecycle range.
+An active child or concurrent setup lifecycle produces a typed fail-closed
+result before capability state is changed. Existing capability state is
+recovered and validated through its durable backup rather than recreated when
+one name is missing; fresh state is valid only for a genuinely new setup.
+
 Capability state consists of a protected state record and a separate protected
 cross-process lock file. Setup generates one random installation SID namespace;
 runtime entries append random subauthorities and are keyed by the SHA-256 of the

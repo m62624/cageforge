@@ -255,6 +255,19 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         WindowsSetupError::ActiveSandboxes
     ));
     assert!(protected.is_dir(), "failed uninstall retained its boundary");
+    let active_capability_state =
+        fs::read(&capability_state).expect("read state before rejected install");
+    assert!(matches!(
+        setup
+            .install()
+            .expect_err("active child must exclude setup reconciliation"),
+        WindowsSetupError::ActiveSandboxes
+    ));
+    assert_eq!(
+        fs::read(&capability_state).expect("read state after rejected install"),
+        active_capability_state,
+        "rejected setup reconciliation must not rewrite capability state"
+    );
 
     child.kill().expect("terminate complete sandbox job");
     let _ = child.wait().expect("reap terminated sandbox job");

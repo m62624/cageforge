@@ -3,7 +3,7 @@
 //! Serialized multi-process access to protected capability-SID state.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -26,6 +26,7 @@ use crate::capability_state_runtime::{
     MaterializationRecovery, PendingMaterializationRemovalView, PendingMaterializationView,
 };
 use crate::error::WindowsSetupVerificationError;
+use crate::filesystem_path::{ValidatedPath, ValidatedPathError};
 
 pub(crate) struct CapabilityStateStore {
     state_path: PathBuf,
@@ -61,6 +62,18 @@ pub(crate) enum CapabilityStateStoreError {
     UninstallInProgress,
     #[error("cannot uninstall Windows setup while a sandbox child is active")]
     ActiveChildren,
+    #[error("protected capability-state path {path:?} is unsafe: {source}")]
+    UnsafeProtectedPath {
+        path: PathBuf,
+        #[source]
+        source: ValidatedPathError,
+    },
+    #[error("failed to clone the pinned protected capability-state handle {path:?}: {source}")]
+    ProtectedHandleClone {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("failed to read protected capability-SID state {path:?}: {source}")]
     Read {
         path: PathBuf,
@@ -111,8 +124,8 @@ impl CapabilityStateStore {
     pub(crate) fn acquire_active_lease(
         &self,
     ) -> Result<CapabilityActiveLease, CapabilityStateStoreError> {
-        self.verify_lock_path()?;
-        match CapabilityLock::acquire(&self.lock_path, 1, false, true, "active-sandbox lifetime") {
+        let file = self.open_protected_file(&self.lock_path)?;
+        match CapabilityLock::acquire_file(file, 1, false, true, "active-sandbox lifetime") {
             Err(CapabilityLockError::Acquire {
                 code: ERROR_LOCK_VIOLATION,
                 ..
@@ -125,8 +138,8 @@ impl CapabilityStateStore {
     pub(crate) fn acquire_uninstall_guard(
         &self,
     ) -> Result<CapabilityUninstallGuard, CapabilityStateStoreError> {
-        self.verify_lock_path()?;
-        match CapabilityLock::acquire(&self.lock_path, 1, true, true, "setup-uninstall exclusion") {
+        let file = self.open_protected_file(&self.lock_path)?;
+        match CapabilityLock::acquire_file(file, 1, true, true, "setup-uninstall exclusion") {
             Err(CapabilityLockError::Acquire {
                 code: ERROR_LOCK_VIOLATION,
                 ..
@@ -147,29 +160,33 @@ impl CapabilityStateStore {
     }
 
     fn lock(&self) -> Result<CapabilityLock, CapabilityStateStoreError> {
-        self.verify_lock_path()?;
-        CapabilityLock::acquire(&self.lock_path, 0, true, false, "capability-state mutation")
+        let file = self.open_protected_file(&self.lock_path)?;
+        CapabilityLock::acquire_file(file, 0, true, false, "capability-state mutation")
             .map_err(Into::into)
     }
 
-    fn verify_lock_path(&self) -> Result<(), CapabilityStateStoreError> {
-        crate::setup_verification::paths::verify_protected_dacl(
-            &self.lock_path,
-            &self.owner_sid,
-            false,
-        )
-        .map_err(Into::into)
+    fn open_protected_file(&self, path: &Path) -> Result<std::fs::File, CapabilityStateStoreError> {
+        let pinned = ValidatedPath::open_file_for_readback(path).map_err(|source| {
+            CapabilityStateStoreError::UnsafeProtectedPath {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        crate::setup_verification::paths::verify_protected_dacl(path, &self.owner_sid, false)?;
+        pinned
+            .try_clone_file()
+            .map_err(|source| CapabilityStateStoreError::ProtectedHandleClone {
+                path: path.to_path_buf(),
+                source,
+            })
     }
 
     fn read_locked(&self) -> Result<CapabilityState, CapabilityStateStoreError> {
         self.recover_missing_state_from_backup()?;
-        crate::setup_verification::paths::verify_protected_dacl(
-            &self.state_path,
-            &self.owner_sid,
-            false,
-        )?;
-        let bytes =
-            fs::read(&self.state_path).map_err(|source| CapabilityStateStoreError::Read {
+        let mut file = self.open_protected_file(&self.state_path)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|source| CapabilityStateStoreError::Read {
                 path: self.state_path.clone(),
                 source,
             })?;
@@ -224,13 +241,10 @@ impl CapabilityStateStore {
                 code,
             });
         }
-        crate::setup_verification::paths::verify_protected_dacl(
-            &self.state_path,
-            &self.owner_sid,
-            false,
-        )?;
-        let actual =
-            fs::read(&self.state_path).map_err(|source| CapabilityStateStoreError::Read {
+        let mut file = self.open_protected_file(&self.state_path)?;
+        let mut actual = Vec::new();
+        file.read_to_end(&mut actual)
+            .map_err(|source| CapabilityStateStoreError::Read {
                 path: self.state_path.clone(),
                 source,
             })?;
@@ -254,16 +268,15 @@ impl CapabilityStateStore {
         }
 
         let backup_path = self.state_path.with_extension("json.backup");
-        crate::setup_verification::paths::verify_protected_dacl(
-            &backup_path,
-            &self.owner_sid,
-            false,
-        )?;
-        let bytes = fs::read(&backup_path).map_err(|source| CapabilityStateStoreError::Read {
-            path: backup_path.clone(),
-            source,
-        })?;
+        let mut file = self.open_protected_file(&backup_path)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|source| CapabilityStateStoreError::Read {
+                path: backup_path.clone(),
+                source,
+            })?;
         let expected = CapabilityState::decode(&bytes)?;
+        drop(file);
         let backup_path_wide = wide_path(&backup_path);
         let state_path_wide = wide_path(&self.state_path);
         if unsafe {
@@ -280,13 +293,10 @@ impl CapabilityStateStore {
                 code: unsafe { GetLastError() },
             });
         }
-        crate::setup_verification::paths::verify_protected_dacl(
-            &self.state_path,
-            &self.owner_sid,
-            false,
-        )?;
-        let actual =
-            fs::read(&self.state_path).map_err(|source| CapabilityStateStoreError::Read {
+        let mut file = self.open_protected_file(&self.state_path)?;
+        let mut actual = Vec::new();
+        file.read_to_end(&mut actual)
+            .map_err(|source| CapabilityStateStoreError::Read {
                 path: self.state_path.clone(),
                 source,
             })?;

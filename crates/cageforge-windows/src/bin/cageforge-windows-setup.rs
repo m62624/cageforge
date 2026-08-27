@@ -18,6 +18,8 @@ mod capability_state_setup;
 mod firewall_contract;
 #[path = "../runner_manifest.rs"]
 mod runner_manifest;
+#[path = "../setup_pinned_file.rs"]
+mod setup_pinned_file;
 #[path = "../setup_protocol.rs"]
 mod setup_protocol;
 #[path = "../setup_state.rs"]

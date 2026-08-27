@@ -27,6 +27,12 @@ impl CapabilityState {
             && self.pending_materialization.is_none()
             && self.pending_materialization_removal.is_none()
     }
+
+    pub(crate) fn setup_reconciliation_safe(&self) -> bool {
+        self.pending_acl_mutation.is_none()
+            && self.pending_materialization.is_none()
+            && self.pending_materialization_removal.is_none()
+    }
 }
 
 fn random_namespace_sid() -> Result<String, CapabilityStateError> {
