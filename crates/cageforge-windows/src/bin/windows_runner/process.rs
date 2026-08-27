@@ -36,6 +36,8 @@ struct PreparedStandardHandles {
 
 struct ProcessAttributeList {
     storage: Vec<usize>,
+    handle_list: Vec<*mut c_void>,
+    job_list: Vec<*mut c_void>,
     initialized: bool,
 }
 
@@ -115,7 +117,7 @@ impl SpawnedProcess {
         let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
         let child_handles = standard.raw_handles();
         let mut attributes = ProcessAttributeList::new(2)?;
-        attributes.apply_handles(&child_handles)?;
+        attributes.apply_handles(child_handles)?;
         attributes.apply_job(job.as_raw_handle())?;
         let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
@@ -252,6 +254,8 @@ impl ProcessAttributeList {
         let words = bytes.div_ceil(size_of::<usize>());
         let mut list = Self {
             storage: vec![0usize; words],
+            handle_list: Vec::new(),
+            job_list: Vec::new(),
             initialized: false,
         };
         if unsafe {
@@ -267,14 +271,15 @@ impl ProcessAttributeList {
     }
 
     #[allow(unsafe_code)]
-    fn apply_handles(&mut self, handles: &[*mut c_void]) -> Result<(), ProcessStartError> {
+    fn apply_handles(&mut self, handles: [*mut c_void; 3]) -> Result<(), ProcessStartError> {
+        let (handle_list, handle_list_bytes) = self.store_handles(&handles);
         if unsafe {
             UpdateProcThreadAttribute(
                 self.as_mut_ptr(),
                 0,
                 PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                handles.as_ptr().cast(),
-                std::mem::size_of_val(handles),
+                handle_list,
+                handle_list_bytes,
                 std::ptr::null_mut(),
                 std::ptr::null(),
             )
@@ -289,13 +294,14 @@ impl ProcessAttributeList {
 
     #[allow(unsafe_code)]
     fn apply_job(&mut self, job: *mut c_void) -> Result<(), ProcessStartError> {
+        let (job_list, job_list_bytes) = self.store_job(job);
         if unsafe {
             UpdateProcThreadAttribute(
                 self.as_mut_ptr(),
                 0,
                 PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
-                (&raw const job).cast(),
-                size_of::<*mut c_void>(),
+                job_list,
+                job_list_bytes,
                 std::ptr::null_mut(),
                 std::ptr::null(),
             )
@@ -306,6 +312,22 @@ impl ProcessAttributeList {
             });
         }
         Ok(())
+    }
+
+    fn store_handles(&mut self, handles: &[*mut c_void; 3]) -> (*const c_void, usize) {
+        self.handle_list = Vec::from(*handles);
+        (
+            self.handle_list.as_ptr().cast(),
+            std::mem::size_of_val(self.handle_list.as_slice()),
+        )
+    }
+
+    fn store_job(&mut self, job: *mut c_void) -> (*const c_void, usize) {
+        self.job_list = vec![job];
+        (
+            self.job_list.as_ptr().cast(),
+            std::mem::size_of_val(self.job_list.as_slice()),
+        )
     }
 
     fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
@@ -551,7 +573,37 @@ fn quote_argument(argument: &[u16], output: &mut Vec<u16>) {
 mod tests {
     use std::ffi::c_void;
 
-    use super::{ProcessStartError, command_line, reject_duplicate, standard_handle_value};
+    use super::{
+        ProcessAttributeList, ProcessStartError, command_line, reject_duplicate,
+        standard_handle_value,
+    };
+
+    #[test]
+    fn process_attributes_retain_their_own_backing_arrays() {
+        let source_handles = [
+            0x101usize as *mut c_void,
+            0x102usize as *mut c_void,
+            0x103usize as *mut c_void,
+        ];
+        let job = 0x201usize as *mut c_void;
+        let mut attributes = ProcessAttributeList {
+            storage: Vec::new(),
+            handle_list: Vec::new(),
+            job_list: Vec::new(),
+            initialized: false,
+        };
+
+        let (handle_list, handle_bytes) = attributes.store_handles(&source_handles);
+        let (job_list, job_bytes) = attributes.store_job(job);
+
+        assert_ne!(handle_list, source_handles.as_ptr().cast());
+        assert_eq!(handle_list, attributes.handle_list.as_ptr().cast());
+        assert_eq!(attributes.handle_list, source_handles);
+        assert_eq!(handle_bytes, std::mem::size_of_val(&source_handles));
+        assert_eq!(job_list, attributes.job_list.as_ptr().cast());
+        assert_eq!(attributes.job_list, [job]);
+        assert_eq!(job_bytes, std::mem::size_of::<*mut c_void>());
+    }
 
     #[test]
     fn command_line_uses_windows_backslash_quote_rules() {

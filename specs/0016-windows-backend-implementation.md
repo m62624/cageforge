@@ -236,8 +236,11 @@ runner. Only after the runner process is created suspended does the parent
 duplicate a handle granting only `JOB_OBJECT_ASSIGN_PROCESS` into that exact
 process; no pre-existing parent handle is exposed. The runner uses the limited
 copy only for `PROC_THREAD_ATTRIBUTE_JOB_LIST` and closes it after child
-creation. `WindowsChild` retains the original handle with termination rights and
-can therefore kill the complete user-command tree without trusting a control
+creation. The initialized process-attribute owner retains the backing Job and
+standard-handle arrays until `CreateProcessAsUserW` returns; no attribute points
+to a temporary stack value whose lifetime ends before process creation.
+`WindowsChild` retains the original handle with termination rights and can
+therefore kill the complete user-command tree without trusting a control
 response from the runner.
 
 The process starts on a private desktop by default. Disabling private-desktop
