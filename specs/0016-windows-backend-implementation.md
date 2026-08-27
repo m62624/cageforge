@@ -382,6 +382,15 @@ two concurrent sandboxes using different policies from selecting one another's
 gateway route. PID lookup, token lookup, and route registration are bounded and
 never fall back to an unauthenticated listener.
 
+The Cageforge ingress strengthens the frozen implementation by requiring
+`SO_EXCLUSIVEADDRUSE` before binding each fixed setup port, bounding owner-table
+resize retries and token buffers, pinning the attributed process while the
+owner row and restricted token are rechecked, and generating route SIDs from
+operating-system cryptographic randomness with a bounded collision loop. These
+are native enforcement details; the public API remains the generalized
+effective network policy and gateway configuration used by other Cageforge
+backends.
+
 The gateway still performs one DNS snapshot and exact `SocketAddr`
 authorization immediately before connect. Firewall and route attribution are
 native ingress boundaries, not replacements for portable policy checks.

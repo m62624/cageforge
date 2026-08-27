@@ -33,15 +33,32 @@ The crate already contains setup state and verification, sandbox-account
 provisioning, firewall and WFP setup contracts, installed-helper identity
 verification, authenticated runner transport, restricted-token construction,
 Job Object and private-desktop preparation, explicit inherited-handle lists,
-filesystem lowering, handle-pinned path identity, and a write-ahead ACL
-mutation journal.
+filesystem lowering, handle-pinned path identity, a write-ahead ACL mutation
+journal, and transactional creation of missing protected paths. The public
+`WindowsBackend` and `WindowsChild` now reach the authenticated runner. The
+network checkpoint contains fixed exclusive IPv4 ingress listeners, bounded
+exact reversed-four-tuple PID attribution, process-handle pinning, one random
+route SID per routed launch, exact one-route selection, and the independent
+`cageforge-network-proxy` gateway. These paths cross-compile, but they are not
+native Windows evidence until the Windows Server 2025 black-box job passes.
 
-The active unfinished filesystem work is the missing-path materialization
-journal. `capability_state.rs` and `capability_store.rs` contain the version-3
-state-model checkpoint. `filesystem_acl.rs` contains imports, types, and typed
-error variants for its runtime implementation, but the runtime methods are not
-yet connected. Continue from that checkpoint; do not replace it with a polling
-monitor or an unjournaled `create_dir_all` implementation.
+Three boundaries remain active and unfinished:
+
+1. Setup uninstall does not yet restore every journaled host ACL or remove
+   materialized paths by recorded handle identity. Add lifecycle coordination,
+   restore ACLs before deleting sandbox accounts, and remove only exact
+   marker/directory objects deepest-first. Interrupted cleanup must be safely
+   resumable and must never adopt or delete a replacement object.
+2. Standard streams still travel as output and stdin frames through the runner
+   protocol. Replace that checkpoint with parent-prepared `Pipe`, `Null`, and
+   `Inherit` handles duplicated into the already authenticated runner process,
+   then pass only those handles to the user process through
+   `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. Keep parent pipe ends in
+   `WindowsChild`. This removes unbounded output buffering and avoids a host
+   `stdout` write blocking runner lifecycle supervision.
+3. Native setup, filesystem, process-tree, stdio, timeout, direct-network, and
+   routed-network behavior still needs complete Windows Server 2025 black-box
+   coverage. Cross-target compilation is only a development check.
 
 Some native implementation modules remain unreachable from the public backend
 and therefore currently emit `dead_code` warnings. Remove those warnings by
@@ -127,6 +144,15 @@ Implement `WindowsBackend`, the backend-bound prepared request handoff, and
 
 This wiring must make the existing native modules genuinely reachable and
 eliminate their `dead_code` warnings without lint suppression.
+
+Before changing this wiring, compare both reference sides. Read the affected
+frozen `../codex` Windows implementation line by line for native security
+invariants, then read `cageforge-linux` and the shared Cageforge crates for the
+independent backend API, ownership model, typed errors, and child lifecycle.
+Retain or strengthen the former while presenting the latter. Never copy Codex
+CLI request schemas, permission profiles, telemetry, product environment
+variables, ConPTY integration, or other product-only coupling into the public
+Windows library.
 
 ### 3. Finish exact network enforcement
 
