@@ -34,16 +34,16 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
         details.owner_sid(),
         details.accounts().group_sid(),
     )?;
+    paths::verify_protected_dacl(&capability_lock_path, details.owner_sid(), false)?;
+    verify_capability_state(state, details.owner_sid())?;
     for path in [
-        &capability_state_path,
-        &capability_lock_path,
         &credentials_path,
         &setup_helper_path,
         &state.join("setup.json"),
     ] {
         paths::verify_protected_dacl(path, details.owner_sid(), false)?;
     }
-    verify_capability_state(state, details.owner_sid())?;
+    paths::verify_protected_dacl(&capability_state_path, details.owner_sid(), false)?;
     paths::verify_runner_executable_dacl(
         &command_runner_path,
         details.owner_sid(),

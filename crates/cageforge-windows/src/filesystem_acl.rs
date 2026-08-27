@@ -32,14 +32,19 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA,
-    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_DISPOSITION_INFO,
+    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, FileDispositionInfo,
+    SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
 
 use crate::capability_state::{
-    CapabilityRole, CapabilityStateError, MaterializationEvidence, MaterializationRecovery,
+    CapabilityRole, CapabilityStateError, MaterializationRemovalPhase, MaterializedObject,
     PersistedDacl, PersistedFileIdentity,
+};
+use crate::capability_state_runtime::{
+    AclMutationRecovery, CapabilityStateTransitionError, MaterializationEvidence,
+    MaterializationRecovery,
 };
 use crate::capability_store::{
     CapabilityStateSession, CapabilityStateStore, CapabilityStateStoreError,
@@ -189,6 +194,8 @@ pub(crate) enum FilesystemAclError {
     #[error(transparent)]
     CapabilityModel(#[from] CapabilityStateError),
     #[error(transparent)]
+    CapabilityTransition(#[from] CapabilityStateTransitionError),
+    #[error(transparent)]
     InvalidPath(#[from] ValidatedPathError),
     #[error("capability state returned {actual} authorities for {expected} filesystem roles")]
     AuthorityCount { expected: usize, actual: usize },
@@ -292,6 +299,12 @@ pub(crate) enum FilesystemAclError {
     MaterializationOwnerMismatch { path: PathBuf },
     #[error("capability-state materialization resolution returned {actual} for {path:?}")]
     MaterializationOutcome { path: PathBuf, actual: &'static str },
+    #[error("materialized directory contains an unexpected entry and cannot be removed: {path:?}")]
+    MaterializationNotEmpty { path: PathBuf },
+    #[error("failed to arm exact materialized object {path:?} for deletion: Windows error {code}")]
+    MaterializationRemove { path: PathBuf, code: u32 },
+    #[error("materialized object remains present after handle-based deletion: {path:?}")]
+    MaterializationRemoveReadBack { path: PathBuf },
     #[error("failed to enumerate filesystem ACL subtree {path:?}: {source}")]
     Enumerate {
         path: PathBuf,
@@ -351,8 +364,40 @@ impl FilesystemAclEnforcement {
         self.authorities.token_sids()
     }
 
-    pub(crate) fn retained_paths(&self) -> &[ValidatedPath] {
-        &self.retained_paths
+    pub(crate) fn release(self) {
+        let Self {
+            authorities,
+            retained_paths,
+        } = self;
+        drop(retained_paths);
+        drop(authorities);
+    }
+
+    pub(crate) fn cleanup_persistent(
+        state_store: &CapabilityStateStore,
+    ) -> Result<(), FilesystemAclError> {
+        let mut state = state_store.begin()?;
+        recover_pending_acl_mutation(&mut state)?;
+        restore_managed_acls(&mut state)?;
+        let owner_sid = state.owner_sid().to_string();
+        let owner = LocalSid::parse("materialization owner", &owner_sid)?;
+        let mut recovered_creation = MaterializedMissingPaths {
+            retained_paths: Vec::new(),
+            directories: Vec::new(),
+        };
+        recovered_creation.recover_pending(&mut state, &owner)?;
+        drop(recovered_creation);
+        recover_pending_materialization_removal(&mut state, &owner)?;
+        let mut materialized = state.materialized_objects().to_vec();
+        materialized.sort_by_key(|object| std::cmp::Reverse(object.path().components().count()));
+        for object in materialized {
+            remove_materialized_object(&mut state, &object, &owner)?;
+        }
+        if !state.filesystem_cleanup_complete() {
+            return Err(CapabilityStateTransitionError::InvalidMaterializationRemoval.into());
+        }
+        state.finish()?;
+        Ok(())
     }
 }
 
@@ -795,9 +840,7 @@ impl PreparedAclOperation {
             Ok(actual) => actual,
             Err(error) => return Err(self.restore_failed_mutation(state, &identity, error)),
         };
-        if state.resolve_acl_mutation(&identity, &actual)?
-            != crate::capability_state::AclMutationRecovery::Next
-        {
+        if state.resolve_acl_mutation(&identity, &actual)? != AclMutationRecovery::Next {
             return Err(FilesystemAclError::DescriptorSnapshotMismatch {
                 path: self.path.final_path().to_path_buf(),
             });
@@ -1145,6 +1188,19 @@ impl OwnedAclBuffer {
             });
         }
         Ok(Self { storage })
+    }
+
+    fn from_persisted(snapshot: &PersistedDacl) -> Self {
+        let mut storage = vec![0u32; snapshot.bytes().len().div_ceil(size_of::<u32>())];
+        #[allow(unsafe_code)]
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                snapshot.bytes().as_ptr(),
+                storage.as_mut_ptr().cast::<u8>(),
+                snapshot.bytes().len(),
+            );
+        }
+        Self { storage }
     }
 
     fn as_ptr(&self) -> *mut ACL {
@@ -1541,8 +1597,8 @@ fn verify_recorded_materialization(
     if &persisted_identity(&verified.retained_paths[0]) != recorded.identity()
         || &persisted_identity(&verified.retained_paths[1]) != recorded.marker_identity()
     {
-        return Err(FilesystemAclError::CapabilityModel(
-            CapabilityStateError::MaterializationDrift {
+        return Err(FilesystemAclError::CapabilityTransition(
+            CapabilityStateTransitionError::MaterializationDrift {
                 path: recorded.path().to_path_buf(),
             },
         ));
@@ -1559,7 +1615,7 @@ fn verify_materialization(
     owner: &LocalSid,
 ) -> Result<VerifiedMaterialization, FilesystemAclError> {
     let directory = ValidatedPath::open_for_acl(path)?;
-    let marker = ValidatedPath::open_for_readback(marker_path)?;
+    let marker = ValidatedPath::open_file_for_readback(marker_path)?;
     let descriptor = SecurityDescriptor::read(&directory)?;
     descriptor.verify_owner(&directory, owner)?;
     if descriptor.snapshot(&directory)? != *expected_descriptor {
@@ -1574,7 +1630,7 @@ fn verify_materialization(
             path: marker_path.to_path_buf(),
         });
     }
-    verify_marker_contents(marker_path, expected_nonce)?;
+    verify_marker_handle_contents(&marker, expected_nonce)?;
     let evidence = MaterializationEvidence::new(
         persisted_identity(&directory),
         expected_descriptor.clone(),
@@ -1586,39 +1642,6 @@ fn verify_materialization(
         evidence,
         retained_paths: [directory, marker],
     })
-}
-
-fn verify_marker_contents(
-    marker_path: &Path,
-    expected_nonce: &[u8; 32],
-) -> Result<(), FilesystemAclError> {
-    let mut file = File::open(marker_path).map_err(|source| {
-        FilesystemAclError::MaterializationMarkerRead {
-            path: marker_path.to_path_buf(),
-            source,
-        }
-    })?;
-    let mut contents = [0u8; 33];
-    let mut length = 0;
-    while length < contents.len() {
-        let read = file.read(&mut contents[length..]).map_err(|source| {
-            FilesystemAclError::MaterializationMarkerRead {
-                path: marker_path.to_path_buf(),
-                source,
-            }
-        })?;
-        if read == 0 {
-            break;
-        }
-        length += read;
-    }
-    if length == expected_nonce.len() && contents[..length] == expected_nonce[..] {
-        Ok(())
-    } else {
-        Err(FilesystemAclError::MaterializationMarkerMismatch {
-            path: marker_path.to_path_buf(),
-        })
-    }
 }
 
 fn wide_path(path: &Path) -> Vec<u16> {
@@ -1646,6 +1669,291 @@ fn recover_pending_acl_mutation(
     let actual = SecurityDescriptor::read(&validated)?.snapshot(&validated)?;
     state.resolve_acl_mutation(&identity, &actual)?;
     Ok(())
+}
+
+fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
+    let mut objects = state.managed_acl_objects().to_vec();
+    objects.sort_by_key(|object| std::cmp::Reverse(object.path().components().count()));
+    for object in objects {
+        let path = ValidatedPath::open_for_acl(object.path())?;
+        let identity = persisted_identity(&path);
+        if &identity != object.identity() {
+            return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+                path: object.path().to_path_buf(),
+            }
+            .into());
+        }
+        let actual = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+        if &actual != object.current() {
+            return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+                path: object.path().to_path_buf(),
+            }
+            .into());
+        }
+        state.begin_acl_mutation(
+            object.path().to_path_buf(),
+            identity.clone(),
+            actual,
+            object.original().clone(),
+        )?;
+        apply_persisted_dacl(&path, object.original())?;
+        let read_back = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+        let outcome = state.resolve_acl_mutation(&identity, &read_back)?;
+        if outcome != AclMutationRecovery::Next || &read_back != object.original() {
+            return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+                path: object.path().to_path_buf(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn recover_pending_materialization_removal(
+    state: &mut CapabilityStateSession<'_>,
+    owner: &LocalSid,
+) -> Result<(), FilesystemAclError> {
+    let Some(pending) = state.pending_materialization_removal() else {
+        return Ok(());
+    };
+    let object = pending.object().clone();
+    match pending.phase() {
+        MaterializationRemovalPhase::MarkerDeleteArmed => {
+            continue_marker_removal(state, &object, owner)
+        }
+        MaterializationRemovalPhase::DirectoryDeleteArmed => {
+            continue_directory_removal(state, &object, owner)
+        }
+    }
+}
+
+fn remove_materialized_object(
+    state: &mut CapabilityStateSession<'_>,
+    object: &MaterializedObject,
+    owner: &LocalSid,
+) -> Result<(), FilesystemAclError> {
+    let directory = verify_materialized_directory_for_cleanup(object, owner)?;
+    let marker = verify_materialized_marker_for_cleanup(object, owner)?;
+    state.begin_materialization_removal(object.path())?;
+    delete_validated_path(marker, object.marker_path())?;
+    state.arm_materialized_directory_removal(object.identity())?;
+    remove_empty_materialized_directory(state, object, directory)
+}
+
+fn continue_marker_removal(
+    state: &mut CapabilityStateSession<'_>,
+    object: &MaterializedObject,
+    owner: &LocalSid,
+) -> Result<(), FilesystemAclError> {
+    let directory = verify_materialized_directory_for_cleanup(object, owner)?;
+    match fs::symlink_metadata(object.marker_path()) {
+        Ok(_) => {
+            let marker = verify_materialized_marker_for_cleanup(object, owner)?;
+            delete_validated_path(marker, object.marker_path())?;
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(FilesystemAclError::MaterializationMetadata {
+                path: object.marker_path().to_path_buf(),
+                source,
+            });
+        }
+    }
+    state.arm_materialized_directory_removal(object.identity())?;
+    remove_empty_materialized_directory(state, object, directory)
+}
+
+fn continue_directory_removal(
+    state: &mut CapabilityStateSession<'_>,
+    object: &MaterializedObject,
+    owner: &LocalSid,
+) -> Result<(), FilesystemAclError> {
+    match fs::symlink_metadata(object.path()) {
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            state.resolve_materialization_removal(object.identity())?;
+            Ok(())
+        }
+        Err(source) => Err(FilesystemAclError::MaterializationMetadata {
+            path: object.path().to_path_buf(),
+            source,
+        }),
+        Ok(_) => {
+            let directory = verify_materialized_directory_for_cleanup(object, owner)?;
+            remove_empty_materialized_directory(state, object, directory)
+        }
+    }
+}
+
+fn remove_empty_materialized_directory(
+    state: &mut CapabilityStateSession<'_>,
+    object: &MaterializedObject,
+    directory: ValidatedPath,
+) -> Result<(), FilesystemAclError> {
+    let mut entries =
+        fs::read_dir(object.path()).map_err(|source| FilesystemAclError::Enumerate {
+            path: object.path().to_path_buf(),
+            source,
+        })?;
+    match entries.next() {
+        None => {}
+        Some(Ok(_)) => {
+            return Err(FilesystemAclError::MaterializationNotEmpty {
+                path: object.path().to_path_buf(),
+            });
+        }
+        Some(Err(source)) => {
+            return Err(FilesystemAclError::Enumerate {
+                path: object.path().to_path_buf(),
+                source,
+            });
+        }
+    }
+    delete_validated_path(directory, object.path())?;
+    state.resolve_materialization_removal(object.identity())?;
+    Ok(())
+}
+
+fn verify_materialized_directory_for_cleanup(
+    object: &MaterializedObject,
+    owner: &LocalSid,
+) -> Result<ValidatedPath, FilesystemAclError> {
+    let directory = ValidatedPath::open_for_cleanup(object.path())?;
+    if &persisted_identity(&directory) != object.identity() {
+        return Err(CapabilityStateTransitionError::MaterializationDrift {
+            path: object.path().to_path_buf(),
+        }
+        .into());
+    }
+    let descriptor = SecurityDescriptor::read(&directory)?;
+    descriptor.verify_owner(&directory, owner)?;
+    if descriptor.snapshot(&directory)? != *object.descriptor() {
+        return Err(CapabilityStateTransitionError::MaterializationDrift {
+            path: object.path().to_path_buf(),
+        }
+        .into());
+    }
+    Ok(directory)
+}
+
+fn verify_materialized_marker_for_cleanup(
+    object: &MaterializedObject,
+    owner: &LocalSid,
+) -> Result<ValidatedPath, FilesystemAclError> {
+    let marker = ValidatedPath::open_file_for_cleanup(object.marker_path())?;
+    if &persisted_identity(&marker) != object.marker_identity() {
+        return Err(CapabilityStateTransitionError::MaterializationDrift {
+            path: object.path().to_path_buf(),
+        }
+        .into());
+    }
+    let descriptor = SecurityDescriptor::read(&marker)?;
+    descriptor.verify_owner(&marker, owner)?;
+    if descriptor.snapshot(&marker)? != *object.marker_descriptor() {
+        return Err(CapabilityStateTransitionError::MaterializationDrift {
+            path: object.path().to_path_buf(),
+        }
+        .into());
+    }
+    verify_marker_handle_contents(&marker, object.marker_nonce())?;
+    Ok(marker)
+}
+
+fn verify_marker_handle_contents(
+    marker: &ValidatedPath,
+    expected_nonce: &[u8; 32],
+) -> Result<(), FilesystemAclError> {
+    let mut file = marker.try_clone_file().map_err(|source| {
+        FilesystemAclError::MaterializationMarkerRead {
+            path: marker.final_path().to_path_buf(),
+            source,
+        }
+    })?;
+    let mut contents = [0u8; 33];
+    let mut length = 0;
+    while length < contents.len() {
+        let read = file.read(&mut contents[length..]).map_err(|source| {
+            FilesystemAclError::MaterializationMarkerRead {
+                path: marker.final_path().to_path_buf(),
+                source,
+            }
+        })?;
+        if read == 0 {
+            break;
+        }
+        length += read;
+    }
+    if length == expected_nonce.len() && contents[..length] == expected_nonce[..] {
+        Ok(())
+    } else {
+        Err(FilesystemAclError::MaterializationMarkerMismatch {
+            path: marker.final_path().to_path_buf(),
+        })
+    }
+}
+
+#[allow(unsafe_code)]
+fn apply_persisted_dacl(
+    path: &ValidatedPath,
+    descriptor: &PersistedDacl,
+) -> Result<(), FilesystemAclError> {
+    let acl = OwnedAclBuffer::from_persisted(descriptor);
+    let security_information = DACL_SECURITY_INFORMATION
+        | if descriptor.is_protected() {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+    let status = unsafe {
+        SetSecurityInfo(
+            path.raw_handle(),
+            SE_FILE_OBJECT,
+            security_information,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl.as_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    if status == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(FilesystemAclError::AclApply {
+            path: path.final_path().to_path_buf(),
+            code: status,
+        })
+    }
+}
+
+#[allow(unsafe_code)]
+fn delete_validated_path(
+    path: ValidatedPath,
+    expected_path: &Path,
+) -> Result<(), FilesystemAclError> {
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    if unsafe {
+        SetFileInformationByHandle(
+            path.raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(FilesystemAclError::MaterializationRemove {
+            path: expected_path.to_path_buf(),
+            code: unsafe { GetLastError() },
+        });
+    }
+    drop(path);
+    match fs::symlink_metadata(expected_path) {
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(FilesystemAclError::MaterializationMetadata {
+            path: expected_path.to_path_buf(),
+            source,
+        }),
+        Ok(_) => Err(FilesystemAclError::MaterializationRemoveReadBack {
+            path: expected_path.to_path_buf(),
+        }),
+    }
 }
 
 fn persisted_identity(path: &ValidatedPath) -> PersistedFileIdentity {

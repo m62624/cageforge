@@ -300,17 +300,10 @@ fn capability_state_model_failure(
         | crate::capability_state::CapabilityStateError::NonCanonicalAclOrder
         | crate::capability_state::CapabilityStateError::RedundantAclObject
         | crate::capability_state::CapabilityStateError::InvalidAclMutation
-        | crate::capability_state::CapabilityStateError::PendingAclMutation { .. }
-        | crate::capability_state::CapabilityStateError::MissingAclMutation
-        | crate::capability_state::CapabilityStateError::AclObjectIdentityMismatch { .. }
-        | crate::capability_state::CapabilityStateError::AclBeforeMismatch { .. }
-        | crate::capability_state::CapabilityStateError::AclMutationDrift { .. }
-        | crate::capability_state::CapabilityStateError::PendingMaterialization { .. }
-        | crate::capability_state::CapabilityStateError::MissingMaterialization
         | crate::capability_state::CapabilityStateError::DuplicateMaterializedObject
         | crate::capability_state::CapabilityStateError::NonCanonicalMaterializedOrder
         | crate::capability_state::CapabilityStateError::InvalidMaterialization
-        | crate::capability_state::CapabilityStateError::MaterializationDrift { .. } => {
+        | crate::capability_state::CapabilityStateError::InvalidMaterializationRemoval => {
             SetupFailureCode::CapabilityStateDecode
         }
     };
@@ -318,6 +311,7 @@ fn capability_state_model_failure(
 }
 
 fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
+    require_completed_filesystem_cleanup(request)?;
     firewall::remove(&request.owner_sid)?;
     wfp::remove(&request.owner_sid)?;
     accounts::remove(request)?;
@@ -326,6 +320,8 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
         request
             .state_directory
             .join(crate::capability_state::CAPABILITY_STATE_NAME),
+        request.state_directory.join("capabilities.json.next"),
+        request.state_directory.join("capabilities.json.backup"),
         request
             .state_directory
             .join(crate::capability_state::CAPABILITY_LOCK_NAME),
@@ -374,4 +370,34 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
         }
     }
     Ok(())
+}
+
+fn require_completed_filesystem_cleanup(request: &SetupRequest) -> NativeSetupResult<()> {
+    let path = request
+        .state_directory
+        .join(crate::capability_state::CAPABILITY_STATE_NAME);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(NativeSetupFailure::new(
+                SetupStage::Uninstall,
+                SetupFailureCode::Cleanup,
+                error.raw_os_error().map(|code| code as u32),
+                format!("failed to read capability state before uninstall {path:?}: {error}"),
+            ));
+        }
+    };
+    let state = crate::capability_state::CapabilityState::decode(&bytes)
+        .map_err(capability_state_model_failure)?;
+    if state.filesystem_cleanup_complete() {
+        Ok(())
+    } else {
+        Err(NativeSetupFailure::new(
+            SetupStage::Uninstall,
+            SetupFailureCode::Cleanup,
+            None,
+            "refusing to remove Windows setup before all managed ACL and materialization state is restored",
+        ))
+    }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Persistent policy-scoped capability identities for Windows filesystem enforcement.
+//! Serialized capability-state model shared by runtime and elevated setup.
 
 use std::collections::BTreeSet;
 use std::ffi::c_void;
@@ -15,92 +15,82 @@ use windows_sys::Win32::Security::{ACL, IsValidAcl, IsValidSid};
 
 pub(crate) const CAPABILITY_STATE_NAME: &str = "capabilities.json";
 pub(crate) const CAPABILITY_LOCK_NAME: &str = "capabilities.lock";
-const CAPABILITY_STATE_VERSION: u32 = 3;
-const READ_BASE_SUBAUTHORITY: &str = "1";
+pub(crate) const CAPABILITY_STATE_VERSION: u32 = 4;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct CapabilityState {
-    version: u32,
-    namespace_sid: String,
-    entries: Vec<FilesystemCapability>,
-    acl_objects: Vec<ManagedAclObject>,
-    pending_acl_mutation: Option<PendingAclMutation>,
-    materialized_objects: Vec<MaterializedObject>,
-    pending_materialization: Option<PendingMaterialization>,
+    pub(crate) version: u32,
+    pub(crate) namespace_sid: String,
+    pub(crate) entries: Vec<FilesystemCapability>,
+    pub(crate) acl_objects: Vec<ManagedAclObject>,
+    pub(crate) pending_acl_mutation: Option<PendingAclMutation>,
+    pub(crate) materialized_objects: Vec<MaterializedObject>,
+    pub(crate) pending_materialization: Option<PendingMaterialization>,
+    pub(crate) pending_materialization_removal: Option<PendingMaterializationRemoval>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct FilesystemCapability {
-    profile_sha256: String,
-    role: CapabilityRole,
-    path: PathBuf,
-    sid: String,
+pub(crate) struct FilesystemCapability {
+    pub(crate) profile_sha256: String,
+    pub(crate) role: CapabilityRole,
+    pub(crate) path: PathBuf,
+    pub(crate) sid: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ManagedAclObject {
-    path: PathBuf,
-    identity: PersistedFileIdentity,
-    original: PersistedDacl,
-    current: PersistedDacl,
+    pub(crate) path: PathBuf,
+    pub(crate) identity: PersistedFileIdentity,
+    pub(crate) original: PersistedDacl,
+    pub(crate) current: PersistedDacl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct PendingAclMutation {
-    path: PathBuf,
-    identity: PersistedFileIdentity,
-    before: PersistedDacl,
-    after: PersistedDacl,
-    prior: Option<ManagedAclObject>,
-    next: Option<ManagedAclObject>,
+pub(crate) struct PendingAclMutation {
+    pub(crate) path: PathBuf,
+    pub(crate) identity: PersistedFileIdentity,
+    pub(crate) before: PersistedDacl,
+    pub(crate) after: PersistedDacl,
+    pub(crate) prior: Option<ManagedAclObject>,
+    pub(crate) next: Option<ManagedAclObject>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct MaterializedObject {
-    path: PathBuf,
-    identity: PersistedFileIdentity,
-    descriptor: PersistedDacl,
-    marker_path: PathBuf,
-    marker_identity: PersistedFileIdentity,
-    marker_descriptor: PersistedDacl,
-    marker_nonce: [u8; 32],
-}
-
-pub(crate) struct MaterializationEvidence {
-    identity: PersistedFileIdentity,
-    descriptor: PersistedDacl,
-    marker_identity: PersistedFileIdentity,
-    marker_descriptor: PersistedDacl,
-    marker_nonce: [u8; 32],
-}
-
-pub(crate) struct PendingMaterializationView<'state> {
-    path: &'state Path,
-    descriptor: &'state PersistedDacl,
-    marker_path: &'state Path,
-    marker_descriptor: &'state PersistedDacl,
-    marker_nonce: &'state [u8; 32],
+    pub(crate) path: PathBuf,
+    pub(crate) identity: PersistedFileIdentity,
+    pub(crate) descriptor: PersistedDacl,
+    pub(crate) marker_path: PathBuf,
+    pub(crate) marker_identity: PersistedFileIdentity,
+    pub(crate) marker_descriptor: PersistedDacl,
+    pub(crate) marker_nonce: [u8; 32],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct PendingMaterialization {
-    path: PathBuf,
-    descriptor: PersistedDacl,
-    marker_path: PathBuf,
-    marker_descriptor: PersistedDacl,
-    marker_nonce: [u8; 32],
+pub(crate) struct PendingMaterialization {
+    pub(crate) path: PathBuf,
+    pub(crate) descriptor: PersistedDacl,
+    pub(crate) marker_path: PathBuf,
+    pub(crate) marker_descriptor: PersistedDacl,
+    pub(crate) marker_nonce: [u8; 32],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct PendingMaterializationRemoval {
+    pub(crate) object: MaterializedObject,
+    pub(crate) phase: MaterializationRemovalPhase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct PersistedFileIdentity {
-    volume_serial_number: u64,
-    file_id: [u8; 16],
+    pub(crate) volume_serial_number: u64,
+    pub(crate) file_id: [u8; 16],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct PersistedDacl {
-    bytes: Vec<u8>,
-    protected: bool,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) protected: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,16 +100,11 @@ pub(crate) enum CapabilityRole {
     WriteRoot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AclMutationRecovery {
-    Prior,
-    Next,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MaterializationRecovery {
-    Absent,
-    Present,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MaterializationRemovalPhase {
+    MarkerDeleteArmed,
+    DirectoryDeleteArmed,
 }
 
 struct LocalSid(*mut c_void);
@@ -175,45 +160,17 @@ pub(crate) enum CapabilityStateError {
     RedundantAclObject,
     #[error("capability-SID state contains an incomplete or inconsistent ACL mutation journal")]
     InvalidAclMutation,
-    #[error("an ACL mutation journal is already pending for {path:?}")]
-    PendingAclMutation { path: PathBuf },
-    #[error("no ACL mutation journal is pending")]
-    MissingAclMutation,
-    #[error("managed ACL object identity changed at {path:?}")]
-    AclObjectIdentityMismatch { path: PathBuf },
-    #[error("managed ACL state for {path:?} does not match the handle-read descriptor")]
-    AclBeforeMismatch { path: PathBuf },
-    #[error("pending ACL mutation for {path:?} matches neither its before nor after descriptor")]
-    AclMutationDrift { path: PathBuf },
-    #[error("a filesystem materialization journal is already pending for {path:?}")]
-    PendingMaterialization { path: PathBuf },
-    #[error("no filesystem materialization journal is pending")]
-    MissingMaterialization,
     #[error("capability-SID state repeats one materialized filesystem object")]
     DuplicateMaterializedObject,
     #[error("capability-SID state materialized objects are not in canonical path order")]
     NonCanonicalMaterializedOrder,
     #[error("capability-SID state contains an incomplete materialization record")]
     InvalidMaterialization,
-    #[error("materialized filesystem object at {path:?} failed identity or marker verification")]
-    MaterializationDrift { path: PathBuf },
+    #[error("capability-SID state contains an incomplete materialization-removal journal")]
+    InvalidMaterializationRemoval,
 }
 
 impl CapabilityState {
-    pub(crate) fn fresh() -> Result<Self, CapabilityStateError> {
-        let state = Self {
-            version: CAPABILITY_STATE_VERSION,
-            namespace_sid: random_namespace_sid()?,
-            entries: Vec::new(),
-            acl_objects: Vec::new(),
-            pending_acl_mutation: None,
-            materialized_objects: Vec::new(),
-            pending_materialization: None,
-        };
-        state.validate()?;
-        Ok(state)
-    }
-
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, CapabilityStateError> {
         let state: Self = serde_json::from_slice(bytes)
             .map_err(|source| CapabilityStateError::Decode { source })?;
@@ -226,263 +183,7 @@ impl CapabilityState {
         serde_json::to_vec(self).map_err(|source| CapabilityStateError::Encode { source })
     }
 
-    pub(crate) fn ensure_authority(
-        &mut self,
-        profile_sha256: &str,
-        role: CapabilityRole,
-        path: PathBuf,
-    ) -> Result<&str, CapabilityStateError> {
-        validate_profile_identity(profile_sha256)?;
-        validate_root(&path)?;
-        let key = authority_key(profile_sha256, &role, &path);
-        if let Some(index) = self
-            .entries
-            .iter()
-            .position(|entry| entry_key(entry) == key)
-        {
-            return Ok(&self.entries[index].sid);
-        }
-        let sid = random_authority_sid(&self.namespace_sid)?;
-        if self
-            .entries
-            .iter()
-            .any(|entry| entry.sid.eq_ignore_ascii_case(&sid))
-        {
-            return Err(CapabilityStateError::DuplicateSid);
-        }
-        self.entries.push(FilesystemCapability {
-            profile_sha256: profile_sha256.to_string(),
-            role,
-            path,
-            sid,
-        });
-        self.entries.sort_by_key(entry_key);
-        self.entries
-            .iter()
-            .find(|entry| entry_key(entry) == key)
-            .map(|entry| entry.sid.as_str())
-            .ok_or(CapabilityStateError::DuplicateAuthority)
-    }
-
-    pub(crate) fn authority_sid(
-        &self,
-        profile_sha256: &str,
-        role: &CapabilityRole,
-        path: &Path,
-    ) -> Option<&str> {
-        let key = authority_key(profile_sha256, role, path);
-        self.entries
-            .iter()
-            .find(|entry| entry_key(entry) == key)
-            .map(|entry| entry.sid.as_str())
-    }
-
-    pub(crate) fn read_base_sid(&self) -> Result<String, CapabilityStateError> {
-        canonical_sid(&format!("{}-{READ_BASE_SUBAUTHORITY}", self.namespace_sid))
-    }
-
-    pub(crate) fn pending_acl_path(&self) -> Option<&Path> {
-        self.pending_acl_mutation
-            .as_ref()
-            .map(|mutation| mutation.path.as_path())
-    }
-
-    pub(crate) fn begin_acl_mutation(
-        &mut self,
-        path: PathBuf,
-        identity: PersistedFileIdentity,
-        before: PersistedDacl,
-        after: PersistedDacl,
-    ) -> Result<(), CapabilityStateError> {
-        if let Some(pending) = &self.pending_acl_mutation {
-            return Err(CapabilityStateError::PendingAclMutation {
-                path: pending.path.clone(),
-            });
-        }
-        validate_root(&path)?;
-        before.validate()?;
-        after.validate()?;
-        let key = NativePathKey::new(&path);
-        let prior = self
-            .acl_objects
-            .iter()
-            .find(|object| NativePathKey::new(&object.path) == key)
-            .cloned();
-        if let Some(object) = &prior {
-            if object.identity != identity {
-                return Err(CapabilityStateError::AclObjectIdentityMismatch { path });
-            }
-            if object.current != before {
-                return Err(CapabilityStateError::AclBeforeMismatch { path });
-            }
-        }
-        let original = prior
-            .as_ref()
-            .map_or_else(|| before.clone(), |object| object.original.clone());
-        let next = if after == original {
-            None
-        } else {
-            Some(ManagedAclObject {
-                path: path.clone(),
-                identity: identity.clone(),
-                original,
-                current: after.clone(),
-            })
-        };
-        self.pending_acl_mutation = Some(PendingAclMutation {
-            path,
-            identity,
-            before,
-            after,
-            prior,
-            next,
-        });
-        self.validate()
-    }
-
-    pub(crate) fn resolve_acl_mutation(
-        &mut self,
-        identity: &PersistedFileIdentity,
-        actual: &PersistedDacl,
-    ) -> Result<AclMutationRecovery, CapabilityStateError> {
-        actual.validate()?;
-        let pending = self
-            .pending_acl_mutation
-            .take()
-            .ok_or(CapabilityStateError::MissingAclMutation)?;
-        if &pending.identity != identity {
-            let path = pending.path.clone();
-            self.pending_acl_mutation = Some(pending);
-            return Err(CapabilityStateError::AclObjectIdentityMismatch { path });
-        }
-        let recovery = if actual == &pending.before {
-            replace_managed_acl_object(&mut self.acl_objects, &pending.path, pending.prior);
-            AclMutationRecovery::Prior
-        } else if actual == &pending.after {
-            replace_managed_acl_object(&mut self.acl_objects, &pending.path, pending.next);
-            AclMutationRecovery::Next
-        } else {
-            let path = pending.path.clone();
-            self.pending_acl_mutation = Some(pending);
-            return Err(CapabilityStateError::AclMutationDrift { path });
-        };
-        self.acl_objects.sort_by_key(managed_acl_key);
-        self.validate()?;
-        Ok(recovery)
-    }
-
-    pub(crate) fn managed_acl_objects(&self) -> &[ManagedAclObject] {
-        &self.acl_objects
-    }
-
-    pub(crate) fn materialized_object(&self, path: &Path) -> Option<&MaterializedObject> {
-        let key = NativePathKey::new(path);
-        self.materialized_objects
-            .iter()
-            .find(|object| NativePathKey::new(&object.path) == key)
-    }
-
-    pub(crate) fn pending_materialization_path(&self) -> Option<&Path> {
-        self.pending_materialization
-            .as_ref()
-            .map(|pending| pending.path.as_path())
-    }
-
-    pub(crate) fn pending_materialization(&self) -> Option<PendingMaterializationView<'_>> {
-        self.pending_materialization
-            .as_ref()
-            .map(|pending| PendingMaterializationView {
-                path: &pending.path,
-                descriptor: &pending.descriptor,
-                marker_path: &pending.marker_path,
-                marker_descriptor: &pending.marker_descriptor,
-                marker_nonce: &pending.marker_nonce,
-            })
-    }
-
-    pub(crate) fn begin_materialization(
-        &mut self,
-        path: PathBuf,
-        descriptor: PersistedDacl,
-        marker_path: PathBuf,
-        marker_descriptor: PersistedDacl,
-        marker_nonce: [u8; 32],
-    ) -> Result<(), CapabilityStateError> {
-        if let Some(pending) = &self.pending_acl_mutation {
-            return Err(CapabilityStateError::PendingAclMutation {
-                path: pending.path.clone(),
-            });
-        }
-        if let Some(pending) = &self.pending_materialization {
-            return Err(CapabilityStateError::PendingMaterialization {
-                path: pending.path.clone(),
-            });
-        }
-        if self.materialized_object(&path).is_some() {
-            return Err(CapabilityStateError::DuplicateMaterializedObject);
-        }
-        validate_materialization_paths(&path, &marker_path)?;
-        descriptor.validate()?;
-        marker_descriptor.validate()?;
-        if marker_nonce.iter().all(|byte| *byte == 0) {
-            return Err(CapabilityStateError::InvalidMaterialization);
-        }
-        self.pending_materialization = Some(PendingMaterialization {
-            path,
-            descriptor,
-            marker_path,
-            marker_descriptor,
-            marker_nonce,
-        });
-        self.validate()
-    }
-
-    pub(crate) fn resolve_materialization(
-        &mut self,
-        evidence: Option<MaterializationEvidence>,
-    ) -> Result<MaterializationRecovery, CapabilityStateError> {
-        let pending = self
-            .pending_materialization
-            .as_ref()
-            .ok_or(CapabilityStateError::MissingMaterialization)?;
-        match evidence {
-            None => {
-                self.pending_materialization = None;
-                Ok(MaterializationRecovery::Absent)
-            }
-            Some(evidence)
-                if evidence.descriptor == pending.descriptor
-                    && evidence.marker_descriptor == pending.marker_descriptor
-                    && evidence.marker_nonce == pending.marker_nonce =>
-            {
-                let candidate = MaterializedObject {
-                    path: pending.path.clone(),
-                    identity: evidence.identity,
-                    descriptor: evidence.descriptor,
-                    marker_path: pending.marker_path.clone(),
-                    marker_identity: evidence.marker_identity,
-                    marker_descriptor: evidence.marker_descriptor,
-                    marker_nonce: evidence.marker_nonce,
-                };
-                let mut next = self.materialized_objects.clone();
-                next.push(candidate);
-                next.sort_by_key(materialized_object_key);
-                validate_materialized_objects(&next).map_err(|_| {
-                    CapabilityStateError::MaterializationDrift {
-                        path: pending.path.clone(),
-                    }
-                })?;
-                self.materialized_objects = next;
-                self.pending_materialization = None;
-                Ok(MaterializationRecovery::Present)
-            }
-            Some(_) => Err(CapabilityStateError::MaterializationDrift {
-                path: pending.path.clone(),
-            }),
-        }
-    }
-
-    fn validate(&self) -> Result<(), CapabilityStateError> {
+    pub(crate) fn validate(&self) -> Result<(), CapabilityStateError> {
         if self.version != CAPABILITY_STATE_VERSION {
             return Err(CapabilityStateError::Version {
                 expected: CAPABILITY_STATE_VERSION,
@@ -544,10 +245,16 @@ impl CapabilityState {
             pending.validate(&self.acl_objects)?;
         }
         validate_materialized_objects(&self.materialized_objects)?;
-        if self.pending_acl_mutation.is_some() && self.pending_materialization.is_some() {
+        let pending_journal_count = usize::from(self.pending_acl_mutation.is_some())
+            + usize::from(self.pending_materialization.is_some())
+            + usize::from(self.pending_materialization_removal.is_some());
+        if pending_journal_count > 1 {
             return Err(CapabilityStateError::InvalidMaterialization);
         }
         if let Some(pending) = &self.pending_materialization {
+            pending.validate(&self.materialized_objects)?;
+        }
+        if let Some(pending) = &self.pending_materialization_removal {
             pending.validate(&self.materialized_objects)?;
         }
         Ok(())
@@ -555,23 +262,7 @@ impl CapabilityState {
 }
 
 impl ManagedAclObject {
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn identity(&self) -> &PersistedFileIdentity {
-        &self.identity
-    }
-
-    pub(crate) fn original(&self) -> &PersistedDacl {
-        &self.original
-    }
-
-    pub(crate) fn current(&self) -> &PersistedDacl {
-        &self.current
-    }
-
-    fn validate(&self) -> Result<(), CapabilityStateError> {
+    pub(crate) fn validate(&self) -> Result<(), CapabilityStateError> {
         validate_root(&self.path)?;
         self.original.validate()?;
         self.current.validate()?;
@@ -629,35 +320,7 @@ impl PendingAclMutation {
 }
 
 impl MaterializedObject {
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn identity(&self) -> &PersistedFileIdentity {
-        &self.identity
-    }
-
-    pub(crate) fn descriptor(&self) -> &PersistedDacl {
-        &self.descriptor
-    }
-
-    pub(crate) fn marker_path(&self) -> &Path {
-        &self.marker_path
-    }
-
-    pub(crate) fn marker_identity(&self) -> &PersistedFileIdentity {
-        &self.marker_identity
-    }
-
-    pub(crate) fn marker_descriptor(&self) -> &PersistedDacl {
-        &self.marker_descriptor
-    }
-
-    pub(crate) const fn marker_nonce(&self) -> &[u8; 32] {
-        &self.marker_nonce
-    }
-
-    fn validate(&self) -> Result<(), CapabilityStateError> {
+    pub(crate) fn validate(&self) -> Result<(), CapabilityStateError> {
         validate_materialization_paths(&self.path, &self.marker_path)?;
         self.descriptor.validate()?;
         self.marker_descriptor.validate()?;
@@ -666,46 +329,6 @@ impl MaterializedObject {
             return Err(CapabilityStateError::InvalidMaterialization);
         }
         Ok(())
-    }
-}
-
-impl MaterializationEvidence {
-    pub(crate) fn new(
-        identity: PersistedFileIdentity,
-        descriptor: PersistedDacl,
-        marker_identity: PersistedFileIdentity,
-        marker_descriptor: PersistedDacl,
-        marker_nonce: [u8; 32],
-    ) -> Self {
-        Self {
-            identity,
-            descriptor,
-            marker_identity,
-            marker_descriptor,
-            marker_nonce,
-        }
-    }
-}
-
-impl PendingMaterializationView<'_> {
-    pub(crate) fn path(&self) -> &Path {
-        self.path
-    }
-
-    pub(crate) const fn descriptor(&self) -> &PersistedDacl {
-        self.descriptor
-    }
-
-    pub(crate) fn marker_path(&self) -> &Path {
-        self.marker_path
-    }
-
-    pub(crate) const fn marker_descriptor(&self) -> &PersistedDacl {
-        self.marker_descriptor
-    }
-
-    pub(crate) const fn marker_nonce(&self) -> &[u8; 32] {
-        self.marker_nonce
     }
 }
 
@@ -725,40 +348,24 @@ impl PendingMaterialization {
     }
 }
 
-impl PersistedFileIdentity {
-    pub(crate) const fn new(volume_serial_number: u64, file_id: [u8; 16]) -> Self {
-        Self {
-            volume_serial_number,
-            file_id,
+impl PendingMaterializationRemoval {
+    fn validate(&self, objects: &[MaterializedObject]) -> Result<(), CapabilityStateError> {
+        self.object.validate()?;
+        let key = NativePathKey::new(&self.object.path);
+        if objects
+            .iter()
+            .find(|object| NativePathKey::new(&object.path) == key)
+            != Some(&self.object)
+        {
+            return Err(CapabilityStateError::InvalidMaterializationRemoval);
         }
-    }
-
-    pub(crate) const fn volume_serial_number(&self) -> u64 {
-        self.volume_serial_number
-    }
-
-    pub(crate) const fn file_id(&self) -> &[u8; 16] {
-        &self.file_id
+        Ok(())
     }
 }
 
 impl PersistedDacl {
-    pub(crate) fn new(bytes: Vec<u8>, protected: bool) -> Result<Self, CapabilityStateError> {
-        let snapshot = Self { bytes, protected };
-        snapshot.validate()?;
-        Ok(snapshot)
-    }
-
-    pub(crate) fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    pub(crate) const fn is_protected(&self) -> bool {
-        self.protected
-    }
-
     #[allow(unsafe_code)]
-    fn validate(&self) -> Result<(), CapabilityStateError> {
+    pub(crate) fn validate(&self) -> Result<(), CapabilityStateError> {
         if self.bytes.len() < std::mem::size_of::<ACL>() || self.bytes.len() > u16::MAX as usize {
             return Err(CapabilityStateError::InvalidDacl);
         }
@@ -799,7 +406,7 @@ impl Drop for LocalWideString {
     }
 }
 
-fn validate_profile_identity(value: &str) -> Result<(), CapabilityStateError> {
+pub(crate) fn validate_profile_identity(value: &str) -> Result<(), CapabilityStateError> {
     if value.len() == 64
         && value
             .bytes()
@@ -811,7 +418,7 @@ fn validate_profile_identity(value: &str) -> Result<(), CapabilityStateError> {
     }
 }
 
-fn validate_root(path: &Path) -> Result<(), CapabilityStateError> {
+pub(crate) fn validate_root(path: &Path) -> Result<(), CapabilityStateError> {
     if !path.is_absolute() {
         return Err(CapabilityStateError::RelativeRoot {
             path: path.to_path_buf(),
@@ -825,7 +432,7 @@ fn validate_root(path: &Path) -> Result<(), CapabilityStateError> {
     Ok(())
 }
 
-fn validate_materialization_paths(
+pub(crate) fn validate_materialization_paths(
     path: &Path,
     marker_path: &Path,
 ) -> Result<(), CapabilityStateError> {
@@ -840,7 +447,7 @@ fn validate_materialization_paths(
     Ok(())
 }
 
-fn authority_key(
+pub(crate) fn authority_key(
     profile_sha256: &str,
     role: &CapabilityRole,
     path: &Path,
@@ -852,19 +459,19 @@ fn authority_key(
     (profile_sha256.to_string(), role, NativePathKey::new(path))
 }
 
-fn entry_key(entry: &FilesystemCapability) -> (String, u8, NativePathKey) {
+pub(crate) fn entry_key(entry: &FilesystemCapability) -> (String, u8, NativePathKey) {
     authority_key(&entry.profile_sha256, &entry.role, &entry.path)
 }
 
-fn managed_acl_key(object: &ManagedAclObject) -> NativePathKey {
+pub(crate) fn managed_acl_key(object: &ManagedAclObject) -> NativePathKey {
     NativePathKey::new(&object.path)
 }
 
-fn materialized_object_key(object: &MaterializedObject) -> NativePathKey {
+pub(crate) fn materialized_object_key(object: &MaterializedObject) -> NativePathKey {
     NativePathKey::new(&object.path)
 }
 
-fn validate_materialized_objects(
+pub(crate) fn validate_materialized_objects(
     objects: &[MaterializedObject],
 ) -> Result<(), CapabilityStateError> {
     let mut paths = BTreeSet::new();
@@ -894,38 +501,8 @@ fn validate_materialized_objects(
     Ok(())
 }
 
-fn replace_managed_acl_object(
-    objects: &mut Vec<ManagedAclObject>,
-    path: &Path,
-    replacement: Option<ManagedAclObject>,
-) {
-    let key = NativePathKey::new(path);
-    objects.retain(|object| NativePathKey::new(&object.path) != key);
-    if let Some(replacement) = replacement {
-        objects.push(replacement);
-    }
-}
-
-fn random_namespace_sid() -> Result<String, CapabilityStateError> {
-    let mut random = [0u8; 16];
-    getrandom::fill(&mut random).map_err(|source| CapabilityStateError::Random { source })?;
-    let first = u32::from_le_bytes([random[0], random[1], random[2], random[3]]);
-    let second = u32::from_le_bytes([random[4], random[5], random[6], random[7]]);
-    let third = u32::from_le_bytes([random[8], random[9], random[10], random[11]]);
-    let fourth = u32::from_le_bytes([random[12], random[13], random[14], random[15]]);
-    Ok(format!("S-1-5-21-{first}-{second}-{third}-{fourth}"))
-}
-
-fn random_authority_sid(namespace: &str) -> Result<String, CapabilityStateError> {
-    let mut random = [0u8; 8];
-    getrandom::fill(&mut random).map_err(|source| CapabilityStateError::Random { source })?;
-    let first = u32::from_le_bytes([random[0], random[1], random[2], random[3]]);
-    let second = u32::from_le_bytes([random[4], random[5], random[6], random[7]]);
-    Ok(format!("{namespace}-{first}-{second}"))
-}
-
 #[allow(unsafe_code)]
-fn canonical_sid(value: &str) -> Result<String, CapabilityStateError> {
+pub(crate) fn canonical_sid(value: &str) -> Result<String, CapabilityStateError> {
     if value.contains('\0') {
         return Err(CapabilityStateError::InvalidSid { code: 0 });
     }
@@ -961,333 +538,5 @@ fn wide_string(value: *const u16) -> String {
             length += 1;
         }
         String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::mem::size_of;
-    use std::path::PathBuf;
-
-    use pretty_assertions::{assert_eq, assert_ne};
-    use windows_sys::Win32::Security::{ACL, ACL_REVISION, ACL_REVISION_DS, InitializeAcl};
-
-    use super::{
-        AclMutationRecovery, CapabilityRole, CapabilityState, CapabilityStateError,
-        MaterializationEvidence, MaterializationRecovery, PersistedDacl, PersistedFileIdentity,
-    };
-
-    const PROFILE_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const PROFILE_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    #[test]
-    fn equivalent_windows_roots_share_one_profile_authority() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let first = state
-            .ensure_authority(
-                PROFILE_A,
-                CapabilityRole::WriteRoot,
-                PathBuf::from(r"C:\Workspace"),
-            )
-            .expect("first authority")
-            .to_string();
-        let second = state
-            .ensure_authority(
-                PROFILE_A,
-                CapabilityRole::WriteRoot,
-                PathBuf::from(r"c:/workspace"),
-            )
-            .expect("equivalent authority")
-            .to_string();
-
-        assert_eq!(first, second);
-        assert_eq!(state.entries.len(), 1);
-    }
-
-    #[test]
-    fn different_policy_profiles_cannot_share_path_authority() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let first = state
-            .ensure_authority(
-                PROFILE_A,
-                CapabilityRole::ProfileGuard,
-                PathBuf::from(r"C:\Workspace"),
-            )
-            .expect("first profile authority")
-            .to_string();
-        let second = state
-            .ensure_authority(
-                PROFILE_B,
-                CapabilityRole::ProfileGuard,
-                PathBuf::from(r"C:\Workspace"),
-            )
-            .expect("second profile authority")
-            .to_string();
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn installation_read_base_is_stable_and_not_a_profile_authority() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let read_base = state.read_base_sid().expect("read-base SID");
-        let repeated = state.read_base_sid().expect("repeated read-base SID");
-        let profile = state
-            .ensure_authority(
-                PROFILE_A,
-                CapabilityRole::ProfileGuard,
-                PathBuf::from(r"C:\Workspace"),
-            )
-            .expect("profile guard");
-
-        assert_eq!(read_base, repeated);
-        assert_ne!(read_base, profile);
-        assert!(read_base.starts_with(&format!("{}-", state.namespace_sid)));
-    }
-
-    #[test]
-    fn durable_state_round_trip_preserves_canonical_identity() {
-        let mut expected = CapabilityState::fresh().expect("fresh capability state");
-        expected
-            .ensure_authority(
-                PROFILE_A,
-                CapabilityRole::WriteRoot,
-                PathBuf::from(r"D:\Build"),
-            )
-            .expect("write authority");
-        let encoded = expected.encode().expect("encode capability state");
-        let actual = CapabilityState::decode(&encoded).expect("decode capability state");
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn completed_acl_journal_commits_only_the_after_descriptor() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let identity = PersistedFileIdentity::new(7, [8; 16]);
-        let before = empty_dacl(ACL_REVISION, false);
-        let after = empty_dacl(ACL_REVISION, true);
-        state
-            .begin_acl_mutation(
-                PathBuf::from(r"C:\Workspace"),
-                identity.clone(),
-                before,
-                after.clone(),
-            )
-            .expect("begin ACL journal");
-
-        assert_eq!(
-            state
-                .resolve_acl_mutation(&identity, &after)
-                .expect("commit after descriptor"),
-            AclMutationRecovery::Next
-        );
-        assert!(state.pending_acl_path().is_none());
-        assert_eq!(state.acl_objects.len(), 1);
-        assert_eq!(state.acl_objects[0].current, after);
-        CapabilityState::decode(&state.encode().expect("encode committed state"))
-            .expect("decode committed state");
-    }
-
-    #[test]
-    fn unapplied_acl_journal_keeps_the_prior_state() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let identity = PersistedFileIdentity::new(9, [10; 16]);
-        let before = empty_dacl(ACL_REVISION, false);
-        state
-            .begin_acl_mutation(
-                PathBuf::from(r"C:\Workspace"),
-                identity.clone(),
-                before.clone(),
-                empty_dacl(ACL_REVISION, true),
-            )
-            .expect("begin ACL journal");
-
-        assert_eq!(
-            state
-                .resolve_acl_mutation(&identity, &before)
-                .expect("retain prior descriptor"),
-            AclMutationRecovery::Prior
-        );
-        assert!(state.pending_acl_path().is_none());
-        assert!(state.acl_objects.is_empty());
-    }
-
-    #[test]
-    fn acl_journal_rejects_descriptor_drift_without_guessing() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let identity = PersistedFileIdentity::new(11, [12; 16]);
-        state
-            .begin_acl_mutation(
-                PathBuf::from(r"C:\Workspace"),
-                identity.clone(),
-                empty_dacl(ACL_REVISION, false),
-                empty_dacl(ACL_REVISION, true),
-            )
-            .expect("begin ACL journal");
-
-        assert!(matches!(
-            state.resolve_acl_mutation(&identity, &empty_dacl(ACL_REVISION_DS, false)),
-            Err(CapabilityStateError::AclMutationDrift { .. })
-        ));
-        assert_eq!(
-            state.pending_acl_path(),
-            Some(PathBuf::from(r"C:\Workspace").as_path())
-        );
-    }
-
-    #[test]
-    fn exact_materialization_evidence_commits_and_clears_the_journal() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let descriptor = empty_dacl(ACL_REVISION, true);
-        let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
-        let nonce = [13; 32];
-        begin_materialization(
-            &mut state,
-            descriptor.clone(),
-            marker_descriptor.clone(),
-            nonce,
-        );
-
-        let recovery = state
-            .resolve_materialization(Some(MaterializationEvidence::new(
-                PersistedFileIdentity::new(14, [15; 16]),
-                descriptor,
-                PersistedFileIdentity::new(14, [16; 16]),
-                marker_descriptor,
-                nonce,
-            )))
-            .expect("commit matching materialization");
-
-        assert_eq!(recovery, MaterializationRecovery::Present);
-        assert!(state.pending_materialization_path().is_none());
-        assert_eq!(state.materialized_objects.len(), 1);
-        CapabilityState::decode(&state.encode().expect("encode committed state"))
-            .expect("decode committed state");
-    }
-
-    #[test]
-    fn absent_materialization_clears_the_journal_without_adopting_an_object() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        begin_materialization(
-            &mut state,
-            empty_dacl(ACL_REVISION, true),
-            empty_dacl(ACL_REVISION_DS, true),
-            [17; 32],
-        );
-
-        assert_eq!(
-            state
-                .resolve_materialization(None)
-                .expect("resolve absent materialization"),
-            MaterializationRecovery::Absent
-        );
-        assert!(state.pending_materialization_path().is_none());
-        assert!(state.materialized_objects.is_empty());
-    }
-
-    #[test]
-    fn materialization_drift_preserves_the_pending_journal() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let descriptor = empty_dacl(ACL_REVISION, true);
-        let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
-        begin_materialization(
-            &mut state,
-            descriptor.clone(),
-            marker_descriptor.clone(),
-            [18; 32],
-        );
-
-        assert!(matches!(
-            state.resolve_materialization(Some(MaterializationEvidence::new(
-                PersistedFileIdentity::new(19, [20; 16]),
-                descriptor,
-                PersistedFileIdentity::new(19, [21; 16]),
-                marker_descriptor,
-                [22; 32],
-            ))),
-            Err(CapabilityStateError::MaterializationDrift { .. })
-        ));
-        assert_eq!(
-            state.pending_materialization_path(),
-            Some(PathBuf::from(r"C:\Workspace\missing").as_path())
-        );
-        assert!(state.materialized_objects.is_empty());
-    }
-
-    #[test]
-    fn duplicate_materialization_identity_fails_without_mutating_state() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-        let descriptor = empty_dacl(ACL_REVISION, true);
-        let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
-        let nonce = [23; 32];
-        begin_materialization(
-            &mut state,
-            descriptor.clone(),
-            marker_descriptor.clone(),
-            nonce,
-        );
-        let identity = PersistedFileIdentity::new(24, [25; 16]);
-
-        assert!(matches!(
-            state.resolve_materialization(Some(MaterializationEvidence::new(
-                identity.clone(),
-                descriptor,
-                identity,
-                marker_descriptor,
-                nonce,
-            ))),
-            Err(CapabilityStateError::MaterializationDrift { .. })
-        ));
-        assert!(state.pending_materialization_path().is_some());
-        assert!(state.materialized_objects.is_empty());
-    }
-
-    #[test]
-    fn zero_materialization_nonce_is_rejected_before_journaling() {
-        let mut state = CapabilityState::fresh().expect("fresh capability state");
-
-        assert!(matches!(
-            state.begin_materialization(
-                PathBuf::from(r"C:\Workspace\missing"),
-                empty_dacl(ACL_REVISION, true),
-                PathBuf::from(r"C:\Workspace\missing\.cageforge-materialized-path"),
-                empty_dacl(ACL_REVISION_DS, true),
-                [0; 32],
-            ),
-            Err(CapabilityStateError::InvalidMaterialization)
-        ));
-        assert!(state.pending_materialization_path().is_none());
-    }
-
-    fn begin_materialization(
-        state: &mut CapabilityState,
-        descriptor: PersistedDacl,
-        marker_descriptor: PersistedDacl,
-        nonce: [u8; 32],
-    ) {
-        state
-            .begin_materialization(
-                PathBuf::from(r"C:\Workspace\missing"),
-                descriptor,
-                PathBuf::from(r"C:\Workspace\missing\.cageforge-materialized-path"),
-                marker_descriptor,
-                nonce,
-            )
-            .expect("begin materialization journal");
-    }
-
-    #[allow(unsafe_code)]
-    fn empty_dacl(revision: u32, protected: bool) -> PersistedDacl {
-        let byte_length = size_of::<ACL>();
-        let mut aligned = vec![0u32; byte_length.div_ceil(size_of::<u32>())];
-        assert_ne!(
-            unsafe { InitializeAcl(aligned.as_mut_ptr().cast(), byte_length as u32, revision) },
-            0
-        );
-        let bytes = unsafe {
-            std::slice::from_raw_parts(aligned.as_ptr().cast::<u8>(), byte_length).to_vec()
-        };
-        PersistedDacl::new(bytes, protected).expect("valid empty DACL")
     }
 }

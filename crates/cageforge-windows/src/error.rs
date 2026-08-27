@@ -533,6 +533,23 @@ pub enum WindowsSetupError {
     /// UAC elevation was cancelled.
     #[error("Windows elevated setup was cancelled by the user")]
     ElevationCanceled,
+    /// At least one live child still depends on the installed setup boundary.
+    #[error("cannot uninstall Windows setup while a sandbox child is active")]
+    ActiveSandboxes,
+    /// The protected setup lifecycle lock could not be acquired or verified.
+    #[error("failed to coordinate Windows setup uninstall: {source}")]
+    UninstallCoordination {
+        /// Exact protected-lock failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// Persistent host ACLs or materialized paths could not be restored exactly.
+    #[error("failed to restore Windows filesystem state before uninstall: {source}")]
+    UninstallFilesystemCleanup {
+        /// Exact journal, identity, ACL, or removal failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// The setup helper failed.
     #[error("Windows setup helper failed during {stage:?} ({code:?}): {detail}")]
     HelperFailed {

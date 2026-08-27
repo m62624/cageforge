@@ -7,6 +7,7 @@ use std::process::ExitStatus;
 use std::thread;
 use std::time::Duration;
 
+use crate::capability_store::CapabilityActiveLease;
 use crate::error::WindowsBackendError;
 use crate::filesystem_acl::FilesystemAclEnforcement;
 use crate::network::WindowsProxyRoute;
@@ -15,19 +16,22 @@ use crate::runner_session::RunnerSession;
 /// A child launched inside the complete Windows sandbox boundary.
 pub struct WindowsChild {
     session: RunnerSession,
-    _filesystem_enforcement: FilesystemAclEnforcement,
+    active_lease: Option<CapabilityActiveLease>,
+    filesystem_enforcement: Option<FilesystemAclEnforcement>,
     network_route: Option<WindowsProxyRoute>,
 }
 
 impl WindowsChild {
     pub(crate) const fn new(
         session: RunnerSession,
+        active_lease: CapabilityActiveLease,
         filesystem_enforcement: FilesystemAclEnforcement,
         network_route: Option<WindowsProxyRoute>,
     ) -> Self {
         Self {
             session,
-            _filesystem_enforcement: filesystem_enforcement,
+            active_lease: Some(active_lease),
+            filesystem_enforcement: Some(filesystem_enforcement),
             network_route,
         }
     }
@@ -67,7 +71,7 @@ impl WindowsChild {
         }
         match self.session.try_wait() {
             Ok(Some(status)) => {
-                self.network_route.take();
+                self.release_completed_boundaries();
                 Ok(Some(status))
             }
             Ok(None) => Ok(None),
@@ -89,9 +93,13 @@ impl WindowsChild {
                 thread::sleep(Duration::from_millis(5));
             }
         }
-        self.session
-            .wait()
-            .map_err(WindowsBackendError::runner_session)
+        match self.session.wait() {
+            Ok(status) => {
+                self.release_completed_boundaries();
+                Ok(status)
+            }
+            Err(error) => Err(WindowsBackendError::runner_session(error)),
+        }
     }
 
     /// Terminates the complete parent-owned Job Object and command runner.
@@ -109,5 +117,13 @@ impl WindowsChild {
             Some(route) => route.check_health().map_err(WindowsBackendError::from),
             None => Ok(()),
         }
+    }
+
+    fn release_completed_boundaries(&mut self) {
+        self.network_route.take();
+        if let Some(enforcement) = self.filesystem_enforcement.take() {
+            enforcement.release();
+        }
+        self.active_lease.take();
     }
 }

@@ -102,12 +102,29 @@ runtime entries append random subauthorities and are keyed by the SHA-256 of the
 complete resolved filesystem enforcement profile, authority role, and canonical
 root identity. One profile-guard SID owns every deny ACE for that immutable
 profile, while separate write-root SIDs own only their corresponding allow
-ACEs. Every update holds an exclusive `LockFileEx` range lock, writes
-and flushes the existing protected record, then validates its owner, DACL,
-schema, canonical ordering, SID namespace, and exact contents again. A missing,
-malformed, non-canonical, foreign-namespace, or unlocked record fails closed;
-setup never silently rotates a damaged record because existing ACLs may still
-refer to its authorities.
+ACEs. Every update holds an exclusive `LockFileEx` range lock, writes and
+flushes a sibling replacement, atomically installs it with
+`ReplaceFileW(REPLACEFILE_WRITE_THROUGH)`, then validates the retained owner and
+DACL plus the schema, canonical ordering, SID namespace, and exact contents
+again. Replacement keeps a sibling backup until that validation succeeds. If
+Windows reports an interrupted replacement with the primary name absent,
+Cageforge accepts only a regular non-reparse backup with the exact protected
+owner/DACL and a valid canonical state, moves it back with write-through, and
+validates it again. The original record therefore remains complete if
+interruption happens before replacement, while a completed replacement is
+durable before its journalled native mutation begins. A missing, malformed,
+non-canonical, foreign-namespace, or unlocked record fails closed; setup never
+silently rotates a damaged record because existing ACLs may still refer to its
+authorities.
+
+The protected lock file has two independent one-byte ranges. Byte zero is the
+exclusive capability-state mutation lock. Byte one is shared by every live
+`WindowsChild` and acquired before byte zero; uninstall requests byte one
+exclusively and without waiting before it may acquire byte zero. Parallel
+sandboxes therefore remain concurrent, while uninstall returns a typed active-
+child error without touching ACLs, materialized paths, accounts, firewall, or
+WFP state. A completed child releases pinned filesystem handles before its
+shared lifetime lock.
 
 Every persistent ACL mutation uses the same record as a write-ahead journal.
 Before `SetSecurityInfo`, Cageforge stores the canonical path, volume serial,
@@ -341,6 +358,19 @@ markers and empty materialized directories in deepest-first order. Identity or
 descriptor drift blocks cleanup rather than deleting an unrelated object. A
 junction, symlink, crash, or replacement race therefore never turns an absent
 protected target into an external writable path.
+
+Uninstall uses a second durable materialization-removal journal. After exact
+directory and marker verification through non-reparse handles, it persists
+`marker_delete_armed` before setting deletion disposition on the pinned marker
+handle. Exact marker absence is recoverable only in that armed phase. It then
+persists `directory_delete_armed`, rejects every unexpected descendant, sets
+deletion disposition on the same pinned empty-directory handle, verifies path
+absence, and only then removes the committed object record. Recovery may repeat
+either armed operation or commit an already absent directory; an unarmed
+absence, replacement identity, changed owner, DACL, nonce, reparse state, or
+non-empty directory remains typed drift. The elevated helper refuses to remove
+accounts or network setup while any ACL, materialization, or cleanup journal
+remains.
 
 Glob expansion starts at the deepest literal root. A recursive root glob with
 no configured depth is rejected rather than scanning the complete machine or
@@ -646,6 +676,14 @@ Cageforge journals the complete before/after descriptor and stable file
 identity before every mutation. This closes the crash interval between state
 write and ACL application and makes a path replacement distinguishable from a
 recoverable interrupted operation.
+
+The frozen `revoke_ace` cleanup is path-based, best-effort, and does not report
+failure. Cageforge instead restores the complete original descriptor through
+the same identity-checked handle and requires exact read-back before deleting
+the state record. Its child-owned resource release follows the independent
+`cageforge-linux` lifecycle shape, while Windows lifetime exclusion uses shared
+and exclusive byte-range locks because ACL state is host-persistent rather than
+mount-namespace-local.
 
 The frozen `deny_read_acl.rs` materializes missing paths with path-based
 `create_dir_all` before adding an ACE. Cageforge intentionally does not retain

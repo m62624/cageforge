@@ -127,6 +127,10 @@ impl WindowsBackend {
         prepared: PreparedBackendRequest<'request, Self>,
     ) -> Result<WindowsChild, WindowsBackendError> {
         let plan = self.lower(&prepared)?;
+        let active_lease = self
+            .capability_state
+            .acquire_active_lease()
+            .map_err(WindowsBackendError::filesystem_enforcement)?;
         let sandbox = prepared.sandbox(self)?;
         let network_route = self.network_route(plan.mode, sandbox.network().clone())?;
         let enforcement = FilesystemAclEnforcement::apply(
@@ -165,7 +169,12 @@ impl WindowsBackend {
         .map_err(WindowsBackendError::runner_launch)?;
         let session = RunnerSession::start(launch, request, stdio, timeout)
             .map_err(WindowsBackendError::runner_session)?;
-        Ok(WindowsChild::new(session, enforcement, network_route))
+        Ok(WindowsChild::new(
+            session,
+            active_lease,
+            enforcement,
+            network_route,
+        ))
     }
 
     fn lower<'request>(

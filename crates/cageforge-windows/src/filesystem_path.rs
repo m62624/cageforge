@@ -3,6 +3,7 @@
 //! Handle-pinned Windows filesystem paths for ACL enforcement.
 
 use std::ffi::OsString;
+use std::fs::File;
 use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -12,15 +13,14 @@ use cageforge_path::{contains_parent_traversal, paths_equal};
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
-    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, OPEN_EXISTING, READ_CONTROL,
-    VOLUME_NAME_DOS, WRITE_DAC,
+    CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FileAttributeTagInfo, GetFileInformationByHandleEx,
+    GetFinalPathNameByHandleW, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_DOS, WRITE_DAC,
 };
 
 pub(crate) struct ValidatedPath {
     handle: OwnedHandle,
-    requested_path: PathBuf,
     final_path: PathBuf,
     identity: FilesystemObjectIdentity,
 }
@@ -62,15 +62,39 @@ pub(crate) enum ValidatedPathError {
 
 impl ValidatedPath {
     pub(crate) fn open_for_acl(path: &Path) -> Result<Self, ValidatedPathError> {
-        Self::open(path, READ_CONTROL | WRITE_DAC)
+        Self::open(
+            path,
+            READ_CONTROL | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )
     }
 
     pub(crate) fn open_for_readback(path: &Path) -> Result<Self, ValidatedPathError> {
-        Self::open(path, READ_CONTROL)
+        Self::open(path, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE)
     }
 
-    pub(crate) fn requested_path(&self) -> &Path {
-        &self.requested_path
+    pub(crate) fn open_file_for_readback(path: &Path) -> Result<Self, ValidatedPathError> {
+        Self::open(
+            path,
+            READ_CONTROL | FILE_GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )
+    }
+
+    pub(crate) fn open_for_cleanup(path: &Path) -> Result<Self, ValidatedPathError> {
+        Self::open(
+            path,
+            READ_CONTROL | WRITE_DAC | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )
+    }
+
+    pub(crate) fn open_file_for_cleanup(path: &Path) -> Result<Self, ValidatedPathError> {
+        Self::open(
+            path,
+            READ_CONTROL | WRITE_DAC | DELETE | FILE_GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )
     }
 
     pub(crate) fn final_path(&self) -> &Path {
@@ -85,8 +109,12 @@ impl ValidatedPath {
         &self.identity
     }
 
+    pub(crate) fn try_clone_file(&self) -> std::io::Result<File> {
+        self.handle.try_clone().map(File::from)
+    }
+
     #[allow(unsafe_code)]
-    fn open(path: &Path, access: u32) -> Result<Self, ValidatedPathError> {
+    fn open(path: &Path, access: u32, share_mode: u32) -> Result<Self, ValidatedPathError> {
         validate_lexical_path(path)?;
         let path_wide = path
             .as_os_str()
@@ -97,7 +125,7 @@ impl ValidatedPath {
             CreateFileW(
                 path_wide.as_ptr(),
                 access,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                share_mode,
                 std::ptr::null(),
                 OPEN_EXISTING,
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
@@ -122,7 +150,6 @@ impl ValidatedPath {
         }
         Ok(Self {
             handle,
-            requested_path: path.to_path_buf(),
             final_path,
             identity,
         })

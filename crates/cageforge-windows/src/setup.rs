@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::capability_store::{CapabilityStateStore, CapabilityStateStoreError};
 use crate::config::{
     CommandRunnerSource, SetupHelperSource, WindowsSetupConfig, WindowsStateDirectorySource,
 };
 use crate::error::WindowsSetupError;
+use crate::filesystem_acl::FilesystemAclEnforcement;
 use crate::setup_protocol::{
     SETUP_PROTOCOL_VERSION, SetupOperation, SetupOutcome, SetupRequest, SetupResponse,
 };
@@ -288,13 +290,46 @@ impl WindowsSetup {
     /// Cleanup refuses to recursively delete unknown state. Unexpected files
     /// therefore produce a typed helper failure instead of widening deletion.
     pub fn uninstall(&self) -> Result<(), WindowsSetupError> {
+        let owner_sid = crate::win::current_user_sid()
+            .map_err(|source| WindowsSetupError::CurrentUserSid { source })?;
+        let state_directory = self.state_directory_for(&owner_sid)?;
+        let uninstall_guard = match fs::symlink_metadata(&state_directory) {
+            Err(source) if source.kind() == io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(WindowsSetupError::StateRead {
+                    path: state_directory,
+                    source,
+                });
+            }
+            Ok(_) => {
+                let store = CapabilityStateStore::new(&state_directory, &owner_sid);
+                let guard = store
+                    .acquire_uninstall_guard()
+                    .map_err(|source| match source {
+                        CapabilityStateStoreError::ActiveChildren => {
+                            WindowsSetupError::ActiveSandboxes
+                        }
+                        source => WindowsSetupError::UninstallCoordination {
+                            source: Box::new(source),
+                        },
+                    })?;
+                FilesystemAclEnforcement::cleanup_persistent(&store).map_err(|source| {
+                    WindowsSetupError::UninstallFilesystemCleanup {
+                        source: Box::new(source),
+                    }
+                })?;
+                Some(guard)
+            }
+        };
         self.run_helper(SetupOperation::Uninstall)?;
-        match self.status()? {
+        let status = match self.status()? {
             WindowsSetupStatus::Missing { .. } => Ok(()),
             WindowsSetupStatus::Stale { .. } | WindowsSetupStatus::Ready(_) => {
                 Err(WindowsSetupError::HelperExitMismatch { exit_code: 0 })
             }
-        }
+        };
+        drop(uninstall_guard);
+        status
     }
 
     fn run_helper(&self, operation: SetupOperation) -> Result<(), WindowsSetupError> {

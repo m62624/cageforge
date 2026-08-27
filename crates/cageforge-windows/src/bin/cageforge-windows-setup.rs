@@ -10,6 +10,8 @@ use std::process::ExitCode;
 
 #[path = "../capability_state.rs"]
 mod capability_state;
+#[path = "../capability_state_setup.rs"]
+mod capability_state_setup;
 #[path = "../firewall_contract.rs"]
 mod firewall_contract;
 #[path = "../runner_manifest.rs"]
