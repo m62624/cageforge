@@ -295,10 +295,38 @@ information through the validated handle. A lexical check followed by a
 path-based ACL mutation is not sufficient.
 
 Rules with `MissingPathBehavior::Error` fail before launch. `Skip` does not
-create the target. A missing protected path remains protected: its nearest
-validated existing parent receives creation protection or a monitor retains
-the obligation until the process exits. A junction, symlink, or replacement
-race never turns an absent protected target into an external writable path.
+create the target. Missing exact read-only and protected paths are materialized
+component by component below their nearest handle-validated existing ancestor.
+Each directory is created atomically with a protected owner/Admin/SYSTEM DACL;
+Cageforge never creates a permissive directory and tightens it afterwards.
+
+Materialization uses the capability-state record as a second write-ahead
+journal, mutually exclusive with an ACL mutation journal. Before creating one
+component, Cageforge durably stores its canonical path, exact creation DACL, a
+fixed marker path, the marker DACL, and a random 32-byte nonce. It then creates
+the directory, creates `.cageforge-materialized-path` with `CREATE_NEW`, writes
+and flushes the nonce, and reopens both objects without delete sharing. Commit
+requires the expected owner SID, exact DACL bytes and protection bit, distinct
+stable file identities, exact marker contents, non-reparse final paths, and
+pinned directory and marker handles.
+
+Recovery accepts exactly three observable states. An absent target means the
+native create never became visible, so the pending journal is cleared without
+recording an object. A target and marker matching every recorded property are
+committed and retained. Any present lookalike, missing or replaced marker,
+different nonce, owner, DACL, identity, final path, or reparse state is typed
+drift; the journal remains pending and launch fails closed. An existing
+component is reusable only when a previously committed materialization record
+still verifies exactly. Cageforge never adopts an arbitrary pre-existing
+directory after planning observed it as missing.
+
+Committed marker and directory handles remain owned by `WindowsChild`, which
+prevents replacement and keeps the materialized directory non-empty while the
+command runs. Cleanup restores managed ACLs first and then removes only verified
+markers and empty materialized directories in deepest-first order. Identity or
+descriptor drift blocks cleanup rather than deleting an unrelated object. A
+junction, symlink, crash, or replacement race therefore never turns an absent
+protected target into an external writable path.
 
 Glob expansion starts at the deepest literal root. A recursive root glob with
 no configured depth is rejected rather than scanning the complete machine or
@@ -582,3 +610,11 @@ Cageforge journals the complete before/after descriptor and stable file
 identity before every mutation. This closes the crash interval between state
 write and ACL application and makes a path replacement distinguishable from a
 recoverable interrupted operation.
+
+The frozen `deny_read_acl.rs` materializes missing paths with path-based
+`create_dir_all` before adding an ACE. Cageforge intentionally does not retain
+that creation interval. Its materialization journal records a random marker and
+exact creation descriptor before the first native object appears, creates each
+component with that descriptor, and accepts only absent or exact verified
+recovery states. Marker and directory identities are pinned through the child
+lifetime, and uninstall removes them only after exact state reconciliation.

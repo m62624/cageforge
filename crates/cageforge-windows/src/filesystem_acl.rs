@@ -25,11 +25,10 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
     CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation,
-    GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
-    GetSecurityDescriptorOwner, INHERIT_ONLY_ACE, INHERITED_ACE, InitializeAcl, IsValidSid,
-    OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
-    UNPROTECTED_DACL_SECURITY_INFORMATION,
+    GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl, INHERIT_ONLY_ACE,
+    INHERITED_ACE, InitializeAcl, IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+    SECURITY_ATTRIBUTES, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA,
@@ -46,7 +45,7 @@ use crate::capability_store::{
     CapabilityStateSession, CapabilityStateStore, CapabilityStateStoreError,
 };
 use crate::filesystem_path::{ValidatedPath, ValidatedPathError};
-use crate::filesystem_plan::{FilesystemPlan, FilesystemPlanAccess};
+use crate::filesystem_plan::{FilesystemPlan, FilesystemPlanAccess, MissingFilesystemTargetKind};
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
@@ -137,6 +136,7 @@ struct AclEntry {
 struct SecurityDescriptor {
     descriptor: PSECURITY_DESCRIPTOR,
     dacl: *mut ACL,
+    owner: *mut c_void,
 }
 
 struct LocalSid(*mut c_void);
@@ -149,6 +149,7 @@ struct OwnedAclBuffer {
 
 struct MaterializedMissingPaths {
     retained_paths: Vec<ValidatedPath>,
+    directories: Vec<PathBuf>,
 }
 
 struct CreationSecurityDescriptor {
@@ -157,6 +158,17 @@ struct CreationSecurityDescriptor {
 }
 
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
+
+struct VerifiedMaterialization {
+    evidence: MaterializationEvidence,
+    retained_paths: [ValidatedPath; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreationDescriptorKind {
+    Directory,
+    Marker,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AclAccessMode {
@@ -192,6 +204,8 @@ pub(crate) enum FilesystemAclError {
     DescriptorRead { path: PathBuf, code: u32 },
     #[error("Windows returned a null DACL for filesystem target {path:?}")]
     NullDacl { path: PathBuf },
+    #[error("Windows returned a null owner SID for filesystem target {path:?}")]
+    NullOwner { path: PathBuf },
     #[error("Windows returned an invalid complete DACL snapshot for {path:?}")]
     InvalidDaclSnapshot { path: PathBuf },
     #[error("failed to inspect the DACL for {path:?}: Windows error {code}")]
@@ -244,6 +258,16 @@ pub(crate) enum FilesystemAclError {
     },
     #[error("failed to build the owner-only materialization descriptor: Windows error {code}")]
     MaterializationDescriptor { code: u32 },
+    #[error("materialization target {path:?} is not below its validated anchor {anchor:?}")]
+    MaterializationOutsideAnchor { path: PathBuf, anchor: PathBuf },
+    #[error("missing-path materialization target {path:?} has no validated existing anchor")]
+    MaterializationMissingAnchor { path: PathBuf },
+    #[error("failed to inspect missing-path materialization target {path:?}: {source}")]
+    MaterializationMetadata {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("missing filesystem target changed before materialization at {path:?}")]
     MaterializationRace { path: PathBuf },
     #[error("failed to create protected missing-path directory {path:?}: Windows error {code}")]
@@ -266,6 +290,8 @@ pub(crate) enum FilesystemAclError {
     MaterializationMarkerMismatch { path: PathBuf },
     #[error("protected materialized object owner differs at {path:?}")]
     MaterializationOwnerMismatch { path: PathBuf },
+    #[error("capability-state materialization resolution returned {actual} for {path:?}")]
+    MaterializationOutcome { path: PathBuf, actual: &'static str },
     #[error("failed to enumerate filesystem ACL subtree {path:?}: {source}")]
     Enumerate {
         path: PathBuf,
@@ -303,10 +329,17 @@ impl FilesystemAclEnforcement {
     ) -> Result<Self, FilesystemAclError> {
         let mut state = state_store.begin()?;
         recover_pending_acl_mutation(&mut state)?;
+        let materialized = MaterializedMissingPaths::apply(filesystem, &mut state)?;
         let authorities = FilesystemAuthorities::load(filesystem, &mut state)?;
-        let plan = FilesystemAclPlan::build(filesystem, &authorities, group_sid)?;
+        let plan = FilesystemAclPlan::build(
+            filesystem,
+            &materialized.directories,
+            &authorities,
+            group_sid,
+        )?;
         let prepared = plan.prepare()?;
-        let retained_paths = prepared.apply(&mut state)?;
+        let mut retained_paths = prepared.apply(&mut state)?;
+        retained_paths.extend(materialized.retained_paths);
         state.finish()?;
         Ok(Self {
             authorities,
@@ -380,10 +413,12 @@ impl FilesystemAuthorities {
 impl FilesystemAclPlan {
     fn build(
         filesystem: &FilesystemPlan,
+        materialized_directories: &[PathBuf],
         authorities: &FilesystemAuthorities,
         group_sid: &str,
     ) -> Result<Self, FilesystemAclError> {
         let mut builder = AclPlanBuilder::new(filesystem, authorities, group_sid);
+        builder.collect_materialized_foundations(materialized_directories)?;
         builder.collect()?;
         builder.finish()
     }
@@ -466,7 +501,58 @@ impl<'plan> AclPlanBuilder<'plan> {
                 }
             }
         }
+        for target in self.filesystem.missing_targets() {
+            match target.kind() {
+                MissingFilesystemTargetKind::SkippedScope => {}
+                MissingFilesystemTargetKind::ReadOnly => {
+                    self.insert_deny(
+                        target.path(),
+                        AclEntry::deny(&self.authorities.profile_guard_sid, WRITE_DENY_MASK),
+                    );
+                }
+                MissingFilesystemTargetKind::Protected => {
+                    self.insert_deny(
+                        target.path(),
+                        AclEntry::deny(&self.authorities.profile_guard_sid, FILE_ALL_ACCESS),
+                    );
+                }
+            }
+        }
         self.expand_protected_boundaries()
+    }
+
+    fn collect_materialized_foundations(
+        &mut self,
+        directories: &[PathBuf],
+    ) -> Result<(), FilesystemAclError> {
+        for directory in directories {
+            let Some(root) = self
+                .write_roots
+                .iter()
+                .filter(|root| is_within(directory, root))
+                .max_by_key(|root| root.components().count())
+            else {
+                return Err(FilesystemAclError::MaterializationOutsideAnchor {
+                    path: directory.clone(),
+                    anchor: self.filesystem.profile_anchor().to_path_buf(),
+                });
+            };
+            let write_sid = self
+                .authorities
+                .write_sid(root)
+                .ok_or_else(|| FilesystemAclError::MissingWriteAuthority { path: root.clone() })?;
+            self.insert_foundation(
+                directory,
+                vec![
+                    AclEntry::allow(self.group_sid, WRITE_ALLOW_MASK),
+                    AclEntry::allow(&self.authorities.read_base_sid, READ_ALLOW_MASK),
+                    AclEntry::allow(write_sid, WRITE_ALLOW_MASK),
+                ],
+                true,
+                vec![self.authorities.profile_guard_sid.clone()],
+            );
+        }
+        Ok(())
     }
 
     fn insert_foundation(
@@ -892,12 +978,13 @@ impl SecurityDescriptor {
     fn read(path: &ValidatedPath) -> Result<Self, FilesystemAclError> {
         let mut descriptor = std::ptr::null_mut();
         let mut dacl = std::ptr::null_mut();
+        let mut owner = std::ptr::null_mut();
         let status = unsafe {
             GetSecurityInfo(
                 path.raw_handle(),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
+                DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+                &mut owner,
                 std::ptr::null_mut(),
                 &mut dacl,
                 std::ptr::null_mut(),
@@ -910,17 +997,27 @@ impl SecurityDescriptor {
                 code: status,
             });
         }
-        if descriptor.is_null() || dacl.is_null() {
+        if descriptor.is_null() || dacl.is_null() || owner.is_null() {
             if !descriptor.is_null() {
                 unsafe {
                     LocalFree(descriptor as HLOCAL);
                 }
             }
-            return Err(FilesystemAclError::NullDacl {
-                path: path.final_path().to_path_buf(),
+            return Err(if owner.is_null() {
+                FilesystemAclError::NullOwner {
+                    path: path.final_path().to_path_buf(),
+                }
+            } else {
+                FilesystemAclError::NullDacl {
+                    path: path.final_path().to_path_buf(),
+                }
             });
         }
-        Ok(Self { descriptor, dacl })
+        Ok(Self {
+            descriptor,
+            dacl,
+            owner,
+        })
     }
 
     fn is_protected(&self, path: &ValidatedPath) -> Result<bool, FilesystemAclError> {
@@ -939,6 +1036,20 @@ impl SecurityDescriptor {
 
     fn snapshot(&self, path: &ValidatedPath) -> Result<PersistedDacl, FilesystemAclError> {
         snapshot_dacl(path, self.dacl, self.is_protected(path)?)
+    }
+
+    fn verify_owner(
+        &self,
+        path: &ValidatedPath,
+        expected: &LocalSid,
+    ) -> Result<(), FilesystemAclError> {
+        if unsafe { EqualSid(self.owner, expected.0) } == 0 {
+            Err(FilesystemAclError::MaterializationOwnerMismatch {
+                path: path.final_path().to_path_buf(),
+            })
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -1041,6 +1152,218 @@ impl OwnedAclBuffer {
     }
 }
 
+impl MaterializedMissingPaths {
+    fn apply(
+        filesystem: &FilesystemPlan,
+        state: &mut CapabilityStateSession<'_>,
+    ) -> Result<Self, FilesystemAclError> {
+        let owner_sid = state.owner_sid().to_string();
+        let owner = LocalSid::parse("materialization owner", &owner_sid)?;
+        let directory_descriptor =
+            CreationSecurityDescriptor::new(&owner_sid, CreationDescriptorKind::Directory)?;
+        let marker_descriptor =
+            CreationSecurityDescriptor::new(&owner_sid, CreationDescriptorKind::Marker)?;
+        let mut materialized = Self {
+            retained_paths: Vec::new(),
+            directories: Vec::new(),
+        };
+        materialized.recover_pending(state, &owner)?;
+        for target in filesystem.missing_targets() {
+            if target.kind() == MissingFilesystemTargetKind::SkippedScope {
+                continue;
+            }
+            let anchor = target.anchor().ok_or_else(|| {
+                FilesystemAclError::MaterializationMissingAnchor {
+                    path: target.path().to_path_buf(),
+                }
+            })?;
+            for path in materialization_components(anchor.final_path(), target.path())? {
+                materialized.retain_or_create(
+                    state,
+                    &path,
+                    &owner,
+                    &directory_descriptor,
+                    &marker_descriptor,
+                )?;
+            }
+        }
+        Ok(materialized)
+    }
+
+    fn recover_pending(
+        &mut self,
+        state: &mut CapabilityStateSession<'_>,
+        owner: &LocalSid,
+    ) -> Result<(), FilesystemAclError> {
+        let Some(pending) = state.pending_materialization() else {
+            return Ok(());
+        };
+        let path = pending.path().to_path_buf();
+        let descriptor = pending.descriptor().clone();
+        let marker_path = pending.marker_path().to_path_buf();
+        let marker_descriptor = pending.marker_descriptor().clone();
+        let marker_nonce = *pending.marker_nonce();
+        match fs::symlink_metadata(&path) {
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                let outcome = state.resolve_materialization(None)?;
+                if outcome != MaterializationRecovery::Absent {
+                    return Err(FilesystemAclError::MaterializationOutcome {
+                        path,
+                        actual: materialization_outcome_label(outcome),
+                    });
+                }
+            }
+            Err(source) => {
+                return Err(FilesystemAclError::MaterializationMetadata { path, source });
+            }
+            Ok(_) => {
+                let verified = verify_materialization(
+                    &path,
+                    &descriptor,
+                    &marker_path,
+                    &marker_descriptor,
+                    &marker_nonce,
+                    owner,
+                )?;
+                let outcome = state.resolve_materialization(Some(verified.evidence))?;
+                if outcome != MaterializationRecovery::Present {
+                    return Err(FilesystemAclError::MaterializationOutcome {
+                        path,
+                        actual: materialization_outcome_label(outcome),
+                    });
+                }
+                self.directories.push(path);
+                self.retained_paths.extend(verified.retained_paths);
+            }
+        }
+        Ok(())
+    }
+
+    fn retain_or_create(
+        &mut self,
+        state: &mut CapabilityStateSession<'_>,
+        path: &Path,
+        owner: &LocalSid,
+        directory_descriptor: &CreationSecurityDescriptor,
+        marker_descriptor: &CreationSecurityDescriptor,
+    ) -> Result<(), FilesystemAclError> {
+        if self
+            .directories
+            .iter()
+            .any(|existing| paths_equal(existing, path))
+        {
+            return Ok(());
+        }
+        if let Some(recorded) = state.materialized_object(path).cloned() {
+            let verified = verify_recorded_materialization(&recorded, owner)?;
+            self.directories.push(path.to_path_buf());
+            self.retained_paths.extend(verified.retained_paths);
+            return Ok(());
+        }
+        match fs::symlink_metadata(path) {
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(FilesystemAclError::MaterializationMetadata {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+            Ok(_) => {
+                return Err(FilesystemAclError::MaterializationRace {
+                    path: path.to_path_buf(),
+                });
+            }
+        }
+        let retained_paths = create_materialized_component(
+            state,
+            path,
+            owner,
+            directory_descriptor,
+            marker_descriptor,
+        )?;
+        self.directories.push(path.to_path_buf());
+        self.retained_paths.extend(retained_paths);
+        Ok(())
+    }
+}
+
+#[allow(unsafe_code)]
+impl CreationSecurityDescriptor {
+    fn new(owner_sid: &str, kind: CreationDescriptorKind) -> Result<Self, FilesystemAclError> {
+        let sddl = kind.sddl(owner_sid);
+        let wide = sddl
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut descriptor = std::ptr::null_mut();
+        if unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        } == 0
+            || descriptor.is_null()
+        {
+            return Err(FilesystemAclError::MaterializationDescriptor {
+                code: unsafe { GetLastError() },
+            });
+        }
+        let descriptor = LocalSecurityDescriptor(descriptor);
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut dacl = std::ptr::null_mut();
+        if unsafe {
+            GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted)
+        } == 0
+            || present == 0
+            || dacl.is_null()
+        {
+            return Err(FilesystemAclError::MaterializationDescriptor {
+                code: unsafe { GetLastError() },
+            });
+        }
+        let snapshot = snapshot_acl_pointer(dacl, true)?;
+        Ok(Self {
+            descriptor,
+            snapshot,
+        })
+    }
+
+    fn security_attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.descriptor.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for LocalSecurityDescriptor {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                LocalFree(self.0 as HLOCAL);
+            }
+        }
+    }
+}
+
+impl CreationDescriptorKind {
+    fn sddl(self, owner_sid: &str) -> String {
+        match self {
+            Self::Directory => {
+                format!("O:{owner_sid}D:P(A;OICI;FA;;;{owner_sid})(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)")
+            }
+            Self::Marker => {
+                format!("O:{owner_sid}D:P(A;;FA;;;{owner_sid})(A;;FA;;;BA)(A;;FA;;;SY)")
+            }
+        }
+    }
+}
+
 impl AclAccessMode {
     const fn key(self) -> u8 {
         match self {
@@ -1077,6 +1400,238 @@ impl AclInheritance {
             Self::Exact => 0,
             Self::Subtree => SUBTREE_INHERITANCE,
         }
+    }
+}
+
+fn materialization_components(
+    anchor: &Path,
+    target: &Path,
+) -> Result<Vec<PathBuf>, FilesystemAclError> {
+    if !is_within(target, anchor) {
+        return Err(FilesystemAclError::MaterializationOutsideAnchor {
+            path: target.to_path_buf(),
+            anchor: anchor.to_path_buf(),
+        });
+    }
+    let mut components = Vec::new();
+    let mut candidate = target;
+    while !paths_equal(candidate, anchor) {
+        components.push(candidate.to_path_buf());
+        let Some(parent) = candidate.parent() else {
+            return Err(FilesystemAclError::MaterializationOutsideAnchor {
+                path: target.to_path_buf(),
+                anchor: anchor.to_path_buf(),
+            });
+        };
+        candidate = parent;
+    }
+    components.reverse();
+    Ok(components)
+}
+
+#[allow(unsafe_code)]
+fn create_materialized_component(
+    state: &mut CapabilityStateSession<'_>,
+    path: &Path,
+    owner: &LocalSid,
+    directory_descriptor: &CreationSecurityDescriptor,
+    marker_descriptor: &CreationSecurityDescriptor,
+) -> Result<[ValidatedPath; 2], FilesystemAclError> {
+    let marker_path = path.join(MATERIALIZATION_MARKER_NAME);
+    let mut nonce = [0u8; 32];
+    getrandom::fill(&mut nonce)
+        .map_err(|source| FilesystemAclError::MaterializationRandom { source })?;
+    if nonce.iter().all(|byte| *byte == 0) {
+        nonce[0] = 1;
+    }
+    state.begin_materialization(
+        path.to_path_buf(),
+        directory_descriptor.snapshot.clone(),
+        marker_path.clone(),
+        marker_descriptor.snapshot.clone(),
+        nonce,
+    )?;
+
+    let path_wide = wide_path(path);
+    let directory_attributes = directory_descriptor.security_attributes();
+    if unsafe { CreateDirectoryW(path_wide.as_ptr(), &raw const directory_attributes) } == 0 {
+        let code = unsafe { GetLastError() };
+        return Err(if code == ERROR_ALREADY_EXISTS {
+            FilesystemAclError::MaterializationRace {
+                path: path.to_path_buf(),
+            }
+        } else {
+            FilesystemAclError::MaterializationCreate {
+                path: path.to_path_buf(),
+                code,
+            }
+        });
+    }
+    let retained_directory = ValidatedPath::open_for_acl(path)?;
+
+    let marker_wide = wide_path(&marker_path);
+    let marker_attributes = marker_descriptor.security_attributes();
+    let marker_handle = unsafe {
+        CreateFileW(
+            marker_wide.as_ptr(),
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &raw const marker_attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if marker_handle == INVALID_HANDLE_VALUE {
+        let code = unsafe { GetLastError() };
+        return Err(if code == ERROR_ALREADY_EXISTS {
+            FilesystemAclError::MaterializationRace { path: marker_path }
+        } else {
+            FilesystemAclError::MaterializationMarkerCreate {
+                path: marker_path,
+                code,
+            }
+        });
+    }
+    let mut marker_file = unsafe { File::from_raw_handle(marker_handle as RawHandle) };
+    marker_file
+        .write_all(&nonce)
+        .and_then(|()| marker_file.sync_all())
+        .map_err(|source| FilesystemAclError::MaterializationMarkerWrite {
+            path: marker_path.clone(),
+            source,
+        })?;
+
+    let verified = verify_materialization(
+        path,
+        &directory_descriptor.snapshot,
+        &marker_path,
+        &marker_descriptor.snapshot,
+        &nonce,
+        owner,
+    )?;
+    drop(marker_file);
+    drop(retained_directory);
+    let VerifiedMaterialization {
+        evidence,
+        retained_paths,
+    } = verified;
+    let outcome = state.resolve_materialization(Some(evidence))?;
+    if outcome != MaterializationRecovery::Present {
+        return Err(FilesystemAclError::MaterializationOutcome {
+            path: path.to_path_buf(),
+            actual: materialization_outcome_label(outcome),
+        });
+    }
+    Ok(retained_paths)
+}
+
+fn verify_recorded_materialization(
+    recorded: &crate::capability_state::MaterializedObject,
+    owner: &LocalSid,
+) -> Result<VerifiedMaterialization, FilesystemAclError> {
+    let verified = verify_materialization(
+        recorded.path(),
+        recorded.descriptor(),
+        recorded.marker_path(),
+        recorded.marker_descriptor(),
+        recorded.marker_nonce(),
+        owner,
+    )?;
+    if &persisted_identity(&verified.retained_paths[0]) != recorded.identity()
+        || &persisted_identity(&verified.retained_paths[1]) != recorded.marker_identity()
+    {
+        return Err(FilesystemAclError::CapabilityModel(
+            CapabilityStateError::MaterializationDrift {
+                path: recorded.path().to_path_buf(),
+            },
+        ));
+    }
+    Ok(verified)
+}
+
+fn verify_materialization(
+    path: &Path,
+    expected_descriptor: &PersistedDacl,
+    marker_path: &Path,
+    expected_marker_descriptor: &PersistedDacl,
+    expected_nonce: &[u8; 32],
+    owner: &LocalSid,
+) -> Result<VerifiedMaterialization, FilesystemAclError> {
+    let directory = ValidatedPath::open_for_acl(path)?;
+    let marker = ValidatedPath::open_for_readback(marker_path)?;
+    let descriptor = SecurityDescriptor::read(&directory)?;
+    descriptor.verify_owner(&directory, owner)?;
+    if descriptor.snapshot(&directory)? != *expected_descriptor {
+        return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+            path: path.to_path_buf(),
+        });
+    }
+    let marker_security = SecurityDescriptor::read(&marker)?;
+    marker_security.verify_owner(&marker, owner)?;
+    if marker_security.snapshot(&marker)? != *expected_marker_descriptor {
+        return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+            path: marker_path.to_path_buf(),
+        });
+    }
+    verify_marker_contents(marker_path, expected_nonce)?;
+    let evidence = MaterializationEvidence::new(
+        persisted_identity(&directory),
+        expected_descriptor.clone(),
+        persisted_identity(&marker),
+        expected_marker_descriptor.clone(),
+        *expected_nonce,
+    );
+    Ok(VerifiedMaterialization {
+        evidence,
+        retained_paths: [directory, marker],
+    })
+}
+
+fn verify_marker_contents(
+    marker_path: &Path,
+    expected_nonce: &[u8; 32],
+) -> Result<(), FilesystemAclError> {
+    let mut file = File::open(marker_path).map_err(|source| {
+        FilesystemAclError::MaterializationMarkerRead {
+            path: marker_path.to_path_buf(),
+            source,
+        }
+    })?;
+    let mut contents = [0u8; 33];
+    let mut length = 0;
+    while length < contents.len() {
+        let read = file.read(&mut contents[length..]).map_err(|source| {
+            FilesystemAclError::MaterializationMarkerRead {
+                path: marker_path.to_path_buf(),
+                source,
+            }
+        })?;
+        if read == 0 {
+            break;
+        }
+        length += read;
+    }
+    if length == expected_nonce.len() && contents[..length] == expected_nonce[..] {
+        Ok(())
+    } else {
+        Err(FilesystemAclError::MaterializationMarkerMismatch {
+            path: marker_path.to_path_buf(),
+        })
+    }
+}
+
+fn wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+const fn materialization_outcome_label(outcome: MaterializationRecovery) -> &'static str {
+    match outcome {
+        MaterializationRecovery::Absent => "absent",
+        MaterializationRecovery::Present => "present",
     }
 }
 
@@ -1587,7 +2142,7 @@ mod tests {
 
     use super::{
         AclAccessMode, AclEntry, PendingAclOperation, READ_ALLOW_MASK, WRITE_ALLOW_MASK,
-        subtree_paths,
+        materialization_components, subtree_paths,
     };
 
     #[test]
@@ -1644,6 +2199,34 @@ mod tests {
         assert!(paths.contains(&sibling));
         assert!(!paths.contains(&writable));
         assert!(!paths.contains(&writable_child));
+    }
+
+    #[test]
+    fn materialization_components_are_parent_first_and_use_native_identity() {
+        assert_eq!(
+            materialization_components(
+                PathBuf::from(r"C:\Workspace").as_path(),
+                PathBuf::from(r"c:\workspace\missing\leaf").as_path(),
+            )
+            .expect("validated descendants"),
+            vec![
+                PathBuf::from(r"c:\workspace\missing"),
+                PathBuf::from(r"c:\workspace\missing\leaf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn materialization_components_reject_parent_traversal_and_external_paths() {
+        for target in [
+            PathBuf::from(r"C:\Workspace\..\outside"),
+            PathBuf::from(r"D:\outside"),
+        ] {
+            assert!(
+                materialization_components(PathBuf::from(r"C:\Workspace").as_path(), &target)
+                    .is_err()
+            );
+        }
     }
 
     fn allow_mask(operation: &PendingAclOperation) -> u32 {

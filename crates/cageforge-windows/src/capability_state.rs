@@ -424,6 +424,9 @@ impl CapabilityState {
         validate_materialization_paths(&path, &marker_path)?;
         descriptor.validate()?;
         marker_descriptor.validate()?;
+        if marker_nonce.iter().all(|byte| *byte == 0) {
+            return Err(CapabilityStateError::InvalidMaterialization);
+        }
         self.pending_materialization = Some(PendingMaterialization {
             path,
             descriptor,
@@ -440,36 +443,43 @@ impl CapabilityState {
     ) -> Result<MaterializationRecovery, CapabilityStateError> {
         let pending = self
             .pending_materialization
-            .take()
+            .as_ref()
             .ok_or(CapabilityStateError::MissingMaterialization)?;
-        let recovery = match evidence {
-            None => MaterializationRecovery::Absent,
+        match evidence {
+            None => {
+                self.pending_materialization = None;
+                Ok(MaterializationRecovery::Absent)
+            }
             Some(evidence)
                 if evidence.descriptor == pending.descriptor
                     && evidence.marker_descriptor == pending.marker_descriptor
                     && evidence.marker_nonce == pending.marker_nonce =>
             {
-                self.materialized_objects.push(MaterializedObject {
-                    path: pending.path,
+                let candidate = MaterializedObject {
+                    path: pending.path.clone(),
                     identity: evidence.identity,
                     descriptor: evidence.descriptor,
-                    marker_path: pending.marker_path,
+                    marker_path: pending.marker_path.clone(),
                     marker_identity: evidence.marker_identity,
                     marker_descriptor: evidence.marker_descriptor,
                     marker_nonce: evidence.marker_nonce,
-                });
-                self.materialized_objects
-                    .sort_by_key(materialized_object_key);
-                MaterializationRecovery::Present
+                };
+                let mut next = self.materialized_objects.clone();
+                next.push(candidate);
+                next.sort_by_key(materialized_object_key);
+                validate_materialized_objects(&next).map_err(|_| {
+                    CapabilityStateError::MaterializationDrift {
+                        path: pending.path.clone(),
+                    }
+                })?;
+                self.materialized_objects = next;
+                self.pending_materialization = None;
+                Ok(MaterializationRecovery::Present)
             }
-            Some(_) => {
-                let path = pending.path.clone();
-                self.pending_materialization = Some(pending);
-                return Err(CapabilityStateError::MaterializationDrift { path });
-            }
-        };
-        self.validate()?;
-        Ok(recovery)
+            Some(_) => Err(CapabilityStateError::MaterializationDrift {
+                path: pending.path.clone(),
+            }),
+        }
     }
 
     fn validate(&self) -> Result<(), CapabilityStateError> {
@@ -533,33 +543,7 @@ impl CapabilityState {
         if let Some(pending) = &self.pending_acl_mutation {
             pending.validate(&self.acl_objects)?;
         }
-        let mut materialized_paths = BTreeSet::new();
-        let mut materialized_identities = BTreeSet::new();
-        let mut previous_materialized = None;
-        for object in &self.materialized_objects {
-            object.validate()?;
-            let key = materialized_object_key(object);
-            if previous_materialized
-                .as_ref()
-                .is_some_and(|previous| previous >= &key)
-            {
-                return Err(CapabilityStateError::NonCanonicalMaterializedOrder);
-            }
-            previous_materialized = Some(key.clone());
-            if !materialized_paths.insert(key)
-                || !materialized_paths.insert(NativePathKey::new(&object.marker_path))
-                || !materialized_identities.insert((
-                    object.identity.volume_serial_number,
-                    object.identity.file_id,
-                ))
-                || !materialized_identities.insert((
-                    object.marker_identity.volume_serial_number,
-                    object.marker_identity.file_id,
-                ))
-            {
-                return Err(CapabilityStateError::DuplicateMaterializedObject);
-            }
-        }
+        validate_materialized_objects(&self.materialized_objects)?;
         if self.pending_acl_mutation.is_some() && self.pending_materialization.is_some() {
             return Err(CapabilityStateError::InvalidMaterialization);
         }
@@ -880,6 +864,36 @@ fn materialized_object_key(object: &MaterializedObject) -> NativePathKey {
     NativePathKey::new(&object.path)
 }
 
+fn validate_materialized_objects(
+    objects: &[MaterializedObject],
+) -> Result<(), CapabilityStateError> {
+    let mut paths = BTreeSet::new();
+    let mut identities = BTreeSet::new();
+    let mut previous = None;
+    for object in objects {
+        object.validate()?;
+        let key = materialized_object_key(object);
+        if previous.as_ref().is_some_and(|previous| previous >= &key) {
+            return Err(CapabilityStateError::NonCanonicalMaterializedOrder);
+        }
+        previous = Some(key.clone());
+        if !paths.insert(key)
+            || !paths.insert(NativePathKey::new(&object.marker_path))
+            || !identities.insert((
+                object.identity.volume_serial_number,
+                object.identity.file_id,
+            ))
+            || !identities.insert((
+                object.marker_identity.volume_serial_number,
+                object.marker_identity.file_id,
+            ))
+        {
+            return Err(CapabilityStateError::DuplicateMaterializedObject);
+        }
+    }
+    Ok(())
+}
+
 fn replace_managed_acl_object(
     objects: &mut Vec<ManagedAclObject>,
     path: &Path,
@@ -959,8 +973,8 @@ mod tests {
     use windows_sys::Win32::Security::{ACL, ACL_REVISION, ACL_REVISION_DS, InitializeAcl};
 
     use super::{
-        AclMutationRecovery, CapabilityRole, CapabilityState, CapabilityStateError, PersistedDacl,
-        PersistedFileIdentity,
+        AclMutationRecovery, CapabilityRole, CapabilityState, CapabilityStateError,
+        MaterializationEvidence, MaterializationRecovery, PersistedDacl, PersistedFileIdentity,
     };
 
     const PROFILE_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1120,6 +1134,147 @@ mod tests {
             state.pending_acl_path(),
             Some(PathBuf::from(r"C:\Workspace").as_path())
         );
+    }
+
+    #[test]
+    fn exact_materialization_evidence_commits_and_clears_the_journal() {
+        let mut state = CapabilityState::fresh().expect("fresh capability state");
+        let descriptor = empty_dacl(ACL_REVISION, true);
+        let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
+        let nonce = [13; 32];
+        begin_materialization(
+            &mut state,
+            descriptor.clone(),
+            marker_descriptor.clone(),
+            nonce,
+        );
+
+        let recovery = state
+            .resolve_materialization(Some(MaterializationEvidence::new(
+                PersistedFileIdentity::new(14, [15; 16]),
+                descriptor,
+                PersistedFileIdentity::new(14, [16; 16]),
+                marker_descriptor,
+                nonce,
+            )))
+            .expect("commit matching materialization");
+
+        assert_eq!(recovery, MaterializationRecovery::Present);
+        assert!(state.pending_materialization_path().is_none());
+        assert_eq!(state.materialized_objects.len(), 1);
+        CapabilityState::decode(&state.encode().expect("encode committed state"))
+            .expect("decode committed state");
+    }
+
+    #[test]
+    fn absent_materialization_clears_the_journal_without_adopting_an_object() {
+        let mut state = CapabilityState::fresh().expect("fresh capability state");
+        begin_materialization(
+            &mut state,
+            empty_dacl(ACL_REVISION, true),
+            empty_dacl(ACL_REVISION_DS, true),
+            [17; 32],
+        );
+
+        assert_eq!(
+            state
+                .resolve_materialization(None)
+                .expect("resolve absent materialization"),
+            MaterializationRecovery::Absent
+        );
+        assert!(state.pending_materialization_path().is_none());
+        assert!(state.materialized_objects.is_empty());
+    }
+
+    #[test]
+    fn materialization_drift_preserves_the_pending_journal() {
+        let mut state = CapabilityState::fresh().expect("fresh capability state");
+        let descriptor = empty_dacl(ACL_REVISION, true);
+        let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
+        begin_materialization(
+            &mut state,
+            descriptor.clone(),
+            marker_descriptor.clone(),
+            [18; 32],
+        );
+
+        assert!(matches!(
+            state.resolve_materialization(Some(MaterializationEvidence::new(
+                PersistedFileIdentity::new(19, [20; 16]),
+                descriptor,
+                PersistedFileIdentity::new(19, [21; 16]),
+                marker_descriptor,
+                [22; 32],
+            ))),
+            Err(CapabilityStateError::MaterializationDrift { .. })
+        ));
+        assert_eq!(
+            state.pending_materialization_path(),
+            Some(PathBuf::from(r"C:\Workspace\missing").as_path())
+        );
+        assert!(state.materialized_objects.is_empty());
+    }
+
+    #[test]
+    fn duplicate_materialization_identity_fails_without_mutating_state() {
+        let mut state = CapabilityState::fresh().expect("fresh capability state");
+        let descriptor = empty_dacl(ACL_REVISION, true);
+        let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
+        let nonce = [23; 32];
+        begin_materialization(
+            &mut state,
+            descriptor.clone(),
+            marker_descriptor.clone(),
+            nonce,
+        );
+        let identity = PersistedFileIdentity::new(24, [25; 16]);
+
+        assert!(matches!(
+            state.resolve_materialization(Some(MaterializationEvidence::new(
+                identity.clone(),
+                descriptor,
+                identity,
+                marker_descriptor,
+                nonce,
+            ))),
+            Err(CapabilityStateError::MaterializationDrift { .. })
+        ));
+        assert!(state.pending_materialization_path().is_some());
+        assert!(state.materialized_objects.is_empty());
+    }
+
+    #[test]
+    fn zero_materialization_nonce_is_rejected_before_journaling() {
+        let mut state = CapabilityState::fresh().expect("fresh capability state");
+
+        assert!(matches!(
+            state.begin_materialization(
+                PathBuf::from(r"C:\Workspace\missing"),
+                empty_dacl(ACL_REVISION, true),
+                PathBuf::from(r"C:\Workspace\missing\.cageforge-materialized-path"),
+                empty_dacl(ACL_REVISION_DS, true),
+                [0; 32],
+            ),
+            Err(CapabilityStateError::InvalidMaterialization)
+        ));
+        assert!(state.pending_materialization_path().is_none());
+    }
+
+    fn begin_materialization(
+        state: &mut CapabilityState,
+        descriptor: PersistedDacl,
+        marker_descriptor: PersistedDacl,
+        nonce: [u8; 32],
+    ) {
+        state
+            .begin_materialization(
+                PathBuf::from(r"C:\Workspace\missing"),
+                descriptor,
+                PathBuf::from(r"C:\Workspace\missing\.cageforge-materialized-path"),
+                marker_descriptor,
+                nonce,
+            )
+            .expect("begin materialization journal");
     }
 
     #[allow(unsafe_code)]
