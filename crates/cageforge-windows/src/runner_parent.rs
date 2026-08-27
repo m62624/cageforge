@@ -14,10 +14,13 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    SetInformationJobObject, TerminateJobObject,
 };
-use windows_sys::Win32::System::SystemServices::JOB_OBJECT_ASSIGN_PROCESS;
+use windows_sys::Win32::System::SystemServices::{
+    JOB_OBJECT_ASSIGN_PROCESS, JOB_OBJECT_UILIMIT_ALL,
+};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     TerminateProcess, WaitForSingleObject,
@@ -68,10 +71,16 @@ pub(crate) enum ParentJobError {
     Create { code: u32 },
     #[error("failed to enable Job Object kill-on-close: Windows error {code}")]
     Configure { code: u32 },
+    #[error("failed to enable Job Object user-interface isolation: Windows error {code}")]
+    UiConfigure { code: u32 },
     #[error("failed to read back Job Object limits: Windows error {code}")]
     ReadBack { code: u32 },
+    #[error("failed to read back Job Object user-interface isolation: Windows error {code}")]
+    UiReadBack { code: u32 },
     #[error("Job Object read-back did not contain exactly kill-on-close")]
     LimitMismatch,
+    #[error("Job Object read-back did not contain every user-interface isolation limit")]
+    UiLimitMismatch,
     #[error(
         "failed to duplicate assign-only Job Object authority into the runner: Windows error {code}"
     )]
@@ -308,6 +317,22 @@ impl ParentJob {
                 code: unsafe { GetLastError() },
             });
         }
+        let ui_limits = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+            UIRestrictionsClass: JOB_OBJECT_UILIMIT_ALL,
+        };
+        if unsafe {
+            SetInformationJobObject(
+                job.handle.as_raw_handle() as _,
+                JobObjectBasicUIRestrictions,
+                (&raw const ui_limits).cast(),
+                size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+            )
+        } == 0
+        {
+            return Err(ParentJobError::UiConfigure {
+                code: unsafe { GetLastError() },
+            });
+        }
         job.verify_limits()?;
         Ok(job)
     }
@@ -373,6 +398,27 @@ impl ParentJob {
             || limits.BasicLimitInformation.LimitFlags != JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         {
             return Err(ParentJobError::LimitMismatch);
+        }
+        let mut ui_limits = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+        returned = 0;
+        if unsafe {
+            QueryInformationJobObject(
+                self.handle.as_raw_handle() as _,
+                JobObjectBasicUIRestrictions,
+                (&raw mut ui_limits).cast(),
+                size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+                &mut returned,
+            )
+        } == 0
+        {
+            return Err(ParentJobError::UiReadBack {
+                code: unsafe { GetLastError() },
+            });
+        }
+        if returned < size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32
+            || ui_limits.UIRestrictionsClass != JOB_OBJECT_UILIMIT_ALL
+        {
+            return Err(ParentJobError::UiLimitMismatch);
         }
         Ok(())
     }

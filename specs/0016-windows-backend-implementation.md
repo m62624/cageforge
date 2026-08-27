@@ -182,9 +182,16 @@ SID, route/default-DACL overlap, or Windows-canonicalized ACL difference fails
 before the child starts.
 
 Every restricted process is assigned atomically at creation to a fresh Job
-Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Cageforge does not
-enable breakaway. If Windows cannot apply the job-list process attribute, the
-spawn fails before the primary thread runs.
+Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and every
+`JOB_OBJECT_UILIMIT_*` isolation flag. The parent reads both classes back
+exactly before launching the runner. These UI limits prevent the child from
+using USER handles owned outside its job, installing cross-job hooks, sending
+broadcast messages outside the job, reading or writing the clipboard, creating
+or switching desktops, sharing global atoms, changing display or system UI
+settings, or exiting the Windows session. This defense remains authoritative
+even if the host's default desktop has an unexpectedly permissive DACL.
+Cageforge does not enable breakaway. If Windows cannot apply the job-list
+process attribute, the spawn fails before the primary thread runs.
 
 The parent creates and retains that fresh Job Object before launching the
 runner. Only after the runner process is created suspended does the parent
@@ -614,7 +621,8 @@ termination on startup failure, timeout, explicit kill, or owner drop.
 
 Cageforge intentionally adds runner-side owner-PID and token verification,
 uses a protected owner manifest, forbids Job Object breakaway and descendant
-preservation, keeps private desktop mandatory, and returns stage-specific typed
+preservation, enables and verifies all Job Object UI restrictions, keeps private
+desktop mandatory, and returns stage-specific typed
 protocol, token, desktop, job, process, wait, and termination failures. It does
 not set `WRITE_RESTRICTED`: the full restricting set participates in read and
 write checks, which permits profile-scoped deny-read ACLs instead of the frozen
