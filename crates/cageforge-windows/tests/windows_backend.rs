@@ -25,6 +25,8 @@ const SANDBOX_FIXTURE_MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const SANDBOX_FIXTURE_READY: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_READY";
 const SANDBOX_FIXTURE_MARKER: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MARKER";
 const SANDBOX_FIXTURE_DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
+const SANDBOX_FIXTURE_PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
+const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct SetupCleanup<'a> {
     setup: &'a WindowsSetup,
@@ -91,6 +93,10 @@ fn sandbox_process_fixture() {
             let path = PathBuf::from(
                 std::env::var_os(SANDBOX_FIXTURE_DENIED_READ).expect("denied-read fixture path"),
             );
+            let progress = PathBuf::from(
+                std::env::var_os(SANDBOX_FIXTURE_PROGRESS).expect("denied-read fixture progress"),
+            );
+            fs::write(&progress, b"before-denied-read").expect("record denied-read start");
             match fs::read(&path) {
                 Ok(_) => panic!("sandbox fixture read denied host file {path:?}"),
                 Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -98,6 +104,7 @@ fn sandbox_process_fixture() {
                 }
                 Err(error) => panic!("sandbox fixture received unexpected read error: {error}"),
             }
+            fs::write(progress, b"after-denied-read").expect("record denied-read completion");
         }
         "descendant-root" => {
             let executable = std::env::current_exe().expect("fixture executable");
@@ -339,9 +346,13 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     assert!(capability_state.is_file());
     assert!(!capability_backup.exists());
 
-    let backend =
-        WindowsBackend::new(WindowsBackendConfig::new().with_setup(setup.config().clone()))
-            .expect("backend after capability-state recovery");
+    let backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(END_TO_END_PROBE_TIMEOUT)
+            .expect("bounded end-to-end probe timeout"),
+    )
+    .expect("backend after capability-state recovery");
     let runner_path = backend.command_runner_path();
     assert!(
         fs::OpenOptions::new()
@@ -386,12 +397,15 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     .expect("copy sandbox fixture into the writable workspace");
 
     let outside_secret = temporary.path().join("outside-secret.txt");
+    let access_progress = workspace.path().join("denied-read-progress.txt");
     fs::write(&outside_secret, b"host secret").expect("outside secret fixture");
     let environment = EnvironmentSpec::inherit_core()
         .with_var(SANDBOX_FIXTURE_MODE, "denied-read")
         .expect("denied-read fixture mode")
         .with_var(SANDBOX_FIXTURE_DENIED_READ, outside_secret.as_os_str())
-        .expect("denied-read fixture environment");
+        .expect("denied-read fixture environment")
+        .with_var(SANDBOX_FIXTURE_PROGRESS, access_progress.as_os_str())
+        .expect("denied-read fixture progress");
     let access_probe = fixture_command(&fixture);
     let (command, effective, context) =
         restricted_request_with_environment(workspace.path(), access_probe, environment);
@@ -399,6 +413,10 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare denied-read probe");
     let mut access_child = backend.spawn(prepared).expect("spawn denied-read probe");
+    let access_status = access_child.wait().unwrap_or_else(|error| {
+        let progress = fs::read_to_string(&access_progress).ok();
+        panic!("wait for denied-read probe: {error}; fixture progress: {progress:?}");
+    });
     let mut access_stdout = String::new();
     access_child
         .stdout()
@@ -411,7 +429,6 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .expect("captured probe stderr")
         .read_to_string(&mut access_stderr)
         .expect("read probe stderr");
-    let access_status = access_child.wait().expect("wait for denied-read probe");
     assert!(
         access_status.success(),
         "outside read probe failed with {access_status}: {access_stderr}"

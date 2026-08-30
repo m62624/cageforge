@@ -113,40 +113,42 @@ impl SpawnedProcess {
         if job_handle.is_null() || job_handle == INVALID_HANDLE_VALUE {
             return Err(ProcessStartError::InvalidJobHandle);
         }
-        let standard = PreparedStandardHandles::new(request.standard_handles, job_value)?;
-        let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
-        let child_handles = standard.raw_handles();
-        let mut attributes = ProcessAttributeList::new(2)?;
-        attributes.apply_handles(child_handles)?;
-        attributes.apply_job(job.as_raw_handle())?;
         let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        startup.StartupInfo.hStdInput = child_handles[0];
-        startup.StartupInfo.hStdOutput = child_handles[1];
-        startup.StartupInfo.hStdError = child_handles[2];
         startup.StartupInfo.lpDesktop = desktop.as_mut_ptr();
-        startup.lpAttributeList = attributes.as_mut_ptr();
         let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-        if unsafe {
-            CreateProcessAsUserW(
-                token.raw(),
-                application.as_ptr(),
-                command_line.as_mut_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                1,
-                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                request.environment_block.as_ptr().cast(),
-                working_directory.as_ptr(),
-                &startup.StartupInfo,
-                &mut process,
-            )
-        } == 0
         {
-            return Err(ProcessStartError::ProcessCreate {
-                code: unsafe { GetLastError() },
-            });
+            let standard = PreparedStandardHandles::new(request.standard_handles, job_value)?;
+            let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
+            let child_handles = standard.raw_handles();
+            let mut attributes = ProcessAttributeList::new(2)?;
+            attributes.apply_handles(child_handles)?;
+            attributes.apply_job(job.as_raw_handle())?;
+            startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = child_handles[0];
+            startup.StartupInfo.hStdOutput = child_handles[1];
+            startup.StartupInfo.hStdError = child_handles[2];
+            startup.lpAttributeList = attributes.as_mut_ptr();
+            if unsafe {
+                CreateProcessAsUserW(
+                    token.raw(),
+                    application.as_ptr(),
+                    command_line.as_mut_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    1,
+                    CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                    request.environment_block.as_ptr().cast(),
+                    working_directory.as_ptr(),
+                    &startup.StartupInfo,
+                    &mut process,
+                )
+            } == 0
+            {
+                return Err(ProcessStartError::ProcessCreate {
+                    code: unsafe { GetLastError() },
+                });
+            }
         }
         if process.hProcess.is_null() || process.hThread.is_null() || process.dwProcessId == 0 {
             if !process.hProcess.is_null() {
@@ -163,7 +165,6 @@ impl SpawnedProcess {
         }
         let process_handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess as RawHandle) };
         let _thread = unsafe { OwnedHandle::from_raw_handle(process.hThread as RawHandle) };
-        drop(job);
         Ok(Self {
             process: process_handle,
             process_id: process.dwProcessId,
