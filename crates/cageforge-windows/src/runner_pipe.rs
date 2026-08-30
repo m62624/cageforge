@@ -31,9 +31,8 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread}
 const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
-const FILE_READ_DATA: u32 = 0x0000_0001;
-const FILE_WRITE_DATA: u32 = 0x0000_0002;
-const SYNCHRONIZE: u32 = 0x0010_0000;
+const FILE_GENERIC_READ: u32 = 0x0012_0089;
+const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 
 pub(crate) struct RunnerPipeNames {
@@ -336,11 +335,10 @@ fn descriptor_string(
 }
 
 const fn client_access_mask(direction: ParentPipeDirection) -> u32 {
-    let data_access = match direction {
-        ParentPipeDirection::Request => FILE_READ_DATA,
-        ParentPipeDirection::Response => FILE_WRITE_DATA,
-    };
-    data_access | SYNCHRONIZE
+    match direction {
+        ParentPipeDirection::Request => FILE_GENERIC_READ,
+        ParentPipeDirection::Response => FILE_GENERIC_WRITE,
+    }
 }
 
 #[allow(unsafe_code)]
@@ -411,18 +409,18 @@ fn connect_and_verify(
 
 #[cfg(test)]
 mod tests {
-    use super::{FILE_READ_DATA, FILE_WRITE_DATA, SYNCHRONIZE, client_access_mask};
+    use super::{FILE_GENERIC_READ, FILE_GENERIC_WRITE, client_access_mask};
     use crate::runner_pipe::ParentPipeDirection;
 
     #[test]
-    fn client_pipe_access_is_directional_and_synchronous() {
+    fn client_pipe_access_matches_the_required_generic_modes() {
         assert_eq!(
             client_access_mask(ParentPipeDirection::Request),
-            FILE_READ_DATA | SYNCHRONIZE
+            FILE_GENERIC_READ
         );
         assert_eq!(
             client_access_mask(ParentPipeDirection::Response),
-            FILE_WRITE_DATA | SYNCHRONIZE
+            FILE_GENERIC_WRITE
         );
     }
 }

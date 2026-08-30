@@ -316,19 +316,23 @@ both named-pipe DACLs for exactly that logon SID rather than the shared account
 SID, and replaces the runner process and primary-thread DACLs with protected
 owner/Admin/SYSTEM descriptors. The parent creates each pipe with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, rejects remote clients, and grants the runner
-only `FILE_READ_DATA | SYNCHRONIZE` on the request pipe and
-`FILE_WRITE_DATA | SYNCHRONIZE` on the response pipe. It intentionally does
-not grant `FILE_GENERIC_WRITE`, because that mask
-also contains `FILE_CREATE_PIPE_INSTANCE` for named pipes. Pipe owner and DACL
-are read back before the runner resumes. The parent then duplicates the
-assign-only Job handle and resumes the primary thread. Exact client-PID checks
-remain mandatory after connection. An older process using the same dedicated
-account therefore cannot race a pipe connection, create another instance, open
-the new runner for injection, steal handles, or reuse another launch's
-authenticated channel.
+the exact `FILE_GENERIC_READ` mask on the request pipe and the exact
+`FILE_GENERIC_WRITE` mask on the response pipe, because Windows requires those
+generic modes for a named-pipe client to connect to the corresponding
+directional server modes. `FILE_GENERIC_WRITE` contains the
+`FILE_CREATE_PIPE_INSTANCE` bit, so `FILE_FLAG_FIRST_PIPE_INSTANCE` is a
+separate mandatory control: after the parent creates the first instance, an
+older process cannot add another one. The launch-unique logon SID, random pipe
+name, protected runner process DACL, and exact client-PID check remain
+independent controls. Pipe owner and DACL are read back before the runner
+resumes. The parent then duplicates the assign-only Job handle and resumes the
+primary thread. An older process using the same dedicated account therefore
+cannot race a pipe connection, open the new runner for injection, steal
+handles, or reuse another launch's authenticated channel.
 
-The runner requests exactly those same directional masks when opening the
-client endpoints; it never requests `FILE_GENERIC_READ` or `FILE_GENERIC_WRITE`.
+The runner requests the corresponding `GENERIC_READ` or `GENERIC_WRITE` client
+mode when opening each endpoint. The sandboxed user process inherits neither
+endpoint nor pipe name.
 
 Before it sends an authenticated spawn response, the runner may report only one
 fixed bootstrap phase through its exit status: argument parsing, installed

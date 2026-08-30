@@ -24,9 +24,8 @@ use crate::runner_resource_security::{
     verify_open_runner_resource,
 };
 
-const FILE_READ_DATA: u32 = 0x0000_0001;
-const FILE_WRITE_DATA: u32 = 0x0000_0002;
-const SYNCHRONIZE: u32 = 0x0010_0000;
+const GENERIC_READ: u32 = 0x8000_0000;
+const GENERIC_WRITE: u32 = 0x4000_0000;
 
 pub(super) struct InstalledRunnerIdentity {
     manifest: RunnerManifest,
@@ -437,8 +436,8 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 const fn client_pipe_access(direction: PipeDirection) -> u32 {
     match direction {
-        PipeDirection::Read => FILE_READ_DATA | SYNCHRONIZE,
-        PipeDirection::Write => FILE_WRITE_DATA | SYNCHRONIZE,
+        PipeDirection::Read => GENERIC_READ,
+        PipeDirection::Write => GENERIC_WRITE,
     }
 }
 
@@ -455,17 +454,11 @@ fn wide_pointer_to_string(value: *const u16) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FILE_READ_DATA, FILE_WRITE_DATA, PipeDirection, SYNCHRONIZE, client_pipe_access};
+    use super::{GENERIC_READ, GENERIC_WRITE, PipeDirection, client_pipe_access};
 
     #[test]
-    fn client_pipe_access_matches_the_parent_directional_acl() {
-        assert_eq!(
-            client_pipe_access(PipeDirection::Read),
-            FILE_READ_DATA | SYNCHRONIZE
-        );
-        assert_eq!(
-            client_pipe_access(PipeDirection::Write),
-            FILE_WRITE_DATA | SYNCHRONIZE
-        );
+    fn client_pipe_access_matches_the_required_generic_modes() {
+        assert_eq!(client_pipe_access(PipeDirection::Read), GENERIC_READ);
+        assert_eq!(client_pipe_access(PipeDirection::Write), GENERIC_WRITE);
     }
 }
