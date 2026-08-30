@@ -11,7 +11,8 @@ use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, OPEN_EXISTING,
+    CreateFileW, FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+    OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::{
@@ -436,7 +437,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 const fn client_pipe_access(direction: PipeDirection) -> u32 {
     match direction {
         PipeDirection::Read => FILE_GENERIC_READ,
-        PipeDirection::Write => FILE_GENERIC_WRITE & !FILE_APPEND_DATA,
+        PipeDirection::Write => (FILE_GENERIC_WRITE & !FILE_APPEND_DATA) | FILE_READ_ATTRIBUTES,
     }
 }
 
@@ -454,7 +455,8 @@ fn wide_pointer_to_string(value: *const u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, PipeDirection, client_pipe_access,
+        FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+        PipeDirection, client_pipe_access,
     };
 
     #[test]
@@ -462,7 +464,7 @@ mod tests {
         assert_eq!(client_pipe_access(PipeDirection::Read), FILE_GENERIC_READ);
         assert_eq!(
             client_pipe_access(PipeDirection::Write),
-            FILE_GENERIC_WRITE & !FILE_APPEND_DATA
+            (FILE_GENERIC_WRITE & !FILE_APPEND_DATA) | FILE_READ_ATTRIBUTES
         );
         assert_eq!(
             client_pipe_access(PipeDirection::Write) & FILE_APPEND_DATA,

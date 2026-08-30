@@ -25,7 +25,7 @@ use windows_sys::Win32::Security::{
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
 };
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Pipes::{
@@ -450,7 +450,8 @@ fn ace_matches(
 }
 
 const fn client_access_mask(direction: ParentPipeDirection) -> u32 {
-    const RESPONSE_PIPE_WRITE_ACCESS: u32 = FILE_GENERIC_WRITE & !FILE_APPEND_DATA;
+    const RESPONSE_PIPE_WRITE_ACCESS: u32 =
+        (FILE_GENERIC_WRITE & !FILE_APPEND_DATA) | FILE_READ_ATTRIBUTES;
 
     match direction {
         ParentPipeDirection::Request => FILE_GENERIC_READ,
@@ -515,7 +516,10 @@ fn connect_and_verify(
 
 #[cfg(test)]
 mod tests {
-    use super::{FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, client_access_mask};
+    use super::{
+        FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+        client_access_mask,
+    };
     use crate::runner_pipe::ParentPipeDirection;
 
     #[test]
@@ -526,7 +530,7 @@ mod tests {
         );
         assert_eq!(
             client_access_mask(ParentPipeDirection::Response),
-            FILE_GENERIC_WRITE & !FILE_APPEND_DATA
+            (FILE_GENERIC_WRITE & !FILE_APPEND_DATA) | FILE_READ_ATTRIBUTES
         );
         assert_eq!(
             client_access_mask(ParentPipeDirection::Response) & FILE_APPEND_DATA,
