@@ -24,9 +24,7 @@ use windows_sys::Win32::Security::{
     IsValidSecurityDescriptor, IsValidSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
 };
-use windows_sys::Win32::Storage::FileSystem::{
-    FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-};
+use windows_sys::Win32::Storage::FileSystem::{FILE_ALL_ACCESS, FILE_GENERIC_READ};
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
@@ -453,11 +451,9 @@ fn ace_matches(
 }
 
 const fn client_access_mask(direction: ParentPipeDirection) -> u32 {
-    const RESPONSE_PIPE_WRITE_ACCESS: u32 = FILE_GENERIC_WRITE & !FILE_APPEND_DATA;
-
     match direction {
         ParentPipeDirection::Request => FILE_GENERIC_READ,
-        ParentPipeDirection::Response => RESPONSE_PIPE_WRITE_ACCESS,
+        ParentPipeDirection::Response => FILE_ALL_ACCESS,
     }
 }
 
@@ -518,22 +514,18 @@ fn connect_and_verify(
 
 #[cfg(test)]
 mod tests {
-    use super::{FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, client_access_mask};
+    use super::{FILE_ALL_ACCESS, FILE_GENERIC_READ, client_access_mask};
     use crate::runner_pipe::ParentPipeDirection;
 
     #[test]
-    fn client_pipe_access_is_directional_without_create_pipe_instance() {
+    fn diagnostic_response_pipe_access_is_full_control() {
         assert_eq!(
             client_access_mask(ParentPipeDirection::Request),
             FILE_GENERIC_READ
         );
         assert_eq!(
             client_access_mask(ParentPipeDirection::Response),
-            FILE_GENERIC_WRITE & !FILE_APPEND_DATA
-        );
-        assert_eq!(
-            client_access_mask(ParentPipeDirection::Response) & FILE_APPEND_DATA,
-            0
+            FILE_ALL_ACCESS
         );
     }
 }
