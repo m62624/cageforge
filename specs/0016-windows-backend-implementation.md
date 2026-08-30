@@ -327,6 +327,9 @@ account therefore cannot race a pipe connection, create another instance, open
 the new runner for injection, steal handles, or reuse another launch's
 authenticated channel.
 
+The runner requests exactly those same directional masks when opening the
+client endpoints; it never requests `FILE_GENERIC_READ` or `FILE_GENERIC_WRITE`.
+
 Before it sends an authenticated spawn response, the runner may report only one
 fixed bootstrap phase through its exit status: argument parsing, installed
 identity verification, request-pipe open, response-pipe open, or transport

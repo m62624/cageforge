@@ -26,6 +26,7 @@ use crate::runner_resource_security::{
 
 const FILE_READ_DATA: u32 = 0x0000_0001;
 const FILE_WRITE_DATA: u32 = 0x0000_0002;
+const SYNCHRONIZE: u32 = 0x0010_0000;
 
 pub(super) struct InstalledRunnerIdentity {
     manifest: RunnerManifest,
@@ -268,10 +269,7 @@ pub(super) fn open_pipe(
     if !name.starts_with(r"\\.\pipe\Cageforge-runner-") || name.contains('\0') {
         return Err(RunnerAuthenticationError::InvalidPipeName);
     }
-    let access = match direction {
-        PipeDirection::Read => FILE_READ_DATA,
-        PipeDirection::Write => FILE_WRITE_DATA,
-    };
+    let access = client_pipe_access(direction);
     let wide = name
         .encode_utf16()
         .chain(std::iter::once(0))
@@ -437,6 +435,13 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
+const fn client_pipe_access(direction: PipeDirection) -> u32 {
+    match direction {
+        PipeDirection::Read => FILE_READ_DATA | SYNCHRONIZE,
+        PipeDirection::Write => FILE_WRITE_DATA | SYNCHRONIZE,
+    }
+}
+
 #[allow(unsafe_code)]
 fn wide_pointer_to_string(value: *const u16) -> String {
     unsafe {
@@ -445,5 +450,22 @@ fn wide_pointer_to_string(value: *const u16) -> String {
             length += 1;
         }
         String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FILE_READ_DATA, FILE_WRITE_DATA, PipeDirection, SYNCHRONIZE, client_pipe_access};
+
+    #[test]
+    fn client_pipe_access_matches_the_parent_directional_acl() {
+        assert_eq!(
+            client_pipe_access(PipeDirection::Read),
+            FILE_READ_DATA | SYNCHRONIZE
+        );
+        assert_eq!(
+            client_pipe_access(PipeDirection::Write),
+            FILE_WRITE_DATA | SYNCHRONIZE
+        );
     }
 }
