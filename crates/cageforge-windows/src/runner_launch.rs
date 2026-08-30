@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{
+    ERROR_INSUFFICIENT_BUFFER, ERROR_PRIVILEGE_NOT_HELD, GetLastError, HLOCAL, LocalFree,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
@@ -19,13 +21,14 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-    GetTokenInformation, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
+    GetTokenInformation, LOGON32_LOGON_BATCH, LOGON32_PROVIDER_DEFAULT, LogonUserW,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithLogonW,
-    OpenProcessToken, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, TerminateProcess,
-    WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+    CreateProcessWithTokenW, OpenProcessToken, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW,
+    TerminateProcess, WaitForSingleObject,
 };
 
 use crate::runner_desktop::{ParentDesktop, ParentDesktopError};
@@ -76,10 +79,22 @@ pub(crate) enum RunnerLaunchError {
     RunnerPathEncoding,
     #[error("command-runner working directory is not valid Unicode")]
     WorkingDirectoryEncoding,
+    #[error("batch logon failed for the {account} sandbox account: Windows error {code}")]
+    BatchLogon { account: String, code: u32 },
+    #[error("Windows returned an invalid primary token for the {account} sandbox account")]
+    InvalidBatchToken { account: String },
     #[error(
-        "CreateProcessWithLogonW failed for the {account} sandbox account: Windows error {code}"
+        "CreateProcessWithTokenW failed for the {account} sandbox account: Windows error {code}"
     )]
-    Logon { account: String, code: u32 },
+    BatchTokenProcessStart { account: String, code: u32 },
+    #[error(
+        "batch-token runner launch failed for the {account} sandbox account: CreateProcessWithTokenW returned {token_code}; CreateProcessAsUserW returned {as_user_code}"
+    )]
+    BatchTokenFallbackProcessStart {
+        account: String,
+        token_code: u32,
+        as_user_code: u32,
+    },
     #[error("Windows returned invalid runner process information")]
     InvalidProcessInformation,
     #[error("failed to open the runner process token: Windows error {code}")]
@@ -255,27 +270,16 @@ impl SuspendedRunner {
             ..Default::default()
         };
         let mut process = PROCESS_INFORMATION::default();
-        if unsafe {
-            CreateProcessWithLogonW(
-                username.as_ptr(),
-                domain.as_ptr(),
-                credential.password_wide().as_ptr(),
-                0,
-                application.as_ptr(),
-                command_line.as_mut_ptr(),
-                CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
-                std::ptr::null(),
-                cwd.as_ptr(),
-                &startup,
-                &mut process,
-            )
-        } == 0
-        {
-            return Err(RunnerLaunchError::Logon {
-                account: credential.name().to_string(),
-                code: unsafe { GetLastError() },
-            });
-        }
+        let token = batch_logon_token(credential, &username, &domain)?;
+        create_suspended_runner_process(
+            token.as_raw_handle() as _,
+            credential.name(),
+            application.as_ptr(),
+            command_line.as_mut_ptr(),
+            cwd.as_ptr(),
+            &startup,
+            &mut process,
+        )?;
         if process.hProcess.is_null() || process.hThread.is_null() || process.dwProcessId == 0 {
             if !process.hProcess.is_null() {
                 unsafe { windows_sys::Win32::Foundation::CloseHandle(process.hProcess) };
@@ -329,6 +333,96 @@ impl SuspendedRunner {
         }
         Ok(())
     }
+}
+
+#[allow(unsafe_code)]
+fn batch_logon_token(
+    credential: &AccountCredential,
+    username: &[u16],
+    domain: &[u16],
+) -> Result<OwnedHandle, RunnerLaunchError> {
+    let mut token = std::ptr::null_mut();
+    if unsafe {
+        LogonUserW(
+            username.as_ptr(),
+            domain.as_ptr(),
+            credential.password_wide().as_ptr(),
+            LOGON32_LOGON_BATCH,
+            LOGON32_PROVIDER_DEFAULT,
+            &mut token,
+        )
+    } == 0
+    {
+        return Err(RunnerLaunchError::BatchLogon {
+            account: credential.name().to_string(),
+            code: unsafe { GetLastError() },
+        });
+    }
+    if token.is_null() {
+        return Err(RunnerLaunchError::InvalidBatchToken {
+            account: credential.name().to_string(),
+        });
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(token as RawHandle) })
+}
+
+#[allow(unsafe_code)]
+fn create_suspended_runner_process(
+    token: windows_sys::Win32::Foundation::HANDLE,
+    account: &str,
+    application: *const u16,
+    command_line: *mut u16,
+    working_directory: *const u16,
+    startup: &STARTUPINFOW,
+    process: &mut PROCESS_INFORMATION,
+) -> Result<(), RunnerLaunchError> {
+    let creation_flags = CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
+    if unsafe {
+        CreateProcessWithTokenW(
+            token,
+            0,
+            application,
+            command_line,
+            creation_flags,
+            std::ptr::null(),
+            working_directory,
+            startup,
+            process,
+        )
+    } != 0
+    {
+        return Ok(());
+    }
+    let token_code = unsafe { GetLastError() };
+    if token_code != ERROR_PRIVILEGE_NOT_HELD {
+        return Err(RunnerLaunchError::BatchTokenProcessStart {
+            account: account.to_string(),
+            code: token_code,
+        });
+    }
+    if unsafe {
+        CreateProcessAsUserW(
+            token,
+            application,
+            command_line,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            creation_flags,
+            std::ptr::null(),
+            working_directory,
+            startup,
+            process,
+        )
+    } != 0
+    {
+        return Ok(());
+    }
+    Err(RunnerLaunchError::BatchTokenFallbackProcessStart {
+        account: account.to_string(),
+        token_code,
+        as_user_code: unsafe { GetLastError() },
+    })
 }
 
 #[allow(unsafe_code)]
