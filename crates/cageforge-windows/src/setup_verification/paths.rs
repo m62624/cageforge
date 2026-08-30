@@ -139,8 +139,19 @@ fn verify_shared_runner_resource(
     group_sid: &str,
     kind: crate::runner_resource_security::RunnerResourceKind,
 ) -> Result<File, WindowsSetupVerificationError> {
-    crate::runner_resource_security::open_verified_runner_resource(path, owner_sid, group_sid, kind)
-        .map_err(map_runner_resource_error)
+    let file = crate::setup_pinned_file::open_for_readback(path, true).map_err(|error| {
+        map_runner_resource_error(
+            crate::runner_resource_security::RunnerResourceSecurityError::Unsafe {
+                path: path.to_path_buf(),
+                detail: error.to_string(),
+            },
+        )
+    })?;
+    crate::runner_resource_security::verify_open_runner_resource(
+        &file, path, owner_sid, group_sid, kind,
+    )
+    .map_err(map_runner_resource_error)?;
+    Ok(file)
 }
 
 pub(crate) fn verify_open_runner_resource_dacl(
@@ -185,7 +196,7 @@ fn verify_dacl(
     let file = if directory {
         crate::setup_pinned_directory::open_for_pin(path)
     } else {
-        crate::setup_pinned_file::open_for_readback(path)
+        crate::setup_pinned_file::open_for_readback(path, true)
     }
     .map_err(|error| WindowsSetupVerificationError::ProtectedPathUnsafe {
         path: path.to_path_buf(),

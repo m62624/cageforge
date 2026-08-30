@@ -54,12 +54,17 @@ pub(crate) enum SetupPinnedFileError {
     },
 }
 
-pub(crate) fn open_for_readback(path: &Path) -> Result<File, SetupPinnedFileError> {
-    open_existing(path, READ_CONTROL | FILE_GENERIC_READ, FILE_SHARE_READ)
-}
-
-fn open_existing(path: &Path, access: u32, share_mode: u32) -> Result<File, SetupPinnedFileError> {
-    open_with_options(path, access, share_mode, false)
+pub(crate) fn open_for_readback(
+    path: &Path,
+    require_exact_caller_path: bool,
+) -> Result<File, SetupPinnedFileError> {
+    open_with_options(
+        path,
+        READ_CONTROL | FILE_GENERIC_READ,
+        FILE_SHARE_READ,
+        false,
+        require_exact_caller_path,
+    )
 }
 
 #[allow(unsafe_code)]
@@ -68,6 +73,22 @@ pub(crate) fn open_with_options(
     access: u32,
     share_mode: u32,
     require_directory: bool,
+    require_exact_caller_path: bool,
+) -> Result<File, SetupPinnedFileError> {
+    let file = open_unverified(path, access, share_mode)?;
+    if require_exact_caller_path {
+        verify_open_path(path, file.as_raw_handle() as _, require_directory)?;
+    } else {
+        reject_reparse_point(path, file.as_raw_handle() as _, require_directory)?;
+    }
+    Ok(file)
+}
+
+#[allow(unsafe_code)]
+fn open_unverified(
+    path: &Path,
+    access: u32,
+    share_mode: u32,
 ) -> Result<File, SetupPinnedFileError> {
     validate_lexical_path(path)?;
     let path_wide = wide_path(path);
@@ -89,7 +110,6 @@ pub(crate) fn open_with_options(
         });
     }
     let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
-    verify_open_path(path, handle.as_raw_handle() as _, require_directory)?;
     Ok(File::from(handle))
 }
 
@@ -100,7 +120,7 @@ pub(crate) fn verify_open_path(
 ) -> Result<(), SetupPinnedFileError> {
     validate_lexical_path(path)?;
     reject_reparse_point(path, handle, require_directory)?;
-    let final_path = final_path(path, handle)?;
+    let final_path = final_path_for_open_handle(path, handle)?;
     let expanded_path = long_path(path)?;
     if !paths_equal(&expanded_path, &final_path) {
         return Err(SetupPinnedFileError::FinalPathMismatch {
@@ -165,7 +185,7 @@ fn reject_reparse_point(
 }
 
 #[allow(unsafe_code)]
-fn final_path(
+pub(crate) fn final_path_for_open_handle(
     requested: &Path,
     handle: windows_sys::Win32::Foundation::HANDLE,
 ) -> Result<PathBuf, SetupPinnedFileError> {

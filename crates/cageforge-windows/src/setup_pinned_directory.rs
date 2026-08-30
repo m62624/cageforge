@@ -17,5 +17,6 @@ pub(crate) fn open_for_pin(path: &Path) -> Result<File, SetupPinnedFileError> {
         READ_CONTROL | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         true,
+        true,
     )
 }

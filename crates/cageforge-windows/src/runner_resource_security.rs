@@ -82,22 +82,6 @@ impl Drop for LocalSid {
     }
 }
 
-pub(crate) fn open_verified_runner_resource(
-    path: &Path,
-    owner_sid: &str,
-    group_sid: &str,
-    kind: RunnerResourceKind,
-) -> Result<File, RunnerResourceSecurityError> {
-    let file = crate::setup_pinned_file::open_for_readback(path).map_err(|error| {
-        RunnerResourceSecurityError::Unsafe {
-            path: path.to_path_buf(),
-            detail: error.to_string(),
-        }
-    })?;
-    verify_open_runner_resource(&file, path, owner_sid, group_sid, kind)?;
-    Ok(file)
-}
-
 #[allow(unsafe_code)]
 pub(crate) fn verify_open_runner_resource(
     file: &File,

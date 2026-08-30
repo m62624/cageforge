@@ -226,12 +226,10 @@ impl WindowsSetup {
             }
             Ok(_) => {}
         }
-        let mut marker_file =
-            crate::setup_pinned_file::open_for_readback(&marker_path).map_err(|error| {
-                WindowsSetupError::StatePathUnsafe {
-                    path: marker_path.clone(),
-                    detail: error.to_string(),
-                }
+        let mut marker_file = crate::setup_pinned_file::open_for_readback(&marker_path, true)
+            .map_err(|error| WindowsSetupError::StatePathUnsafe {
+                path: marker_path.clone(),
+                detail: error.to_string(),
             })?;
         let mut marker_bytes = Vec::new();
         marker_file

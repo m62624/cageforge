@@ -398,7 +398,7 @@ fn open_existing_capability_file(
     request: &SetupRequest,
     path: &std::path::Path,
 ) -> NativeSetupResult<File> {
-    let pinned = crate::setup_pinned_file::open_for_readback(path).map_err(|error| {
+    let pinned = crate::setup_pinned_file::open_for_readback(path, true).map_err(|error| {
         NativeSetupFailure::new(
             SetupStage::CapabilityState,
             SetupFailureCode::CapabilityStateRead,

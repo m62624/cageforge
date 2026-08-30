@@ -4,7 +4,9 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::io::Read;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::path::Path;
 
+use cageforge_path::paths_equal;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
@@ -23,8 +25,7 @@ use crate::account_identity::ManagedAccountNames;
 use crate::runner_manifest::{RUNNER_MANIFEST_NAME, RUNNER_MANIFEST_VERSION, RunnerManifest};
 use crate::runner_protocol::{RunnerAccount, RunnerBootstrapStage};
 use crate::runner_resource_security::{
-    RunnerResourceKind, RunnerResourceSecurityError, open_verified_runner_resource,
-    verify_open_runner_resource,
+    RunnerResourceKind, RunnerResourceSecurityError, verify_open_runner_resource,
 };
 
 pub(super) struct InstalledRunnerIdentity {
@@ -69,6 +70,8 @@ pub(super) enum RunnerAuthenticationError {
     },
     #[error("running command-runner executable has no parent directory")]
     MissingInstallDirectory,
+    #[error("protected command-runner manifest is not adjacent to the running executable")]
+    ManifestLocationMismatch,
     #[error("failed to read the protected command-runner manifest: {source}")]
     ManifestRead {
         #[source]
@@ -127,7 +130,7 @@ impl InstalledRunnerIdentity {
             .parent()
             .ok_or(RunnerAuthenticationError::MissingInstallDirectory)?;
         let manifest_path = directory.join(RUNNER_MANIFEST_NAME);
-        let mut manifest_file = crate::setup_pinned_file::open_for_readback(&manifest_path)
+        let mut manifest_file = crate::setup_pinned_file::open_for_readback(&manifest_path, false)
             .map_err(
                 |error| RunnerAuthenticationError::InstalledResourceSecurity {
                     source: RunnerResourceSecurityError::Unsafe {
@@ -136,6 +139,42 @@ impl InstalledRunnerIdentity {
                     },
                 },
             )?;
+        let manifest_path = crate::setup_pinned_file::final_path_for_open_handle(
+            &manifest_path,
+            manifest_file.as_raw_handle() as _,
+        )
+        .map_err(
+            |error| RunnerAuthenticationError::InstalledResourceSecurity {
+                source: RunnerResourceSecurityError::Unsafe {
+                    path: manifest_path.clone(),
+                    detail: error.to_string(),
+                },
+            },
+        )?;
+        let mut executable_file = crate::setup_pinned_file::open_for_readback(&executable, false)
+            .map_err(|error| {
+            RunnerAuthenticationError::InstalledResourceSecurity {
+                source: RunnerResourceSecurityError::Unsafe {
+                    path: executable.clone(),
+                    detail: error.to_string(),
+                },
+            }
+        })?;
+        let executable_path = crate::setup_pinned_file::final_path_for_open_handle(
+            &executable,
+            executable_file.as_raw_handle() as _,
+        )
+        .map_err(
+            |error| RunnerAuthenticationError::InstalledResourceSecurity {
+                source: RunnerResourceSecurityError::Unsafe {
+                    path: executable.clone(),
+                    detail: error.to_string(),
+                },
+            },
+        )?;
+        if !runner_resources_are_adjacent(&executable_path, &manifest_path) {
+            return Err(RunnerAuthenticationError::ManifestLocationMismatch);
+        }
         let mut encoded = Vec::new();
         manifest_file
             .read_to_end(&mut encoded)
@@ -152,8 +191,9 @@ impl InstalledRunnerIdentity {
         {
             return Err(RunnerAuthenticationError::ManifestAccountBinding);
         }
-        let mut executable_file = open_verified_runner_resource(
-            &executable,
+        verify_open_runner_resource(
+            &executable_file,
+            &executable_path,
             &manifest.owner_sid,
             &manifest.group_sid,
             RunnerResourceKind::Executable,
@@ -179,6 +219,20 @@ impl InstalledRunnerIdentity {
     }
 }
 
+fn runner_resources_are_adjacent(executable: &Path, manifest: &Path) -> bool {
+    let Some(executable_directory) = executable.parent() else {
+        return false;
+    };
+    let Some(manifest_directory) = manifest.parent() else {
+        return false;
+    };
+    let Some(manifest_name) = manifest.file_name() else {
+        return false;
+    };
+    paths_equal(executable_directory, manifest_directory)
+        && paths_equal(Path::new(manifest_name), Path::new(RUNNER_MANIFEST_NAME))
+}
+
 impl AuthenticatedRunnerAccount {
     pub(super) const fn matches(&self, requested: RunnerAccount) -> bool {
         matches!(
@@ -198,6 +252,7 @@ impl RunnerAuthenticationError {
         match self {
             Self::CurrentExecutable { .. }
             | Self::MissingInstallDirectory
+            | Self::ManifestLocationMismatch
             | Self::ManifestRead { .. }
             | Self::ExecutableRead { .. }
             | Self::ManifestDecode { .. }
@@ -244,6 +299,7 @@ impl RunnerAuthenticationError {
             | Self::InvalidPipeName
             | Self::CurrentExecutable { .. }
             | Self::MissingInstallDirectory
+            | Self::ManifestLocationMismatch
             | Self::ManifestRead { .. }
             | Self::ExecutableRead { .. }
             | Self::ManifestDecode { .. }
@@ -454,9 +510,11 @@ fn wide_pointer_to_string(value: *const u16) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{
         FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
-        PipeDirection, client_pipe_access,
+        PipeDirection, client_pipe_access, runner_resources_are_adjacent,
     };
 
     #[test]
@@ -470,5 +528,21 @@ mod tests {
             client_pipe_access(PipeDirection::Write) & FILE_APPEND_DATA,
             0
         );
+    }
+
+    #[test]
+    fn runner_resources_must_share_one_directory_and_manifest_name() {
+        assert!(runner_resources_are_adjacent(
+            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\cageforge-windows-command-runner.exe"),
+            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\runner-manifest.json"),
+        ));
+        assert!(!runner_resources_are_adjacent(
+            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\cageforge-windows-command-runner.exe"),
+            Path::new(r"\\?\C:\ProgramData\Cageforge\other\runner-manifest.json"),
+        ));
+        assert!(!runner_resources_are_adjacent(
+            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\cageforge-windows-command-runner.exe"),
+            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\other.json"),
+        ));
     }
 }

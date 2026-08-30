@@ -18,6 +18,7 @@ pub(crate) fn open_for_cleanup(path: &Path) -> Result<File, SetupPinnedFileError
         READ_CONTROL | FILE_GENERIC_READ | DELETE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         false,
+        true,
     )
 }
 

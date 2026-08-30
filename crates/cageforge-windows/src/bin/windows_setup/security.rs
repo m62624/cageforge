@@ -425,7 +425,7 @@ pub(super) fn create_new_protected_file(path: &Path, owner_sid: &str) -> NativeS
 }
 
 pub(super) fn verify_owner_file(path: &Path, owner_sid: &str) -> NativeSetupResult<()> {
-    let file = crate::setup_pinned_file::open_for_readback(path).map_err(|error| {
+    let file = crate::setup_pinned_file::open_for_readback(path, true).map_err(|error| {
         NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::DirectoryAcl,

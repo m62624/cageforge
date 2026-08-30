@@ -348,6 +348,15 @@ revision, ACE order, ACE type, ACE flags, exact SID, exact access mask, and ACE
 size. SDDL rendering and non-enforcing descriptor formatting flags are not
 security evidence.
 
+The runner pins both its own executable and the adjacent manifest with
+`FILE_FLAG_OPEN_REPARSE_POINT`, rejects either leaf reparse point, and compares
+the two final handle paths to require one directory and the exact manifest
+filename. It verifies both retained handles' protected descriptors before
+consuming the manifest or runner bytes. It deliberately does not re-enumerate
+the full caller-supplied path with `GetLongPathNameW` after opening those
+handles: the dedicated account may validly lack list access to an ancestor, and
+the handle-pinned final-path pair is the relevant identity proof.
+
 Before it sends an authenticated spawn response, the runner may report only one
 fixed bootstrap phase through its exit status: argument parsing, installed
 identity verification, request-pipe open, response-pipe open, or transport

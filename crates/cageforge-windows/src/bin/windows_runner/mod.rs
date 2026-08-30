@@ -262,6 +262,9 @@ fn authentication_failure(error: &identity::RunnerAuthenticationError) -> Window
         | identity::RunnerAuthenticationError::MissingInstallDirectory => {
             WindowsRunnerFailureCode::ManifestPath
         }
+        identity::RunnerAuthenticationError::ManifestLocationMismatch => {
+            WindowsRunnerFailureCode::InstalledResourceSecurity
+        }
         identity::RunnerAuthenticationError::ManifestRead { .. }
         | identity::RunnerAuthenticationError::ExecutableRead { .. } => {
             WindowsRunnerFailureCode::InstalledResourceRead
