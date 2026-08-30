@@ -298,7 +298,14 @@ receives a versioned authenticated request over one random private named-pipe
 pair. Both directions are identity-bound: the parent verifies that both pipe
 clients have the exact PID returned for the launched runner, while the runner
 verifies that both pipe servers have the same PID and that the server process
-`TokenUser` is the setup owner recorded in a protected runner manifest. The
+`TokenUser` is the setup owner recorded in a protected runner manifest. After
+both connections complete, the parent duplicates only a
+`PROCESS_QUERY_LIMITED_INFORMATION` handle for itself into the runner and
+writes its numeric value in one fixed pre-request bootstrap frame. The runner
+requires that handle's PID to equal both pipe-server PIDs before it queries the
+token. It never opens an arbitrary host process by PID or changes the host
+process DACL merely to authenticate the transport. The handle is not inherited
+by the sandboxed user process. The
 runner also verifies the exact owner and DACL of its own executable and
 manifest, its executable digest, its own `TokenUser` against the selected
 manifest account SID, and the deterministic relation between that account name
@@ -328,8 +335,9 @@ owner and DACL are read back before the runner resumes. The parent starts both
 server-side accepts, waits until both workers
 have published their cancellation handles, then resumes the primary thread; it
 must not serialize the two accepts because the runner opens its endpoints
-consecutively. The parent then duplicates the assign-only Job handle before
-this handoff. An older process using the same dedicated account therefore
+consecutively. The parent duplicates the assign-only Job handle before it
+resumes the runner, and duplicates the query-only parent-identity handle only
+after both pipe connections complete. An older process using the same dedicated account therefore
 cannot race a pipe connection, open the new runner for injection, steal
 handles, or reuse another launch's authenticated channel.
 

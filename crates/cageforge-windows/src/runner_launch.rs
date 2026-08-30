@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree, WAIT_FAILED, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree, WAIT_FAILED,
+    WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
@@ -27,8 +27,9 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithLogonW,
-    GetExitCodeProcess, OpenProcessToken, PROCESS_ALL_ACCESS, PROCESS_INFORMATION, ResumeThread,
-    STARTUPINFOW, THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
+    GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
+    PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread, STARTUPINFOW,
+    THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
 };
 
 use crate::runner_desktop::{ParentDesktop, ParentDesktopError};
@@ -36,7 +37,9 @@ use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, P
 use crate::runner_pipe::{
     ParentPipeDirection, ParentRunnerPipe, ParentRunnerPipeError, RunnerPipeNames,
 };
-use crate::runner_protocol::RunnerBootstrapStage;
+use crate::runner_protocol::{
+    RunnerBootstrapStage, RunnerMessage, WindowsRunnerProtocolError, write_frame,
+};
 use crate::setup_verification::PinnedRunnerResources;
 use crate::setup_verification::credentials::AccountCredential;
 
@@ -116,6 +119,12 @@ pub(crate) enum RunnerLaunchError {
     ProcessDescriptorMismatch { object: &'static str },
     #[error("failed to resume the hardened command runner: Windows error {code}")]
     Resume { code: u32 },
+    #[error(
+        "failed to duplicate the query-only parent process handle into the runner: Windows error {code}"
+    )]
+    ParentIdentityHandle { code: u32 },
+    #[error(transparent)]
+    ParentIdentityFrame(#[from] WindowsRunnerProtocolError),
     #[error("the {direction:?} runner-pipe accept worker stopped before becoming ready")]
     PipeAcceptWorkerMissing { direction: ParentPipeDirection },
     #[error("the {direction:?} runner-pipe accept worker panicked")]
@@ -238,10 +247,16 @@ impl RunnerLaunch {
         )?;
         let job_handle = job.duplicate_assign_only_into(runner.process.as_raw_handle() as _)?;
         connect_runner_pipes(&mut runner, &request, &response)?;
+        let mut request = request.into_file();
+        let process_handle = runner.duplicate_parent_identity_handle()?;
+        write_frame(
+            &mut request,
+            RunnerMessage::ParentIdentity { process_handle },
+        )?;
         let boundary = Arc::new(BoundaryTerminator::new(job, &runner.process)?);
         runner.released = true;
         Ok(Self {
-            request: Some(request.into_file()),
+            request: Some(request),
             response: Some(response.into_file()),
             job_handle,
             desktop,
@@ -378,6 +393,28 @@ impl SuspendedRunner {
             });
         }
         Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn duplicate_parent_identity_handle(&self) -> Result<u64, RunnerLaunchError> {
+        let mut duplicate = std::ptr::null_mut();
+        if unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                GetCurrentProcess(),
+                self.process.as_raw_handle() as _,
+                &mut duplicate,
+                PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                0,
+            )
+        } == 0
+        {
+            return Err(RunnerLaunchError::ParentIdentityHandle {
+                code: unsafe { GetLastError() },
+            });
+        }
+        Ok(duplicate as usize as u64)
     }
 
     #[allow(unsafe_code)]

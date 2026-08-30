@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 3;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 4;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -19,6 +19,7 @@ pub(crate) struct RunnerFrame {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RunnerMessage {
+    ParentIdentity { process_handle: u64 },
     Ready,
     Spawn { request: RunnerSpawnRequest },
     Spawned { process_id: u32 },
@@ -102,8 +103,10 @@ pub enum WindowsRunnerFailureCode {
     PipeOpen,
     /// The two named-pipe server process identifiers differ.
     PipeServerMismatch,
-    /// The named-pipe server process could not be opened.
-    ServerProcessOpen,
+    /// The mandatory parent-identity bootstrap frame was malformed or out of phase.
+    ParentIdentityFrame,
+    /// The passed parent process handle was invalid or did not name the pipe server.
+    ParentIdentityHandle,
     /// The named-pipe server token could not be opened.
     ServerTokenOpen,
     /// The named-pipe server token owner differs from the setup owner.
@@ -224,6 +227,7 @@ pub enum WindowsRunnerProtocolError {
 impl RunnerMessage {
     pub(crate) const fn kind(&self) -> &'static str {
         match self {
+            Self::ParentIdentity { .. } => "parent_identity",
             Self::Ready => "ready",
             Self::Spawn { .. } => "spawn",
             Self::Spawned { .. } => "spawned",
@@ -383,6 +387,26 @@ mod tests {
         let message = read_frame(&mut encoded.as_slice()).expect("read ready frame");
 
         assert!(matches!(message, RunnerMessage::Ready));
+    }
+
+    #[test]
+    fn parent_identity_round_trip_preserves_the_runner_handle_value() {
+        let mut encoded = Vec::new();
+        write_frame(
+            &mut encoded,
+            RunnerMessage::ParentIdentity {
+                process_handle: 0x1234_5678,
+            },
+        )
+        .expect("write parent identity frame");
+        let message = read_frame(&mut encoded.as_slice()).expect("read parent identity frame");
+
+        assert!(matches!(
+            message,
+            RunnerMessage::ParentIdentity {
+                process_handle: 0x1234_5678
+            }
+        ));
     }
 
     #[test]

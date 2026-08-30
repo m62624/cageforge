@@ -64,8 +64,9 @@ impl AuthenticatedTransport {
         installed: &identity::InstalledRunnerIdentity,
         request: &File,
         response: &File,
+        parent_process_handle: u64,
     ) -> Result<identity::AuthenticatedRunnerAccount, identity::RunnerAuthenticationError> {
-        identity::authenticate_transport(installed, request, response)
+        identity::authenticate_transport(installed, request, response, parent_process_handle)
     }
 
     fn fail(&mut self, failure: WindowsRunnerFailure) -> ExitCode {
@@ -90,7 +91,7 @@ pub(super) fn run() -> ExitCode {
             return ExitCode::from(RunnerBootstrapStage::Arguments as u8);
         }
     };
-    let (request, mut response) = match AuthenticatedTransport::open_pipes(&arguments) {
+    let (mut request, mut response) = match AuthenticatedTransport::open_pipes(&arguments) {
         Ok(pipes) => pipes,
         Err(error) => {
             eprintln!("cageforge-windows-command-runner: {error}");
@@ -101,7 +102,29 @@ pub(super) fn run() -> ExitCode {
         Ok(installed) => installed,
         Err(error) => return report_bootstrap_failure(&mut response, &error),
     };
-    let account = match AuthenticatedTransport::authenticate(&installed, &request, &response) {
+    let parent_process_handle = match read_frame(&mut request) {
+        Ok(RunnerMessage::ParentIdentity { process_handle }) => process_handle,
+        Ok(message) => {
+            return report_bootstrap_failure(
+                &mut response,
+                &identity::RunnerAuthenticationError::ParentIdentityMessage {
+                    actual: message.kind(),
+                },
+            );
+        }
+        Err(source) => {
+            return report_bootstrap_failure(
+                &mut response,
+                &identity::RunnerAuthenticationError::ParentIdentityFrame { source },
+            );
+        }
+    };
+    let account = match AuthenticatedTransport::authenticate(
+        &installed,
+        &request,
+        &response,
+        parent_process_handle,
+    ) {
         Ok(account) => account,
         Err(error) => return report_bootstrap_failure(&mut response, &error),
     };
@@ -286,8 +309,13 @@ fn authentication_failure(error: &identity::RunnerAuthenticationError) -> Window
         | identity::RunnerAuthenticationError::InvalidPipeServerPid => {
             WindowsRunnerFailureCode::PipeServerMismatch
         }
-        identity::RunnerAuthenticationError::ServerProcessOpen { .. } => {
-            WindowsRunnerFailureCode::ServerProcessOpen
+        identity::RunnerAuthenticationError::ParentIdentityFrame { .. }
+        | identity::RunnerAuthenticationError::ParentIdentityMessage { .. } => {
+            WindowsRunnerFailureCode::ParentIdentityFrame
+        }
+        identity::RunnerAuthenticationError::ParentIdentityHandle { .. }
+        | identity::RunnerAuthenticationError::ParentIdentityPidMismatch { .. } => {
+            WindowsRunnerFailureCode::ParentIdentityHandle
         }
         identity::RunnerAuthenticationError::ProcessTokenOpen { .. }
         | identity::RunnerAuthenticationError::TokenUserRead { .. }
@@ -311,7 +339,7 @@ fn authentication_failure(error: &identity::RunnerAuthenticationError) -> Window
     runner_failure(
         WindowsRunnerFailureStage::Authentication,
         code,
-        None,
+        error.native_code(),
         error.to_string(),
     )
 }

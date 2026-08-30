@@ -17,9 +17,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
-use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
-};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessId, OpenProcessToken};
 
 use crate::account_identity::ManagedAccountNames;
 use crate::runner_manifest::{RUNNER_MANIFEST_NAME, RUNNER_MANIFEST_VERSION, RunnerManifest};
@@ -104,10 +102,21 @@ pub(super) enum RunnerAuthenticationError {
     PipeServerPidRead { direction: PipeDirection, code: u32 },
     #[error("request and response pipes belong to different server processes")]
     PipeServerMismatch,
+    #[error("the parent identity bootstrap frame could not be read: {source}")]
+    ParentIdentityFrame {
+        #[source]
+        source: crate::runner_protocol::WindowsRunnerProtocolError,
+    },
+    #[error("expected a parent identity bootstrap frame, received {actual}")]
+    ParentIdentityMessage { actual: &'static str },
+    #[error(
+        "the parent identity bootstrap frame contains an invalid process handle: Windows error {code}"
+    )]
+    ParentIdentityHandle { code: u32 },
+    #[error("the parent identity handle PID {actual} differs from pipe server PID {expected}")]
+    ParentIdentityPidMismatch { expected: u32, actual: u32 },
     #[error("Windows returned an invalid zero pipe-server PID")]
     InvalidPipeServerPid,
-    #[error("failed to open the pipe server process: Windows error {code}")]
-    ServerProcessOpen { code: u32 },
     #[error("failed to open a process token for identity verification: Windows error {code}")]
     ProcessTokenOpen { code: u32 },
     #[error("failed to read a process token user SID: Windows error {code}")]
@@ -274,8 +283,11 @@ impl RunnerAuthenticationError {
             | Self::InvalidPipeName => RunnerBootstrapStage::Arguments,
             Self::PipeServerPidRead { .. }
             | Self::PipeServerMismatch
+            | Self::ParentIdentityFrame { .. }
+            | Self::ParentIdentityMessage { .. }
+            | Self::ParentIdentityHandle { .. }
+            | Self::ParentIdentityPidMismatch { .. }
             | Self::InvalidPipeServerPid
-            | Self::ServerProcessOpen { .. }
             | Self::ProcessTokenOpen { .. }
             | Self::TokenUserRead { .. }
             | Self::InvalidTokenUser
@@ -289,7 +301,7 @@ impl RunnerAuthenticationError {
         match self {
             Self::PipeOpen { code, .. }
             | Self::PipeServerPidRead { code, .. }
-            | Self::ServerProcessOpen { code }
+            | Self::ParentIdentityHandle { code }
             | Self::ProcessTokenOpen { code }
             | Self::TokenUserRead { code }
             | Self::TokenUserFormat { code } => Some(*code),
@@ -308,6 +320,9 @@ impl RunnerAuthenticationError {
             | Self::InstalledResourceSecurity { .. }
             | Self::RunnerDigestMismatch
             | Self::PipeServerMismatch
+            | Self::ParentIdentityFrame { .. }
+            | Self::ParentIdentityMessage { .. }
+            | Self::ParentIdentityPidMismatch { .. }
             | Self::InvalidPipeServerPid
             | Self::InvalidTokenUser
             | Self::RunnerAccountMismatch
@@ -353,13 +368,14 @@ pub(super) fn authenticate_transport(
     installed: &InstalledRunnerIdentity,
     request: &File,
     response: &File,
+    parent_process_handle: u64,
 ) -> Result<AuthenticatedRunnerAccount, RunnerAuthenticationError> {
     let request_pid = pipe_server_pid(request, PipeDirection::Read)?;
     let response_pid = pipe_server_pid(response, PipeDirection::Write)?;
     if request_pid != response_pid {
         return Err(RunnerAuthenticationError::PipeServerMismatch);
     }
-    let server = process_token_identity(request_pid)?;
+    let server = parent_process_token_identity(parent_process_handle, request_pid)?;
     if !server
         .user_sid
         .eq_ignore_ascii_case(&installed.manifest.owner_sid)
@@ -407,17 +423,27 @@ fn pipe_server_pid(
 }
 
 #[allow(unsafe_code)]
-fn process_token_identity(
-    process_id: u32,
+fn parent_process_token_identity(
+    value: u64,
+    expected_process_id: u32,
 ) -> Result<ProcessTokenIdentity, RunnerAuthenticationError> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
-    if process.is_null() {
-        return Err(RunnerAuthenticationError::ServerProcessOpen {
+    let handle =
+        usize::try_from(value).map_err(|_| RunnerAuthenticationError::ParentIdentityHandle {
+            code: windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE,
+        })? as *mut c_void;
+    let process_id = unsafe { GetProcessId(handle) };
+    if process_id == 0 {
+        return Err(RunnerAuthenticationError::ParentIdentityHandle {
             code: unsafe { GetLastError() },
         });
     }
-    let process = unsafe { OwnedHandle::from_raw_handle(process as RawHandle) };
-    token_identity_for_process(process.as_raw_handle() as _)
+    if process_id != expected_process_id {
+        return Err(RunnerAuthenticationError::ParentIdentityPidMismatch {
+            expected: expected_process_id,
+            actual: process_id,
+        });
+    }
+    token_identity_for_process(handle)
 }
 
 #[allow(unsafe_code)]
