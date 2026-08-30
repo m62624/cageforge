@@ -270,8 +270,8 @@ duplicate a handle granting only `JOB_OBJECT_ASSIGN_PROCESS` into that exact
 process; no pre-existing parent handle is exposed. The runner uses the limited
 copy only for `PROC_THREAD_ATTRIBUTE_JOB_LIST` and closes it after child
 creation. The initialized process-attribute owner retains the backing Job and
-standard-handle arrays until `CreateProcessAsUserW` returns; no attribute points
-to a temporary stack value whose lifetime ends before process creation.
+explicit child-handle arrays until `CreateProcessAsUserW` returns; no attribute
+points to a temporary stack value whose lifetime ends before process creation.
 `WindowsChild` retains the original handle with termination rights and can
 therefore kill the complete user-command tree without trusting a control
 response from the runner.
@@ -284,11 +284,18 @@ launch-unique desktop, and verifies the protected owner/Admin/SYSTEM/logon-SID
 descriptor before resuming the runner. Full desktop access is necessary for
 Windows process initialization and is not access to the host default desktop:
 Job UI limits and the isolated object DACL still prohibit cross-job or host
-desktop interaction. The runner receives only the desktop
-name. A desktop created by the sandbox account would be unsafe because another
-logon of the same file owner retains implicit descriptor-control rights. The
-desktop, token, process, thread, pipe, and job handles use owned RAII wrappers
-and are never inherited unless explicitly present in the process handle list.
+desktop interaction. The runner receives only the desktop name and one
+explicitly inherited `WinSta0` handle with only `WINSTA_ENUMDESKTOPS`. Windows
+uses that handle to connect the new process to the station before user code
+starts; omitting it from a complete explicit-handle list can leave a restricted
+process stalled before `main` while it tries to reopen the station with
+`MAXIMUM_ALLOWED`. This one right permits neither clipboard nor global-atom
+access, screen reads, desktop creation, station mutation, or session exit; the
+complete Job UI limits continue to block those operations. A desktop created by
+the sandbox account would be unsafe because another logon of the same file
+owner retains implicit descriptor-control rights. The desktop, window-station,
+token, process, thread, pipe, and job handles use owned RAII wrappers and are
+never inherited unless explicitly present in the process handle list.
 
 The parent launches the command runner with `CreateProcessWithLogonW`, so an
 ordinary Cageforge application needs no per-launch Windows privilege or

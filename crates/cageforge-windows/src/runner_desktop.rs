@@ -16,11 +16,13 @@ use windows_sys::Win32::Security::{
     SECURITY_ATTRIBUTES,
 };
 use windows_sys::Win32::System::StationsAndDesktops::{
-    CloseDesktop, CreateDesktopW, DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW, DESKTOP_DELETE,
-    DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK, DESKTOP_JOURNALRECORD,
-    DESKTOP_READ_CONTROL, DESKTOP_READOBJECTS, DESKTOP_SWITCHDESKTOP, DESKTOP_WRITE_DAC,
-    DESKTOP_WRITE_OWNER, DESKTOP_WRITEOBJECTS, HDESK,
+    CloseDesktop, CloseWindowStation, CreateDesktopW, DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW,
+    DESKTOP_DELETE, DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK,
+    DESKTOP_JOURNALRECORD, DESKTOP_READ_CONTROL, DESKTOP_READOBJECTS, DESKTOP_SWITCHDESKTOP,
+    DESKTOP_WRITE_DAC, DESKTOP_WRITE_OWNER, DESKTOP_WRITEOBJECTS, HDESK, HWINSTA,
+    OpenWindowStationW,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::WINSTA_ENUMDESKTOPS;
 
 const PRIVATE_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_CREATEWINDOW
@@ -39,6 +41,10 @@ const PRIVATE_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
 pub(crate) struct ParentDesktop {
     handle: HDESK,
     startup_name: Vec<u16>,
+}
+
+pub(crate) struct ParentWindowStation {
+    handle: HWINSTA,
 }
 
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
@@ -62,11 +68,28 @@ pub(crate) enum ParentDesktopError {
     DescriptorMismatch,
 }
 
+#[derive(Debug, Error)]
+pub(crate) enum ParentWindowStationError {
+    #[error(
+        "failed to open the interactive window station with desktop-enumeration access: Windows error {code}"
+    )]
+    Open { code: u32 },
+}
+
 #[allow(unsafe_code)]
 impl Drop for ParentDesktop {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe { CloseDesktop(self.handle) };
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for ParentWindowStation {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { CloseWindowStation(self.handle) };
         }
     }
 }
@@ -163,6 +186,25 @@ impl ParentDesktop {
         } else {
             Err(ParentDesktopError::DescriptorMismatch)
         }
+    }
+}
+
+impl ParentWindowStation {
+    #[allow(unsafe_code)]
+    pub(crate) fn open_interactive() -> Result<Self, ParentWindowStationError> {
+        let name = crate::win::to_wide("WinSta0");
+        let handle = unsafe { OpenWindowStationW(name.as_ptr(), 0, WINSTA_ENUMDESKTOPS as u32) };
+        if handle.is_null() {
+            Err(ParentWindowStationError::Open {
+                code: unsafe { GetLastError() },
+            })
+        } else {
+            Ok(Self { handle })
+        }
+    }
+
+    pub(crate) fn raw(&self) -> HWINSTA {
+        self.handle
     }
 }
 

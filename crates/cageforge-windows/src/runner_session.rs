@@ -173,8 +173,16 @@ impl RunnerSession {
             }
         };
         let (standard_handles, stdin, stdout, stderr) = stdio.into_parts();
+        let window_station_handle = match launch.duplicate_window_station() {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = boundary.terminate(125);
+                return Err(error.into());
+            }
+        };
         let request = request.bind(
             standard_handles,
+            window_station_handle,
             launch.job_handle,
             launch.desktop_name().to_vec(),
         );
@@ -359,6 +367,7 @@ impl PendingRunnerSpawnRequest {
     fn bind(
         self,
         standard_handles: RunnerStandardHandles,
+        window_station_handle: u64,
         job_handle: u64,
         desktop_name: Vec<u16>,
     ) -> RunnerSpawnRequest {
@@ -370,6 +379,7 @@ impl PendingRunnerSpawnRequest {
             route_sid: self.route_sid,
             account: self.account,
             standard_handles,
+            window_station_handle,
             job_handle,
             desktop_name,
         }

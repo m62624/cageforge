@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 5;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 6;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -47,6 +47,7 @@ pub(crate) struct RunnerSpawnRequest {
     pub(crate) route_sid: Option<String>,
     pub(crate) account: RunnerAccount,
     pub(crate) standard_handles: RunnerStandardHandles,
+    pub(crate) window_station_handle: u64,
     pub(crate) job_handle: u64,
     pub(crate) desktop_name: Vec<u16>,
 }
@@ -148,6 +149,8 @@ pub enum WindowsRunnerFailureCode {
     AttributeListCreate,
     /// The explicit standard-handle list could not be installed.
     HandleListApply,
+    /// The inherited window-station handle was malformed or failed validation.
+    WindowStationPrepare,
     /// Atomic Job Object assignment could not be installed.
     JobListApply,
     /// A parent-duplicated standard handle was invalid or not inheritable.
@@ -375,6 +378,7 @@ mod tests {
                 stdout: 0x2222,
                 stderr: 0x3333,
             },
+            window_station_handle: 0x4444,
             job_handle: 0x1234_5678,
             desktop_name: "Cageforge-test".encode_utf16().collect(),
         };
@@ -390,6 +394,7 @@ mod tests {
         assert_eq!(request.standard_handles.stdin, 0x1111);
         assert_eq!(request.standard_handles.stdout, 0x2222);
         assert_eq!(request.standard_handles.stderr, 0x3333);
+        assert_eq!(request.window_station_handle, 0x4444);
         assert_eq!(request.route_sid.as_deref(), Some("S-1-5-21-5-6-7-8"));
     }
 
