@@ -116,6 +116,10 @@ pub(crate) enum RunnerLaunchError {
     ProcessDescriptorMismatch { object: &'static str },
     #[error("failed to resume the hardened command runner: Windows error {code}")]
     Resume { code: u32 },
+    #[error("the {direction:?} runner-pipe accept worker stopped before becoming ready")]
+    PipeAcceptWorkerMissing { direction: ParentPipeDirection },
+    #[error("the {direction:?} runner-pipe accept worker panicked")]
+    PipeAcceptWorkerPanic { direction: ParentPipeDirection },
     #[error(
         "waiting for the command runner before {direction:?} pipe connection failed: Windows error {code}"
     )]
@@ -233,9 +237,7 @@ impl RunnerLaunch {
             THREAD_ALL_ACCESS,
         )?;
         let job_handle = job.duplicate_assign_only_into(runner.process.as_raw_handle() as _)?;
-        runner.resume()?;
-        connect_runner_pipe(&runner, &request, ParentPipeDirection::Request)?;
-        connect_runner_pipe(&runner, &response, ParentPipeDirection::Response)?;
+        connect_runner_pipes(&mut runner, &request, &response)?;
         let boundary = Arc::new(BoundaryTerminator::new(job, &runner.process)?);
         runner.released = true;
         Ok(Self {
@@ -407,12 +409,53 @@ impl SuspendedRunner {
     }
 }
 
-fn connect_runner_pipe(
+fn connect_runner_pipes(
+    runner: &mut SuspendedRunner,
+    request: &ParentRunnerPipe,
+    response: &ParentRunnerPipe,
+) -> Result<(), RunnerLaunchError> {
+    let process_id = runner.process_id;
+    let (request_ready_sender, request_ready_receiver) = std::sync::mpsc::sync_channel(1);
+    let (response_ready_sender, response_ready_receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let request_worker = scope
+            .spawn(|| request.connect(process_id, RUNNER_CONNECT_TIMEOUT, request_ready_sender));
+        let response_worker = scope
+            .spawn(|| response.connect(process_id, RUNNER_CONNECT_TIMEOUT, response_ready_sender));
+        request_ready_receiver
+            .recv()
+            .map_err(|_| RunnerLaunchError::PipeAcceptWorkerMissing {
+                direction: ParentPipeDirection::Request,
+            })?;
+        response_ready_receiver
+            .recv()
+            .map_err(|_| RunnerLaunchError::PipeAcceptWorkerMissing {
+                direction: ParentPipeDirection::Response,
+            })?;
+        runner.resume()?;
+        let request_result =
+            request_worker
+                .join()
+                .map_err(|_| RunnerLaunchError::PipeAcceptWorkerPanic {
+                    direction: ParentPipeDirection::Request,
+                })?;
+        let response_result =
+            response_worker
+                .join()
+                .map_err(|_| RunnerLaunchError::PipeAcceptWorkerPanic {
+                    direction: ParentPipeDirection::Response,
+                })?;
+        connect_runner_pipe_result(runner, request_result, ParentPipeDirection::Request)?;
+        connect_runner_pipe_result(runner, response_result, ParentPipeDirection::Response)
+    })
+}
+
+fn connect_runner_pipe_result(
     runner: &SuspendedRunner,
-    pipe: &ParentRunnerPipe,
+    result: Result<(), ParentRunnerPipeError>,
     direction: ParentPipeDirection,
 ) -> Result<(), RunnerLaunchError> {
-    match pipe.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT) {
+    match result {
         Ok(()) => Ok(()),
         Err(error) => match runner.exited_before_pipe_connect(direction)? {
             Some(exit_code) => match decode_runner_bootstrap_status(exit_code) {

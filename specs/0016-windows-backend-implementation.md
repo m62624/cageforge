@@ -325,8 +325,11 @@ separate mandatory control: after the parent creates the first instance, an
 older process cannot add another one. The launch-unique logon SID, random pipe
 name, protected runner process DACL, and exact client-PID check remain
 independent controls. Pipe owner and DACL are read back before the runner
-resumes. The parent then duplicates the assign-only Job handle and resumes the
-primary thread. An older process using the same dedicated account therefore
+resumes. The parent starts both server-side accepts, waits until both workers
+have published their cancellation handles, then resumes the primary thread; it
+must not serialize the two accepts because the runner opens its endpoints
+consecutively. The parent then duplicates the assign-only Job handle before
+this handoff. An older process using the same dedicated account therefore
 cannot race a pipe connection, open the new runner for injection, steal
 handles, or reuse another launch's authenticated channel.
 

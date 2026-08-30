@@ -224,6 +224,7 @@ impl ParentRunnerPipe {
         &self,
         expected_runner_pid: u32,
         timeout: Duration,
+        ready: mpsc::SyncSender<()>,
     ) -> Result<(), ParentRunnerPipeError> {
         let direction = self.direction;
         let handle = self.handle.as_raw_handle() as usize;
@@ -245,6 +246,7 @@ impl ParentRunnerPipe {
             let thread_handle = thread_handle_receiver
                 .recv()
                 .map_err(|_| ParentRunnerPipeError::ConnectThreadMissing { direction })??;
+            let _ = ready.send(());
             let result = match result_receiver.recv_timeout(timeout) {
                 Ok(result) => result,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
