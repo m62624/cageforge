@@ -36,6 +36,7 @@ use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, P
 use crate::runner_pipe::{
     ParentPipeDirection, ParentRunnerPipe, ParentRunnerPipeError, RunnerPipeNames,
 };
+use crate::runner_protocol::RunnerBootstrapStage;
 use crate::setup_verification::PinnedRunnerResources;
 use crate::setup_verification::credentials::AccountCredential;
 
@@ -130,7 +131,14 @@ pub(crate) enum RunnerLaunchError {
         direction: ParentPipeDirection,
         code: u32,
     },
-    #[error("command runner exited with code {exit_code} before {direction:?} pipe connection")]
+    #[error("command runner failed during {stage:?} before {direction:?} pipe connection")]
+    RunnerBootstrapFailure {
+        direction: ParentPipeDirection,
+        stage: RunnerBootstrapStage,
+    },
+    #[error(
+        "command runner exited with unexpected code {exit_code} before {direction:?} pipe connection"
+    )]
     RunnerExitedBeforePipeConnect {
         direction: ParentPipeDirection,
         exit_code: u32,
@@ -398,10 +406,13 @@ fn connect_runner_pipe(
     match pipe.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT) {
         Ok(()) => Ok(()),
         Err(error) => match runner.exited_before_pipe_connect(direction)? {
-            Some(exit_code) => Err(RunnerLaunchError::RunnerExitedBeforePipeConnect {
-                direction,
-                exit_code,
-            }),
+            Some(exit_code) => match RunnerBootstrapStage::try_from(exit_code) {
+                Ok(stage) => Err(RunnerLaunchError::RunnerBootstrapFailure { direction, stage }),
+                Err(()) => Err(RunnerLaunchError::RunnerExitedBeforePipeConnect {
+                    direction,
+                    exit_code,
+                }),
+            },
             None => Err(error.into()),
         },
     }

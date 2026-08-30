@@ -326,6 +326,16 @@ account therefore cannot race a pipe connection, create another instance, open
 the new runner for injection, steal handles, or reuse another launch's
 authenticated channel.
 
+Before it sends an authenticated spawn response, the runner may report only one
+fixed bootstrap phase through its exit status: argument parsing, installed
+identity verification, request-pipe open, response-pipe open, or transport
+authentication. If pipe connection or the spawn handshake fails, the parent
+checks the pinned runner process and maps only those reserved statuses to a
+typed launch error; all other early exits retain their exact status. This
+bounded diagnostic contains neither secrets nor arbitrary runner output and
+distinguishes a failed bootstrap from a live process that exceeded the pipe
+deadline.
+
 The runner process and primary-thread DACLs use the concrete Windows
 `PROCESS_ALL_ACCESS` and `THREAD_ALL_ACCESS` masks for the setup owner,
 Administrators, and SYSTEM. `GA` is not used in their expected descriptor:

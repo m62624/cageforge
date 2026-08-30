@@ -52,6 +52,17 @@ pub(crate) enum RunnerAccount {
     Online,
 }
 
+/// Fixed pre-transport command-runner bootstrap phase.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunnerBootstrapStage {
+    Arguments = 125,
+    InstalledIdentity = 126,
+    RequestPipe = 127,
+    ResponsePipe = 128,
+    TransportAuthentication = 129,
+}
+
 /// Native command-runner stage that rejected or failed an operation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -220,6 +231,21 @@ impl RunnerMessage {
     }
 }
 
+impl TryFrom<u32> for RunnerBootstrapStage {
+    type Error = ();
+
+    fn try_from(exit_code: u32) -> Result<Self, Self::Error> {
+        match exit_code {
+            125 => Ok(Self::Arguments),
+            126 => Ok(Self::InstalledIdentity),
+            127 => Ok(Self::RequestPipe),
+            128 => Ok(Self::ResponsePipe),
+            129 => Ok(Self::TransportAuthentication),
+            _ => Err(()),
+        }
+    }
+}
+
 impl WindowsRunnerFailure {
     /// Returns the native runner stage that failed.
     pub const fn stage(&self) -> WindowsRunnerFailureStage {
@@ -302,10 +328,31 @@ pub(crate) fn read_frame(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_RUNNER_FRAME_BYTES, RUNNER_PROTOCOL_VERSION, RunnerAccount, RunnerFrame, RunnerMessage,
-        RunnerSpawnRequest, RunnerStandardHandles, WindowsRunnerProtocolError, read_frame,
-        write_frame,
+        MAX_RUNNER_FRAME_BYTES, RUNNER_PROTOCOL_VERSION, RunnerAccount, RunnerBootstrapStage,
+        RunnerFrame, RunnerMessage, RunnerSpawnRequest, RunnerStandardHandles,
+        WindowsRunnerProtocolError, read_frame, write_frame,
     };
+
+    #[test]
+    fn bootstrap_exit_codes_are_exclusive_and_round_trip() {
+        let stages = [
+            RunnerBootstrapStage::Arguments,
+            RunnerBootstrapStage::InstalledIdentity,
+            RunnerBootstrapStage::RequestPipe,
+            RunnerBootstrapStage::ResponsePipe,
+            RunnerBootstrapStage::TransportAuthentication,
+        ];
+
+        for stage in stages {
+            assert_eq!(
+                RunnerBootstrapStage::try_from(u32::from(stage as u8)),
+                Ok(stage)
+            );
+        }
+        assert_eq!(RunnerBootstrapStage::try_from(0), Err(()));
+        assert_eq!(RunnerBootstrapStage::try_from(124), Err(()));
+        assert_eq!(RunnerBootstrapStage::try_from(130), Err(()));
+    }
 
     #[test]
     fn spawn_request_round_trip_preserves_utf16_and_job_handle() {

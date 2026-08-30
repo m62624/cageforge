@@ -5,8 +5,8 @@ use std::fs::File;
 use std::process::ExitCode;
 
 use crate::runner_protocol::{
-    RunnerMessage, WindowsRunnerFailure, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
-    WindowsRunnerProtocolError, read_frame, write_frame,
+    RunnerBootstrapStage, RunnerMessage, WindowsRunnerFailure, WindowsRunnerFailureCode,
+    WindowsRunnerFailureStage, WindowsRunnerProtocolError, read_frame, write_frame,
 };
 
 mod identity;
@@ -83,14 +83,14 @@ pub(super) fn run() -> ExitCode {
         Ok(arguments) => arguments,
         Err(error) => {
             eprintln!("cageforge-windows-command-runner: {error}");
-            return ExitCode::from(125);
+            return ExitCode::from(RunnerBootstrapStage::Arguments as u8);
         }
     };
     let mut transport = match AuthenticatedTransport::connect(arguments) {
         Ok(transport) => transport,
         Err(error) => {
             eprintln!("cageforge-windows-command-runner: {error}");
-            return ExitCode::from(125);
+            return ExitCode::from(error.bootstrap_stage() as u8);
         }
     };
     let message = match read_frame(&mut transport.request) {

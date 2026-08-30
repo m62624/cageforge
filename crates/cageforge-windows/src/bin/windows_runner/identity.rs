@@ -18,7 +18,7 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::account_identity::ManagedAccountNames;
 use crate::runner_manifest::{RUNNER_MANIFEST_NAME, RUNNER_MANIFEST_VERSION, RunnerManifest};
-use crate::runner_protocol::RunnerAccount;
+use crate::runner_protocol::{RunnerAccount, RunnerBootstrapStage};
 use crate::runner_resource_security::{
     RunnerResourceKind, RunnerResourceSecurityError, open_verified_runner_resource,
     verify_open_runner_resource,
@@ -190,6 +190,44 @@ impl AuthenticatedRunnerAccount {
 
     pub(super) fn sid(&self) -> &str {
         &self.sid
+    }
+}
+
+impl RunnerAuthenticationError {
+    pub(super) const fn bootstrap_stage(&self) -> RunnerBootstrapStage {
+        match self {
+            Self::CurrentExecutable { .. }
+            | Self::MissingInstallDirectory
+            | Self::ManifestRead { .. }
+            | Self::ExecutableRead { .. }
+            | Self::ManifestDecode { .. }
+            | Self::ManifestVersion
+            | Self::ManifestAccountBinding
+            | Self::InstalledResourceSecurity { .. }
+            | Self::RunnerDigestMismatch => RunnerBootstrapStage::InstalledIdentity,
+            Self::PipeOpen {
+                direction: PipeDirection::Read,
+                ..
+            } => RunnerBootstrapStage::RequestPipe,
+            Self::PipeOpen {
+                direction: PipeDirection::Write,
+                ..
+            } => RunnerBootstrapStage::ResponsePipe,
+            Self::MissingPipeArguments
+            | Self::UnexpectedArgument
+            | Self::NonUnicodePipeName
+            | Self::InvalidPipeName => RunnerBootstrapStage::Arguments,
+            Self::PipeServerPidRead { .. }
+            | Self::PipeServerMismatch
+            | Self::InvalidPipeServerPid
+            | Self::ServerProcessOpen { .. }
+            | Self::ProcessTokenOpen { .. }
+            | Self::TokenUserRead { .. }
+            | Self::InvalidTokenUser
+            | Self::TokenUserFormat { .. }
+            | Self::RunnerAccountMismatch
+            | Self::ServerOwnerMismatch => RunnerBootstrapStage::TransportAuthentication,
+        }
     }
 }
 
