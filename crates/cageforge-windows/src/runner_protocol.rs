@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 2;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 3;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -19,6 +19,7 @@ pub(crate) struct RunnerFrame {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RunnerMessage {
+    Ready,
     Spawn { request: RunnerSpawnRequest },
     Spawned { process_id: u32 },
     Exited { exit_code: u32 },
@@ -223,6 +224,7 @@ pub enum WindowsRunnerProtocolError {
 impl RunnerMessage {
     pub(crate) const fn kind(&self) -> &'static str {
         match self {
+            Self::Ready => "ready",
             Self::Spawn { .. } => "spawn",
             Self::Spawned { .. } => "spawned",
             Self::Exited { .. } => "exited",
@@ -372,6 +374,15 @@ mod tests {
         assert_eq!(request.standard_handles.stdout, 0x2222);
         assert_eq!(request.standard_handles.stderr, 0x3333);
         assert_eq!(request.route_sid.as_deref(), Some("S-1-5-21-5-6-7-8"));
+    }
+
+    #[test]
+    fn ready_round_trip_is_distinct_from_a_spawn_request() {
+        let mut encoded = Vec::new();
+        write_frame(&mut encoded, RunnerMessage::Ready).expect("write ready frame");
+        let message = read_frame(&mut encoded.as_slice()).expect("read ready frame");
+
+        assert!(matches!(message, RunnerMessage::Ready));
     }
 
     #[test]

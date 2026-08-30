@@ -333,8 +333,14 @@ cannot race a pipe connection, open the new runner for injection, steal
 handles, or reuse another launch's authenticated channel.
 
 The runner requests exactly the matching numeric client access mask when
-opening each endpoint; it never requests `FILE_APPEND_DATA`. The sandboxed user
-process inherits neither endpoint nor pipe name.
+opening each endpoint; it never requests `FILE_APPEND_DATA`. Before the parent
+writes the capability-bearing spawn request, the runner completes installed
+resource and transport authentication and sends exactly one bounded `ready` or
+structured `failed` frame on the response pipe. The parent requires that frame
+under the spawn-handshake deadline. It therefore reports an authentication or
+runner-bootstrap rejection as its typed failure instead of treating the later
+request-pipe closure as the primary error. The sandboxed user process inherits
+neither endpoint nor pipe name.
 
 Descriptor verification compares the binary owner, protected-DACL state, ACL
 revision, ACE order, ACE type, ACE flags, exact SID, exact access mask, and ACE

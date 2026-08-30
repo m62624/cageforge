@@ -110,6 +110,12 @@ pub(super) fn run() -> ExitCode {
         response,
         account,
     };
+    if let Err(error) = write_frame(&mut transport.response, RunnerMessage::Ready) {
+        eprintln!(
+            "cageforge-windows-command-runner: failed to report authenticated readiness: {error}"
+        );
+        return ExitCode::from(125);
+    }
     let message = match read_frame(&mut transport.request) {
         Ok(message) => message,
         Err(error) => {

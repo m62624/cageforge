@@ -63,6 +63,12 @@ enum RunnerTerminal {
     Failed(RunnerSessionError),
 }
 
+#[derive(Clone, Copy)]
+enum RunnerHandshakePhase {
+    Readiness,
+    Spawn,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum RunnerSessionError {
     #[error(transparent)]
@@ -89,14 +95,18 @@ pub(crate) enum RunnerSessionError {
     },
     #[error("timed out waiting for the authenticated runner spawn response")]
     SpawnHandshakeTimeout,
+    #[error("timed out waiting for the authenticated runner readiness response")]
+    ReadinessHandshakeTimeout,
     #[error(
         "authenticated runner response pipe failed while checking available data: Windows error {code}"
     )]
     ResponsePeek { code: u32 },
-    #[error("authenticated runner response pipe closed during the spawn handshake")]
-    ResponseClosed,
+    #[error("authenticated runner response pipe closed during the {phase} handshake")]
+    ResponseClosed { phase: &'static str },
     #[error("authenticated runner sent {actual} during the spawn handshake")]
     UnexpectedHandshakeMessage { actual: &'static str },
+    #[error("authenticated runner sent {actual} during the readiness handshake")]
+    UnexpectedReadinessMessage { actual: &'static str },
     #[error("authenticated runner sent {actual} during the command lifecycle")]
     UnexpectedLifecycleMessage { actual: &'static str },
     #[error("authenticated runner lifecycle channel closed without a terminal result")]
@@ -123,6 +133,38 @@ impl RunnerSession {
         timeout: Option<Duration>,
     ) -> Result<Self, RunnerSessionError> {
         let boundary = launch.boundary();
+        let mut response_pipe = launch.take_response()?;
+        let readiness = match read_frame_until(
+            &mut response_pipe,
+            Instant::now() + SPAWN_HANDSHAKE_TIMEOUT,
+            RunnerHandshakePhase::Readiness,
+        ) {
+            Ok(message) => message,
+            Err(error) => {
+                let error = match runner_bootstrap_failure(&boundary) {
+                    Ok(Some(status)) => RunnerSessionError::RunnerBootstrapFailure {
+                        stage: status.stage,
+                        native_code: status.native_code,
+                    },
+                    Ok(None) => error,
+                    Err(error) => RunnerSessionError::Boundary(error),
+                };
+                let _ = boundary.terminate(125);
+                return Err(error);
+            }
+        };
+        match readiness {
+            RunnerMessage::Ready => {}
+            RunnerMessage::Failed { failure } => {
+                let _ = boundary.terminate(125);
+                return Err(runner_failure(failure));
+            }
+            other => {
+                let actual = other.kind();
+                let _ = boundary.terminate(125);
+                return Err(RunnerSessionError::UnexpectedReadinessMessage { actual });
+            }
+        }
         let stdio = match ParentStdio::prepare(stdio_spec, &boundary) {
             Ok(stdio) => stdio,
             Err(error) => {
@@ -142,23 +184,25 @@ impl RunnerSession {
             return Err(error.into());
         }
         drop(request_pipe);
-        let mut response_pipe = launch.take_response()?;
-        let message =
-            match read_frame_until(&mut response_pipe, Instant::now() + SPAWN_HANDSHAKE_TIMEOUT) {
-                Ok(message) => message,
-                Err(error) => {
-                    let error = match runner_bootstrap_failure(&boundary) {
-                        Ok(Some(status)) => RunnerSessionError::RunnerBootstrapFailure {
-                            stage: status.stage,
-                            native_code: status.native_code,
-                        },
-                        Ok(None) => error,
-                        Err(error) => RunnerSessionError::Boundary(error),
-                    };
-                    let _ = boundary.terminate(125);
-                    return Err(error);
-                }
-            };
+        let message = match read_frame_until(
+            &mut response_pipe,
+            Instant::now() + SPAWN_HANDSHAKE_TIMEOUT,
+            RunnerHandshakePhase::Spawn,
+        ) {
+            Ok(message) => message,
+            Err(error) => {
+                let error = match runner_bootstrap_failure(&boundary) {
+                    Ok(Some(status)) => RunnerSessionError::RunnerBootstrapFailure {
+                        stage: status.stage,
+                        native_code: status.native_code,
+                    },
+                    Ok(None) => error,
+                    Err(error) => RunnerSessionError::Boundary(error),
+                };
+                let _ = boundary.terminate(125);
+                return Err(error);
+            }
+        };
         let process_id = match message {
             RunnerMessage::Spawned { process_id } if process_id != 0 => process_id,
             RunnerMessage::Failed { failure } => {
@@ -427,9 +471,10 @@ fn dispatch_responses(
 fn read_frame_until(
     reader: &mut File,
     deadline: Instant,
+    phase: RunnerHandshakePhase,
 ) -> Result<RunnerMessage, RunnerSessionError> {
     let mut length = [0u8; 4];
-    read_exact_until(reader, &mut length, deadline)?;
+    read_exact_until(reader, &mut length, deadline, phase)?;
     let payload_length = u32::from_le_bytes(length) as usize;
     if payload_length > MAX_RUNNER_FRAME_BYTES {
         return Err(WindowsRunnerProtocolError::FrameTooLarge {
@@ -441,7 +486,7 @@ fn read_frame_until(
     let mut frame = Vec::with_capacity(4 + payload_length);
     frame.extend_from_slice(&length);
     frame.resize(4 + payload_length, 0);
-    read_exact_until(reader, &mut frame[4..], deadline)?;
+    read_exact_until(reader, &mut frame[4..], deadline, phase)?;
     read_frame(&mut frame.as_slice()).map_err(Into::into)
 }
 
@@ -450,10 +495,14 @@ fn read_exact_until(
     reader: &mut File,
     mut buffer: &mut [u8],
     deadline: Instant,
+    phase: RunnerHandshakePhase,
 ) -> Result<(), RunnerSessionError> {
     while !buffer.is_empty() {
         if Instant::now() >= deadline {
-            return Err(RunnerSessionError::SpawnHandshakeTimeout);
+            return Err(match phase {
+                RunnerHandshakePhase::Readiness => RunnerSessionError::ReadinessHandshakeTimeout,
+                RunnerHandshakePhase::Spawn => RunnerSessionError::SpawnHandshakeTimeout,
+            });
         }
         let mut available = 0;
         if unsafe {
@@ -480,7 +529,12 @@ fn read_exact_until(
             .read(&mut buffer[..length])
             .map_err(|source| WindowsRunnerProtocolError::PayloadRead { source })?;
         if read == 0 {
-            return Err(RunnerSessionError::ResponseClosed);
+            return Err(RunnerSessionError::ResponseClosed {
+                phase: match phase {
+                    RunnerHandshakePhase::Readiness => "readiness",
+                    RunnerHandshakePhase::Spawn => "spawn",
+                },
+            });
         }
         buffer = &mut buffer[read..];
     }
