@@ -337,10 +337,12 @@ The runner requests the corresponding `GENERIC_READ` or `GENERIC_WRITE` client
 mode when opening each endpoint. The sandboxed user process inherits neither
 endpoint nor pipe name.
 
-Windows expands the `GR` and `GW` ACE aliases to the corresponding file generic
-masks when reading the pipe DACL back. Descriptor verification canonicalizes
-only those two aliases before comparison; owner, ACE order, SID, inheritance,
-and every other access mask remain exact.
+Windows can expand the `GR` and `GW` ACE aliases to the corresponding file
+generic masks when reading the pipe DACL back. Descriptor verification compares
+the binary owner, protected-DACL state, ACL revision, ACE order, ACE type,
+ACE flags, exact SID, and ACE size. It canonicalizes only those two generic
+masks; every other access mask remains exact. SDDL rendering and non-enforcing
+descriptor formatting flags are not security evidence.
 
 Before it sends an authenticated spawn response, the runner may report only one
 fixed bootstrap phase through its exit status: argument parsing, installed

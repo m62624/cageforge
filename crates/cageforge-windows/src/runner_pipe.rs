@@ -2,6 +2,8 @@
 
 //! Launch-unique parent-side named pipes with bounded authenticated connection.
 
+use std::ffi::c_void;
+use std::fmt;
 use std::fs::File;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
 use std::sync::mpsc;
@@ -13,19 +15,21 @@ use windows_sys::Win32::Foundation::{
     HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
     SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    SECURITY_ATTRIBUTES,
+    ACCESS_ALLOWED_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetLengthSid,
+    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+    IsValidSecurityDescriptor, IsValidSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
 };
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
+use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread};
 
 const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
@@ -47,12 +51,21 @@ pub(crate) struct ParentRunnerPipe {
 
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
-struct LocalWideString(*mut u16);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParentPipeDirection {
     Request,
     Response,
+}
+
+#[derive(Debug)]
+pub(crate) enum RunnerPipeDescriptorComponent {
+    ExpectedInvalid,
+    ActualInvalid,
+    Owner,
+    ProtectedDacl,
+    Dacl,
+    AceCount,
+    Ace { index: u16 },
 }
 
 #[derive(Debug, Error)]
@@ -74,8 +87,11 @@ pub(crate) enum ParentRunnerPipeError {
         direction: ParentPipeDirection,
         code: u32,
     },
-    #[error("the {direction:?} runner pipe descriptor differs after Windows read-back")]
-    DescriptorMismatch { direction: ParentPipeDirection },
+    #[error("the {direction:?} runner pipe descriptor {component} differs after Windows read-back")]
+    DescriptorMismatch {
+        direction: ParentPipeDirection,
+        component: RunnerPipeDescriptorComponent,
+    },
     #[error("failed to duplicate the {direction:?} connect-thread handle: Windows error {code}")]
     ConnectThreadHandle {
         direction: ParentPipeDirection,
@@ -123,13 +139,16 @@ impl Drop for LocalSecurityDescriptor {
     }
 }
 
-#[allow(unsafe_code)]
-impl Drop for LocalWideString {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                LocalFree(self.0 as HLOCAL);
-            }
+impl fmt::Display for RunnerPipeDescriptorComponent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExpectedInvalid => formatter.write_str("expected security descriptor is invalid"),
+            Self::ActualInvalid => formatter.write_str("read-back security descriptor is invalid"),
+            Self::Owner => formatter.write_str("owner"),
+            Self::ProtectedDacl => formatter.write_str("protected DACL state"),
+            Self::Dacl => formatter.write_str("DACL revision"),
+            Self::AceCount => formatter.write_str("ACE count"),
+            Self::Ace { index } => write!(formatter, "ACE at index {index}"),
         }
     }
 }
@@ -299,64 +318,149 @@ impl ParentRunnerPipe {
             });
         }
         let actual = LocalSecurityDescriptor(actual);
-        if descriptor_string(expected.0, self.direction)?
-            == descriptor_string(actual.0, self.direction)?
-        {
-            Ok(())
-        } else {
-            Err(ParentRunnerPipeError::DescriptorMismatch {
+        if let Some(component) = descriptor_difference(expected.0, actual.0) {
+            return Err(ParentRunnerPipeError::DescriptorMismatch {
                 direction: self.direction,
-            })
+                component,
+            });
         }
+        Ok(())
     }
 }
 
 #[allow(unsafe_code)]
-fn descriptor_string(
-    descriptor: PSECURITY_DESCRIPTOR,
-    direction: ParentPipeDirection,
-) -> Result<String, ParentRunnerPipeError> {
-    let mut value = std::ptr::null_mut();
-    if unsafe {
-        ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            descriptor,
-            SDDL_REVISION_1,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            &mut value,
-            std::ptr::null_mut(),
-        )
-    } == 0
-    {
-        return Err(ParentRunnerPipeError::DescriptorReadBack {
-            direction,
-            code: unsafe { GetLastError() },
-        });
+fn descriptor_difference(
+    expected: PSECURITY_DESCRIPTOR,
+    actual: PSECURITY_DESCRIPTOR,
+) -> Option<RunnerPipeDescriptorComponent> {
+    if unsafe { IsValidSecurityDescriptor(expected) } == 0 {
+        return Some(RunnerPipeDescriptorComponent::ExpectedInvalid);
     }
-    let value = LocalWideString(value);
-    Ok(canonical_descriptor_string(wide_string(value.0)))
+    if unsafe { IsValidSecurityDescriptor(actual) } == 0 {
+        return Some(RunnerPipeDescriptorComponent::ActualInvalid);
+    }
+
+    let (expected_owner, expected_dacl) = match descriptor_owner_and_dacl(expected) {
+        Ok(parts) => parts,
+        Err(component) => return Some(component),
+    };
+    let (actual_owner, actual_dacl) = match descriptor_owner_and_dacl(actual) {
+        Ok(parts) => parts,
+        Err(component) => return Some(component),
+    };
+    if unsafe { EqualSid(expected_owner, actual_owner) } == 0 {
+        return Some(RunnerPipeDescriptorComponent::Owner);
+    }
+
+    if !has_protected_dacl(expected) || !has_protected_dacl(actual) {
+        return Some(RunnerPipeDescriptorComponent::ProtectedDacl);
+    }
+    if unsafe { (*expected_dacl).AclRevision } != unsafe { (*actual_dacl).AclRevision } {
+        return Some(RunnerPipeDescriptorComponent::Dacl);
+    }
+    if unsafe { (*expected_dacl).AceCount } != unsafe { (*actual_dacl).AceCount } {
+        return Some(RunnerPipeDescriptorComponent::AceCount);
+    }
+
+    for index in 0..unsafe { (*expected_dacl).AceCount } {
+        if !ace_matches(expected_dacl, actual_dacl, index) {
+            return Some(RunnerPipeDescriptorComponent::Ace { index });
+        }
+    }
+    None
 }
 
-fn canonical_descriptor_string(descriptor: String) -> String {
-    descriptor
-        .replace(";;GR;;;", &format!(";;0x{FILE_GENERIC_READ:08x};;;"))
-        .replace(";;GW;;;", &format!(";;0x{FILE_GENERIC_WRITE:08x};;;"))
+#[allow(unsafe_code)]
+fn descriptor_owner_and_dacl(
+    descriptor: PSECURITY_DESCRIPTOR,
+) -> Result<(*mut c_void, *mut windows_sys::Win32::Security::ACL), RunnerPipeDescriptorComponent> {
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    if unsafe { GetSecurityDescriptorOwner(descriptor, &mut owner, &mut owner_defaulted) } == 0
+        || owner.is_null()
+        || unsafe { IsValidSid(owner) } == 0
+    {
+        return Err(RunnerPipeDescriptorComponent::Owner);
+    }
+    let mut dacl_present = 0;
+    let mut dacl_defaulted = 0;
+    let mut dacl = std::ptr::null_mut();
+    if unsafe {
+        GetSecurityDescriptorDacl(
+            descriptor,
+            &mut dacl_present,
+            &mut dacl,
+            &mut dacl_defaulted,
+        )
+    } == 0
+        || dacl_present == 0
+        || dacl.is_null()
+    {
+        return Err(RunnerPipeDescriptorComponent::Dacl);
+    }
+    Ok((owner, dacl))
+}
+
+#[allow(unsafe_code)]
+fn has_protected_dacl(descriptor: PSECURITY_DESCRIPTOR) -> bool {
+    let mut control = 0u16;
+    let mut revision = 0u32;
+    (unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) }) != 0
+        && control & SE_DACL_PROTECTED != 0
+}
+
+#[allow(unsafe_code)]
+fn ace_matches(
+    expected_dacl: *mut windows_sys::Win32::Security::ACL,
+    actual_dacl: *mut windows_sys::Win32::Security::ACL,
+    index: u16,
+) -> bool {
+    let mut expected_raw = std::ptr::null_mut();
+    let mut actual_raw = std::ptr::null_mut();
+    if unsafe { GetAce(expected_dacl, u32::from(index), &mut expected_raw) } == 0
+        || expected_raw.is_null()
+        || unsafe { GetAce(actual_dacl, u32::from(index), &mut actual_raw) } == 0
+        || actual_raw.is_null()
+    {
+        return false;
+    }
+    let expected = expected_raw.cast::<ACCESS_ALLOWED_ACE>();
+    let actual = actual_raw.cast::<ACCESS_ALLOWED_ACE>();
+    if unsafe { (*expected).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
+        || unsafe { (*actual).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
+        || unsafe { (*expected).Header.AceFlags } != 0
+        || unsafe { (*actual).Header.AceFlags } != 0
+        || canonical_pipe_access_mask(unsafe { (*expected).Mask })
+            != canonical_pipe_access_mask(unsafe { (*actual).Mask })
+    {
+        return false;
+    }
+    let expected_sid = unsafe { (&raw mut (*expected).SidStart).cast::<c_void>() };
+    let actual_sid = unsafe { (&raw mut (*actual).SidStart).cast::<c_void>() };
+    if unsafe { IsValidSid(expected_sid) } == 0 || unsafe { IsValidSid(actual_sid) } == 0 {
+        return false;
+    }
+    let expected_size = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart)
+        .checked_add(unsafe { GetLengthSid(expected_sid) } as usize);
+    let actual_size = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart)
+        .checked_add(unsafe { GetLengthSid(actual_sid) } as usize);
+    expected_size == Some(unsafe { (*expected).Header.AceSize } as usize)
+        && actual_size == Some(unsafe { (*actual).Header.AceSize } as usize)
+        && unsafe { EqualSid(expected_sid, actual_sid) } != 0
+}
+
+const fn canonical_pipe_access_mask(mask: u32) -> u32 {
+    match mask {
+        0x8000_0000 => FILE_GENERIC_READ,
+        0x4000_0000 => FILE_GENERIC_WRITE,
+        _ => mask,
+    }
 }
 
 const fn client_access_sddl(direction: ParentPipeDirection) -> &'static str {
     match direction {
         ParentPipeDirection::Request => "GR",
         ParentPipeDirection::Response => "GW",
-    }
-}
-
-#[allow(unsafe_code)]
-fn wide_string(value: *const u16) -> String {
-    unsafe {
-        let mut length = 0;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
     }
 }
 
@@ -418,7 +522,7 @@ fn connect_and_verify(
 #[cfg(test)]
 mod tests {
     use super::{
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE, canonical_descriptor_string, client_access_sddl,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, canonical_pipe_access_mask, client_access_sddl,
     };
     use crate::runner_pipe::ParentPipeDirection;
 
@@ -429,13 +533,9 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_comparison_canonicalizes_only_pipe_generic_aces() {
-        let descriptor = "O:S-1-5-18D:P(A;;GR;;;S-1-5-5-1-2)(A;;GW;;;S-1-5-5-1-2)";
-        assert_eq!(
-            canonical_descriptor_string(descriptor.to_string()),
-            format!(
-                "O:S-1-5-18D:P(A;;0x{FILE_GENERIC_READ:08x};;;S-1-5-5-1-2)(A;;0x{FILE_GENERIC_WRITE:08x};;;S-1-5-5-1-2)"
-            )
-        );
+    fn descriptor_comparison_canonicalizes_only_the_required_generic_masks() {
+        assert_eq!(canonical_pipe_access_mask(0x8000_0000), FILE_GENERIC_READ);
+        assert_eq!(canonical_pipe_access_mask(0x4000_0000), FILE_GENERIC_WRITE);
+        assert_eq!(canonical_pipe_access_mask(0x001f_01ff), 0x001f_01ff);
     }
 }
