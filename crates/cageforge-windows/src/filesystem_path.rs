@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use cageforge_path::{contains_parent_traversal, paths_equal};
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GetLastError, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ,
@@ -163,6 +165,18 @@ impl ValidatedPath {
             final_path,
             identity,
         })
+    }
+}
+
+impl ValidatedPathError {
+    pub(crate) const fn is_not_found(&self) -> bool {
+        matches!(
+            self,
+            Self::Open {
+                code: ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND,
+                ..
+            }
+        )
     }
 }
 

@@ -420,6 +420,11 @@ group and write-root capability ACEs. New descendants then inherit from the
 protected writable root while new siblings outside it continue to inherit the
 deny. Unknown or malformed ACE forms, a failed protected-DACL read-back, or a
 descendant on which the effective deny did not propagate fails before launch.
+If an enumerated descendant disappears before its read-back handle can be
+opened, only `ERROR_FILE_NOT_FOUND` or `ERROR_PATH_NOT_FOUND` is treated as an
+absent object and skipped. Reparse substitution, final-path drift, access
+denial, malformed ACLs, and every other open failure remain typed fail-closed
+errors.
 
 All capability-state and ACL reconciliation uses the same protected
 cross-process lock. A later profile may preserve another profile's capability

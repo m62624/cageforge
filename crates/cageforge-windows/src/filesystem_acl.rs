@@ -872,7 +872,9 @@ impl PreparedAclOperation {
 
     fn verify_subtree(&self) -> Result<(), FilesystemAclError> {
         for path in subtree_paths(self.path.final_path(), &self.excluded_roots)? {
-            let validated = ValidatedPath::open_for_readback(&path)?;
+            let Some(validated) = open_descendant_for_readback(&path)? else {
+                continue;
+            };
             let descriptor = SecurityDescriptor::read(&validated)?;
             for entry in &self.entries {
                 verify_entry(&validated, descriptor.dacl, entry, false)?;
@@ -2059,7 +2061,9 @@ fn protected_descendants(
 ) -> Result<Vec<ValidatedPath>, FilesystemAclError> {
     let mut protected = Vec::new();
     for path in subtree_paths(root, excluded_roots)? {
-        let validated = ValidatedPath::open_for_readback(&path)?;
+        let Some(validated) = open_descendant_for_readback(&path)? else {
+            continue;
+        };
         if SecurityDescriptor::read(&validated)?.is_protected(&validated)? {
             protected.push(validated);
         }
@@ -2086,10 +2090,16 @@ fn subtree_paths(
     let mut paths = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(parent) = stack.pop() {
-        let entries = fs::read_dir(&parent).map_err(|source| FilesystemAclError::Enumerate {
-            path: parent.clone(),
-            source,
-        })?;
+        let entries = match fs::read_dir(&parent) {
+            Ok(entries) => entries,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(FilesystemAclError::Enumerate {
+                    path: parent.clone(),
+                    source,
+                });
+            }
+        };
         let mut children = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|source| FilesystemAclError::Enumerate {
@@ -2103,11 +2113,16 @@ fn subtree_paths(
             {
                 continue;
             }
-            let metadata =
-                fs::symlink_metadata(&child).map_err(|source| FilesystemAclError::Metadata {
-                    path: child.clone(),
-                    source,
-                })?;
+            let metadata = match fs::symlink_metadata(&child) {
+                Ok(metadata) => metadata,
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(source) => {
+                    return Err(FilesystemAclError::Metadata {
+                        path: child,
+                        source,
+                    });
+                }
+            };
             if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 continue;
             }
@@ -2123,6 +2138,14 @@ fn subtree_paths(
     }
     paths.sort_by_key(|path| NativePathKey::new(path));
     Ok(paths)
+}
+
+fn open_descendant_for_readback(path: &Path) -> Result<Option<ValidatedPath>, FilesystemAclError> {
+    match ValidatedPath::open_for_readback(path) {
+        Ok(path) => Ok(Some(path)),
+        Err(error) if error.is_not_found() => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[allow(unsafe_code)]
@@ -2450,7 +2473,7 @@ mod tests {
 
     use super::{
         AclAccessMode, AclEntry, PendingAclOperation, READ_ALLOW_MASK, WRITE_ALLOW_MASK,
-        materialization_components, subtree_paths,
+        materialization_components, open_descendant_for_readback, subtree_paths,
     };
 
     #[test]
@@ -2526,6 +2549,19 @@ mod tests {
         assert!(!paths.contains(&junction));
         assert!(!paths.contains(&outside_child));
         assert!(subtree_paths(&junction, &[]).is_err());
+    }
+
+    #[test]
+    fn vanished_descendant_is_absent_but_other_validation_errors_fail_closed() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let vanished = temporary.path().join("vanished.txt");
+
+        assert!(
+            open_descendant_for_readback(&vanished)
+                .expect("missing descendant is not an ACL target")
+                .is_none()
+        );
+        assert!(open_descendant_for_readback(PathBuf::from("relative").as_path()).is_err());
     }
 
     #[test]
