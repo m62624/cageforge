@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     fn target_access(plan: &FilesystemPlan, path: &Path) -> Option<FilesystemPlanAccess> {
-        let validated = crate::filesystem_path::ValidatedPath::open_for_readback(path)
+        let validated = crate::filesystem_path::ValidatedPath::open_for_acl(path)
             .expect("validated assertion path");
         plan.targets()
             .iter()

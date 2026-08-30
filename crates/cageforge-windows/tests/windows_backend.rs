@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use cageforge_backend_api::BackendRequest;
@@ -20,6 +21,11 @@ use cageforge_windows::{
 };
 use pretty_assertions::assert_eq;
 
+const SANDBOX_FIXTURE_MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
+const SANDBOX_FIXTURE_READY: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_READY";
+const SANDBOX_FIXTURE_MARKER: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MARKER";
+const SANDBOX_FIXTURE_DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
+
 struct SetupCleanup<'a> {
     setup: &'a WindowsSetup,
     armed: bool,
@@ -33,17 +39,6 @@ impl Drop for SetupCleanup<'_> {
     }
 }
 
-fn restricted_request(
-    workspace: &Path,
-    command: CommandSpec,
-) -> (
-    CommandRequest,
-    cageforge_policy_compose::EffectiveSandbox,
-    PathResolutionContext,
-) {
-    restricted_request_with_environment(workspace, command, EnvironmentSpec::inherit_core())
-}
-
 fn restricted_request_with_environment(
     workspace: &Path,
     command: CommandSpec,
@@ -53,6 +48,8 @@ fn restricted_request_with_environment(
     cageforge_policy_compose::EffectiveSandbox,
     PathResolutionContext,
 ) {
+    let minimal = workspace.join(".cageforge-test-runtime");
+    fs::create_dir_all(&minimal).expect("minimal runtime fixture directory");
     let filesystem = FilesystemPolicy::restricted([
         FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
         FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
@@ -63,13 +60,11 @@ fn restricted_request_with_environment(
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
         .expect("policies compose");
-    let windows_directory =
-        PathBuf::from(std::env::var_os("WINDIR").expect("Windows test runner must define WINDIR"));
     let context = PathResolutionContext::new()
         .with_workspace_root(workspace.to_path_buf())
         .expect("workspace root")
-        .with_minimal_path(windows_directory)
-        .expect("Windows runtime scope")
+        .with_minimal_path(minimal)
+        .expect("minimal runtime fixture directory")
         .with_current_directory(workspace.to_path_buf())
         .expect("current directory");
     let command = CommandRequest::new(command)
@@ -77,6 +72,69 @@ fn restricted_request_with_environment(
         .expect("working directory")
         .with_environment(environment);
     (command, effective, context)
+}
+
+fn fixture_command(path: &Path) -> CommandSpec {
+    CommandSpec::new(path)
+        .expect("sandbox fixture command")
+        .with_args(["--exact", "sandbox_process_fixture", "--nocapture"])
+        .expect("sandbox fixture arguments")
+}
+
+#[test]
+fn sandbox_process_fixture() {
+    let Some(mode) = std::env::var_os(SANDBOX_FIXTURE_MODE) else {
+        return;
+    };
+    match mode.to_string_lossy().as_ref() {
+        "denied-read" => {
+            let path = PathBuf::from(
+                std::env::var_os(SANDBOX_FIXTURE_DENIED_READ).expect("denied-read fixture path"),
+            );
+            match fs::read(&path) {
+                Ok(_) => panic!("sandbox fixture read denied host file {path:?}"),
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    print!("denied");
+                }
+                Err(error) => panic!("sandbox fixture received unexpected read error: {error}"),
+            }
+        }
+        "descendant-root" => {
+            let executable = std::env::current_exe().expect("fixture executable");
+            let ready = PathBuf::from(
+                std::env::var_os(SANDBOX_FIXTURE_READY).expect("descendant readiness path"),
+            );
+            let mut descendant = Command::new(executable)
+                .args(["--exact", "sandbox_process_fixture", "--nocapture"])
+                .env(SANDBOX_FIXTURE_MODE, "descendant")
+                .spawn()
+                .expect("spawn descendant fixture");
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !ready.exists() && std::time::Instant::now() < deadline {
+                if let Some(status) = descendant.try_wait().expect("poll descendant fixture") {
+                    panic!("descendant fixture exited before becoming ready: {status}");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(ready.is_file(), "descendant fixture did not become ready");
+            // The enclosing WindowsChild Job Object must terminate this process after
+            // the root fixture exits; waiting here would erase that boundary test.
+            std::mem::forget(descendant);
+        }
+        "descendant" => {
+            let ready = PathBuf::from(
+                std::env::var_os(SANDBOX_FIXTURE_READY).expect("descendant readiness path"),
+            );
+            let marker = PathBuf::from(
+                std::env::var_os(SANDBOX_FIXTURE_MARKER).expect("descendant marker path"),
+            );
+            fs::write(ready, b"ready").expect("write descendant readiness marker");
+            std::thread::sleep(Duration::from_secs(2));
+            fs::write(marker, b"escaped").expect("write descendant escape marker");
+        }
+        "sleep" => std::thread::sleep(Duration::from_secs(30)),
+        other => panic!("unknown Windows sandbox fixture mode: {other}"),
+    }
 }
 
 #[test]
@@ -320,27 +378,21 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         "a verified backend did not pin its runner manifest against replacement"
     );
     let workspace = tempfile::tempdir().expect("sandbox workspace");
-    let powershell = PathBuf::from(std::env::var_os("WINDIR").expect("WINDIR"))
-        .join("System32")
-        .join("WindowsPowerShell")
-        .join("v1.0")
-        .join("powershell.exe");
+    let fixture = workspace.path().join("cageforge-windows-fixture.exe");
+    fs::copy(
+        std::env::current_exe().expect("integration-test fixture executable"),
+        &fixture,
+    )
+    .expect("copy sandbox fixture into the writable workspace");
 
     let outside_secret = temporary.path().join("outside-secret.txt");
     fs::write(&outside_secret, b"host secret").expect("outside secret fixture");
     let environment = EnvironmentSpec::inherit_core()
-        .with_var("CAGEFORGE_DENIED_READ", outside_secret.as_os_str())
+        .with_var(SANDBOX_FIXTURE_MODE, "denied-read")
+        .expect("denied-read fixture mode")
+        .with_var(SANDBOX_FIXTURE_DENIED_READ, outside_secret.as_os_str())
         .expect("denied-read fixture environment");
-    let access_probe = CommandSpec::new(&powershell)
-        .expect("PowerShell command")
-        .with_args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "try { [IO.File]::ReadAllText($env:CAGEFORGE_DENIED_READ) | Out-Null; exit 91 } catch [System.UnauthorizedAccessException] { [Console]::Out.Write('denied') } catch { [Console]::Error.Write($_.Exception.GetType().FullName); exit 92 }",
-        ])
-        .expect("PowerShell arguments");
+    let access_probe = fixture_command(&fixture);
     let (command, effective, context) =
         restricted_request_with_environment(workspace.path(), access_probe, environment);
     let prepared = backend
@@ -364,25 +416,21 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         access_status.success(),
         "outside read probe failed with {access_status}: {access_stderr}"
     );
-    assert_eq!(access_stdout, "denied");
+    assert!(
+        access_stdout.contains("denied"),
+        "denied-read fixture did not report its typed access result: {access_stdout}"
+    );
 
     let descendant_ready = workspace.path().join("descendant-ready.txt");
     let descendant_marker = workspace.path().join("descendant-escaped.txt");
     let environment = EnvironmentSpec::inherit_core()
-        .with_var("CAGEFORGE_DESCENDANT_READY", descendant_ready.as_os_str())
+        .with_var(SANDBOX_FIXTURE_MODE, "descendant-root")
+        .expect("descendant fixture mode")
+        .with_var(SANDBOX_FIXTURE_READY, descendant_ready.as_os_str())
         .expect("descendant readiness environment")
-        .with_var("CAGEFORGE_DESCENDANT_MARKER", descendant_marker.as_os_str())
+        .with_var(SANDBOX_FIXTURE_MARKER, descendant_marker.as_os_str())
         .expect("descendant marker environment");
-    let descendant_probe = CommandSpec::new(&powershell)
-        .expect("PowerShell command")
-        .with_args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$program = Join-Path $PSHOME 'powershell.exe'; $script = '[IO.File]::WriteAllText($env:CAGEFORGE_DESCENDANT_READY, ''ready''); Start-Sleep -Seconds 2; [IO.File]::WriteAllText($env:CAGEFORGE_DESCENDANT_MARKER, ''escaped'')'; $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script)); $descendant = Start-Process -FilePath $program -ArgumentList \"-NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded\" -PassThru; $deadline = [DateTime]::UtcNow.AddSeconds(10); while (-not [IO.File]::Exists($env:CAGEFORGE_DESCENDANT_READY) -and -not $descendant.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 10 }; if (-not [IO.File]::Exists($env:CAGEFORGE_DESCENDANT_READY)) { exit 93 }",
-        ])
-        .expect("PowerShell descendant arguments");
+    let descendant_probe = fixture_command(&fixture);
     let (command, effective, context) =
         restricted_request_with_environment(workspace.path(), descendant_probe, environment);
     let prepared = backend
@@ -405,17 +453,14 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         "a descendant survived the completed WindowsChild boundary"
     );
 
-    let command = CommandSpec::new(&powershell)
-        .expect("PowerShell command")
-        .with_args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Start-Sleep -Seconds 30",
-        ])
-        .expect("PowerShell arguments");
-    let (command, effective, context) = restricted_request(workspace.path(), command);
+    let active_environment = EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, "sleep")
+        .expect("active-child fixture mode");
+    let (command, effective, context) = restricted_request_with_environment(
+        workspace.path(),
+        fixture_command(&fixture),
+        active_environment,
+    );
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare restricted launch");
@@ -456,18 +501,14 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
             .expect("non-zero timeout"),
     )
     .expect("timeout backend");
-    let timeout_command = CommandSpec::new(&powershell)
-        .expect("PowerShell command")
-        .with_args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Start-Sleep -Seconds 30",
-        ])
-        .expect("PowerShell arguments");
-    let (timeout_command, timeout_effective, timeout_context) =
-        restricted_request(workspace.path(), timeout_command);
+    let timeout_environment = EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, "sleep")
+        .expect("timeout fixture mode");
+    let (timeout_command, timeout_effective, timeout_context) = restricted_request_with_environment(
+        workspace.path(),
+        fixture_command(&fixture),
+        timeout_environment,
+    );
     let timeout_prepared = timeout_backend
         .prepare(
             BackendRequest::new(&timeout_command, &timeout_effective),

@@ -416,15 +416,20 @@ complete subtree and turns every nested writable root into a protected-DACL
 inheritance boundary. The protected DACL is built from the handle-read effective
 DACL, removes only the current profile-guard SID, converts retained inherited
 ACEs to explicit ACEs without changing their masks, and installs the writable
-group and write-root capability ACEs. New descendants then inherit from the
-protected writable root while new siblings outside it continue to inherit the
-deny. Unknown or malformed ACE forms, a failed protected-DACL read-back, or a
-descendant on which the effective deny did not propagate fails before launch.
-If an enumerated descendant disappears before its read-back handle can be
-opened, only `ERROR_FILE_NOT_FOUND` or `ERROR_PATH_NOT_FOUND` is treated as an
-absent object and skipped. Reparse substitution, final-path drift, access
-denial, malformed ACLs, and every other open failure remain typed fail-closed
-errors.
+group and write-root capability ACEs. Windows does not retroactively propagate
+a changed parent DACL to existing descendants. Cageforge consequently enumerates
+each existing non-reparse descendant once, applies the required ACEs through
+that object's validated ACL handle, journals the mutation, and reads back that
+same handle before launch. This direct pass covers ordinary and protected DACLs
+alike; it is not replaced by an assumption that a parent mutation reached an
+already-existing file. New descendants then inherit from the protected writable
+root while new siblings outside it continue to inherit the deny. Unknown or
+malformed ACE forms, a failed handle read-back, or a descendant on which the
+effective deny did not propagate fails before launch. If an enumerated
+descendant disappears before its ACL handle can be opened, only
+`ERROR_FILE_NOT_FOUND` or `ERROR_PATH_NOT_FOUND` is treated as an absent object
+and skipped. Reparse substitution, final-path drift, access denial, malformed
+ACLs, and every other open failure remain typed fail-closed errors.
 
 All capability-state and ACL reconciliation uses the same protected
 cross-process lock. A later profile may preserve another profile's capability

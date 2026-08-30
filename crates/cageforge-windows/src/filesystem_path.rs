@@ -76,10 +76,6 @@ impl ValidatedPath {
         )
     }
 
-    pub(crate) fn open_for_readback(path: &Path) -> Result<Self, ValidatedPathError> {
-        Self::open(path, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE)
-    }
-
     pub(crate) fn open_file_for_readback(path: &Path) -> Result<Self, ValidatedPathError> {
         Self::open(
             path,

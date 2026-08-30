@@ -106,24 +106,34 @@ struct PendingAclOperation {
 }
 
 struct AclOperation {
-    path: ValidatedPath,
+    path: AclOperationPath,
     entries: Vec<AclEntry>,
     remove_sids: Vec<String>,
     protect_dacl: bool,
-    excluded_roots: Vec<PathBuf>,
+}
+
+enum AclOperationPath {
+    Pinned(ValidatedPath),
+    Discovered(PathBuf),
 }
 
 struct PreparedAclPlan {
-    operations: Vec<PreparedAclOperation>,
+    operations: Vec<AclOperation>,
 }
 
 struct PreparedAclOperation {
     path: ValidatedPath,
+    retain_path: bool,
     entries: Vec<PreparedAclEntry>,
     remove_sids: Vec<LocalSid>,
     protect_dacl: bool,
-    excluded_roots: Vec<PathBuf>,
     original: SecurityDescriptor,
+}
+
+struct AppliedAclOperation {
+    path: PathBuf,
+    identity: PersistedFileIdentity,
+    original: PersistedDacl,
 }
 
 struct PreparedAclEntry {
@@ -469,13 +479,23 @@ impl FilesystemAclPlan {
     }
 
     fn prepare(self) -> Result<PreparedAclPlan, FilesystemAclError> {
-        let operations = self
+        let mut operations = self
             .foundation
             .into_iter()
-            .chain(self.continuation)
             .chain(self.denies)
-            .map(AclOperation::prepare)
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
+        operations.extend(self.continuation);
+        operations.sort_by(|left, right| {
+            left.path
+                .sort_path()
+                .components()
+                .count()
+                .cmp(&right.path.sort_path().components().count())
+                .then_with(|| {
+                    NativePathKey::new(left.path.sort_path())
+                        .cmp(&NativePathKey::new(right.path.sort_path()))
+                })
+        });
         Ok(PreparedAclPlan { operations })
     }
 }
@@ -563,7 +583,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                 }
             }
         }
-        self.expand_protected_boundaries()
+        self.expand_existing_descendants()
     }
 
     fn collect_materialized_foundations(
@@ -634,7 +654,7 @@ impl<'plan> AclPlanBuilder<'plan> {
         );
     }
 
-    fn expand_protected_boundaries(&mut self) -> Result<(), FilesystemAclError> {
+    fn expand_existing_descendants(&mut self) -> Result<(), FilesystemAclError> {
         let allow_roots = self
             .foundation
             .values()
@@ -646,10 +666,10 @@ impl<'plan> AclPlanBuilder<'plan> {
             })
             .collect::<Vec<_>>();
         for (root, entries) in allow_roots {
-            for boundary in protected_descendants(&root, &[])? {
+            for descendant in subtree_paths(&root, &[])? {
                 merge_pending(
                     &mut self.continuation,
-                    boundary.final_path(),
+                    &descendant,
                     entries.clone(),
                     false,
                     Vec::new(),
@@ -673,14 +693,14 @@ impl<'plan> AclPlanBuilder<'plan> {
             })
             .collect::<Vec<_>>();
         for (root, entries, exclusions) in deny_roots {
-            for boundary in protected_descendants(&root, &exclusions)? {
+            for descendant in subtree_paths(&root, &exclusions)? {
                 merge_pending(
-                    &mut self.denies,
-                    boundary.final_path(),
+                    &mut self.continuation,
+                    &descendant,
                     entries.clone(),
                     false,
                     Vec::new(),
-                    exclusions.clone(),
+                    Vec::new(),
                 );
             }
         }
@@ -690,7 +710,7 @@ impl<'plan> AclPlanBuilder<'plan> {
     fn finish(self) -> Result<FilesystemAclPlan, FilesystemAclError> {
         Ok(FilesystemAclPlan {
             foundation: finish_operations(self.foundation)?,
-            continuation: finish_operations(self.continuation)?,
+            continuation: finish_discovered_operations(self.continuation)?,
             denies: finish_operations(self.denies)?,
         })
     }
@@ -736,8 +756,15 @@ impl PendingAclOperation {
 }
 
 impl AclOperation {
-    fn prepare(self) -> Result<PreparedAclOperation, FilesystemAclError> {
-        let original = SecurityDescriptor::read(&self.path)?;
+    fn prepare(self) -> Result<Option<PreparedAclOperation>, FilesystemAclError> {
+        let (path, retain_path) = match self.path {
+            AclOperationPath::Pinned(path) => (path, true),
+            AclOperationPath::Discovered(path) => match open_discovered_acl_path(&path)? {
+                Some(path) => (path, false),
+                None => return Ok(None),
+            },
+        };
+        let original = SecurityDescriptor::read(&path)?;
         let entries = self
             .entries
             .into_iter()
@@ -751,14 +778,14 @@ impl AclOperation {
             .into_iter()
             .map(|sid| LocalSid::parse("protected-DACL removal", &sid))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(PreparedAclOperation {
-            path: self.path,
+        Ok(Some(PreparedAclOperation {
+            path,
+            retain_path,
             entries,
             remove_sids,
             protect_dacl: self.protect_dacl,
-            excluded_roots: self.excluded_roots,
             original,
-        })
+        }))
     }
 }
 
@@ -768,27 +795,52 @@ impl PreparedAclPlan {
         state: &mut CapabilityStateSession<'_>,
     ) -> Result<Vec<ValidatedPath>, FilesystemAclError> {
         let mut applied = Vec::new();
-        for (index, operation) in self.operations.iter().enumerate() {
+        let mut retained_paths = Vec::new();
+        for operation in self.operations {
+            let operation = match operation.prepare() {
+                Ok(Some(operation)) => operation,
+                Ok(None) => continue,
+                Err(error) => return Err(rollback(&applied, state, error)),
+            };
+            let rollback_record = match operation.rollback_record() {
+                Ok(record) => record,
+                Err(error) => return Err(rollback(&applied, state, error)),
+            };
             if let Err(error) = operation.apply(state) {
-                return Err(rollback(&self.operations, &applied, state, error));
+                return Err(rollback(&applied, state, error));
             }
-            applied.push(index);
-        }
-        for operation in &self.operations {
-            if let Err(error) = operation.verify_subtree() {
-                return Err(rollback(&self.operations, &applied, state, error));
+            if let Some(path) = operation.into_retained_path() {
+                retained_paths.push(path);
             }
+            applied.push(rollback_record);
         }
-        Ok(self
-            .operations
-            .into_iter()
-            .map(|operation| operation.path)
-            .collect())
+        Ok(retained_paths)
+    }
+}
+
+impl AclOperationPath {
+    fn sort_path(&self) -> &Path {
+        match self {
+            Self::Pinned(path) => path.final_path(),
+            Self::Discovered(path) => path,
+        }
     }
 }
 
 #[allow(unsafe_code)]
 impl PreparedAclOperation {
+    fn rollback_record(&self) -> Result<AppliedAclOperation, FilesystemAclError> {
+        Ok(AppliedAclOperation {
+            path: self.path.final_path().to_path_buf(),
+            identity: persisted_identity(&self.path),
+            original: self.original.snapshot(&self.path)?,
+        })
+    }
+
+    fn into_retained_path(self) -> Option<ValidatedPath> {
+        self.retain_path.then_some(self.path)
+    }
+
     fn apply(&self, state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
         let filtered;
         let base = if self.remove_sids.is_empty() {
@@ -870,19 +922,6 @@ impl PreparedAclOperation {
         Ok(actual)
     }
 
-    fn verify_subtree(&self) -> Result<(), FilesystemAclError> {
-        for path in subtree_paths(self.path.final_path(), &self.excluded_roots)? {
-            let Some(validated) = open_descendant_for_readback(&path)? else {
-                continue;
-            };
-            let descriptor = SecurityDescriptor::read(&validated)?;
-            for entry in &self.entries {
-                verify_entry(&validated, descriptor.dacl, entry, false)?;
-            }
-        }
-        Ok(())
-    }
-
     fn restore(&self) -> Result<(), u32> {
         let protected = self
             .original
@@ -953,33 +992,34 @@ impl PreparedAclOperation {
         }
         self.reconcile_failed_mutation(state, identity, original)
     }
+}
 
+impl AppliedAclOperation {
     fn rollback(&self, state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
-        let current = SecurityDescriptor::read(&self.path)?.snapshot(&self.path)?;
-        let target = self.original.snapshot(&self.path)?;
-        if current == target {
+        let path = ValidatedPath::open_for_acl(&self.path)?;
+        let identity = persisted_identity(&path);
+        if identity != self.identity {
+            return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+                path: self.path.clone(),
+            }
+            .into());
+        }
+        let current = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+        let target = &self.original;
+        if &current == target {
             return Ok(());
         }
-        let identity = persisted_identity(&self.path);
         state.begin_acl_mutation(
-            self.path.final_path().to_path_buf(),
+            path.final_path().to_path_buf(),
             identity.clone(),
             current,
             target.clone(),
         )?;
-        if let Err(code) = self.restore() {
-            return Err(FilesystemAclError::Rollback {
-                path: self.path.final_path().to_path_buf(),
-                code,
-                original: Box::new(FilesystemAclError::DescriptorSnapshotMismatch {
-                    path: self.path.final_path().to_path_buf(),
-                }),
-            });
-        }
-        let actual = SecurityDescriptor::read(&self.path)?.snapshot(&self.path)?;
-        if actual != target {
+        apply_persisted_dacl(&path, target)?;
+        let actual = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+        if &actual != target {
             return Err(FilesystemAclError::DescriptorSnapshotMismatch {
-                path: self.path.final_path().to_path_buf(),
+                path: path.final_path().to_path_buf(),
             });
         }
         state.resolve_acl_mutation(&identity, &actual)?;
@@ -2029,46 +2069,50 @@ fn merge_pending(
 fn finish_operations(
     operations: BTreeMap<NativePathKey, PendingAclOperation>,
 ) -> Result<Vec<AclOperation>, FilesystemAclError> {
-    let mut operations = operations
+    let operations = operations
         .into_values()
         .map(|operation| {
             Ok(AclOperation {
-                path: ValidatedPath::open_for_acl(&operation.path)?,
+                path: AclOperationPath::Pinned(ValidatedPath::open_for_acl(&operation.path)?),
                 entries: operation.entries.into_values().collect(),
                 remove_sids: operation.remove_sids.into_iter().collect(),
                 protect_dacl: operation.protect_dacl,
-                excluded_roots: operation.excluded_roots.into_values().collect(),
             })
         })
         .collect::<Result<Vec<_>, FilesystemAclError>>()?;
+    sort_operations(operations)
+}
+
+fn finish_discovered_operations(
+    operations: BTreeMap<NativePathKey, PendingAclOperation>,
+) -> Result<Vec<AclOperation>, FilesystemAclError> {
+    let mut prepared = Vec::new();
+    for operation in operations.into_values() {
+        prepared.push(AclOperation {
+            path: AclOperationPath::Discovered(operation.path),
+            entries: operation.entries.into_values().collect(),
+            remove_sids: operation.remove_sids.into_iter().collect(),
+            protect_dacl: operation.protect_dacl,
+        });
+    }
+    sort_operations(prepared)
+}
+
+fn sort_operations(
+    mut operations: Vec<AclOperation>,
+) -> Result<Vec<AclOperation>, FilesystemAclError> {
     operations.sort_by(|left, right| {
         left.path
-            .final_path()
+            .sort_path()
             .components()
             .count()
-            .cmp(&right.path.final_path().components().count())
+            .cmp(&right.path.sort_path().components().count())
             .then_with(|| {
-                NativePathKey::new(left.path.final_path())
-                    .cmp(&NativePathKey::new(right.path.final_path()))
+                NativePathKey::new(left.path.sort_path())
+                    .cmp(&NativePathKey::new(right.path.sort_path()))
             })
     });
     Ok(operations)
-}
-
-fn protected_descendants(
-    root: &Path,
-    excluded_roots: &[PathBuf],
-) -> Result<Vec<ValidatedPath>, FilesystemAclError> {
-    let mut protected = Vec::new();
-    for path in subtree_paths(root, excluded_roots)? {
-        let Some(validated) = open_descendant_for_readback(&path)? else {
-            continue;
-        };
-        if SecurityDescriptor::read(&validated)?.is_protected(&validated)? {
-            protected.push(validated);
-        }
-    }
-    Ok(protected)
 }
 
 fn subtree_paths(
@@ -2140,8 +2184,8 @@ fn subtree_paths(
     Ok(paths)
 }
 
-fn open_descendant_for_readback(path: &Path) -> Result<Option<ValidatedPath>, FilesystemAclError> {
-    match ValidatedPath::open_for_readback(path) {
+fn open_discovered_acl_path(path: &Path) -> Result<Option<ValidatedPath>, FilesystemAclError> {
+    match ValidatedPath::open_for_acl(path) {
         Ok(path) => Ok(Some(path)),
         Err(error) if error.is_not_found() => Ok(None),
         Err(error) => Err(error.into()),
@@ -2440,13 +2484,12 @@ fn ace(
 }
 
 fn rollback(
-    operations: &[PreparedAclOperation],
-    applied: &[usize],
+    operations: &[AppliedAclOperation],
     state: &mut CapabilityStateSession<'_>,
     original: FilesystemAclError,
 ) -> FilesystemAclError {
-    for index in applied.iter().rev() {
-        if let Err(recovery) = operations[*index].rollback(state) {
+    for operation in operations.iter().rev() {
+        if let Err(recovery) = operation.rollback(state) {
             return FilesystemAclError::JournalRecovery {
                 original: Box::new(original),
                 recovery: Box::new(recovery),
@@ -2473,7 +2516,7 @@ mod tests {
 
     use super::{
         AclAccessMode, AclEntry, PendingAclOperation, READ_ALLOW_MASK, WRITE_ALLOW_MASK,
-        materialization_components, open_descendant_for_readback, subtree_paths,
+        materialization_components, open_discovered_acl_path, subtree_paths,
     };
 
     #[test]
@@ -2557,11 +2600,11 @@ mod tests {
         let vanished = temporary.path().join("vanished.txt");
 
         assert!(
-            open_descendant_for_readback(&vanished)
+            open_discovered_acl_path(&vanished)
                 .expect("missing descendant is not an ACL target")
                 .is_none()
         );
-        assert!(open_descendant_for_readback(PathBuf::from("relative").as_path()).is_err());
+        assert!(open_discovered_acl_path(PathBuf::from("relative").as_path()).is_err());
     }
 
     #[test]
