@@ -337,6 +337,11 @@ The runner requests the corresponding `GENERIC_READ` or `GENERIC_WRITE` client
 mode when opening each endpoint. The sandboxed user process inherits neither
 endpoint nor pipe name.
 
+Windows expands the `GR` and `GW` ACE aliases to the corresponding file generic
+masks when reading the pipe DACL back. Descriptor verification canonicalizes
+only those two aliases before comparison; owner, ACE order, SID, inheritance,
+and every other access mask remain exact.
+
 Before it sends an authenticated spawn response, the runner may report only one
 fixed bootstrap phase through its exit status: argument parsing, installed
 identity verification, request-pipe open, response-pipe open, or transport

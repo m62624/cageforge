@@ -31,6 +31,8 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread}
 const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
+const FILE_GENERIC_READ: u32 = 0x0012_0089;
+const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 
 pub(crate) struct RunnerPipeNames {
@@ -331,7 +333,13 @@ fn descriptor_string(
         });
     }
     let value = LocalWideString(value);
-    Ok(wide_string(value.0))
+    Ok(canonical_descriptor_string(wide_string(value.0)))
+}
+
+fn canonical_descriptor_string(descriptor: String) -> String {
+    descriptor
+        .replace(";;GR;;;", &format!(";;0x{FILE_GENERIC_READ:08x};;;"))
+        .replace(";;GW;;;", &format!(";;0x{FILE_GENERIC_WRITE:08x};;;"))
 }
 
 const fn client_access_sddl(direction: ParentPipeDirection) -> &'static str {
@@ -409,12 +417,25 @@ fn connect_and_verify(
 
 #[cfg(test)]
 mod tests {
-    use super::client_access_sddl;
+    use super::{
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, canonical_descriptor_string, client_access_sddl,
+    };
     use crate::runner_pipe::ParentPipeDirection;
 
     #[test]
     fn client_pipe_access_uses_the_required_sddl_generic_modes() {
         assert_eq!(client_access_sddl(ParentPipeDirection::Request), "GR");
         assert_eq!(client_access_sddl(ParentPipeDirection::Response), "GW");
+    }
+
+    #[test]
+    fn descriptor_comparison_canonicalizes_only_pipe_generic_aces() {
+        let descriptor = "O:S-1-5-18D:P(A;;GR;;;S-1-5-5-1-2)(A;;GW;;;S-1-5-5-1-2)";
+        assert_eq!(
+            canonical_descriptor_string(descriptor.to_string()),
+            format!(
+                "O:S-1-5-18D:P(A;;0x{FILE_GENERIC_READ:08x};;;S-1-5-5-1-2)(A;;0x{FILE_GENERIC_WRITE:08x};;;S-1-5-5-1-2)"
+            )
+        );
     }
 }
