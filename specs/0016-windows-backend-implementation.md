@@ -316,10 +316,10 @@ both named-pipe DACLs for exactly that logon SID rather than the shared account
 SID, and replaces the runner process and primary-thread DACLs with protected
 owner/Admin/SYSTEM descriptors. The parent creates each pipe with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, rejects remote clients, and grants the runner
-the exact `FILE_GENERIC_READ` mask on the request pipe and the exact
-`FILE_GENERIC_WRITE` mask on the response pipe, because Windows requires those
-generic modes for a named-pipe client to connect to the corresponding
-directional server modes. `FILE_GENERIC_WRITE` contains the
+the SDDL `GR` generic-read right on the request pipe and `GW` generic-write
+right on the response pipe, because Windows requires those generic modes for a
+named-pipe client to connect to the corresponding directional server modes.
+`GW` contains the
 `FILE_CREATE_PIPE_INSTANCE` bit, so `FILE_FLAG_FIRST_PIPE_INSTANCE` is a
 separate mandatory control: after the parent creates the first instance, an
 older process cannot add another one. The launch-unique logon SID, random pipe
