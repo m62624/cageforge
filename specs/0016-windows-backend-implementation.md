@@ -316,16 +316,15 @@ both named-pipe DACLs for exactly that logon SID rather than the shared account
 SID, and replaces the runner process and primary-thread DACLs with protected
 owner/Admin/SYSTEM descriptors. The parent creates each pipe with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, rejects remote clients, and grants the runner
-the SDDL `GR` generic-read right on the request pipe and `GW` generic-write
-right on the response pipe, because Windows requires those generic modes for a
-named-pipe client to connect to the corresponding directional server modes.
-`GW` contains the
-`FILE_CREATE_PIPE_INSTANCE` bit, so `FILE_FLAG_FIRST_PIPE_INSTANCE` is a
-separate mandatory control: after the parent creates the first instance, an
-older process cannot add another one. The launch-unique logon SID, random pipe
-name, protected runner process DACL, and exact client-PID check remain
-independent controls. Pipe owner and DACL are read back before the runner
-resumes. The parent starts both server-side accepts, waits until both workers
+the file-generic read mask on the request pipe and the file-generic write mask
+minus `FILE_APPEND_DATA` on the response pipe. Windows aliases
+`FILE_APPEND_DATA` and `FILE_CREATE_PIPE_INSTANCE`; a client must never receive
+that bit. `FILE_FLAG_FIRST_PIPE_INSTANCE` is an independent mandatory control:
+after the parent creates the first instance, an older process cannot add
+another one. The launch-unique logon SID, random pipe name, protected runner
+process DACL, and exact client-PID check remain independent controls. Pipe
+owner and DACL are read back before the runner resumes. The parent starts both
+server-side accepts, waits until both workers
 have published their cancellation handles, then resumes the primary thread; it
 must not serialize the two accepts because the runner opens its endpoints
 consecutively. The parent then duplicates the assign-only Job handle before
@@ -333,16 +332,14 @@ this handoff. An older process using the same dedicated account therefore
 cannot race a pipe connection, open the new runner for injection, steal
 handles, or reuse another launch's authenticated channel.
 
-The runner requests the corresponding `GENERIC_READ` or `GENERIC_WRITE` client
-mode when opening each endpoint. The sandboxed user process inherits neither
-endpoint nor pipe name.
+The runner requests exactly the matching numeric client access mask when
+opening each endpoint; it never requests `FILE_APPEND_DATA`. The sandboxed user
+process inherits neither endpoint nor pipe name.
 
-Windows can expand the `GR` and `GW` ACE aliases to the corresponding file
-generic masks when reading the pipe DACL back. Descriptor verification compares
-the binary owner, protected-DACL state, ACL revision, ACE order, ACE type,
-ACE flags, exact SID, and ACE size. It canonicalizes only those two generic
-masks; every other access mask remains exact. SDDL rendering and non-enforcing
-descriptor formatting flags are not security evidence.
+Descriptor verification compares the binary owner, protected-DACL state, ACL
+revision, ACE order, ACE type, ACE flags, exact SID, exact access mask, and ACE
+size. SDDL rendering and non-enforcing descriptor formatting flags are not
+security evidence.
 
 Before it sends an authenticated spawn response, the runner may report only one
 fixed bootstrap phase through its exit status: argument parsing, installed

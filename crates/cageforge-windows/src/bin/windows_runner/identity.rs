@@ -10,7 +10,9 @@ use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
-use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, OPEN_EXISTING,
+};
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -23,9 +25,6 @@ use crate::runner_resource_security::{
     RunnerResourceKind, RunnerResourceSecurityError, open_verified_runner_resource,
     verify_open_runner_resource,
 };
-
-const GENERIC_READ: u32 = 0x8000_0000;
-const GENERIC_WRITE: u32 = 0x4000_0000;
 
 pub(super) struct InstalledRunnerIdentity {
     manifest: RunnerManifest,
@@ -436,8 +435,8 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 const fn client_pipe_access(direction: PipeDirection) -> u32 {
     match direction {
-        PipeDirection::Read => GENERIC_READ,
-        PipeDirection::Write => GENERIC_WRITE,
+        PipeDirection::Read => FILE_GENERIC_READ,
+        PipeDirection::Write => FILE_GENERIC_WRITE & !FILE_APPEND_DATA,
     }
 }
 
@@ -454,11 +453,20 @@ fn wide_pointer_to_string(value: *const u16) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{GENERIC_READ, GENERIC_WRITE, PipeDirection, client_pipe_access};
+    use super::{
+        FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, PipeDirection, client_pipe_access,
+    };
 
     #[test]
-    fn client_pipe_access_matches_the_required_generic_modes() {
-        assert_eq!(client_pipe_access(PipeDirection::Read), GENERIC_READ);
-        assert_eq!(client_pipe_access(PipeDirection::Write), GENERIC_WRITE);
+    fn client_pipe_access_excludes_named_pipe_instance_creation() {
+        assert_eq!(client_pipe_access(PipeDirection::Read), FILE_GENERIC_READ);
+        assert_eq!(
+            client_pipe_access(PipeDirection::Write),
+            FILE_GENERIC_WRITE & !FILE_APPEND_DATA
+        );
+        assert_eq!(
+            client_pipe_access(PipeDirection::Write) & FILE_APPEND_DATA,
+            0
+        );
     }
 }

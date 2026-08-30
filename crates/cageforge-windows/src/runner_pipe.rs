@@ -24,6 +24,9 @@ use windows_sys::Win32::Security::{
     IsValidSecurityDescriptor, IsValidSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
 };
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+};
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
@@ -35,8 +38,6 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread}
 const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
-const FILE_GENERIC_READ: u32 = 0x0012_0089;
-const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 
 pub(crate) struct RunnerPipeNames {
@@ -177,7 +178,7 @@ impl ParentRunnerPipe {
         logon_sid: &str,
         direction: ParentPipeDirection,
     ) -> Result<Self, ParentRunnerPipeError> {
-        let client_access = client_access_sddl(direction);
+        let client_access = format!("0x{:08x}", client_access_mask(direction));
         let sddl = format!(
             "O:{owner_sid}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{owner_sid})(A;;{client_access};;;{logon_sid})"
         )
@@ -430,8 +431,7 @@ fn ace_matches(
         || unsafe { (*actual).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
         || unsafe { (*expected).Header.AceFlags } != 0
         || unsafe { (*actual).Header.AceFlags } != 0
-        || canonical_pipe_access_mask(unsafe { (*expected).Mask })
-            != canonical_pipe_access_mask(unsafe { (*actual).Mask })
+        || unsafe { (*expected).Mask } != unsafe { (*actual).Mask }
     {
         return false;
     }
@@ -449,18 +449,12 @@ fn ace_matches(
         && unsafe { EqualSid(expected_sid, actual_sid) } != 0
 }
 
-const fn canonical_pipe_access_mask(mask: u32) -> u32 {
-    match mask {
-        0x8000_0000 => FILE_GENERIC_READ,
-        0x4000_0000 => FILE_GENERIC_WRITE,
-        _ => mask,
-    }
-}
+const fn client_access_mask(direction: ParentPipeDirection) -> u32 {
+    const RESPONSE_PIPE_WRITE_ACCESS: u32 = FILE_GENERIC_WRITE & !FILE_APPEND_DATA;
 
-const fn client_access_sddl(direction: ParentPipeDirection) -> &'static str {
     match direction {
-        ParentPipeDirection::Request => "GR",
-        ParentPipeDirection::Response => "GW",
+        ParentPipeDirection::Request => FILE_GENERIC_READ,
+        ParentPipeDirection::Response => RESPONSE_PIPE_WRITE_ACCESS,
     }
 }
 
@@ -521,21 +515,22 @@ fn connect_and_verify(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE, canonical_pipe_access_mask, client_access_sddl,
-    };
+    use super::{FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, client_access_mask};
     use crate::runner_pipe::ParentPipeDirection;
 
     #[test]
-    fn client_pipe_access_uses_the_required_sddl_generic_modes() {
-        assert_eq!(client_access_sddl(ParentPipeDirection::Request), "GR");
-        assert_eq!(client_access_sddl(ParentPipeDirection::Response), "GW");
-    }
-
-    #[test]
-    fn descriptor_comparison_canonicalizes_only_the_required_generic_masks() {
-        assert_eq!(canonical_pipe_access_mask(0x8000_0000), FILE_GENERIC_READ);
-        assert_eq!(canonical_pipe_access_mask(0x4000_0000), FILE_GENERIC_WRITE);
-        assert_eq!(canonical_pipe_access_mask(0x001f_01ff), 0x001f_01ff);
+    fn client_pipe_access_is_directional_without_create_pipe_instance() {
+        assert_eq!(
+            client_access_mask(ParentPipeDirection::Request),
+            FILE_GENERIC_READ
+        );
+        assert_eq!(
+            client_access_mask(ParentPipeDirection::Response),
+            FILE_GENERIC_WRITE & !FILE_APPEND_DATA
+        );
+        assert_eq!(
+            client_access_mask(ParentPipeDirection::Response) & FILE_APPEND_DATA,
+            0
+        );
     }
 }
