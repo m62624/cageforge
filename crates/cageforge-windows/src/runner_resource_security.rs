@@ -3,13 +3,15 @@
 //! Exact installed-resource owner and DACL verification shared with the runner.
 
 use std::ffi::c_void;
+use std::fs::File;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-    ConvertStringSidToSidW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
+    ConvertStringSidToSidW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetSecurityDescriptorControl,
@@ -39,6 +41,8 @@ struct LocalSid(*mut c_void);
 
 #[derive(Debug, Error)]
 pub(crate) enum RunnerResourceSecurityError {
+    #[error("installed Windows resource path is unsafe at {path:?}: {detail}")]
+    Unsafe { path: PathBuf, detail: String },
     #[error("failed to read Windows security descriptor for {path:?}: error {code}")]
     Read { path: PathBuf, code: u32 },
     #[error("protected Windows security descriptor mismatch for {path:?}: {descriptor}")]
@@ -78,24 +82,34 @@ impl Drop for LocalSid {
     }
 }
 
+pub(crate) fn open_verified_runner_resource(
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+    kind: RunnerResourceKind,
+) -> Result<File, RunnerResourceSecurityError> {
+    let file = crate::setup_pinned_file::open_for_readback(path).map_err(|error| {
+        RunnerResourceSecurityError::Unsafe {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        }
+    })?;
+    verify_open_runner_resource(&file, path, owner_sid, group_sid, kind)?;
+    Ok(file)
+}
+
 #[allow(unsafe_code)]
-pub(crate) fn verify_runner_resource(
+pub(crate) fn verify_open_runner_resource(
+    file: &File,
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
     kind: RunnerResourceKind,
 ) -> Result<(), RunnerResourceSecurityError> {
-    use std::os::windows::ffi::OsStrExt;
-
-    let path_wide = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
     let mut descriptor = std::ptr::null_mut();
     let status = unsafe {
-        GetNamedSecurityInfoW(
-            path_wide.as_ptr(),
+        GetSecurityInfo(
+            file.as_raw_handle() as _,
             SE_FILE_OBJECT,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),

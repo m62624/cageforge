@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::c_void;
-use std::fs::{self, File};
+use std::fs::File;
+use std::io::Read;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
 use sha2::{Digest, Sha256};
@@ -19,7 +20,8 @@ use crate::account_identity::ManagedAccountNames;
 use crate::runner_manifest::{RUNNER_MANIFEST_NAME, RUNNER_MANIFEST_VERSION, RunnerManifest};
 use crate::runner_protocol::RunnerAccount;
 use crate::runner_resource_security::{
-    RunnerResourceKind, RunnerResourceSecurityError, verify_runner_resource,
+    RunnerResourceKind, RunnerResourceSecurityError, open_verified_runner_resource,
+    verify_open_runner_resource,
 };
 
 const FILE_READ_DATA: u32 = 0x0000_0001;
@@ -125,7 +127,18 @@ impl InstalledRunnerIdentity {
             .parent()
             .ok_or(RunnerAuthenticationError::MissingInstallDirectory)?;
         let manifest_path = directory.join(RUNNER_MANIFEST_NAME);
-        let encoded = fs::read(&manifest_path)
+        let mut manifest_file = crate::setup_pinned_file::open_for_readback(&manifest_path)
+            .map_err(
+                |error| RunnerAuthenticationError::InstalledResourceSecurity {
+                    source: RunnerResourceSecurityError::Unsafe {
+                        path: manifest_path.clone(),
+                        detail: error.to_string(),
+                    },
+                },
+            )?;
+        let mut encoded = Vec::new();
+        manifest_file
+            .read_to_end(&mut encoded)
             .map_err(|source| RunnerAuthenticationError::ManifestRead { source })?;
         let manifest: RunnerManifest = serde_json::from_slice(&encoded)
             .map_err(|source| RunnerAuthenticationError::ManifestDecode { source })?;
@@ -139,21 +152,24 @@ impl InstalledRunnerIdentity {
         {
             return Err(RunnerAuthenticationError::ManifestAccountBinding);
         }
-        verify_runner_resource(
+        let mut executable_file = open_verified_runner_resource(
             &executable,
             &manifest.owner_sid,
             &manifest.group_sid,
             RunnerResourceKind::Executable,
         )
         .map_err(|source| RunnerAuthenticationError::InstalledResourceSecurity { source })?;
-        verify_runner_resource(
+        verify_open_runner_resource(
+            &manifest_file,
             &manifest_path,
             &manifest.owner_sid,
             &manifest.group_sid,
             RunnerResourceKind::Manifest,
         )
         .map_err(|source| RunnerAuthenticationError::InstalledResourceSecurity { source })?;
-        let executable_bytes = fs::read(&executable)
+        let mut executable_bytes = Vec::new();
+        executable_file
+            .read_to_end(&mut executable_bytes)
             .map_err(|source| RunnerAuthenticationError::ExecutableRead { source })?;
         let actual_digest = hex_digest(&executable_bytes);
         if !actual_digest.eq_ignore_ascii_case(&manifest.command_runner_sha256) {

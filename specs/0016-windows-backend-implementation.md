@@ -123,6 +123,16 @@ or read-back marks the still-open staging file for deletion before its handle is
 closed. New capability state and lock files use exclusive creation under the
 same pinned ancestor-chain rule.
 
+Read-only setup verification applies the same object-identity rule. The setup
+marker, credentials, capability records, helper executable, command runner, and
+runner manifest are opened with reparse-point inspection and without write or
+delete sharing. Marker decoding, owner/DACL inspection, manifest decoding, and
+resource hashing use those same retained handles; verification never validates
+one pathname object and then reopens its name to consume security-relevant
+bytes. Directory handles remain pinned while their protected descriptors are
+checked. A reparse point, final-path mismatch, sharing conflict, or replacement
+attempt is a typed fail-closed setup error.
+
 Install reconciliation uses the same lifecycle byte-range as uninstall and
 holds it exclusively before reading, replacing, or rotating any capability
 state, credential, helper, account, firewall, or WFP object. An existing lock
@@ -679,6 +689,10 @@ The Cageforge setup protocol retains the following boundaries:
 - setup-owned files are committed from newly created, descriptor-verified
   sibling handles instead of truncating an existing destination, so a stale or
   attacker-created reparse point cannot redirect elevated writes;
+- setup readiness reads each protected marker, credential, capability record,
+  helper, runner, and runner manifest through the same no-write/no-delete-share
+  handle used for final-path and owner/DACL verification; the frozen baseline's
+  path lookup and later path-based consumption are not retained;
 - an incomplete or malformed marker is never readiness evidence;
 - independent random credentials are rotated on every successful reconcile,
   protected with machine-scope DPAPI, and stored behind an explicit protected
@@ -765,10 +779,15 @@ runner directory and executable grant the managed group exactly read/execute
 access, while the manifest grants that group exactly read access; owner,
 Administrators, and SYSTEM retain full control. Every one of these protected
 DACLs and manifest fields is read back before setup is accepted. The runner
-obtains the manifest
-only from the protected directory containing its own verified executable, so a
-copied binary and attacker-selected manifest cannot establish a trusted
-endpoint.
+opens its manifest and running executable without write or delete sharing,
+rejects reparse points and final-path aliases, and verifies each resource's
+owner/DACL and bytes through that same retained handle. The manifest is accepted
+only from the protected directory containing the verified executable, so a
+copied binary, attacker-selected manifest, or pathname replacement race cannot
+establish a trusted endpoint. The frozen runner lookup passes a path from
+`find_runner_exe` to `CreateProcessWithLogonW`; Cageforge treats that behavior as
+the baseline to harden, not as evidence that a pathname is an execution
+identity.
 
 Each protected setup directory and file also has the real setup owner SID as
 its Windows object owner, and read-back verifies that owner together with the

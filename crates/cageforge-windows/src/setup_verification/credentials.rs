@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -57,19 +58,23 @@ impl AccountCredential {
 pub(super) fn verify(
     details: &WindowsSetupDetails,
     path: &Path,
+    file: &mut File,
 ) -> Result<(), WindowsSetupVerificationError> {
-    read(details, path).map(|_| ())
+    read(details, path, file).map(|_| ())
 }
 
 pub(super) fn read(
     details: &WindowsSetupDetails,
     path: &Path,
+    file: &mut File,
 ) -> Result<SandboxCredentials, WindowsSetupVerificationError> {
-    let encoded =
-        fs::read(path).map_err(|source| WindowsSetupVerificationError::CredentialRead {
+    let mut encoded = Vec::new();
+    file.read_to_end(&mut encoded).map_err(|source| {
+        WindowsSetupVerificationError::CredentialRead {
             path: path.to_path_buf(),
             source,
-        })?;
+        }
+    })?;
     let expected_digest = super::hex_digest(&encoded);
     if !expected_digest.eq_ignore_ascii_case(details.credential_sha256()) {
         return Err(WindowsSetupVerificationError::DigestMismatch {

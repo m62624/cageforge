@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Handle-pinned setup files for the elevated helper crate root.
+//! Handle-pinned files shared by setup and runtime verification.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -13,39 +13,40 @@ use cageforge_path::{contains_parent_traversal, paths_equal};
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_GENERIC_READ, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ,
     FileAttributeTagInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
     GetLongPathNameW, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_DOS,
 };
 
 #[derive(Debug, Error)]
 pub(crate) enum SetupPinnedFileError {
-    #[error("elevated setup requires an absolute file path: {path:?}")]
+    #[error("protected Windows setup requires an absolute file path: {path:?}")]
     Relative { path: PathBuf },
-    #[error("elevated setup rejects parent traversal in file path {path:?}")]
+    #[error("protected Windows setup rejects parent traversal in file path {path:?}")]
     ParentTraversal { path: PathBuf },
-    #[error("elevated setup file path contains NUL: {path:?}")]
+    #[error("protected Windows setup file path contains NUL: {path:?}")]
     Nul { path: PathBuf },
-    #[error("failed to open elevated setup file {path:?}: Windows error {code}")]
+    #[error("failed to open protected Windows setup file {path:?}: Windows error {code}")]
     Open { path: PathBuf, code: u32 },
-    #[error("failed to inspect elevated setup file attributes {path:?}: Windows error {code}")]
+    #[error(
+        "failed to inspect protected Windows setup file attributes {path:?}: Windows error {code}"
+    )]
     AttributeRead { path: PathBuf, code: u32 },
-    #[error("elevated setup path is a reparse point: {path:?}")]
+    #[error("protected Windows setup path is a reparse point: {path:?}")]
     ReparsePoint { path: PathBuf },
-    #[error("elevated setup directory path is not a directory: {path:?}")]
+    #[error("protected Windows setup directory path is not a directory: {path:?}")]
     NotDirectory { path: PathBuf },
-    #[error("failed to resolve elevated setup file handle {path:?}: Windows error {code}")]
+    #[error("failed to resolve protected Windows setup file handle {path:?}: Windows error {code}")]
     FinalPathRead { path: PathBuf, code: u32 },
-    #[error("Windows returned an invalid final elevated setup file path length for {path:?}")]
+    #[error("Windows returned an invalid final protected setup file path length for {path:?}")]
     FinalPathLength { path: PathBuf },
-    #[error("failed to expand an elevated setup file path {path:?}: Windows error {code}")]
+    #[error("failed to expand a protected Windows setup file path {path:?}: Windows error {code}")]
     LongPathRead { path: PathBuf, code: u32 },
-    #[error("Windows returned an invalid expanded elevated setup path length for {path:?}")]
+    #[error("Windows returned an invalid expanded protected setup path length for {path:?}")]
     LongPathLength { path: PathBuf },
     #[error(
-        "elevated setup file handle resolves outside its requested path: requested {requested:?}, final {final_path:?}"
+        "protected Windows setup file handle resolves outside its requested path: requested {requested:?}, final {final_path:?}"
     )]
     FinalPathMismatch {
         requested: PathBuf,
@@ -54,41 +55,15 @@ pub(crate) enum SetupPinnedFileError {
 }
 
 pub(crate) fn open_for_readback(path: &Path) -> Result<File, SetupPinnedFileError> {
-    open_existing(
-        path,
-        READ_CONTROL | FILE_GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-    )
+    open_existing(path, READ_CONTROL | FILE_GENERIC_READ, FILE_SHARE_READ)
 }
 
-pub(crate) fn open_for_cleanup(path: &Path) -> Result<File, SetupPinnedFileError> {
-    open_existing(
-        path,
-        READ_CONTROL | FILE_GENERIC_READ | DELETE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-    )
-}
-
-pub(crate) fn open_directory_for_pin(path: &Path) -> Result<File, SetupPinnedFileError> {
-    open_checked(
-        path,
-        READ_CONTROL | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        true,
-    )
-}
-
-pub(crate) fn verify_open_file_path(path: &Path, file: &File) -> Result<(), SetupPinnedFileError> {
-    verify_open_path(path, file.as_raw_handle() as _, false)
-}
-
-#[allow(unsafe_code)]
 fn open_existing(path: &Path, access: u32, share_mode: u32) -> Result<File, SetupPinnedFileError> {
-    open_checked(path, access, share_mode, false)
+    open_with_options(path, access, share_mode, false)
 }
 
 #[allow(unsafe_code)]
-fn open_checked(
+pub(crate) fn open_with_options(
     path: &Path,
     access: u32,
     share_mode: u32,
@@ -118,7 +93,7 @@ fn open_checked(
     Ok(File::from(handle))
 }
 
-fn verify_open_path(
+pub(crate) fn verify_open_path(
     path: &Path,
     handle: windows_sys::Win32::Foundation::HANDLE,
     require_directory: bool,

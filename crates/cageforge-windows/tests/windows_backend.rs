@@ -185,6 +185,53 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         WindowsSetupStatus::Ready(_)
     ));
 
+    let marker_path = first.state_directory().join("setup.json");
+    let marker_backup = temporary.path().join("setup-marker.backup");
+    let marker_reparse_target = temporary.path().join("setup-marker-target.json");
+    fs::write(
+        &marker_reparse_target,
+        fs::read(&marker_path).expect("read protected marker fixture"),
+    )
+    .expect("setup marker reparse target");
+    fs::rename(&marker_path, &marker_backup).expect("retain protected setup marker");
+    std::os::windows::fs::symlink_file(&marker_reparse_target, &marker_path)
+        .expect("setup marker file symlink");
+    assert!(matches!(
+        setup.status().expect_err("reparse marker must fail closed"),
+        WindowsSetupError::StatePathUnsafe { path, .. } if path == marker_path
+    ));
+    fs::remove_file(&marker_path).expect("remove setup marker symlink");
+    fs::rename(&marker_backup, &marker_path).expect("restore protected setup marker");
+
+    let manifest_path = first
+        .state_directory()
+        .join("bin")
+        .join("runner-manifest.json");
+    let manifest_backup = temporary.path().join("runner-manifest.backup");
+    let manifest_reparse_target = temporary.path().join("runner-manifest-target.json");
+    fs::write(
+        &manifest_reparse_target,
+        fs::read(&manifest_path).expect("read protected runner manifest fixture"),
+    )
+    .expect("runner manifest reparse target");
+    fs::rename(&manifest_path, &manifest_backup).expect("retain protected runner manifest");
+    std::os::windows::fs::symlink_file(&manifest_reparse_target, &manifest_path)
+        .expect("runner manifest file symlink");
+    assert!(matches!(
+        setup
+            .status()
+            .expect_err("reparse runner manifest must fail closed"),
+        WindowsSetupError::Verification(
+            WindowsSetupVerificationError::ProtectedPathUnsafe { path, .. }
+        ) if path == manifest_path
+    ));
+    fs::remove_file(&manifest_path).expect("remove runner manifest symlink");
+    fs::rename(&manifest_backup, &manifest_path).expect("restore protected runner manifest");
+    assert!(matches!(
+        setup.status().expect("status after restoring pinned files"),
+        WindowsSetupStatus::Ready(_)
+    ));
+
     let credential_path = first.state_directory().join("credentials.json.dpapi");
     let credential_reparse_target = temporary.path().join("credential-reparse-target.txt");
     fs::write(&credential_reparse_target, b"must remain unchanged")

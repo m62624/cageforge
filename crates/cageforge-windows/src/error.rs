@@ -219,6 +219,14 @@ pub enum WindowsSetupVerificationError {
         /// Native Win32 code.
         code: u32,
     },
+    /// A protected setup path is relative, a reparse point, or resolves to another object.
+    #[error("protected Windows setup path is unsafe at {path:?}: {detail}")]
+    ProtectedPathUnsafe {
+        /// Rejected state, credential, marker, or helper path.
+        path: PathBuf,
+        /// Exact lexical, reparse-point, or final-path failure.
+        detail: String,
+    },
     /// A protected setup path has the wrong object owner or effective DACL.
     #[error("protected Windows setup security descriptor mismatch at {path:?}: {actual}")]
     ProtectedSecurityDescriptorMismatch {
@@ -419,6 +427,14 @@ pub enum WindowsSetupError {
         /// Filesystem failure.
         #[source]
         source: io::Error,
+    },
+    /// The setup marker is a reparse point or resolves outside its expected path.
+    #[error("Windows setup state path is unsafe at {path:?}: {detail}")]
+    StatePathUnsafe {
+        /// Rejected setup marker path.
+        path: PathBuf,
+        /// Exact lexical, reparse-point, or final-path failure.
+        detail: String,
     },
     /// Setup state was not valid JSON.
     #[error("failed to decode Windows setup state {path:?}: {source}")]

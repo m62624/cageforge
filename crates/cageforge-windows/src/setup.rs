@@ -214,8 +214,7 @@ impl WindowsSetup {
             .map_err(|source| WindowsSetupError::CurrentUserSid { source })?;
         let state_directory = self.state_directory_for(&owner_sid)?;
         let marker_path = state_directory.join(MARKER_NAME);
-        let marker_bytes = match fs::read(&marker_path) {
-            Ok(bytes) => bytes,
+        match fs::symlink_metadata(&marker_path) {
             Err(source) if source.kind() == io::ErrorKind::NotFound => {
                 return Ok(WindowsSetupStatus::Missing { marker_path });
             }
@@ -225,7 +224,22 @@ impl WindowsSetup {
                     source,
                 });
             }
-        };
+            Ok(_) => {}
+        }
+        let mut marker_file =
+            crate::setup_pinned_file::open_for_readback(&marker_path).map_err(|error| {
+                WindowsSetupError::StatePathUnsafe {
+                    path: marker_path.clone(),
+                    detail: error.to_string(),
+                }
+            })?;
+        let mut marker_bytes = Vec::new();
+        marker_file
+            .read_to_end(&mut marker_bytes)
+            .map_err(|source| WindowsSetupError::StateRead {
+                path: marker_path.clone(),
+                source,
+            })?;
         let marker: SetupMarker = serde_json::from_slice(&marker_bytes).map_err(|source| {
             WindowsSetupError::StateDecode {
                 path: marker_path.clone(),
@@ -262,7 +276,7 @@ impl WindowsSetup {
         }
         let details = marker.into_details(state_directory);
         verify_accounts(&details)?;
-        crate::setup_verification::verify(&details)?;
+        crate::setup_verification::verify(&details, marker_file)?;
         Ok(WindowsSetupStatus::Ready(Box::new(details)))
     }
 

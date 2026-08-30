@@ -39,6 +39,8 @@ mod runner_resource_security;
 mod runner_session;
 mod runner_stdio;
 mod setup;
+mod setup_pinned_directory;
+mod setup_pinned_file;
 mod setup_protocol;
 mod setup_state;
 mod setup_state_path;

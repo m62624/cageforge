@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::fs::File;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
 use std::ffi::c_void;
@@ -7,7 +9,7 @@ use std::ffi::c_void;
 use windows_sys::Win32::Foundation::{GENERIC_ALL, GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-    ConvertStringSidToSidW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
+    ConvertStringSidToSidW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
@@ -65,24 +67,43 @@ impl Drop for LocalSid {
     }
 }
 
-#[allow(unsafe_code)]
 pub(crate) fn verify_protected_dacl(
     path: &Path,
     owner_sid: &str,
     inherit: bool,
-) -> Result<(), WindowsSetupVerificationError> {
-    verify_dacl(path, owner_sid, &ProtectedDescriptor::OwnerOnly { inherit })
+) -> Result<File, WindowsSetupVerificationError> {
+    verify_dacl(
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit },
+        inherit,
+    )
+}
+
+pub(super) fn verify_open_protected_dacl(
+    file: File,
+    path: &Path,
+    owner_sid: &str,
+    inherit: bool,
+) -> Result<File, WindowsSetupVerificationError> {
+    verify_open_dacl(
+        file,
+        path,
+        owner_sid,
+        &ProtectedDescriptor::OwnerOnly { inherit },
+    )
 }
 
 pub(super) fn verify_runner_directory_dacl(
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
-) -> Result<(), WindowsSetupVerificationError> {
+) -> Result<File, WindowsSetupVerificationError> {
     verify_dacl(
         path,
         owner_sid,
         &ProtectedDescriptor::RunnerDirectory { group_sid },
+        true,
     )
 }
 
@@ -90,7 +111,7 @@ pub(super) fn verify_runner_executable_dacl(
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
-) -> Result<(), WindowsSetupVerificationError> {
+) -> Result<File, WindowsSetupVerificationError> {
     verify_shared_runner_resource(
         path,
         owner_sid,
@@ -103,7 +124,7 @@ pub(super) fn verify_runner_manifest_dacl(
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
-) -> Result<(), WindowsSetupVerificationError> {
+) -> Result<File, WindowsSetupVerificationError> {
     verify_shared_runner_resource(
         path,
         owner_sid,
@@ -117,9 +138,13 @@ fn verify_shared_runner_resource(
     owner_sid: &str,
     group_sid: &str,
     kind: crate::runner_resource_security::RunnerResourceKind,
-) -> Result<(), WindowsSetupVerificationError> {
-    crate::runner_resource_security::verify_runner_resource(path, owner_sid, group_sid, kind)
+) -> Result<File, WindowsSetupVerificationError> {
+    crate::runner_resource_security::open_verified_runner_resource(path, owner_sid, group_sid, kind)
         .map_err(|error| match error {
+            crate::runner_resource_security::RunnerResourceSecurityError::Unsafe {
+                path,
+                detail,
+            } => WindowsSetupVerificationError::ProtectedPathUnsafe { path, detail },
             crate::runner_resource_security::RunnerResourceSecurityError::Read { path, code } => {
                 WindowsSetupVerificationError::ProtectedAclRead { path, code }
             }
@@ -133,23 +158,35 @@ fn verify_shared_runner_resource(
         })
 }
 
-#[allow(unsafe_code)]
 fn verify_dacl(
     path: &Path,
     owner_sid: &str,
     descriptor_kind: &ProtectedDescriptor<'_>,
-) -> Result<(), WindowsSetupVerificationError> {
-    use std::os::windows::ffi::OsStrExt;
+    directory: bool,
+) -> Result<File, WindowsSetupVerificationError> {
+    let file = if directory {
+        crate::setup_pinned_directory::open_for_pin(path)
+    } else {
+        crate::setup_pinned_file::open_for_readback(path)
+    }
+    .map_err(|error| WindowsSetupVerificationError::ProtectedPathUnsafe {
+        path: path.to_path_buf(),
+        detail: error.to_string(),
+    })?;
+    verify_open_dacl(file, path, owner_sid, descriptor_kind)
+}
 
-    let path_wide = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+#[allow(unsafe_code)]
+fn verify_open_dacl(
+    file: File,
+    path: &Path,
+    owner_sid: &str,
+    descriptor_kind: &ProtectedDescriptor<'_>,
+) -> Result<File, WindowsSetupVerificationError> {
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     let status = unsafe {
-        GetNamedSecurityInfoW(
-            path_wide.as_ptr(),
+        GetSecurityInfo(
+            file.as_raw_handle() as _,
             SE_FILE_OBJECT,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
@@ -185,7 +222,7 @@ fn verify_dacl(
     let value = LocalWideString(value);
     let actual = wide_pointer_to_string(value.0);
     if protected_descriptor_matches(descriptor.0, owner_sid, descriptor_kind) {
-        Ok(())
+        Ok(file)
     } else {
         Err(
             WindowsSetupVerificationError::ProtectedSecurityDescriptorMismatch {

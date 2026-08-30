@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -18,7 +19,10 @@ mod wfp;
 const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
 const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
 
-pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVerificationError> {
+pub(super) fn verify(
+    details: &WindowsSetupDetails,
+    setup_marker: fs::File,
+) -> Result<(), WindowsSetupVerificationError> {
     verify_ports(details.proxy_ports())?;
     let state = details.state_directory();
     let bin_directory = state.join("bin");
@@ -28,46 +32,53 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     let setup_helper_path = bin_directory.join(SETUP_HELPER_NAME);
     let command_runner_path = bin_directory.join(COMMAND_RUNNER_NAME);
     let runner_manifest_path = bin_directory.join(crate::runner_manifest::RUNNER_MANIFEST_NAME);
-    paths::verify_protected_dacl(state, details.owner_sid(), true)?;
-    paths::verify_runner_directory_dacl(
+    let _state_directory = paths::verify_protected_dacl(state, details.owner_sid(), true)?;
+    let _bin_directory = paths::verify_runner_directory_dacl(
         &bin_directory,
         details.owner_sid(),
         details.accounts().group_sid(),
     )?;
-    paths::verify_protected_dacl(&capability_lock_path, details.owner_sid(), false)?;
+    let _capability_lock =
+        paths::verify_protected_dacl(&capability_lock_path, details.owner_sid(), false)?;
     verify_capability_state(state, details.owner_sid())?;
-    for path in [
-        &credentials_path,
-        &setup_helper_path,
+    let mut credentials =
+        paths::verify_protected_dacl(&credentials_path, details.owner_sid(), false)?;
+    let mut setup_helper =
+        paths::verify_protected_dacl(&setup_helper_path, details.owner_sid(), false)?;
+    let _setup_marker = paths::verify_open_protected_dacl(
+        setup_marker,
         &state.join("setup.json"),
-    ] {
-        paths::verify_protected_dacl(path, details.owner_sid(), false)?;
-    }
-    paths::verify_protected_dacl(&capability_state_path, details.owner_sid(), false)?;
-    paths::verify_runner_executable_dacl(
+        details.owner_sid(),
+        false,
+    )?;
+    let _capability_state =
+        paths::verify_protected_dacl(&capability_state_path, details.owner_sid(), false)?;
+    let mut command_runner = paths::verify_runner_executable_dacl(
         &command_runner_path,
         details.owner_sid(),
         details.accounts().group_sid(),
     )?;
-    paths::verify_runner_manifest_dacl(
+    let mut runner_manifest = paths::verify_runner_manifest_dacl(
         &runner_manifest_path,
         details.owner_sid(),
         details.accounts().group_sid(),
     )?;
     rights::verify(details.accounts().offline_sid())?;
     rights::verify(details.accounts().online_sid())?;
-    credentials::verify(details, &credentials_path)?;
+    credentials::verify(details, &credentials_path, &mut credentials)?;
     verify_resource_digest(
         "setup helper",
         &setup_helper_path,
         details.setup_helper_sha256(),
+        &mut setup_helper,
     )?;
     verify_resource_digest(
         "command runner",
         &command_runner_path,
         details.command_runner_sha256(),
+        &mut command_runner,
     )?;
-    runner::verify(details, &runner_manifest_path)?;
+    runner::verify(details, &runner_manifest_path, &mut runner_manifest)?;
     firewall::verify(details)?;
     wfp::verify(details)?;
     Ok(())
@@ -90,10 +101,9 @@ fn verify_capability_state(
 pub(crate) fn read_credentials(
     details: &WindowsSetupDetails,
 ) -> Result<credentials::SandboxCredentials, WindowsSetupVerificationError> {
-    credentials::read(
-        details,
-        &details.state_directory().join("credentials.json.dpapi"),
-    )
+    let path = details.state_directory().join("credentials.json.dpapi");
+    let mut file = paths::verify_protected_dacl(&path, details.owner_sid(), false)?;
+    credentials::read(details, &path, &mut file)
 }
 
 fn verify_ports(ports: &[u16]) -> Result<(), WindowsSetupVerificationError> {
@@ -113,11 +123,14 @@ fn verify_resource_digest(
     component: &'static str,
     path: &Path,
     expected: &str,
+    file: &mut fs::File,
 ) -> Result<(), WindowsSetupVerificationError> {
-    let bytes = fs::read(path).map_err(|source| WindowsSetupVerificationError::ResourceRead {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|source| WindowsSetupVerificationError::ResourceRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
     let actual = hex_digest(&bytes);
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())

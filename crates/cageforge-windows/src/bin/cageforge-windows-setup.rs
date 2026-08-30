@@ -20,8 +20,12 @@ mod firewall_contract;
 mod owner_identity;
 #[path = "../runner_manifest.rs"]
 mod runner_manifest;
+#[path = "../setup_pinned_directory.rs"]
+mod setup_pinned_directory;
 #[path = "../setup_pinned_file.rs"]
 mod setup_pinned_file;
+#[path = "../setup_pinned_mutation.rs"]
+mod setup_pinned_mutation;
 #[path = "../setup_protocol.rs"]
 mod setup_protocol;
 #[path = "../setup_state.rs"]

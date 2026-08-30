@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 use crate::error::WindowsSetupVerificationError;
@@ -10,12 +11,15 @@ use crate::setup::WindowsSetupDetails;
 pub(super) fn verify(
     details: &WindowsSetupDetails,
     path: &Path,
+    file: &mut File,
 ) -> Result<(), WindowsSetupVerificationError> {
-    let encoded =
-        fs::read(path).map_err(|source| WindowsSetupVerificationError::RunnerManifestRead {
+    let mut encoded = Vec::new();
+    file.read_to_end(&mut encoded).map_err(|source| {
+        WindowsSetupVerificationError::RunnerManifestRead {
             path: path.to_path_buf(),
             source,
-        })?;
+        }
+    })?;
     let actual_digest = super::hex_digest(&encoded);
     if !actual_digest.eq_ignore_ascii_case(details.runner_manifest_sha256()) {
         return Err(WindowsSetupVerificationError::DigestMismatch {

@@ -15,6 +15,8 @@ mod runner_manifest;
 mod runner_protocol;
 #[path = "../runner_resource_security.rs"]
 mod runner_resource_security;
+#[path = "../setup_pinned_file.rs"]
+mod setup_pinned_file;
 mod windows_runner;
 
 fn main() -> ExitCode {
