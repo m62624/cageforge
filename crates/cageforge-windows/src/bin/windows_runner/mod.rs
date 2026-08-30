@@ -51,17 +51,21 @@ impl RunnerArguments {
 }
 
 impl AuthenticatedTransport {
-    fn connect(arguments: RunnerArguments) -> Result<Self, identity::RunnerAuthenticationError> {
-        let installed = identity::InstalledRunnerIdentity::verify()?;
+    fn open_pipes(
+        arguments: &RunnerArguments,
+    ) -> Result<(File, File), identity::RunnerAuthenticationError> {
         let request = identity::open_pipe(&arguments.request_pipe, identity::PipeDirection::Read)?;
         let response =
             identity::open_pipe(&arguments.response_pipe, identity::PipeDirection::Write)?;
-        let account = identity::authenticate_transport(&installed, &request, &response)?;
-        Ok(Self {
-            request,
-            response,
-            account,
-        })
+        Ok((request, response))
+    }
+
+    fn authenticate(
+        installed: &identity::InstalledRunnerIdentity,
+        request: &File,
+        response: &File,
+    ) -> Result<identity::AuthenticatedRunnerAccount, identity::RunnerAuthenticationError> {
+        identity::authenticate_transport(installed, request, response)
     }
 
     fn fail(&mut self, failure: WindowsRunnerFailure) -> ExitCode {
@@ -86,12 +90,25 @@ pub(super) fn run() -> ExitCode {
             return ExitCode::from(RunnerBootstrapStage::Arguments as u8);
         }
     };
-    let mut transport = match AuthenticatedTransport::connect(arguments) {
-        Ok(transport) => transport,
+    let (request, mut response) = match AuthenticatedTransport::open_pipes(&arguments) {
+        Ok(pipes) => pipes,
         Err(error) => {
             eprintln!("cageforge-windows-command-runner: {error}");
             return ExitCode::from(error.bootstrap_stage() as u8);
         }
+    };
+    let installed = match identity::InstalledRunnerIdentity::verify() {
+        Ok(installed) => installed,
+        Err(error) => return report_bootstrap_failure(&mut response, &error),
+    };
+    let account = match AuthenticatedTransport::authenticate(&installed, &request, &response) {
+        Ok(account) => account,
+        Err(error) => return report_bootstrap_failure(&mut response, &error),
+    };
+    let mut transport = AuthenticatedTransport {
+        request,
+        response,
+        account,
     };
     let message = match read_frame(&mut transport.request) {
         Ok(message) => message,
@@ -206,4 +223,75 @@ fn runner_failure(
         native_code,
         detail: detail.into(),
     }
+}
+
+fn report_bootstrap_failure(
+    response: &mut File,
+    error: &identity::RunnerAuthenticationError,
+) -> ExitCode {
+    let failure = authentication_failure(error);
+    if let Err(write_error) = write_frame(response, RunnerMessage::Failed { failure }) {
+        eprintln!(
+            "cageforge-windows-command-runner: failed to report bootstrap failure {error}: {write_error}"
+        );
+        return ExitCode::from(error.bootstrap_stage() as u8);
+    }
+    ExitCode::from(125)
+}
+
+fn authentication_failure(error: &identity::RunnerAuthenticationError) -> WindowsRunnerFailure {
+    let code = match error {
+        identity::RunnerAuthenticationError::CurrentExecutable { .. }
+        | identity::RunnerAuthenticationError::MissingInstallDirectory => {
+            WindowsRunnerFailureCode::ManifestPath
+        }
+        identity::RunnerAuthenticationError::ManifestRead { .. }
+        | identity::RunnerAuthenticationError::ExecutableRead { .. } => {
+            WindowsRunnerFailureCode::InstalledResourceRead
+        }
+        identity::RunnerAuthenticationError::ManifestDecode { .. }
+        | identity::RunnerAuthenticationError::ManifestVersion
+        | identity::RunnerAuthenticationError::ManifestAccountBinding => {
+            WindowsRunnerFailureCode::ManifestDecode
+        }
+        identity::RunnerAuthenticationError::InstalledResourceSecurity { .. } => {
+            WindowsRunnerFailureCode::InstalledResourceSecurity
+        }
+        identity::RunnerAuthenticationError::RunnerDigestMismatch => {
+            WindowsRunnerFailureCode::RunnerDigestMismatch
+        }
+        identity::RunnerAuthenticationError::PipeOpen { .. } => WindowsRunnerFailureCode::PipeOpen,
+        identity::RunnerAuthenticationError::PipeServerPidRead { .. }
+        | identity::RunnerAuthenticationError::PipeServerMismatch
+        | identity::RunnerAuthenticationError::InvalidPipeServerPid => {
+            WindowsRunnerFailureCode::PipeServerMismatch
+        }
+        identity::RunnerAuthenticationError::ServerProcessOpen { .. } => {
+            WindowsRunnerFailureCode::ServerProcessOpen
+        }
+        identity::RunnerAuthenticationError::ProcessTokenOpen { .. }
+        | identity::RunnerAuthenticationError::TokenUserRead { .. }
+        | identity::RunnerAuthenticationError::InvalidTokenUser
+        | identity::RunnerAuthenticationError::TokenUserFormat { .. } => {
+            WindowsRunnerFailureCode::ServerTokenOpen
+        }
+        identity::RunnerAuthenticationError::RunnerAccountMismatch => {
+            WindowsRunnerFailureCode::RunnerAccountMismatch
+        }
+        identity::RunnerAuthenticationError::ServerOwnerMismatch => {
+            WindowsRunnerFailureCode::ServerOwnerMismatch
+        }
+        identity::RunnerAuthenticationError::MissingPipeArguments
+        | identity::RunnerAuthenticationError::UnexpectedArgument
+        | identity::RunnerAuthenticationError::NonUnicodePipeName
+        | identity::RunnerAuthenticationError::InvalidPipeName => {
+            WindowsRunnerFailureCode::RequestFrame
+        }
+    };
+    runner_failure(
+        WindowsRunnerFailureStage::Authentication,
+        code,
+        None,
+        error.to_string(),
+    )
 }

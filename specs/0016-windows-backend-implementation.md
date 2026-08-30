@@ -336,6 +336,14 @@ bounded diagnostic contains neither secrets nor arbitrary runner output and
 distinguishes a failed bootstrap from a live process that exceeded the pipe
 deadline.
 
+The runner may open those launch-unique pipes before its own installed-resource
+verification only to return that fixed failure; it does not read a request or
+construct a restricted token until verification and server authentication both
+succeed. The parent already requires both client connections to have the exact
+suspended runner PID, and the pipe DACL names that runner's unique logon SID.
+An unverified runner can therefore report failure but cannot acquire a prepared
+command or turn a failed identity check into a successful launch.
+
 The runner process and primary-thread DACLs use the concrete Windows
 `PROCESS_ALL_ACCESS` and `THREAD_ALL_ACCESS` masks for the setup owner,
 Administrators, and SYSTEM. `GA` is not used in their expected descriptor:
