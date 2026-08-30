@@ -329,12 +329,13 @@ authenticated channel.
 Before it sends an authenticated spawn response, the runner may report only one
 fixed bootstrap phase through its exit status: argument parsing, installed
 identity verification, request-pipe open, response-pipe open, or transport
-authentication. If pipe connection or the spawn handshake fails, the parent
-checks the pinned runner process and maps only those reserved statuses to a
-typed launch error; all other early exits retain their exact status. This
-bounded diagnostic contains neither secrets nor arbitrary runner output and
-distinguishes a failed bootstrap from a live process that exceeded the pipe
-deadline.
+authentication. A failed Win32 API may additionally encode its unsigned
+16-bit system error in a fixed status envelope; larger values retain only the
+phase. If pipe connection or the spawn handshake fails, the parent checks the
+pinned runner process and maps only those reserved statuses to a typed launch
+error; all other early exits retain their exact status. This bounded diagnostic
+contains neither secrets nor arbitrary runner output and distinguishes a failed
+bootstrap from a live process that exceeded the pipe deadline.
 
 The runner may open those launch-unique pipes before its own installed-resource
 verification only to return that fixed failure; it does not read a request or

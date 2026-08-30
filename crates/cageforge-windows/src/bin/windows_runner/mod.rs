@@ -94,7 +94,7 @@ pub(super) fn run() -> ExitCode {
         Ok(pipes) => pipes,
         Err(error) => {
             eprintln!("cageforge-windows-command-runner: {error}");
-            return ExitCode::from(error.bootstrap_stage() as u8);
+            std::process::exit(bootstrap_exit_code(&error) as i32);
         }
     };
     let installed = match identity::InstalledRunnerIdentity::verify() {
@@ -222,6 +222,17 @@ fn runner_failure(
         code,
         native_code,
         detail: detail.into(),
+    }
+}
+
+fn bootstrap_exit_code(error: &identity::RunnerAuthenticationError) -> u32 {
+    const BOOTSTRAP_STATUS_PREFIX: u32 = 0xcf00_0000;
+
+    match error.native_code() {
+        Some(native_code) if native_code <= u16::MAX as u32 => {
+            BOOTSTRAP_STATUS_PREFIX | ((error.bootstrap_stage() as u32) << 16) | native_code
+        }
+        Some(_) | None => error.bootstrap_stage() as u32,
     }
 }
 

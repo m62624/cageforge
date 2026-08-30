@@ -16,7 +16,7 @@ use thiserror::Error;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
-use crate::runner_launch::{RunnerLaunch, RunnerLaunchError};
+use crate::runner_launch::{RunnerBootstrapStatus, RunnerLaunch, RunnerLaunchError};
 use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError};
 use crate::runner_protocol::{
     MAX_RUNNER_FRAME_BYTES, RunnerAccount, RunnerBootstrapStage, RunnerMessage, RunnerSpawnRequest,
@@ -80,8 +80,13 @@ pub(crate) enum RunnerSessionError {
         native_code: Option<u32>,
         detail: String,
     },
-    #[error("command runner failed during {stage:?} before the spawn handshake completed")]
-    RunnerBootstrapFailure { stage: RunnerBootstrapStage },
+    #[error(
+        "command runner failed during {stage:?} before the spawn handshake completed (Windows error {native_code:?})"
+    )]
+    RunnerBootstrapFailure {
+        stage: RunnerBootstrapStage,
+        native_code: Option<u32>,
+    },
     #[error("timed out waiting for the authenticated runner spawn response")]
     SpawnHandshakeTimeout,
     #[error(
@@ -143,7 +148,10 @@ impl RunnerSession {
                 Ok(message) => message,
                 Err(error) => {
                     let error = match runner_bootstrap_failure(&boundary) {
-                        Ok(Some(stage)) => RunnerSessionError::RunnerBootstrapFailure { stage },
+                        Ok(Some(status)) => RunnerSessionError::RunnerBootstrapFailure {
+                            stage: status.stage,
+                            native_code: status.native_code,
+                        },
                         Ok(None) => error,
                         Err(error) => RunnerSessionError::Boundary(error),
                     };
@@ -490,11 +498,13 @@ fn runner_failure(failure: WindowsRunnerFailure) -> RunnerSessionError {
 
 fn runner_bootstrap_failure(
     boundary: &BoundaryTerminator,
-) -> Result<Option<RunnerBootstrapStage>, ParentBoundaryError> {
+) -> Result<Option<RunnerBootstrapStatus>, ParentBoundaryError> {
     let Some(exit_code) = boundary.wait_runner(Duration::ZERO)? else {
         return Ok(None);
     };
-    Ok(RunnerBootstrapStage::try_from(exit_code).ok())
+    Ok(crate::runner_launch::decode_runner_bootstrap_status(
+        exit_code,
+    ))
 }
 
 #[allow(unsafe_code)]

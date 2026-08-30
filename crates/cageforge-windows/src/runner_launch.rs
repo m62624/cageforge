@@ -64,6 +64,12 @@ struct LocalWideString(*mut u16);
 
 struct TokenBuffer(Vec<u8>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunnerBootstrapStatus {
+    pub(crate) stage: RunnerBootstrapStage,
+    pub(crate) native_code: Option<u32>,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum RunnerLaunchError {
     #[error(transparent)]
@@ -131,10 +137,13 @@ pub(crate) enum RunnerLaunchError {
         direction: ParentPipeDirection,
         code: u32,
     },
-    #[error("command runner failed during {stage:?} before {direction:?} pipe connection")]
+    #[error(
+        "command runner failed during {stage:?} before {direction:?} pipe connection (Windows error {native_code:?})"
+    )]
     RunnerBootstrapFailure {
         direction: ParentPipeDirection,
         stage: RunnerBootstrapStage,
+        native_code: Option<u32>,
     },
     #[error(
         "command runner exited with unexpected code {exit_code} before {direction:?} pipe connection"
@@ -406,9 +415,13 @@ fn connect_runner_pipe(
     match pipe.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT) {
         Ok(()) => Ok(()),
         Err(error) => match runner.exited_before_pipe_connect(direction)? {
-            Some(exit_code) => match RunnerBootstrapStage::try_from(exit_code) {
-                Ok(stage) => Err(RunnerLaunchError::RunnerBootstrapFailure { direction, stage }),
-                Err(()) => Err(RunnerLaunchError::RunnerExitedBeforePipeConnect {
+            Some(exit_code) => match decode_runner_bootstrap_status(exit_code) {
+                Some(status) => Err(RunnerLaunchError::RunnerBootstrapFailure {
+                    direction,
+                    stage: status.stage,
+                    native_code: status.native_code,
+                }),
+                None => Err(RunnerLaunchError::RunnerExitedBeforePipeConnect {
                     direction,
                     exit_code,
                 }),
@@ -416,6 +429,31 @@ fn connect_runner_pipe(
             None => Err(error.into()),
         },
     }
+}
+
+pub(crate) fn decode_runner_bootstrap_status(exit_code: u32) -> Option<RunnerBootstrapStatus> {
+    const PREFIX: u32 = 0xcf00_0000;
+
+    let (stage_code, native_code) = if exit_code & 0xff00_0000 == PREFIX {
+        (
+            (exit_code >> 16) & 0xff,
+            Some((exit_code & u16::MAX as u32) as u16),
+        )
+    } else {
+        (exit_code, None)
+    };
+    let stage = match stage_code {
+        125 => RunnerBootstrapStage::Arguments,
+        126 => RunnerBootstrapStage::InstalledIdentity,
+        127 => RunnerBootstrapStage::RequestPipe,
+        128 => RunnerBootstrapStage::ResponsePipe,
+        129 => RunnerBootstrapStage::TransportAuthentication,
+        _ => return None,
+    };
+    Some(RunnerBootstrapStatus {
+        stage,
+        native_code: native_code.map(u32::from),
+    })
 }
 
 #[allow(unsafe_code)]
@@ -597,5 +635,25 @@ fn wide_string(value: *const u16) -> String {
             length += 1;
         }
         String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RunnerBootstrapStatus, decode_runner_bootstrap_status};
+    use crate::runner_protocol::RunnerBootstrapStage;
+
+    #[test]
+    fn bootstrap_status_accepts_only_reserved_stages() {
+        assert_eq!(
+            decode_runner_bootstrap_status(0xcf7f_0005),
+            Some(RunnerBootstrapStatus {
+                stage: RunnerBootstrapStage::RequestPipe,
+                native_code: Some(5),
+            })
+        );
+        assert_eq!(decode_runner_bootstrap_status(0xcf7a_0005), None);
+        assert_eq!(decode_runner_bootstrap_status(124), None);
+        assert_eq!(decode_runner_bootstrap_status(130), None);
     }
 }

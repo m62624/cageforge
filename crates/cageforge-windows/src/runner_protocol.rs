@@ -231,21 +231,6 @@ impl RunnerMessage {
     }
 }
 
-impl TryFrom<u32> for RunnerBootstrapStage {
-    type Error = ();
-
-    fn try_from(exit_code: u32) -> Result<Self, Self::Error> {
-        match exit_code {
-            125 => Ok(Self::Arguments),
-            126 => Ok(Self::InstalledIdentity),
-            127 => Ok(Self::RequestPipe),
-            128 => Ok(Self::ResponsePipe),
-            129 => Ok(Self::TransportAuthentication),
-            _ => Err(()),
-        }
-    }
-}
-
 impl WindowsRunnerFailure {
     /// Returns the native runner stage that failed.
     pub const fn stage(&self) -> WindowsRunnerFailureStage {
@@ -345,13 +330,16 @@ mod tests {
 
         for stage in stages {
             assert_eq!(
-                RunnerBootstrapStage::try_from(u32::from(stage as u8)),
-                Ok(stage)
+                u32::from(stage as u8),
+                match stage {
+                    RunnerBootstrapStage::Arguments => 125,
+                    RunnerBootstrapStage::InstalledIdentity => 126,
+                    RunnerBootstrapStage::RequestPipe => 127,
+                    RunnerBootstrapStage::ResponsePipe => 128,
+                    RunnerBootstrapStage::TransportAuthentication => 129,
+                }
             );
         }
-        assert_eq!(RunnerBootstrapStage::try_from(0), Err(()));
-        assert_eq!(RunnerBootstrapStage::try_from(124), Err(()));
-        assert_eq!(RunnerBootstrapStage::try_from(130), Err(()));
     }
 
     #[test]

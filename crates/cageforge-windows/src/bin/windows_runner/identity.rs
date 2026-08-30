@@ -229,6 +229,35 @@ impl RunnerAuthenticationError {
             | Self::ServerOwnerMismatch => RunnerBootstrapStage::TransportAuthentication,
         }
     }
+
+    pub(super) const fn native_code(&self) -> Option<u32> {
+        match self {
+            Self::PipeOpen { code, .. }
+            | Self::PipeServerPidRead { code, .. }
+            | Self::ServerProcessOpen { code }
+            | Self::ProcessTokenOpen { code }
+            | Self::TokenUserRead { code }
+            | Self::TokenUserFormat { code } => Some(*code),
+            Self::MissingPipeArguments
+            | Self::UnexpectedArgument
+            | Self::NonUnicodePipeName
+            | Self::InvalidPipeName
+            | Self::CurrentExecutable { .. }
+            | Self::MissingInstallDirectory
+            | Self::ManifestRead { .. }
+            | Self::ExecutableRead { .. }
+            | Self::ManifestDecode { .. }
+            | Self::ManifestVersion
+            | Self::ManifestAccountBinding
+            | Self::InstalledResourceSecurity { .. }
+            | Self::RunnerDigestMismatch
+            | Self::PipeServerMismatch
+            | Self::InvalidPipeServerPid
+            | Self::InvalidTokenUser
+            | Self::RunnerAccountMismatch
+            | Self::ServerOwnerMismatch => None,
+        }
+    }
 }
 
 #[allow(unsafe_code)]
