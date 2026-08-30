@@ -119,11 +119,6 @@ Implement `WindowsBackend`, the backend-bound prepared request handoff, and
   logon SID full access only to that desktop. Do not trim this ACL below the
   Windows initialization contract or broaden it to the host default desktop:
   the desktop DACL and Job UI restrictions are independent controls.
-- Because `JOB_OBJECT_UILIMIT_HANDLES` rejects a Job's use of a USER object
-  created by its trusted parent, grant only that launch-unique private desktop
-  to only that fresh Job with `UserHandleGrantAccess` before the runner is
-  resumed. Do not remove the handle UI limit and never grant the host desktop
-  or window station through that API.
 - An explicit child HANDLE list must also carry exactly one parent-opened
   `WinSta0` handle with only `WINSTA_ENUMDESKTOPS`. Windows uses that inherited
   station handle before child `main` to attach the named private desktop; do

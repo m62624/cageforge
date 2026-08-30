@@ -159,10 +159,6 @@ impl ParentDesktop {
         &self.startup_name
     }
 
-    pub(crate) fn raw(&self) -> HDESK {
-        self.handle
-    }
-
     #[allow(unsafe_code)]
     fn verify_descriptor(
         &self,
