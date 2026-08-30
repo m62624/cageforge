@@ -2,6 +2,7 @@
 
 #![cfg(target_os = "windows")]
 
+use std::ffi::c_void;
 use std::fs;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,14 @@ use cageforge_windows::{
     WindowsSetupVerificationError,
 };
 use pretty_assertions::assert_eq;
-use windows_sys::Win32::Foundation::{GetLastError, STILL_ACTIVE};
+use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE, STILL_ACTIVE};
+use windows_sys::Win32::System::Diagnostics::Debug::{
+    CloseThreadWaitChainSession, GetThreadWaitChain, OpenThreadWaitChainSession,
+    WAITCHAIN_NODE_INFO, WCT_MAX_NODE_COUNT,
+};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+};
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -39,11 +47,20 @@ struct SetupCleanup<'a> {
     armed: bool,
 }
 
+struct WaitChainSession(*mut c_void);
+
 impl Drop for SetupCleanup<'_> {
     fn drop(&mut self) {
         if self.armed {
             let _ = self.setup.uninstall();
         }
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for WaitChainSession {
+    fn drop(&mut self) {
+        unsafe { CloseThreadWaitChainSession(self.0) };
     }
 }
 
@@ -116,6 +133,81 @@ fn wait_for_fixture_exit(process_id: u32) -> Result<u32, String> {
             Ok(None) => return Err("the process remained active".to_string()),
             Err(code) => return Err(format!("failed to query the process: Windows error {code}")),
         }
+    }
+}
+
+#[allow(unsafe_code)]
+fn fixture_wait_chains(process_id: u32) -> Result<String, String> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(format!(
+            "failed to snapshot process threads: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot as RawHandle) };
+    let session = unsafe { OpenThreadWaitChainSession(0, None) };
+    if session.is_null() {
+        return Err(format!(
+            "failed to open a wait-chain session: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let session = WaitChainSession(session);
+    let mut entry = THREADENTRY32 {
+        dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
+    if unsafe { Thread32First(snapshot.as_raw_handle() as _, &mut entry) } == 0 {
+        return Err(format!(
+            "failed to read the first process thread: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let mut chains = Vec::new();
+    loop {
+        if entry.th32OwnerProcessID == process_id {
+            let mut nodes = [WAITCHAIN_NODE_INFO::default(); WCT_MAX_NODE_COUNT as usize];
+            let mut node_count = WCT_MAX_NODE_COUNT;
+            let mut cycle = 0;
+            if unsafe {
+                GetThreadWaitChain(
+                    session.0,
+                    0,
+                    0,
+                    entry.th32ThreadID,
+                    &mut node_count,
+                    nodes.as_mut_ptr(),
+                    &mut cycle,
+                )
+            } == 0
+            {
+                return Err(format!(
+                    "failed to inspect wait chain for thread {}: Windows error {}",
+                    entry.th32ThreadID,
+                    unsafe { GetLastError() }
+                ));
+            }
+            let nodes = nodes
+                .into_iter()
+                .take(node_count as usize)
+                .map(|node| format!("{}:{}", node.ObjectType, node.ObjectStatus))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            chains.push(format!(
+                "thread {} cycle={} [{nodes}]",
+                entry.th32ThreadID, cycle
+            ));
+        }
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        if unsafe { Thread32Next(snapshot.as_raw_handle() as _, &mut entry) } == 0 {
+            break;
+        }
+    }
+    if chains.is_empty() {
+        Err("the process had no visible threads".to_string())
+    } else {
+        Ok(chains.join("; "))
     }
 }
 
@@ -459,8 +551,9 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let mut access_child = backend.spawn(prepared).expect("spawn denied-read probe");
     let fixture_exit = wait_for_fixture_exit(access_child.id()).unwrap_or_else(|detail| {
         let progress = fs::read_to_string(&access_progress).ok();
+        let wait_chains = fixture_wait_chains(access_child.id());
         panic!(
-            "denied-read fixture did not exit promptly: {detail}; fixture progress: {progress:?}"
+            "denied-read fixture did not exit promptly: {detail}; fixture progress: {progress:?}; fixture wait chains: {wait_chains:?}"
         );
     });
     assert_eq!(fixture_exit, 0, "denied-read fixture exit status");
