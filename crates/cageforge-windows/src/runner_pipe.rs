@@ -178,7 +178,10 @@ impl ParentRunnerPipe {
         logon_sid: &str,
         direction: ParentPipeDirection,
     ) -> Result<Self, ParentRunnerPipeError> {
-        let client_access = format!("0x{:08x}", client_access_mask(direction));
+        let client_access = match direction {
+            ParentPipeDirection::Request => format!("0x{:08x}", client_access_mask(direction)),
+            ParentPipeDirection::Response => "GA".to_string(),
+        };
         let sddl = format!(
             "O:{owner_sid}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{owner_sid})(A;;{client_access};;;{logon_sid})"
         )
