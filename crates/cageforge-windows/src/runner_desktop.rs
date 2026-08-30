@@ -64,8 +64,10 @@ pub(crate) enum ParentDesktopError {
     Create { code: u32 },
     #[error("failed to read back the private desktop descriptor: Windows error {code}")]
     DescriptorReadBack { code: u32 },
-    #[error("private desktop descriptor differs after Windows read-back")]
-    DescriptorMismatch,
+    #[error(
+        "private desktop descriptor differs after Windows read-back: expected {expected}, found {actual}"
+    )]
+    DescriptorMismatch { expected: String, actual: String },
 }
 
 #[allow(unsafe_code)]
@@ -164,10 +166,12 @@ impl ParentDesktop {
             return Err(ParentDesktopError::DescriptorReadBack { code: status });
         }
         let actual = LocalSecurityDescriptor(actual);
-        if descriptor_string(expected.0)? == descriptor_string(actual.0)? {
+        let expected = descriptor_string(expected.0)?;
+        let actual = descriptor_string(actual.0)?;
+        if expected == actual {
             Ok(())
         } else {
-            Err(ParentDesktopError::DescriptorMismatch)
+            Err(ParentDesktopError::DescriptorMismatch { expected, actual })
         }
     }
 }
