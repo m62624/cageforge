@@ -326,6 +326,13 @@ account therefore cannot race a pipe connection, create another instance, open
 the new runner for injection, steal handles, or reuse another launch's
 authenticated channel.
 
+The runner process and primary-thread DACLs use the concrete Windows
+`PROCESS_ALL_ACCESS` and `THREAD_ALL_ACCESS` masks for the setup owner,
+Administrators, and SYSTEM. `GA` is not used in their expected descriptor:
+Windows expands that generic mask when storing kernel-object ACEs, so comparing
+the exact concrete descriptor keeps read-back strict without mistaking kernel
+canonicalization for a security difference.
+
 Only the user command's explicit standard handles cross the second process
 boundary. The runner supplies those handles through the process handle-list
 attribute; no transport, token, job, desktop, setup, or unrelated inheritable

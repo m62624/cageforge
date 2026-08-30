@@ -24,8 +24,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithLogonW,
-    OpenProcessToken, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, TerminateProcess,
-    WaitForSingleObject,
+    OpenProcessToken, PROCESS_ALL_ACCESS, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW,
+    THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
 };
 
 use crate::runner_desktop::{ParentDesktop, ParentDesktopError};
@@ -178,11 +178,13 @@ impl RunnerLaunch {
             runner.process.as_raw_handle() as _,
             owner_sid,
             "runner process",
+            PROCESS_ALL_ACCESS,
         )?;
         protect_kernel_object(
             runner.thread.as_raw_handle() as _,
             owner_sid,
             "runner primary thread",
+            THREAD_ALL_ACCESS,
         )?;
         let job_handle = job.duplicate_assign_only_into(runner.process.as_raw_handle() as _)?;
         runner.resume()?;
@@ -393,9 +395,11 @@ fn protect_kernel_object(
     handle: *mut c_void,
     owner_sid: &str,
     object: &'static str,
+    canonical_full_access: u32,
 ) -> Result<(), RunnerLaunchError> {
     let sddl = crate::win::to_wide(&format!(
-        "O:{owner_sid}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})"
+        "O:{owner_sid}D:P(A;;0x{:08x};;;SY)(A;;0x{:08x};;;BA)(A;;0x{:08x};;;{owner_sid})",
+        canonical_full_access, canonical_full_access, canonical_full_access,
     ));
     let mut expected = std::ptr::null_mut();
     if unsafe {
