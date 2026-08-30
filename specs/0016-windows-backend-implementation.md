@@ -423,9 +423,14 @@ that object's validated ACL handle, journals the mutation, and reads back that
 same handle before launch. This direct pass covers ordinary and protected DACLs
 alike; it is not replaced by an assumption that a parent mutation reached an
 already-existing file. New descendants then inherit from the protected writable
-root while new siblings outside it continue to inherit the deny. Unknown or
-malformed ACE forms, a failed handle read-back, or a descendant on which the
-effective deny did not propagate fails before launch. If an enumerated
+root while new siblings outside it continue to inherit the deny. The scan retains
+each object's directory-or-file kind: direct ACEs on existing files are exact,
+while ACEs on existing directories retain their required inheritance flags for
+future children. Windows correctly strips inheritance flags from a file ACE, so
+Cageforge never treats that canonicalization as either evidence of enforcement
+or a reason to weaken a directory ACE check. Unknown or malformed ACE forms, a
+failed handle read-back, or a descendant on which the effective deny did not
+propagate fails before launch. If an enumerated
 descendant disappears before its ACL handle can be opened, only
 `ERROR_FILE_NOT_FOUND` or `ERROR_PATH_NOT_FOUND` is treated as an absent object
 and skipped. Reparse substitution, final-path drift, access denial, malformed

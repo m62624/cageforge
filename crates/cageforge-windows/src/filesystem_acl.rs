@@ -112,6 +112,11 @@ struct AclOperation {
     protect_dacl: bool,
 }
 
+struct SubtreePath {
+    path: PathBuf,
+    is_directory: bool,
+}
+
 enum AclOperationPath {
     Pinned(ValidatedPath),
     Discovered(PathBuf),
@@ -669,8 +674,8 @@ impl<'plan> AclPlanBuilder<'plan> {
             for descendant in subtree_paths(&root, &[])? {
                 merge_pending(
                     &mut self.continuation,
-                    &descendant,
-                    entries.clone(),
+                    &descendant.path,
+                    entries_for_existing_path(&entries, descendant.is_directory),
                     false,
                     Vec::new(),
                     Vec::new(),
@@ -696,8 +701,8 @@ impl<'plan> AclPlanBuilder<'plan> {
             for descendant in subtree_paths(&root, &exclusions)? {
                 merge_pending(
                     &mut self.continuation,
-                    &descendant,
-                    entries.clone(),
+                    &descendant.path,
+                    entries_for_existing_path(&entries, descendant.is_directory),
                     false,
                     Vec::new(),
                     Vec::new(),
@@ -1045,6 +1050,22 @@ impl AclEntry {
             inheritance: AclInheritance::Subtree,
         }
     }
+}
+
+fn entries_for_existing_path(entries: &[AclEntry], is_directory: bool) -> Vec<AclEntry> {
+    entries
+        .iter()
+        .map(|entry| AclEntry {
+            sid: entry.sid.clone(),
+            mode: entry.mode,
+            mask: entry.mask,
+            inheritance: if is_directory {
+                entry.inheritance
+            } else {
+                AclInheritance::Exact
+            },
+        })
+        .collect()
 }
 
 impl Clone for AclEntry {
@@ -2118,7 +2139,7 @@ fn sort_operations(
 fn subtree_paths(
     root: &Path,
     excluded_roots: &[PathBuf],
-) -> Result<Vec<PathBuf>, FilesystemAclError> {
+) -> Result<Vec<SubtreePath>, FilesystemAclError> {
     let metadata = fs::symlink_metadata(root).map_err(|source| FilesystemAclError::Metadata {
         path: root.to_path_buf(),
         source,
@@ -2177,10 +2198,13 @@ fn subtree_paths(
             if is_directory {
                 stack.push(child.clone());
             }
-            paths.push(child);
+            paths.push(SubtreePath {
+                path: child,
+                is_directory,
+            });
         }
     }
-    paths.sort_by_key(|path| NativePathKey::new(path));
+    paths.sort_by_key(|entry| NativePathKey::new(&entry.path));
     Ok(paths)
 }
 
@@ -2515,8 +2539,9 @@ mod tests {
     use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 
     use super::{
-        AclAccessMode, AclEntry, PendingAclOperation, READ_ALLOW_MASK, WRITE_ALLOW_MASK,
-        materialization_components, open_discovered_acl_path, subtree_paths,
+        AclAccessMode, AclEntry, AclInheritance, PendingAclOperation, READ_ALLOW_MASK,
+        WRITE_ALLOW_MASK, entries_for_existing_path, materialization_components,
+        open_discovered_acl_path, subtree_paths,
     };
 
     #[test]
@@ -2558,6 +2583,24 @@ mod tests {
     }
 
     #[test]
+    fn existing_file_acl_entries_do_not_retain_directory_inheritance() {
+        let entries =
+            entries_for_existing_path(&[AclEntry::allow("S-1-5-21-1", READ_ALLOW_MASK)], false);
+
+        assert_eq!(entries[0].inheritance, AclInheritance::Exact);
+        assert_eq!(entries[0].mask, READ_ALLOW_MASK);
+    }
+
+    #[test]
+    fn existing_directory_acl_entries_remain_inheritable() {
+        let entries =
+            entries_for_existing_path(&[AclEntry::allow("S-1-5-21-1", READ_ALLOW_MASK)], true);
+
+        assert_eq!(entries[0].inheritance, AclInheritance::Subtree);
+        assert_eq!(entries[0].mask, READ_ALLOW_MASK);
+    }
+
+    #[test]
     fn subtree_enumeration_excludes_the_complete_writable_boundary() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let denied = temporary.path().join("denied");
@@ -2570,9 +2613,9 @@ mod tests {
         let paths = subtree_paths(&denied, std::slice::from_ref(&writable))
             .expect("enumerate denied subtree");
 
-        assert!(paths.contains(&sibling));
-        assert!(!paths.contains(&writable));
-        assert!(!paths.contains(&writable_child));
+        assert!(paths.iter().any(|entry| entry.path == sibling));
+        assert!(!paths.iter().any(|entry| entry.path == writable));
+        assert!(!paths.iter().any(|entry| entry.path == writable_child));
     }
 
     #[test]
@@ -2589,8 +2632,8 @@ mod tests {
 
         let paths = subtree_paths(&root, &[]).expect("enumerate without following reparse point");
 
-        assert!(!paths.contains(&junction));
-        assert!(!paths.contains(&outside_child));
+        assert!(!paths.iter().any(|entry| entry.path == junction));
+        assert!(!paths.iter().any(|entry| entry.path == outside_child));
         assert!(subtree_paths(&junction, &[]).is_err());
     }
 
