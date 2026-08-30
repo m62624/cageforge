@@ -64,10 +64,8 @@ pub(crate) enum ParentDesktopError {
     Create { code: u32 },
     #[error("failed to read back the private desktop descriptor: Windows error {code}")]
     DescriptorReadBack { code: u32 },
-    #[error(
-        "private desktop descriptor differs after Windows read-back: expected {expected}, found {actual}"
-    )]
-    DescriptorMismatch { expected: String, actual: String },
+    #[error("private desktop descriptor differs after Windows read-back")]
+    DescriptorMismatch,
 }
 
 #[allow(unsafe_code)]
@@ -109,7 +107,7 @@ impl ParentDesktop {
         let name = format!("Cageforge-{nonce}");
         let name_wide = crate::win::to_wide(&name);
         let sddl = format!(
-            "O:{owner_sid}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;0x{SANDBOX_DESKTOP_ACCESS:08x};;;{logon_sid})"
+            "O:{owner_sid}D:P(A;;0x{PARENT_DESKTOP_ACCESS:08x};;;SY)(A;;0x{PARENT_DESKTOP_ACCESS:08x};;;BA)(A;;0x{PARENT_DESKTOP_ACCESS:08x};;;{owner_sid})(A;;0x{SANDBOX_DESKTOP_ACCESS:08x};;;{logon_sid})"
         );
         let descriptor = parse_descriptor(&sddl)?;
         let security = SECURITY_ATTRIBUTES {
@@ -166,12 +164,10 @@ impl ParentDesktop {
             return Err(ParentDesktopError::DescriptorReadBack { code: status });
         }
         let actual = LocalSecurityDescriptor(actual);
-        let expected = descriptor_string(expected.0)?;
-        let actual = descriptor_string(actual.0)?;
-        if expected == actual {
+        if descriptor_string(expected.0)? == descriptor_string(actual.0)? {
             Ok(())
         } else {
-            Err(ParentDesktopError::DescriptorMismatch { expected, actual })
+            Err(ParentDesktopError::DescriptorMismatch)
         }
     }
 }
