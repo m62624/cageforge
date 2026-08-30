@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Parent-owned launch-unique desktop with an isolated sandbox grant.
-
 use std::mem::size_of;
 
 use thiserror::Error;
@@ -16,13 +14,13 @@ use windows_sys::Win32::Security::{
     SECURITY_ATTRIBUTES,
 };
 use windows_sys::Win32::System::StationsAndDesktops::{
-    CloseDesktop, CloseWindowStation, CreateDesktopW, DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW,
-    DESKTOP_DELETE, DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK,
-    DESKTOP_JOURNALRECORD, DESKTOP_READ_CONTROL, DESKTOP_READOBJECTS, DESKTOP_SWITCHDESKTOP,
-    DESKTOP_WRITE_DAC, DESKTOP_WRITE_OWNER, DESKTOP_WRITEOBJECTS, HDESK, HWINSTA,
-    OpenWindowStationW,
+    CloseDesktop, CreateDesktopW, DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW, DESKTOP_DELETE,
+    DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK, DESKTOP_JOURNALRECORD,
+    DESKTOP_READ_CONTROL, DESKTOP_READOBJECTS, DESKTOP_SWITCHDESKTOP, DESKTOP_WRITE_DAC,
+    DESKTOP_WRITE_OWNER, DESKTOP_WRITEOBJECTS, HDESK,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::WINSTA_ENUMDESKTOPS;
+
+use super::token::RestrictedPrimaryToken;
 
 const PRIVATE_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_CREATEWINDOW
@@ -38,13 +36,9 @@ const PRIVATE_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_WRITE_DAC
     | DESKTOP_WRITE_OWNER;
 
-pub(crate) struct ParentDesktop {
+pub(super) struct PrivateDesktop {
     handle: HDESK,
     startup_name: Vec<u16>,
-}
-
-pub(crate) struct ParentWindowStation {
-    handle: HWINSTA,
 }
 
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
@@ -52,7 +46,7 @@ struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 struct LocalWideString(*mut u16);
 
 #[derive(Debug, Error)]
-pub(crate) enum ParentDesktopError {
+pub(super) enum PrivateDesktopError {
     #[error("failed to generate a private desktop identity: {source}")]
     Random {
         #[source]
@@ -60,7 +54,9 @@ pub(crate) enum ParentDesktopError {
     },
     #[error("failed to parse the private desktop descriptor: Windows error {code}")]
     DescriptorParse { code: u32 },
-    #[error("failed to create the private desktop: Windows error {code}")]
+    #[error(
+        "failed to create the private desktop in the sandbox runner session: Windows error {code}"
+    )]
     Create { code: u32 },
     #[error("failed to read back the private desktop descriptor: Windows error {code}")]
     DescriptorReadBack { code: u32 },
@@ -68,28 +64,11 @@ pub(crate) enum ParentDesktopError {
     DescriptorMismatch,
 }
 
-#[derive(Debug, Error)]
-pub(crate) enum ParentWindowStationError {
-    #[error(
-        "failed to open the interactive window station with desktop-enumeration access: Windows error {code}"
-    )]
-    Open { code: u32 },
-}
-
 #[allow(unsafe_code)]
-impl Drop for ParentDesktop {
+impl Drop for PrivateDesktop {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe { CloseDesktop(self.handle) };
-        }
-    }
-}
-
-#[allow(unsafe_code)]
-impl Drop for ParentWindowStation {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe { CloseWindowStation(self.handle) };
         }
     }
 }
@@ -112,19 +91,22 @@ impl Drop for LocalWideString {
     }
 }
 
-impl ParentDesktop {
+impl PrivateDesktop {
     #[allow(unsafe_code)]
-    pub(crate) fn create(owner_sid: &str, logon_sid: &str) -> Result<Self, ParentDesktopError> {
+    pub(super) fn create(token: &RestrictedPrimaryToken) -> Result<Self, PrivateDesktopError> {
         let mut random = [0u8; 16];
-        getrandom::fill(&mut random).map_err(|source| ParentDesktopError::Random { source })?;
+        getrandom::fill(&mut random).map_err(|source| PrivateDesktopError::Random { source })?;
         let nonce = random
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let name = format!("Cageforge-{nonce}");
-        let name_wide = crate::win::to_wide(&name);
+        let name_wide = to_wide(&name);
         let sddl = format!(
-            "O:{owner_sid}D:P(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;SY)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;BA)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{owner_sid})(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{logon_sid})"
+            "O:{}D:P(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;SY)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;BA)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{})(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{})",
+            token.user_sid(),
+            token.user_sid(),
+            token.logon_sid(),
         );
         let descriptor = parse_descriptor(&sddl)?;
         let security = SECURITY_ATTRIBUTES {
@@ -143,7 +125,7 @@ impl ParentDesktop {
             )
         };
         if handle.is_null() {
-            return Err(ParentDesktopError::Create {
+            return Err(PrivateDesktopError::Create {
                 code: unsafe { GetLastError() },
             });
         }
@@ -155,7 +137,7 @@ impl ParentDesktop {
         Ok(desktop)
     }
 
-    pub(crate) fn startup_name(&self) -> &[u16] {
+    pub(super) fn startup_name(&self) -> &[u16] {
         &self.startup_name
     }
 
@@ -163,7 +145,7 @@ impl ParentDesktop {
     fn verify_descriptor(
         &self,
         expected: &LocalSecurityDescriptor,
-    ) -> Result<(), ParentDesktopError> {
+    ) -> Result<(), PrivateDesktopError> {
         let mut actual = std::ptr::null_mut();
         let status = unsafe {
             GetSecurityInfo(
@@ -178,50 +160,42 @@ impl ParentDesktop {
             )
         };
         if status != 0 {
-            return Err(ParentDesktopError::DescriptorReadBack { code: status });
+            return Err(PrivateDesktopError::DescriptorReadBack { code: status });
         }
         let actual = LocalSecurityDescriptor(actual);
         if descriptor_string(expected.0)? == descriptor_string(actual.0)? {
             Ok(())
         } else {
-            Err(ParentDesktopError::DescriptorMismatch)
+            Err(PrivateDesktopError::DescriptorMismatch)
         }
     }
 }
 
-impl ParentWindowStation {
-    #[allow(unsafe_code)]
-    pub(crate) fn open_interactive() -> Result<Self, ParentWindowStationError> {
-        let name = crate::win::to_wide("WinSta0");
-        let handle = unsafe { OpenWindowStationW(name.as_ptr(), 0, WINSTA_ENUMDESKTOPS as u32) };
-        if handle.is_null() {
-            Err(ParentWindowStationError::Open {
-                code: unsafe { GetLastError() },
-            })
-        } else {
-            Ok(Self { handle })
+impl PrivateDesktopError {
+    pub(super) const fn native_code(&self) -> Option<u32> {
+        match self {
+            Self::DescriptorParse { code }
+            | Self::Create { code }
+            | Self::DescriptorReadBack { code } => Some(*code),
+            Self::Random { .. } | Self::DescriptorMismatch => None,
         }
-    }
-
-    pub(crate) fn raw(&self) -> HWINSTA {
-        self.handle
     }
 }
 
 #[allow(unsafe_code)]
-fn parse_descriptor(sddl: &str) -> Result<LocalSecurityDescriptor, ParentDesktopError> {
-    let sddl = crate::win::to_wide(sddl);
+fn parse_descriptor(value: &str) -> Result<LocalSecurityDescriptor, PrivateDesktopError> {
+    let wide = to_wide(value);
     let mut descriptor = std::ptr::null_mut();
     if unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(),
+            wide.as_ptr(),
             SDDL_REVISION_1,
             &mut descriptor,
             std::ptr::null_mut(),
         )
     } == 0
     {
-        Err(ParentDesktopError::DescriptorParse {
+        Err(PrivateDesktopError::DescriptorParse {
             code: unsafe { GetLastError() },
         })
     } else {
@@ -230,7 +204,7 @@ fn parse_descriptor(sddl: &str) -> Result<LocalSecurityDescriptor, ParentDesktop
 }
 
 #[allow(unsafe_code)]
-fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, ParentDesktopError> {
+fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, PrivateDesktopError> {
     let mut value = std::ptr::null_mut();
     if unsafe {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
@@ -242,7 +216,7 @@ fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, ParentD
         )
     } == 0
     {
-        return Err(ParentDesktopError::DescriptorReadBack {
+        return Err(PrivateDesktopError::DescriptorReadBack {
             code: unsafe { GetLastError() },
         });
     }
@@ -259,4 +233,8 @@ fn wide_string(value: *const u16) -> String {
         }
         String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
     }
+}
+
+fn to_wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }

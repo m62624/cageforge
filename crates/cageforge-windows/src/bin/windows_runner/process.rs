@@ -8,7 +8,6 @@ use thiserror::Error;
 use windows_sys::Win32::Foundation::{
     GetHandleInformation, GetLastError, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::System::StationsAndDesktops::{CloseWindowStation, HWINSTA};
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
@@ -21,19 +20,22 @@ use crate::runner_protocol::{
     RunnerSpawnRequest, RunnerStandardHandles, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
 };
 
-use super::token::RestrictedPrimaryToken;
+use super::{
+    desktop::{PrivateDesktop, PrivateDesktopError},
+    token::RestrictedPrimaryToken,
+};
 
 pub(super) struct SpawnedProcess {
     process: OwnedHandle,
     process_id: u32,
     finished: bool,
+    _desktop: PrivateDesktop,
 }
 
 struct PreparedStandardHandles {
     stdin: OwnedHandle,
     stdout: OwnedHandle,
     stderr: OwnedHandle,
-    window_station: RunnerWindowStation,
 }
 
 struct ProcessAttributeList {
@@ -41,10 +43,6 @@ struct ProcessAttributeList {
     handle_list: Vec<*mut c_void>,
     job_list: Vec<*mut c_void>,
     initialized: bool,
-}
-
-struct RunnerWindowStation {
-    handle: HWINSTA,
 }
 
 #[derive(Debug, Error)]
@@ -57,8 +55,8 @@ pub(super) enum ProcessStartError {
     InvalidEnvironmentBlock,
     #[error("spawn request working directory is empty")]
     EmptyWorkingDirectory,
-    #[error("spawn request private desktop name is empty")]
-    EmptyDesktopName,
+    #[error(transparent)]
+    PrivateDesktop(#[from] PrivateDesktopError),
     #[error("parent-supplied Job Object handle is invalid")]
     InvalidJobHandle,
     #[error("parent-supplied {stream} handle does not fit the runner architecture")]
@@ -72,18 +70,6 @@ pub(super) enum ProcessStartError {
     },
     #[error("parent-supplied {stream} handle aliases the Job Object handle")]
     StandardHandleMatchesJob { stream: &'static str },
-    #[error("parent-supplied window-station handle does not fit the runner architecture")]
-    WindowStationHandleWidth,
-    #[error("parent-supplied window-station handle is null or invalid")]
-    InvalidWindowStationHandle,
-    #[error("parent-supplied window-station handle aliases a standard stream or Job Object handle")]
-    WindowStationHandleAlias,
-    #[error("failed to inspect the parent-supplied window-station handle: Windows error {code}")]
-    WindowStationHandleInspect { code: u32 },
-    #[error("parent-supplied window-station handle is not marked inheritable")]
-    WindowStationHandleNotInheritable,
-    #[error("parent-supplied window-station handle has unexpected handle flags {flags:#x}")]
-    UnexpectedWindowStationHandleFlags { flags: u32 },
     #[error("failed to inspect parent-supplied {stream}: Windows error {code}")]
     StandardHandleInspect { stream: &'static str, code: u32 },
     #[error("parent-supplied {stream} is not marked inheritable")]
@@ -123,8 +109,7 @@ impl SpawnedProcess {
         application.push(0);
         let mut working_directory = request.working_directory;
         working_directory.push(0);
-        let mut desktop = request.desktop_name;
-        desktop.push(0);
+        let desktop = PrivateDesktop::create(token)?;
         let job_value =
             usize::try_from(request.job_handle).map_err(|_| ProcessStartError::InvalidJobHandle)?;
         let job_handle = job_value as *mut c_void;
@@ -133,14 +118,10 @@ impl SpawnedProcess {
         }
         let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-        startup.StartupInfo.lpDesktop = desktop.as_mut_ptr();
+        startup.StartupInfo.lpDesktop = desktop.startup_name().as_ptr() as _;
         let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         {
-            let standard = PreparedStandardHandles::new(
-                request.standard_handles,
-                request.window_station_handle,
-                job_value,
-            )?;
+            let standard = PreparedStandardHandles::new(request.standard_handles, job_value)?;
             let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
             let child_handles = standard.raw_handles();
             let mut attributes = ProcessAttributeList::new(2)?;
@@ -191,6 +172,7 @@ impl SpawnedProcess {
             process: process_handle,
             process_id: process.dwProcessId,
             finished: false,
+            _desktop: desktop,
         })
     }
 
@@ -251,44 +233,31 @@ impl Drop for SpawnedProcess {
 
 impl PreparedStandardHandles {
     #[allow(unsafe_code)]
-    fn new(
-        handles: RunnerStandardHandles,
-        window_station: u64,
-        job: usize,
-    ) -> Result<Self, ProcessStartError> {
+    fn new(handles: RunnerStandardHandles, job: usize) -> Result<Self, ProcessStartError> {
         let stdin = standard_handle_value("stdin", handles.stdin)?;
         let stdout = standard_handle_value("stdout", handles.stdout)?;
         let stderr = standard_handle_value("stderr", handles.stderr)?;
         reject_duplicate("stdin", stdin, "stdout", stdout)?;
         reject_duplicate("stdin", stdin, "stderr", stderr)?;
         reject_duplicate("stdout", stdout, "stderr", stderr)?;
-        let window_station = window_station_value(window_station)?;
-        if [stdin, stdout, stderr, job as *mut c_void].contains(&window_station) {
-            return Err(ProcessStartError::WindowStationHandleAlias);
-        }
         for (stream, handle) in [("stdin", stdin), ("stdout", stdout), ("stderr", stderr)] {
             if handle as usize == job {
                 return Err(ProcessStartError::StandardHandleMatchesJob { stream });
             }
             validate_inheritable_handle(stream, handle)?;
         }
-        validate_window_station_handle(window_station)?;
         Ok(Self {
             stdin: unsafe { OwnedHandle::from_raw_handle(stdin as RawHandle) },
             stdout: unsafe { OwnedHandle::from_raw_handle(stdout as RawHandle) },
             stderr: unsafe { OwnedHandle::from_raw_handle(stderr as RawHandle) },
-            window_station: RunnerWindowStation {
-                handle: window_station,
-            },
         })
     }
 
-    fn raw_handles(&self) -> [*mut c_void; 4] {
+    fn raw_handles(&self) -> [*mut c_void; 3] {
         [
             self.stdin.as_raw_handle(),
             self.stdout.as_raw_handle(),
             self.stderr.as_raw_handle(),
-            self.window_station.handle,
         ]
     }
 }
@@ -325,7 +294,7 @@ impl ProcessAttributeList {
     }
 
     #[allow(unsafe_code)]
-    fn apply_handles(&mut self, handles: [*mut c_void; 4]) -> Result<(), ProcessStartError> {
+    fn apply_handles(&mut self, handles: [*mut c_void; 3]) -> Result<(), ProcessStartError> {
         let (handle_list, handle_list_bytes) = self.store_handles(&handles);
         if unsafe {
             UpdateProcThreadAttribute(
@@ -368,7 +337,7 @@ impl ProcessAttributeList {
         Ok(())
     }
 
-    fn store_handles(&mut self, handles: &[*mut c_void; 4]) -> (*const c_void, usize) {
+    fn store_handles(&mut self, handles: &[*mut c_void; 3]) -> (*const c_void, usize) {
         self.handle_list = Vec::from(*handles);
         (
             self.handle_list.as_ptr().cast(),
@@ -401,14 +370,6 @@ impl Drop for ProcessAttributeList {
 }
 
 #[allow(unsafe_code)]
-impl Drop for RunnerWindowStation {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe { CloseWindowStation(self.handle) };
-        }
-    }
-}
-
 impl ProcessStartError {
     pub(super) const fn stage(&self) -> WindowsRunnerFailureStage {
         match self {
@@ -417,7 +378,6 @@ impl ProcessStartError {
             | Self::EmbeddedNul { .. }
             | Self::InvalidEnvironmentBlock
             | Self::EmptyWorkingDirectory
-            | Self::EmptyDesktopName
             | Self::StandardHandleWidth { .. }
             | Self::InvalidStandardHandle { .. }
             | Self::DuplicateStandardHandle { .. }
@@ -425,12 +385,7 @@ impl ProcessStartError {
             | Self::StandardHandleInspect { .. }
             | Self::StandardHandleNotInheritable { .. }
             | Self::UnexpectedStandardHandleFlags { .. } => WindowsRunnerFailureStage::Request,
-            Self::WindowStationHandleWidth
-            | Self::InvalidWindowStationHandle
-            | Self::WindowStationHandleAlias
-            | Self::WindowStationHandleInspect { .. }
-            | Self::WindowStationHandleNotInheritable
-            | Self::UnexpectedWindowStationHandleFlags { .. } => WindowsRunnerFailureStage::Request,
+            Self::PrivateDesktop(_) => WindowsRunnerFailureStage::Process,
             Self::AttributeListSize { .. }
             | Self::AttributeListInitialize { .. }
             | Self::HandleListApply { .. }
@@ -447,8 +402,8 @@ impl ProcessStartError {
             Self::EmptyCommand
             | Self::EmbeddedNul { .. }
             | Self::InvalidEnvironmentBlock
-            | Self::EmptyWorkingDirectory
-            | Self::EmptyDesktopName => WindowsRunnerFailureCode::RequestField,
+            | Self::EmptyWorkingDirectory => WindowsRunnerFailureCode::RequestField,
+            Self::PrivateDesktop(_) => WindowsRunnerFailureCode::PrivateDesktopPrepare,
             Self::InvalidJobHandle => WindowsRunnerFailureCode::JobHandleInvalid,
             Self::StandardHandleWidth { .. }
             | Self::InvalidStandardHandle { .. }
@@ -458,14 +413,6 @@ impl ProcessStartError {
             | Self::StandardHandleNotInheritable { .. }
             | Self::UnexpectedStandardHandleFlags { .. } => {
                 WindowsRunnerFailureCode::StandardStreamPrepare
-            }
-            Self::WindowStationHandleWidth
-            | Self::InvalidWindowStationHandle
-            | Self::WindowStationHandleAlias
-            | Self::WindowStationHandleInspect { .. }
-            | Self::WindowStationHandleNotInheritable
-            | Self::UnexpectedWindowStationHandleFlags { .. } => {
-                WindowsRunnerFailureCode::WindowStationPrepare
             }
             Self::AttributeListSize { .. } | Self::AttributeListInitialize { .. } => {
                 WindowsRunnerFailureCode::AttributeListCreate
@@ -485,7 +432,6 @@ impl ProcessStartError {
     pub(super) const fn native_code(&self) -> Option<u32> {
         match self {
             Self::StandardHandleInspect { code, .. }
-            | Self::WindowStationHandleInspect { code }
             | Self::AttributeListSize { code }
             | Self::AttributeListInitialize { code }
             | Self::HandleListApply { code }
@@ -493,11 +439,11 @@ impl ProcessStartError {
             | Self::ProcessCreate { code }
             | Self::ProcessWait { code }
             | Self::ExitCodeRead { code } => Some(*code),
+            Self::PrivateDesktop(error) => error.native_code(),
             Self::EmptyCommand
             | Self::EmbeddedNul { .. }
             | Self::InvalidEnvironmentBlock
             | Self::EmptyWorkingDirectory
-            | Self::EmptyDesktopName
             | Self::InvalidJobHandle
             | Self::StandardHandleWidth { .. }
             | Self::InvalidStandardHandle { .. }
@@ -505,11 +451,6 @@ impl ProcessStartError {
             | Self::StandardHandleMatchesJob { .. }
             | Self::StandardHandleNotInheritable { .. }
             | Self::UnexpectedStandardHandleFlags { .. }
-            | Self::WindowStationHandleWidth
-            | Self::InvalidWindowStationHandle
-            | Self::WindowStationHandleAlias
-            | Self::WindowStationHandleNotInheritable
-            | Self::UnexpectedWindowStationHandleFlags { .. }
             | Self::MissingProcessHandle
             | Self::UnexpectedWait { .. } => None,
         }
@@ -530,16 +471,6 @@ fn standard_handle_value(
     }
 }
 
-fn window_station_value(value: u64) -> Result<HWINSTA, ProcessStartError> {
-    let value = usize::try_from(value).map_err(|_| ProcessStartError::WindowStationHandleWidth)?;
-    let handle = value as HWINSTA;
-    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-        Err(ProcessStartError::InvalidWindowStationHandle)
-    } else {
-        Ok(handle)
-    }
-}
-
 fn reject_duplicate(
     first: &'static str,
     first_handle: *mut c_void,
@@ -551,23 +482,6 @@ fn reject_duplicate(
     } else {
         Ok(())
     }
-}
-
-#[allow(unsafe_code)]
-fn validate_window_station_handle(handle: HWINSTA) -> Result<(), ProcessStartError> {
-    let mut flags = 0;
-    if unsafe { GetHandleInformation(handle, &mut flags) } == 0 {
-        return Err(ProcessStartError::WindowStationHandleInspect {
-            code: unsafe { GetLastError() },
-        });
-    }
-    if flags & HANDLE_FLAG_INHERIT == 0 {
-        return Err(ProcessStartError::WindowStationHandleNotInheritable);
-    }
-    if flags != HANDLE_FLAG_INHERIT {
-        return Err(ProcessStartError::UnexpectedWindowStationHandleFlags { flags });
-    }
-    Ok(())
 }
 
 #[allow(unsafe_code)]
@@ -604,14 +518,6 @@ fn validate_request(request: &RunnerSpawnRequest) -> Result<(), ProcessStartErro
     if request.working_directory.contains(&0) {
         return Err(ProcessStartError::EmbeddedNul {
             field: "working directory",
-        });
-    }
-    if request.desktop_name.is_empty() {
-        return Err(ProcessStartError::EmptyDesktopName);
-    }
-    if request.desktop_name.contains(&0) {
-        return Err(ProcessStartError::EmbeddedNul {
-            field: "private desktop",
         });
     }
     if request.environment_block.len() < 2 || !request.environment_block.ends_with(&[0, 0]) {
@@ -676,7 +582,6 @@ mod tests {
             0x101usize as *mut c_void,
             0x102usize as *mut c_void,
             0x103usize as *mut c_void,
-            0x104usize as *mut c_void,
         ];
         let job = 0x201usize as *mut c_void;
         let mut attributes = ProcessAttributeList {

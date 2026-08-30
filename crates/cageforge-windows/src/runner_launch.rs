@@ -32,12 +32,7 @@ use windows_sys::Win32::System::Threading::{
     THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
 };
 
-use crate::runner_desktop::{
-    ParentDesktop, ParentDesktopError, ParentWindowStation, ParentWindowStationError,
-};
-use crate::runner_parent::{
-    BoundaryTerminator, ParentBoundaryError, ParentJob, ParentJobError, RunnerHandleDuplicateError,
-};
+use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, ParentJobError};
 use crate::runner_pipe::{
     ParentPipeDirection, ParentRunnerPipe, ParentRunnerPipeError, RunnerPipeNames,
 };
@@ -54,8 +49,6 @@ pub(crate) struct RunnerLaunch {
     request: Option<File>,
     response: Option<File>,
     pub(crate) job_handle: u64,
-    desktop: ParentDesktop,
-    window_station: ParentWindowStation,
     boundary: Arc<BoundaryTerminator>,
 }
 
@@ -84,12 +77,6 @@ pub(crate) enum RunnerLaunchError {
     Job(#[from] ParentJobError),
     #[error(transparent)]
     Pipe(#[from] ParentRunnerPipeError),
-    #[error(transparent)]
-    Desktop(#[from] ParentDesktopError),
-    #[error(transparent)]
-    WindowStation(#[from] ParentWindowStationError),
-    #[error(transparent)]
-    WindowStationHandle(#[from] RunnerHandleDuplicateError),
     #[error(transparent)]
     Boundary(#[from] ParentBoundaryError),
     #[error(transparent)]
@@ -249,8 +236,6 @@ impl RunnerLaunch {
             &logon_sid,
             ParentPipeDirection::Response,
         )?;
-        let desktop = ParentDesktop::create(owner_sid, &logon_sid)?;
-        let window_station = ParentWindowStation::open_interactive()?;
         protect_kernel_object(
             runner.process.as_raw_handle() as _,
             owner_sid,
@@ -280,24 +265,12 @@ impl RunnerLaunch {
             request: Some(request),
             response: Some(response.into_file()),
             job_handle,
-            desktop,
-            window_station,
             boundary,
         })
     }
 
-    pub(crate) fn desktop_name(&self) -> &[u16] {
-        self.desktop.startup_name()
-    }
-
     pub(crate) fn boundary(&self) -> Arc<BoundaryTerminator> {
         Arc::clone(&self.boundary)
-    }
-
-    pub(crate) fn duplicate_window_station(&self) -> Result<u64, RunnerLaunchError> {
-        Ok(self
-            .boundary
-            .duplicate_inheritable_handle(self.window_station.raw() as RawHandle)?)
     }
 
     pub(crate) fn take_request(&mut self) -> Result<File, RunnerLaunchError> {

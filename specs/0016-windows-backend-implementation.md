@@ -278,24 +278,21 @@ response from the runner.
 
 The process starts on a private desktop by default. Disabling private-desktop
 is not part of the first public API because it would weaken the declared
-boundary. After learning the runner's unique logon SID, the trusted parent
-creates and retains the desktop, gives that SID full access only to that
-launch-unique desktop, and verifies the protected owner/Admin/SYSTEM/logon-SID
-descriptor before resuming the runner. Full desktop access is necessary for
-Windows process initialization and is not access to the host default desktop:
-Job UI limits and the isolated object DACL still prohibit cross-job or host
-desktop interaction. The runner receives only the desktop name and one
-explicitly inherited `WinSta0` handle with only `WINSTA_ENUMDESKTOPS`. Windows
-uses that handle to connect the new process to the station before user code
-starts; omitting it from a complete explicit-handle list can leave a restricted
-process stalled before `main` while it tries to reopen the station with
-`MAXIMUM_ALLOWED`. This one right permits neither clipboard nor global-atom
-access, screen reads, desktop creation, station mutation, or session exit; the
-complete Job UI limits continue to block those operations. A desktop created by
-the sandbox account would be unsafe because another logon of the same file
-owner retains implicit descriptor-control rights. The desktop, window-station,
-token, process, thread, pipe, and job handles use owned RAII wrappers and are
-never inherited unless explicitly present in the process handle list.
+boundary. The authenticated runner creates the launch-unique desktop in its
+own sandbox-account logon session after constructing the restricted token. It
+uses a cryptographically random name and a protected descriptor that grants
+full desktop access only to SYSTEM, Administrators, the runner account, and
+that launch logon SID; it reads the descriptor back before process creation.
+The runner retains the desktop handle while it supervises the child, and the
+parent retains the runner boundary for the complete `WindowsChild` lifetime.
+This follows the Windows session ownership model used by the frozen Codex
+baseline and avoids crossing a parent-user `WinSta0` handle through two
+process boundaries. The explicit child HANDLE list contains only the three
+validated standard-stream endpoints; no window-station or desktop handle is
+inherited by the untrusted process. Job UI limits and the isolated desktop DACL
+prohibit cross-job and host-desktop interaction. The desktop, token, process,
+thread, pipe, and job handles use owned RAII wrappers and are never inherited
+unless explicitly present in the process handle list.
 
 The parent launches the command runner with `CreateProcessWithLogonW`, so an
 ordinary Cageforge application needs no per-launch Windows privilege or

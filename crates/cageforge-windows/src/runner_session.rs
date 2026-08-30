@@ -173,19 +173,7 @@ impl RunnerSession {
             }
         };
         let (standard_handles, stdin, stdout, stderr) = stdio.into_parts();
-        let window_station_handle = match launch.duplicate_window_station() {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _ = boundary.terminate(125);
-                return Err(error.into());
-            }
-        };
-        let request = request.bind(
-            standard_handles,
-            window_station_handle,
-            launch.job_handle,
-            launch.desktop_name().to_vec(),
-        );
+        let request = request.bind(standard_handles, launch.job_handle);
         let mut request_pipe = launch.take_request()?;
         if let Err(error) = write_frame(&mut request_pipe, RunnerMessage::Spawn { request }) {
             let _ = boundary.terminate(125);
@@ -364,13 +352,7 @@ impl RunnerSession {
 }
 
 impl PendingRunnerSpawnRequest {
-    fn bind(
-        self,
-        standard_handles: RunnerStandardHandles,
-        window_station_handle: u64,
-        job_handle: u64,
-        desktop_name: Vec<u16>,
-    ) -> RunnerSpawnRequest {
+    fn bind(self, standard_handles: RunnerStandardHandles, job_handle: u64) -> RunnerSpawnRequest {
         RunnerSpawnRequest {
             command: self.command,
             working_directory: self.working_directory,
@@ -379,9 +361,7 @@ impl PendingRunnerSpawnRequest {
             route_sid: self.route_sid,
             account: self.account,
             standard_handles,
-            window_station_handle,
             job_handle,
-            desktop_name,
         }
     }
 }

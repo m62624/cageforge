@@ -31,6 +31,8 @@ const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 
 pub(super) struct RestrictedPrimaryToken {
     handle: OwnedHandle,
+    user_sid: String,
+    logon_sid: String,
 }
 
 struct LocalSid(*mut c_void);
@@ -172,11 +174,23 @@ impl RestrictedPrimaryToken {
                     .map(|sid| ("default DACL SID", sid)),
             )?,
         )?;
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            user_sid: actual_user_sid,
+            logon_sid,
+        })
     }
 
     pub(super) fn raw(&self) -> *mut c_void {
         self.handle.as_raw_handle() as _
+    }
+
+    pub(super) fn user_sid(&self) -> &str {
+        &self.user_sid
+    }
+
+    pub(super) fn logon_sid(&self) -> &str {
+        &self.logon_sid
     }
 }
 

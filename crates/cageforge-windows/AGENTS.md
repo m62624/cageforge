@@ -115,17 +115,19 @@ Implement `WindowsBackend`, the backend-bound prepared request handoff, and
 - The runner must use the verified sandbox account, restricted token, private
   desktop, Job Object, explicit handle list, and parent-process constraints
   already implemented in this crate.
-- The parent owns each launch-unique private desktop and grants the unique
-  logon SID full access only to that desktop. Do not trim this ACL below the
-  Windows initialization contract or broaden it to the host default desktop:
-  the desktop DACL and Job UI restrictions are independent controls.
-- An explicit child HANDLE list must also carry exactly one parent-opened
-  `WinSta0` handle with only `WINSTA_ENUMDESKTOPS`. Windows uses that inherited
-  station handle before child `main` to attach the named private desktop; do
-  not accidentally remove it while tightening inheritance, and do not replace
-  it with `WINSTA_ALL_ACCESS` or a broad inherited parent handle. It grants no
-  clipboard, global-atom, screen, desktop-creation, station-mutation, or
-  session-exit rights, while the Job UI limits remain fully enabled.
+- The authenticated runner creates and owns each launch-unique private desktop
+  in its own sandbox-account logon session, after it has constructed and
+  verified the restricted token. It grants only SYSTEM, Administrators, the
+  runner account, and that launch logon SID full access, reads the descriptor
+  back, and holds the desktop through child supervision. Do not trim this ACL
+  below the Windows initialization contract or broaden it to the host default
+  desktop: the desktop DACL and Job UI restrictions are independent controls.
+- The explicit child HANDLE list contains only the three validated standard
+  stream endpoints. Do not pass a parent `WinSta0` or desktop handle through
+  the runner: cross-session station inheritance can stall Windows process
+  initialization before `main`. The runner-owned private desktop follows the
+  frozen Codex session model without granting the untrusted child a station
+  handle.
 - Keep the completed standard-stream boundary intact: prepare handles in the
   parent, duplicate only into the pinned authenticated runner process, reject
   malformed or aliased values in the runner, and expose only direct pipe
@@ -133,7 +135,7 @@ Implement `WindowsBackend`, the backend-bound prepared request handoff, and
 - Treat every duplicated HANDLE as a linear ownership transfer. For piped
   stdin the parent retains the writer; for piped stdout/stderr it retains the
   readers. The runner owns each duplicated child endpoint and its assign-only
-  Job handle, plus the narrow `WinSta0` handle, only inside the narrow
+  Job handle only inside the narrow
   `CreateProcessAsUserW` scope, then closes those copies immediately after the
   explicit handle and Job lists have been consumed. Keep the parent endpoints
   alive in `WindowsChild` until their documented close/drop boundary. Do not

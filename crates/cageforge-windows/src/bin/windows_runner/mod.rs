@@ -9,6 +9,7 @@ use crate::runner_protocol::{
     WindowsRunnerFailureStage, WindowsRunnerProtocolError, read_frame, write_frame,
 };
 
+mod desktop;
 mod identity;
 mod process;
 mod token;
