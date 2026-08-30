@@ -72,14 +72,8 @@ pub(crate) enum ParentRunnerPipeError {
         direction: ParentPipeDirection,
         code: u32,
     },
-    #[error(
-        "the {direction:?} runner pipe descriptor differs after Windows read-back: expected {expected}, found {actual}"
-    )]
-    DescriptorMismatch {
-        direction: ParentPipeDirection,
-        expected: String,
-        actual: String,
-    },
+    #[error("the {direction:?} runner pipe descriptor differs after Windows read-back")]
+    DescriptorMismatch { direction: ParentPipeDirection },
     #[error("failed to duplicate the {direction:?} connect-thread handle: Windows error {code}")]
     ConnectThreadHandle {
         direction: ParentPipeDirection,
@@ -167,7 +161,7 @@ impl ParentRunnerPipe {
             ParentPipeDirection::Response => "0x00000002",
         };
         let sddl = format!(
-            "O:{owner_sid}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})(A;;{client_access};;;{logon_sid})"
+            "O:{owner_sid}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{owner_sid})(A;;{client_access};;;{logon_sid})"
         )
             .encode_utf16()
             .chain(std::iter::once(0))
@@ -304,15 +298,13 @@ impl ParentRunnerPipe {
             });
         }
         let actual = LocalSecurityDescriptor(actual);
-        let expected = descriptor_string(expected.0, self.direction)?;
-        let actual = descriptor_string(actual.0, self.direction)?;
-        if expected == actual {
+        if descriptor_string(expected.0, self.direction)?
+            == descriptor_string(actual.0, self.direction)?
+        {
             Ok(())
         } else {
             Err(ParentRunnerPipeError::DescriptorMismatch {
                 direction: self.direction,
-                expected,
-                actual,
             })
         }
     }
