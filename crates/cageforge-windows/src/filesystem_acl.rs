@@ -2109,7 +2109,7 @@ fn subtree_paths(
                     source,
                 })?;
             if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                return Err(FilesystemAclError::ReparsePoint { path: child });
+                continue;
             }
             children.push((NativePathKey::new(&child), child, metadata.is_dir()));
         }
@@ -2507,6 +2507,25 @@ mod tests {
         assert!(paths.contains(&sibling));
         assert!(!paths.contains(&writable));
         assert!(!paths.contains(&writable_child));
+    }
+
+    #[test]
+    fn subtree_enumeration_does_not_follow_or_adopt_a_child_reparse_point() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("root");
+        let outside = temporary.path().join("outside");
+        let outside_child = outside.join("secret.txt");
+        let junction = root.join("junction");
+        std::fs::create_dir(&root).expect("scan root");
+        std::fs::create_dir(&outside).expect("external target");
+        std::fs::write(&outside_child, b"secret").expect("external fixture");
+        std::os::windows::fs::symlink_dir(&outside, &junction).expect("directory reparse point");
+
+        let paths = subtree_paths(&root, &[]).expect("enumerate without following reparse point");
+
+        assert!(!paths.contains(&junction));
+        assert!(!paths.contains(&outside_child));
+        assert!(subtree_paths(&junction, &[]).is_err());
     }
 
     #[test]

@@ -492,7 +492,11 @@ remains.
 Glob expansion starts at the deepest literal root. A recursive root glob with
 no configured depth is rejected rather than scanning the complete machine or
 silently truncating the rule. Directory enumeration does not follow reparse
-points and detects object-identity cycles.
+points and detects object-identity cycles. An explicitly selected reparse path
+still fails closed before ACL planning, while a reparse entry encountered below
+an already validated ordinary directory is excluded from descendant ACL scans:
+the backend neither follows it nor adopts the link itself as a proven ordinary
+descendant.
 
 The first implementation supports the elevated Codex filesystem shape: a
 restricted policy must provide readable platform or root scopes and may narrow
