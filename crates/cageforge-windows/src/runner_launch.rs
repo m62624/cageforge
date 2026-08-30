@@ -11,7 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{
+    ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree, WAIT_FAILED, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
@@ -24,8 +27,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithLogonW,
-    OpenProcessToken, PROCESS_ALL_ACCESS, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW,
-    THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
+    GetExitCodeProcess, OpenProcessToken, PROCESS_ALL_ACCESS, PROCESS_INFORMATION, ResumeThread,
+    STARTUPINFOW, THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
 };
 
 use crate::runner_desktop::{ParentDesktop, ParentDesktopError};
@@ -106,6 +109,32 @@ pub(crate) enum RunnerLaunchError {
     ProcessDescriptorMismatch { object: &'static str },
     #[error("failed to resume the hardened command runner: Windows error {code}")]
     Resume { code: u32 },
+    #[error(
+        "waiting for the command runner before {direction:?} pipe connection failed: Windows error {code}"
+    )]
+    RunnerConnectWait {
+        direction: ParentPipeDirection,
+        code: u32,
+    },
+    #[error(
+        "waiting for the command runner before {direction:?} pipe connection returned unexpected status {result:#x}"
+    )]
+    RunnerConnectWaitUnexpected {
+        direction: ParentPipeDirection,
+        result: u32,
+    },
+    #[error(
+        "failed to read command-runner exit code before {direction:?} pipe connection: Windows error {code}"
+    )]
+    RunnerConnectExitCode {
+        direction: ParentPipeDirection,
+        code: u32,
+    },
+    #[error("command runner exited with code {exit_code} before {direction:?} pipe connection")]
+    RunnerExitedBeforePipeConnect {
+        direction: ParentPipeDirection,
+        exit_code: u32,
+    },
     #[error("authenticated runner request pipe is no longer available")]
     RequestPipeUnavailable,
     #[error("authenticated runner response pipe is no longer available")]
@@ -188,8 +217,8 @@ impl RunnerLaunch {
         )?;
         let job_handle = job.duplicate_assign_only_into(runner.process.as_raw_handle() as _)?;
         runner.resume()?;
-        request.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT)?;
-        response.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT)?;
+        connect_runner_pipe(&runner, &request, ParentPipeDirection::Request)?;
+        connect_runner_pipe(&runner, &response, ParentPipeDirection::Response)?;
         let boundary = Arc::new(BoundaryTerminator::new(job, &runner.process)?);
         runner.released = true;
         Ok(Self {
@@ -330,6 +359,51 @@ impl SuspendedRunner {
             });
         }
         Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn exited_before_pipe_connect(
+        &self,
+        direction: ParentPipeDirection,
+    ) -> Result<Option<u32>, RunnerLaunchError> {
+        let result = unsafe { WaitForSingleObject(self.process.as_raw_handle() as _, 0) };
+        if result == WAIT_TIMEOUT {
+            return Ok(None);
+        }
+        if result == WAIT_FAILED {
+            return Err(RunnerLaunchError::RunnerConnectWait {
+                direction,
+                code: unsafe { GetLastError() },
+            });
+        }
+        if result != WAIT_OBJECT_0 {
+            return Err(RunnerLaunchError::RunnerConnectWaitUnexpected { direction, result });
+        }
+        let mut exit_code = 0;
+        if unsafe { GetExitCodeProcess(self.process.as_raw_handle() as _, &mut exit_code) } == 0 {
+            return Err(RunnerLaunchError::RunnerConnectExitCode {
+                direction,
+                code: unsafe { GetLastError() },
+            });
+        }
+        Ok(Some(exit_code))
+    }
+}
+
+fn connect_runner_pipe(
+    runner: &SuspendedRunner,
+    pipe: &ParentRunnerPipe,
+    direction: ParentPipeDirection,
+) -> Result<(), RunnerLaunchError> {
+    match pipe.connect(runner.process_id, RUNNER_CONNECT_TIMEOUT) {
+        Ok(()) => Ok(()),
+        Err(error) => match runner.exited_before_pipe_connect(direction)? {
+            Some(exit_code) => Err(RunnerLaunchError::RunnerExitedBeforePipeConnect {
+                direction,
+                exit_code,
+            }),
+            None => Err(error.into()),
+        },
     }
 }
 
