@@ -543,8 +543,11 @@ that is added to its token and registered to exactly one immutable
 `NetworkGateway` route. For every accepted connection, ingress:
 
 1. reads the accepted local and peer addresses;
-2. queries the exact reversed TCP four-tuple in the Windows owner-PID table;
-3. opens that PID and reads its `TokenRestrictedSids`;
+2. queries the exact reversed TCP four-tuple, PID, and TCP context-bind
+   timestamp in the Windows owner-module table;
+3. opens that PID, requires the process creation time not to be newer than the
+   connection timestamp, rechecks the same tuple/PID/timestamp identity, and
+   reads the pinned process token's `TokenRestrictedSids`;
 4. requires exactly one currently registered route SID;
 5. prepends the private `GatewayIngressKey` proof; and
 6. hands the stream to the route's Cageforge gateway.
@@ -552,16 +555,20 @@ that is added to its token and registered to exactly one immutable
 Missing, duplicate, stale, or unattributable routes fail closed. This prevents
 two concurrent sandboxes using different policies from selecting one another's
 gateway route. PID lookup, token lookup, and route registration are bounded and
-never fall back to an unauthenticated listener.
+never fall back to an unauthenticated listener. The process-wide admission
+limit remains held through PID and route attribution and through the first
+protocol byte under the route's handshake deadline. A client therefore cannot
+escape the pre-gateway connection bound by obtaining a route and then stalling
+before the portable gateway acquires its own per-route connection permit.
 
 The Cageforge ingress strengthens the frozen implementation by requiring
 `SO_EXCLUSIVEADDRUSE` before binding each fixed setup port, bounding owner-table
-resize retries and token buffers, pinning the attributed process while the
-owner row and restricted token are rechecked, and generating route SIDs from
-operating-system cryptographic randomness with a bounded collision loop. These
-are native enforcement details; the public API remains the generalized
-effective network policy and gateway configuration used by other Cageforge
-backends.
+resize retries and token buffers, binding the attributed process creation time
+to the TCP context timestamp before rechecking the complete owner row and
+restricted token, and generating route SIDs from operating-system
+cryptographic randomness with a bounded collision loop. These are native
+enforcement details; the public API remains the generalized effective network
+policy and gateway configuration used by other Cageforge backends.
 
 The gateway still performs one DNS snapshot and exact `SocketAddr`
 authorization immediately before connect. Firewall and route attribution are

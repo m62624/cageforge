@@ -747,8 +747,13 @@ async fn serve_connection(
             .await
             .map_err(|_| WindowsNetworkIngressError::AttributionWorker)??;
     let route = registered_route_for_sids(&routes, &restricting_sids)?;
-    drop(pre_attribution_permit);
-    verify_protocol(&stream, protocol, route.handshake_timeout).await?;
+    verify_protocol_while_admitted(
+        &stream,
+        protocol,
+        route.handshake_timeout,
+        pre_attribution_permit,
+    )
+    .await?;
     serve_authenticated_route(stream, route).await
 }
 
@@ -798,6 +803,17 @@ async fn verify_protocol(
             protocol: protocol.label(),
         })
     }
+}
+
+async fn verify_protocol_while_admitted(
+    stream: &TcpStream,
+    protocol: ProxyProtocol,
+    handshake_timeout: Duration,
+    pre_attribution_permit: OwnedSemaphorePermit,
+) -> Result<(), WindowsNetworkIngressError> {
+    let result = verify_protocol(stream, protocol, handshake_timeout).await;
+    drop(pre_attribution_permit);
+    result
 }
 
 async fn serve_authenticated_route(
@@ -889,16 +905,22 @@ fn random_route_sid() -> Result<String, WindowsNetworkGatewayError> {
 mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use cageforge_command::EnvironmentSpec;
     use cageforge_network_proxy::{GatewayConfig, NetworkGateway};
     use cageforge_policy::NetworkPolicy;
     use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
     use pretty_assertions::assert_eq;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::Semaphore;
+    use tokio::time::timeout;
 
     use super::{
-        ProxyAddresses, RouteServices, WindowsNetworkGatewayError, WindowsNetworkIngressError,
-        random_route_sid, registered_route_for_sids,
+        ProxyAddresses, ProxyProtocol, RouteServices, WindowsNetworkGatewayError,
+        WindowsNetworkIngressError, random_route_sid, registered_route_for_sids,
+        verify_protocol_while_admitted,
     };
 
     #[test]
@@ -950,6 +972,38 @@ mod tests {
         assert_eq!(&parts[..4], &["S", "1", "5", "21"]);
         assert_eq!(parts.len(), 8);
         assert!(parts[4..].iter().all(|part| part.parse::<u32>().is_ok()));
+    }
+
+    #[tokio::test]
+    async fn protocol_stalls_remain_inside_the_pre_attribution_connection_limit() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("loopback listener");
+        let address = listener.local_addr().expect("listener address");
+        let mut client = TcpStream::connect(address).await.expect("loopback client");
+        let (server, _) = listener.accept().await.expect("accepted client");
+        let admission = Arc::new(Semaphore::new(1));
+        let permit = Arc::clone(&admission)
+            .try_acquire_owned()
+            .expect("one admission permit");
+        let verification = verify_protocol_while_admitted(
+            &server,
+            ProxyProtocol::Http,
+            Duration::from_secs(1),
+            permit,
+        );
+        tokio::pin!(verification);
+
+        assert!(
+            timeout(Duration::from_millis(20), &mut verification)
+                .await
+                .is_err()
+        );
+        assert_eq!(admission.available_permits(), 0);
+
+        client.write_all(b"G").await.expect("HTTP protocol byte");
+        verification.await.expect("protocol verification");
+        assert_eq!(admission.available_permits(), 1);
     }
 
     fn route_services() -> Arc<RouteServices> {

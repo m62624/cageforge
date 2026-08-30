@@ -9,11 +9,11 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree, NO_ERROR,
+    ERROR_INSUFFICIENT_BUFFER, FILETIME, GetLastError, HLOCAL, LocalFree, NO_ERROR,
 };
 use windows_sys::Win32::NetworkManagement::IpHelper::{
-    GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
-    TCP_TABLE_OWNER_PID_CONNECTIONS,
+    GetExtendedTcpTable, MIB_TCPROW_OWNER_MODULE, MIB_TCPTABLE_OWNER_MODULE,
+    TCP_TABLE_OWNER_MODULE_CONNECTIONS,
 };
 use windows_sys::Win32::Networking::WinSock::AF_INET;
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
@@ -22,7 +22,7 @@ use windows_sys::Win32::Security::{
     TokenRestrictedSids,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 const MAX_TCP_TABLE_BYTES: usize = 64 * 1024 * 1024;
@@ -87,6 +87,15 @@ pub enum WindowsNetworkAttributionError {
     /// The exact owner changed during process-handle acquisition.
     #[error("accepted Windows proxy connection owner changed during attribution")]
     ConnectionOwnerChanged,
+    /// Reading the attributed process creation time failed.
+    #[error("failed to read attributed Windows proxy client process times: error {code}")]
+    ProcessTimes {
+        /// Native Win32 code.
+        code: u32,
+    },
+    /// The process object was created after the TCP context attributed to its reused PID.
+    #[error("attributed Windows proxy client PID was reused after the TCP context was created")]
+    ProcessIdentityMismatch,
     /// The attributed client process could not be opened.
     #[error("failed to open attributed Windows proxy client process {process_id}: error {code}")]
     ProcessOpen {
@@ -143,6 +152,12 @@ pub enum WindowsNetworkAttributionError {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConnectionOwner {
+    process_id: u32,
+    connection_created: i64,
+}
+
 struct LocalWideString(*mut u16);
 
 #[allow(unsafe_code)]
@@ -173,24 +188,25 @@ pub(crate) fn restricting_sids_for_tcp_connection(
             address: accepted_peer,
         });
     }
-    let process_id = owning_process_id(accepted_local, accepted_peer)?;
-    let process = open_process(process_id)?;
-    if owning_process_id(accepted_local, accepted_peer)? != process_id {
+    let owner = owning_connection(accepted_local, accepted_peer)?;
+    let process = open_process(owner.process_id)?;
+    validate_process_identity(owner, process_creation_time(&process)?)?;
+    if owning_connection(accepted_local, accepted_peer)? != owner {
         return Err(WindowsNetworkAttributionError::ConnectionOwnerChanged);
     }
     restricting_sids_for_process(&process)
 }
 
-fn owning_process_id(
+fn owning_connection(
     accepted_local: SocketAddrV4,
     accepted_peer: SocketAddrV4,
-) -> Result<u32, WindowsNetworkAttributionError> {
+) -> Result<ConnectionOwner, WindowsNetworkAttributionError> {
     let rows = tcp_owner_rows()?;
-    unique_client_process_id(&rows, accepted_local, accepted_peer)
+    unique_client_owner(&rows, accepted_local, accepted_peer)
 }
 
 #[allow(unsafe_code)]
-fn tcp_owner_rows() -> Result<Vec<MIB_TCPROW_OWNER_PID>, WindowsNetworkAttributionError> {
+fn tcp_owner_rows() -> Result<Vec<MIB_TCPROW_OWNER_MODULE>, WindowsNetworkAttributionError> {
     let mut byte_length = 0;
     let status = unsafe {
         GetExtendedTcpTable(
@@ -198,7 +214,7 @@ fn tcp_owner_rows() -> Result<Vec<MIB_TCPROW_OWNER_PID>, WindowsNetworkAttributi
             &mut byte_length,
             0,
             AF_INET as u32,
-            TCP_TABLE_OWNER_PID_CONNECTIONS,
+            TCP_TABLE_OWNER_MODULE_CONNECTIONS,
             0,
         )
     };
@@ -220,7 +236,7 @@ fn tcp_owner_rows() -> Result<Vec<MIB_TCPROW_OWNER_PID>, WindowsNetworkAttributi
                 &mut byte_length,
                 0,
                 AF_INET as u32,
-                TCP_TABLE_OWNER_PID_CONNECTIONS,
+                TCP_TABLE_OWNER_MODULE_CONNECTIONS,
                 0,
             )
         };
@@ -239,14 +255,14 @@ fn tcp_owner_rows() -> Result<Vec<MIB_TCPROW_OWNER_PID>, WindowsNetworkAttributi
 fn parse_tcp_owner_rows(
     buffer: &[usize],
     byte_length: usize,
-) -> Result<Vec<MIB_TCPROW_OWNER_PID>, WindowsNetworkAttributionError> {
-    let rows_offset = offset_of!(MIB_TCPTABLE_OWNER_PID, table);
+) -> Result<Vec<MIB_TCPROW_OWNER_MODULE>, WindowsNetworkAttributionError> {
+    let rows_offset = offset_of!(MIB_TCPTABLE_OWNER_MODULE, table);
     if byte_length > size_of_val(buffer) || byte_length < rows_offset {
         return Err(WindowsNetworkAttributionError::TcpTableMalformed);
     }
     let count = unsafe { buffer.as_ptr().cast::<u32>().read_unaligned() } as usize;
     let expected = count
-        .checked_mul(size_of::<MIB_TCPROW_OWNER_PID>())
+        .checked_mul(size_of::<MIB_TCPROW_OWNER_MODULE>())
         .and_then(|rows| rows_offset.checked_add(rows))
         .ok_or(WindowsNetworkAttributionError::TcpTableMalformed)?;
     if expected > byte_length {
@@ -258,34 +274,37 @@ fn parse_tcp_owner_rows(
                 .as_ptr()
                 .cast::<u8>()
                 .add(rows_offset)
-                .cast::<MIB_TCPROW_OWNER_PID>(),
+                .cast::<MIB_TCPROW_OWNER_MODULE>(),
             count,
         )
     };
     Ok(rows.to_vec())
 }
 
-fn unique_client_process_id(
-    rows: &[MIB_TCPROW_OWNER_PID],
+fn unique_client_owner(
+    rows: &[MIB_TCPROW_OWNER_MODULE],
     accepted_local: SocketAddrV4,
     accepted_peer: SocketAddrV4,
-) -> Result<u32, WindowsNetworkAttributionError> {
+) -> Result<ConnectionOwner, WindowsNetworkAttributionError> {
     let mut matches = rows
         .iter()
         .filter(|row| client_row_matches(row, accepted_local, accepted_peer))
-        .map(|row| row.dwOwningPid);
-    let process_id = matches
+        .map(|row| ConnectionOwner {
+            process_id: row.dwOwningPid,
+            connection_created: row.liCreateTimestamp,
+        });
+    let owner = matches
         .next()
         .ok_or(WindowsNetworkAttributionError::ConnectionOwnerMissing)?;
     if matches.next().is_some() {
         Err(WindowsNetworkAttributionError::ConnectionOwnerDuplicate)
     } else {
-        Ok(process_id)
+        Ok(owner)
     }
 }
 
 fn client_row_matches(
-    row: &MIB_TCPROW_OWNER_PID,
+    row: &MIB_TCPROW_OWNER_MODULE,
     accepted_local: SocketAddrV4,
     accepted_peer: SocketAddrV4,
 ) -> bool {
@@ -313,6 +332,42 @@ fn open_process(process_id: u32) -> Result<OwnedHandle, WindowsNetworkAttributio
         })
     } else {
         Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
+    }
+}
+
+#[allow(unsafe_code)]
+fn process_creation_time(process: &OwnedHandle) -> Result<u64, WindowsNetworkAttributionError> {
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    if unsafe {
+        GetProcessTimes(
+            process.as_raw_handle() as _,
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    } == 0
+    {
+        return Err(WindowsNetworkAttributionError::ProcessTimes {
+            code: unsafe { GetLastError() },
+        });
+    }
+    Ok(u64::from(creation.dwLowDateTime) | (u64::from(creation.dwHighDateTime) << 32))
+}
+
+fn validate_process_identity(
+    owner: ConnectionOwner,
+    process_created: u64,
+) -> Result<(), WindowsNetworkAttributionError> {
+    let connection_created = u64::try_from(owner.connection_created)
+        .map_err(|_| WindowsNetworkAttributionError::ProcessIdentityMismatch)?;
+    if process_created > connection_created {
+        Err(WindowsNetworkAttributionError::ProcessIdentityMismatch)
+    } else {
+        Ok(())
     }
 }
 
@@ -482,9 +537,12 @@ mod tests {
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     use pretty_assertions::assert_eq;
-    use windows_sys::Win32::NetworkManagement::IpHelper::MIB_TCPROW_OWNER_PID;
+    use windows_sys::Win32::NetworkManagement::IpHelper::MIB_TCPROW_OWNER_MODULE;
 
-    use super::{WindowsNetworkAttributionError, unique_client_process_id};
+    use super::{
+        ConnectionOwner, WindowsNetworkAttributionError, unique_client_owner,
+        validate_process_identity,
+    };
 
     #[test]
     fn reversed_four_tuple_selects_exactly_one_owner() {
@@ -493,11 +551,14 @@ mod tests {
         let rows = [row(client, listener, 42), row(client, listener, 43)];
 
         assert_eq!(
-            unique_client_process_id(&rows[..1], listener, client).expect("one owner"),
-            42
+            unique_client_owner(&rows[..1], listener, client).expect("one owner"),
+            ConnectionOwner {
+                process_id: 42,
+                connection_created: 100,
+            }
         );
         assert!(matches!(
-            unique_client_process_id(&rows, listener, client),
+            unique_client_owner(&rows, listener, client),
             Err(WindowsNetworkAttributionError::ConnectionOwnerDuplicate)
         ));
     }
@@ -509,19 +570,45 @@ mod tests {
         let unrelated = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 2), 41000);
 
         assert!(matches!(
-            unique_client_process_id(&[row(client, unrelated, 42)], listener, client),
+            unique_client_owner(&[row(client, unrelated, 42)], listener, client),
             Err(WindowsNetworkAttributionError::ConnectionOwnerMissing)
         ));
     }
 
-    fn row(local: SocketAddrV4, remote: SocketAddrV4, process_id: u32) -> MIB_TCPROW_OWNER_PID {
-        MIB_TCPROW_OWNER_PID {
+    #[test]
+    fn reused_pid_cannot_adopt_an_older_tcp_context() {
+        let owner = ConnectionOwner {
+            process_id: 42,
+            connection_created: 100,
+        };
+
+        validate_process_identity(owner, 100).expect("original process identity");
+        assert!(matches!(
+            validate_process_identity(owner, 101),
+            Err(WindowsNetworkAttributionError::ProcessIdentityMismatch)
+        ));
+        assert!(matches!(
+            validate_process_identity(
+                ConnectionOwner {
+                    process_id: 42,
+                    connection_created: -1,
+                },
+                0,
+            ),
+            Err(WindowsNetworkAttributionError::ProcessIdentityMismatch)
+        ));
+    }
+
+    fn row(local: SocketAddrV4, remote: SocketAddrV4, process_id: u32) -> MIB_TCPROW_OWNER_MODULE {
+        MIB_TCPROW_OWNER_MODULE {
             dwState: 5,
             dwLocalAddr: u32::from_ne_bytes(local.ip().octets()),
             dwLocalPort: u16::to_be(local.port()) as u32,
             dwRemoteAddr: u32::from_ne_bytes(remote.ip().octets()),
             dwRemotePort: u16::to_be(remote.port()) as u32,
             dwOwningPid: process_id,
+            liCreateTimestamp: 100,
+            OwningModuleInfo: [0; 16],
         }
     }
 }
