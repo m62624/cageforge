@@ -3,9 +3,10 @@
 #![cfg(target_os = "windows")]
 
 use std::fs;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cageforge_backend_api::BackendRequest;
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
@@ -20,6 +21,10 @@ use cageforge_windows::{
     WindowsSetupVerificationError,
 };
 use pretty_assertions::assert_eq;
+use windows_sys::Win32::Foundation::{GetLastError, STILL_ACTIVE};
+use windows_sys::Win32::System::Threading::{
+    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 const SANDBOX_FIXTURE_MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const SANDBOX_FIXTURE_READY: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_READY";
@@ -27,6 +32,7 @@ const SANDBOX_FIXTURE_MARKER: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MARKER";
 const SANDBOX_FIXTURE_DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
 const SANDBOX_FIXTURE_PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 
 struct SetupCleanup<'a> {
     setup: &'a WindowsSetup,
@@ -81,6 +87,32 @@ fn fixture_command(path: &Path) -> CommandSpec {
         .expect("sandbox fixture command")
         .with_args(["--exact", "sandbox_process_fixture", "--nocapture"])
         .expect("sandbox fixture arguments")
+}
+
+#[allow(unsafe_code)]
+fn process_exit_code(process_id: u32) -> Result<Option<u32>, u32> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    if handle.is_null() {
+        return Err(unsafe { GetLastError() });
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
+    let mut exit_code = 0;
+    if unsafe { GetExitCodeProcess(handle.as_raw_handle() as _, &mut exit_code) } == 0 {
+        return Err(unsafe { GetLastError() });
+    }
+    Ok((exit_code != STILL_ACTIVE as u32).then_some(exit_code))
+}
+
+fn wait_for_fixture_exit(process_id: u32) -> Result<u32, String> {
+    let deadline = Instant::now() + FIXTURE_START_DEADLINE;
+    loop {
+        match process_exit_code(process_id) {
+            Ok(Some(exit_code)) => return Ok(exit_code),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => return Err("the process remained active".to_string()),
+            Err(code) => return Err(format!("failed to query the process: Windows error {code}")),
+        }
+    }
 }
 
 #[test]
@@ -413,6 +445,13 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare denied-read probe");
     let mut access_child = backend.spawn(prepared).expect("spawn denied-read probe");
+    let fixture_exit = wait_for_fixture_exit(access_child.id()).unwrap_or_else(|detail| {
+        let progress = fs::read_to_string(&access_progress).ok();
+        panic!(
+            "denied-read fixture did not exit promptly: {detail}; fixture progress: {progress:?}"
+        );
+    });
+    assert_eq!(fixture_exit, 0, "denied-read fixture exit status");
     let access_status = access_child.wait().unwrap_or_else(|error| {
         let progress = fs::read_to_string(&access_progress).ok();
         panic!("wait for denied-read probe: {error}; fixture progress: {progress:?}");

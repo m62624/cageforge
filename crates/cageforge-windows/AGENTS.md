@@ -119,6 +119,15 @@ Implement `WindowsBackend`, the backend-bound prepared request handoff, and
   parent, duplicate only into the pinned authenticated runner process, reject
   malformed or aliased values in the runner, and expose only direct pipe
   endpoints from `WindowsChild`. Do not restore framed stdio forwarding.
+- Treat every duplicated HANDLE as a linear ownership transfer. For piped
+  stdin the parent retains the writer; for piped stdout/stderr it retains the
+  readers. The runner owns each duplicated child endpoint and its assign-only
+  Job handle only inside the narrow `CreateProcessAsUserW` scope, then closes
+  those copies immediately after the explicit handle and Job lists have been
+  consumed. Keep the parent endpoints alive in `WindowsChild` until their
+  documented close/drop boundary. Do not rely on a broad function scope or an
+  incidental destructor order for this transition; a late runner-held writer
+  prevents EOF, while an early close invalidates the child launch.
 - `WindowsChild` must retain the process, Job Object, ACL/materialization
   handles, runner session, desktop, proxy route, and every other enforcement
   resource. `kill`, timeout, wait, and `Drop` must terminate the complete Job

@@ -679,6 +679,20 @@ by `WindowsChild` and close deterministically on timeout and drop. Standard
 stream content is not part of the authenticated runner protocol: the protocol
 reports only spawn, typed failure, and exit lifecycle state.
 
+For piped stdin, the parent retains the write endpoint and duplicates only the
+read endpoint into the authenticated runner; for piped stdout and stderr, the
+parent retains the read endpoints and duplicates only the write endpoints into
+that runner. The runner owns its remote duplicates only for the narrow
+`CreateProcessAsUserW` call. Its explicit inherited-handle list transfers the
+three stream handles to the sandboxed process, after which the runner closes
+its copies before it waits for the child. This prevents a runner-held writer
+from delaying EOF without closing a child handle before process creation has
+consumed the explicit list. The parent also owns the real kill-on-close Job
+Object and duplicates only assign authority to the runner; that duplicate is
+closed immediately after atomic child assignment. Neither stream endpoint nor
+Job authority is inherited outside the explicit child handle and Job-list
+attributes.
+
 ## 9. Capabilities and native validation
 
 The backend advertises command execution, checked working directories, all
