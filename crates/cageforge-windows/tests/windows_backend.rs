@@ -25,7 +25,8 @@ use pretty_assertions::assert_eq;
 use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE, STILL_ACTIVE};
 use windows_sys::Win32::System::Diagnostics::Debug::{
     CloseThreadWaitChainSession, GetThreadWaitChain, OpenThreadWaitChainSession,
-    WAITCHAIN_NODE_INFO, WCT_MAX_NODE_COUNT,
+    WAITCHAIN_NODE_INFO, WCT_MAX_NODE_COUNT, WCT_OUT_OF_PROC_COM_FLAG, WCT_OUT_OF_PROC_CS_FLAG,
+    WCT_OUT_OF_PROC_FLAG, WctThreadType,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
@@ -137,6 +138,31 @@ fn wait_for_fixture_exit(process_id: u32) -> Result<u32, String> {
 }
 
 #[allow(unsafe_code)]
+fn describe_wait_chain_node(node: WAITCHAIN_NODE_INFO) -> String {
+    if node.ObjectType == WctThreadType {
+        let thread = unsafe { node.Anonymous.ThreadObject };
+        return format!(
+            "{}:{}(process={}, thread={}, wait_ms={}, context_switches={})",
+            node.ObjectType,
+            node.ObjectStatus,
+            thread.ProcessId,
+            thread.ThreadId,
+            thread.WaitTime,
+            thread.ContextSwitches,
+        );
+    }
+    let lock = unsafe { node.Anonymous.LockObject };
+    let name = String::from_utf16_lossy(&lock.ObjectName);
+    let name = name
+        .split_once('\0')
+        .map_or(name.as_str(), |(name, _)| name);
+    format!(
+        "{}:{}(name={name:?}, timeout={}, alertable={})",
+        node.ObjectType, node.ObjectStatus, lock.Timeout, lock.Alertable
+    )
+}
+
+#[allow(unsafe_code)]
 fn fixture_wait_chains(process_id: u32) -> Result<String, String> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
@@ -174,7 +200,7 @@ fn fixture_wait_chains(process_id: u32) -> Result<String, String> {
                 GetThreadWaitChain(
                     session.0,
                     0,
-                    0,
+                    WCT_OUT_OF_PROC_FLAG | WCT_OUT_OF_PROC_COM_FLAG | WCT_OUT_OF_PROC_CS_FLAG,
                     entry.th32ThreadID,
                     &mut node_count,
                     nodes.as_mut_ptr(),
@@ -191,7 +217,7 @@ fn fixture_wait_chains(process_id: u32) -> Result<String, String> {
             let nodes = nodes
                 .into_iter()
                 .take(node_count as usize)
-                .map(|node| format!("{}:{}", node.ObjectType, node.ObjectStatus))
+                .map(describe_wait_chain_node)
                 .collect::<Vec<_>>()
                 .join(" -> ");
             chains.push(format!(
