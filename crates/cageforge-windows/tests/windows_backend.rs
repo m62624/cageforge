@@ -89,6 +89,10 @@ fn fixture_command(path: &Path) -> CommandSpec {
         .expect("sandbox fixture arguments")
 }
 
+fn access_fixture_command(path: &Path) -> CommandSpec {
+    CommandSpec::new(path).expect("denied-read fixture command")
+}
+
 #[allow(unsafe_code)]
 fn process_exit_code(process_id: u32) -> Result<Option<u32>, u32> {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
@@ -427,6 +431,14 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         &fixture,
     )
     .expect("copy sandbox fixture into the writable workspace");
+    let access_fixture = workspace
+        .path()
+        .join("cageforge-windows-access-fixture.exe");
+    fs::copy(
+        env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"),
+        &access_fixture,
+    )
+    .expect("copy denied-read fixture into the writable workspace");
 
     let outside_secret = temporary.path().join("outside-secret.txt");
     let access_progress = workspace.path().join("denied-read-progress.txt");
@@ -438,7 +450,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .expect("denied-read fixture environment")
         .with_var(SANDBOX_FIXTURE_PROGRESS, access_progress.as_os_str())
         .expect("denied-read fixture progress");
-    let access_probe = fixture_command(&fixture);
+    let access_probe = access_fixture_command(&access_fixture);
     let (command, effective, context) =
         restricted_request_with_environment(workspace.path(), access_probe, environment);
     let prepared = backend

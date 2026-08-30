@@ -19,6 +19,13 @@ bundled-helpers = []
 name = "cageforge_windows"
 path = "src/lib.rs"
 
+[[bin]]
+name = "cageforge-windows-test-fixture"
+path = "tests/support/windows_sandbox_fixture.rs"
+test = false
+bench = false
+doc = false
+
 [target.'cfg(target_os = "windows")'.dependencies]
 cageforge-backend-api.workspace = true
 cageforge-command.workspace = true
