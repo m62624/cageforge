@@ -279,9 +279,12 @@ response from the runner.
 The process starts on a private desktop by default. Disabling private-desktop
 is not part of the first public API because it would weaken the declared
 boundary. After learning the runner's unique logon SID, the trusted parent
-creates and retains the desktop, gives that SID only the access required to
-start and use the child, and verifies the protected owner/Admin/SYSTEM/logon-SID
-descriptor before resuming the runner. The runner receives only the desktop
+creates and retains the desktop, gives that SID full access only to that
+launch-unique desktop, and verifies the protected owner/Admin/SYSTEM/logon-SID
+descriptor before resuming the runner. Full desktop access is necessary for
+Windows process initialization and is not access to the host default desktop:
+Job UI limits and the isolated object DACL still prohibit cross-job or host
+desktop interaction. The runner receives only the desktop
 name. A desktop created by the sandbox account would be unsafe because another
 logon of the same file owner retains implicit descriptor-control rights. The
 desktop, token, process, thread, pipe, and job handles use owned RAII wrappers

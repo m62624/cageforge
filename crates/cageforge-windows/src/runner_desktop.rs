@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Parent-owned launch-unique desktop with a least-authority sandbox grant.
+//! Parent-owned launch-unique desktop with an isolated sandbox grant.
 
 use std::mem::size_of;
 
@@ -22,7 +22,7 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     DESKTOP_WRITE_OWNER, DESKTOP_WRITEOBJECTS, HDESK,
 };
 
-const PARENT_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
+const PRIVATE_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_CREATEWINDOW
     | DESKTOP_CREATEMENU
     | DESKTOP_HOOKCONTROL
@@ -35,12 +35,6 @@ const PARENT_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_READ_CONTROL
     | DESKTOP_WRITE_DAC
     | DESKTOP_WRITE_OWNER;
-const SANDBOX_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
-    | DESKTOP_CREATEWINDOW
-    | DESKTOP_CREATEMENU
-    | DESKTOP_HOOKCONTROL
-    | DESKTOP_ENUMERATE
-    | DESKTOP_WRITEOBJECTS;
 
 pub(crate) struct ParentDesktop {
     handle: HDESK,
@@ -107,7 +101,7 @@ impl ParentDesktop {
         let name = format!("Cageforge-{nonce}");
         let name_wide = crate::win::to_wide(&name);
         let sddl = format!(
-            "O:{owner_sid}D:P(A;;0x{PARENT_DESKTOP_ACCESS:08x};;;SY)(A;;0x{PARENT_DESKTOP_ACCESS:08x};;;BA)(A;;0x{PARENT_DESKTOP_ACCESS:08x};;;{owner_sid})(A;;0x{SANDBOX_DESKTOP_ACCESS:08x};;;{logon_sid})"
+            "O:{owner_sid}D:P(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;SY)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;BA)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{owner_sid})(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{logon_sid})"
         );
         let descriptor = parse_descriptor(&sddl)?;
         let security = SECURITY_ATTRIBUTES {
@@ -121,7 +115,7 @@ impl ParentDesktop {
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
-                PARENT_DESKTOP_ACCESS,
+                PRIVATE_DESKTOP_ACCESS,
                 &security,
             )
         };

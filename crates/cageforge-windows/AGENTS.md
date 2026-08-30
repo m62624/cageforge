@@ -115,6 +115,10 @@ Implement `WindowsBackend`, the backend-bound prepared request handoff, and
 - The runner must use the verified sandbox account, restricted token, private
   desktop, Job Object, explicit handle list, and parent-process constraints
   already implemented in this crate.
+- The parent owns each launch-unique private desktop and grants the unique
+  logon SID full access only to that desktop. Do not trim this ACL below the
+  Windows initialization contract or broaden it to the host default desktop:
+  the desktop DACL and Job UI restrictions are independent controls.
 - Keep the completed standard-stream boundary intact: prepare handles in the
   parent, duplicate only into the pinned authenticated runner process, reject
   malformed or aliased values in the runner, and expose only direct pipe
