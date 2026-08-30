@@ -31,6 +31,9 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread}
 const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
+const FILE_READ_DATA: u32 = 0x0000_0001;
+const FILE_WRITE_DATA: u32 = 0x0000_0002;
+const SYNCHRONIZE: u32 = 0x0010_0000;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 
 pub(crate) struct RunnerPipeNames {
@@ -156,10 +159,7 @@ impl ParentRunnerPipe {
         logon_sid: &str,
         direction: ParentPipeDirection,
     ) -> Result<Self, ParentRunnerPipeError> {
-        let client_access = match direction {
-            ParentPipeDirection::Request => "0x00000001",
-            ParentPipeDirection::Response => "0x00000002",
-        };
+        let client_access = format!("0x{:08x}", client_access_mask(direction));
         let sddl = format!(
             "O:{owner_sid}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{owner_sid})(A;;{client_access};;;{logon_sid})"
         )
@@ -335,6 +335,14 @@ fn descriptor_string(
     Ok(wide_string(value.0))
 }
 
+const fn client_access_mask(direction: ParentPipeDirection) -> u32 {
+    let data_access = match direction {
+        ParentPipeDirection::Request => FILE_READ_DATA,
+        ParentPipeDirection::Response => FILE_WRITE_DATA,
+    };
+    data_access | SYNCHRONIZE
+}
+
 #[allow(unsafe_code)]
 fn wide_string(value: *const u16) -> String {
     unsafe {
@@ -399,4 +407,22 @@ fn connect_and_verify(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FILE_READ_DATA, FILE_WRITE_DATA, SYNCHRONIZE, client_access_mask};
+    use crate::runner_pipe::ParentPipeDirection;
+
+    #[test]
+    fn client_pipe_access_is_directional_and_synchronous() {
+        assert_eq!(
+            client_access_mask(ParentPipeDirection::Request),
+            FILE_READ_DATA | SYNCHRONIZE
+        );
+        assert_eq!(
+            client_access_mask(ParentPipeDirection::Response),
+            FILE_WRITE_DATA | SYNCHRONIZE
+        );
+    }
 }

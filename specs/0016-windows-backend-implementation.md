@@ -316,8 +316,9 @@ both named-pipe DACLs for exactly that logon SID rather than the shared account
 SID, and replaces the runner process and primary-thread DACLs with protected
 owner/Admin/SYSTEM descriptors. The parent creates each pipe with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, rejects remote clients, and grants the runner
-only `FILE_READ_DATA` on the request pipe and `FILE_WRITE_DATA` on the response
-pipe. It intentionally does not grant `FILE_GENERIC_WRITE`, because that mask
+only `FILE_READ_DATA | SYNCHRONIZE` on the request pipe and
+`FILE_WRITE_DATA | SYNCHRONIZE` on the response pipe. It intentionally does
+not grant `FILE_GENERIC_WRITE`, because that mask
 also contains `FILE_CREATE_PIPE_INSTANCE` for named pipes. Pipe owner and DACL
 are read back before the runner resumes. The parent then duplicates the
 assign-only Job handle and resumes the primary thread. Exact client-PID checks
