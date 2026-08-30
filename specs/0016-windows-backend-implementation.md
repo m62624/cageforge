@@ -317,7 +317,8 @@ SID, and replaces the runner process and primary-thread DACLs with protected
 owner/Admin/SYSTEM descriptors. The parent creates each pipe with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, rejects remote clients, and grants the runner
 the file-generic read mask on the request pipe and the file-generic write mask
-minus `FILE_APPEND_DATA` on the response pipe. Windows aliases
+plus `FILE_READ_ATTRIBUTES`, but minus `FILE_APPEND_DATA`, on the response
+pipe. Windows aliases
 `FILE_APPEND_DATA` and `FILE_CREATE_PIPE_INSTANCE`; a client must never receive
 that bit. `FILE_FLAG_FIRST_PIPE_INSTANCE` is an independent mandatory control:
 after the parent creates the first instance, an older process cannot add
