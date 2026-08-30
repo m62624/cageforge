@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::os::windows::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use cageforge_backend_api::{
@@ -31,9 +31,8 @@ use crate::runner_launch::RunnerLaunch;
 use crate::runner_protocol::RunnerAccount;
 use crate::runner_session::{PendingRunnerSpawnRequest, RunnerSession};
 use crate::setup::{WindowsSetup, WindowsSetupDetails};
+use crate::setup_verification::PinnedRunnerResources;
 use crate::setup_verification::credentials::{AccountCredential, SandboxCredentials};
-
-const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
 
 /// A Windows-native Cageforge backend bound to one verified elevated setup.
 pub struct WindowsBackend {
@@ -41,7 +40,7 @@ pub struct WindowsBackend {
     setup: WindowsSetupDetails,
     credentials: SandboxCredentials,
     capability_state: CapabilityStateStore,
-    command_runner: PathBuf,
+    runner_resources: PinnedRunnerResources,
     identity: BackendIdentity,
 }
 
@@ -64,7 +63,10 @@ impl fmt::Debug for WindowsBackend {
             .debug_struct("WindowsBackend")
             .field("config", &self.config)
             .field("setup", &self.setup)
-            .field("command_runner", &self.command_runner)
+            .field(
+                "command_runner",
+                &self.runner_resources.command_runner_path(),
+            )
             .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
@@ -81,16 +83,14 @@ impl WindowsBackend {
         capability_state
             .verify()
             .map_err(WindowsBackendError::filesystem_enforcement)?;
-        let command_runner = setup
-            .state_directory()
-            .join("bin")
-            .join(COMMAND_RUNNER_NAME);
+        let runner_resources =
+            PinnedRunnerResources::open(&setup).map_err(crate::error::WindowsSetupError::from)?;
         Ok(Self {
             config,
             setup,
             credentials,
             capability_state,
-            command_runner,
+            runner_resources,
             identity: BackendIdentity::new(),
         })
     }
@@ -107,7 +107,7 @@ impl WindowsBackend {
 
     /// Returns the protected installed command-runner path.
     pub fn command_runner_path(&self) -> &Path {
-        &self.command_runner
+        self.runner_resources.command_runner_path()
     }
 
     /// Runs common Cageforge preflight and Windows-specific combination checks.
@@ -161,10 +161,11 @@ impl WindowsBackend {
             account: plan.account,
         };
         let launch = RunnerLaunch::start(
-            &self.command_runner,
+            &self.runner_resources,
             prepared.working_directory(self)?,
             credential,
             self.setup.owner_sid(),
+            self.setup.accounts().group_sid(),
         )
         .map_err(WindowsBackendError::runner_launch)?;
         let session = RunnerSession::start(launch, request, stdio, timeout)

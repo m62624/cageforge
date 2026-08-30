@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -19,6 +19,71 @@ mod wfp;
 const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
 const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
 
+pub(crate) struct PinnedRunnerResources {
+    command_runner_path: PathBuf,
+    runner_manifest_path: PathBuf,
+    command_runner: fs::File,
+    runner_manifest: fs::File,
+}
+
+impl PinnedRunnerResources {
+    pub(crate) fn open(
+        details: &WindowsSetupDetails,
+    ) -> Result<Self, WindowsSetupVerificationError> {
+        let bin_directory = details.state_directory().join("bin");
+        let command_runner_path = bin_directory.join(COMMAND_RUNNER_NAME);
+        let runner_manifest_path = bin_directory.join(crate::runner_manifest::RUNNER_MANIFEST_NAME);
+        let mut command_runner = paths::verify_runner_executable_dacl(
+            &command_runner_path,
+            details.owner_sid(),
+            details.accounts().group_sid(),
+        )?;
+        let mut runner_manifest = paths::verify_runner_manifest_dacl(
+            &runner_manifest_path,
+            details.owner_sid(),
+            details.accounts().group_sid(),
+        )?;
+        verify_resource_digest(
+            "command runner",
+            &command_runner_path,
+            details.command_runner_sha256(),
+            &mut command_runner,
+        )?;
+        runner::verify(details, &runner_manifest_path, &mut runner_manifest)?;
+        Ok(Self {
+            command_runner_path,
+            runner_manifest_path,
+            command_runner,
+            runner_manifest,
+        })
+    }
+
+    pub(crate) fn command_runner_path(&self) -> &Path {
+        &self.command_runner_path
+    }
+
+    pub(crate) fn verify_launch_security(
+        &self,
+        owner_sid: &str,
+        group_sid: &str,
+    ) -> Result<(), WindowsSetupVerificationError> {
+        paths::verify_open_runner_resource_dacl(
+            &self.command_runner,
+            &self.command_runner_path,
+            owner_sid,
+            group_sid,
+            crate::runner_resource_security::RunnerResourceKind::Executable,
+        )?;
+        paths::verify_open_runner_resource_dacl(
+            &self.runner_manifest,
+            &self.runner_manifest_path,
+            owner_sid,
+            group_sid,
+            crate::runner_resource_security::RunnerResourceKind::Manifest,
+        )
+    }
+}
+
 pub(super) fn verify(
     details: &WindowsSetupDetails,
     setup_marker: fs::File,
@@ -30,8 +95,6 @@ pub(super) fn verify(
     let capability_state_path = state.join(crate::capability_state::CAPABILITY_STATE_NAME);
     let capability_lock_path = state.join(crate::capability_state::CAPABILITY_LOCK_NAME);
     let setup_helper_path = bin_directory.join(SETUP_HELPER_NAME);
-    let command_runner_path = bin_directory.join(COMMAND_RUNNER_NAME);
-    let runner_manifest_path = bin_directory.join(crate::runner_manifest::RUNNER_MANIFEST_NAME);
     let _state_directory = paths::verify_protected_dacl(state, details.owner_sid(), true)?;
     let _bin_directory = paths::verify_runner_directory_dacl(
         &bin_directory,
@@ -53,16 +116,7 @@ pub(super) fn verify(
     )?;
     let _capability_state =
         paths::verify_protected_dacl(&capability_state_path, details.owner_sid(), false)?;
-    let mut command_runner = paths::verify_runner_executable_dacl(
-        &command_runner_path,
-        details.owner_sid(),
-        details.accounts().group_sid(),
-    )?;
-    let mut runner_manifest = paths::verify_runner_manifest_dacl(
-        &runner_manifest_path,
-        details.owner_sid(),
-        details.accounts().group_sid(),
-    )?;
+    let _runner_resources = PinnedRunnerResources::open(details)?;
     rights::verify(details.accounts().offline_sid())?;
     rights::verify(details.accounts().online_sid())?;
     credentials::verify(details, &credentials_path, &mut credentials)?;
@@ -72,13 +126,6 @@ pub(super) fn verify(
         details.setup_helper_sha256(),
         &mut setup_helper,
     )?;
-    verify_resource_digest(
-        "command runner",
-        &command_runner_path,
-        details.command_runner_sha256(),
-        &mut command_runner,
-    )?;
-    runner::verify(details, &runner_manifest_path, &mut runner_manifest)?;
     firewall::verify(details)?;
     wfp::verify(details)?;
     Ok(())

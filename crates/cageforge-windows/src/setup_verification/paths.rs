@@ -6,7 +6,7 @@ use std::path::Path;
 
 use std::ffi::c_void;
 
-use windows_sys::Win32::Foundation::{GENERIC_ALL, GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSidToSidW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
@@ -14,8 +14,8 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
     GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-    INHERIT_ONLY_ACE, IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+    IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
@@ -140,22 +140,40 @@ fn verify_shared_runner_resource(
     kind: crate::runner_resource_security::RunnerResourceKind,
 ) -> Result<File, WindowsSetupVerificationError> {
     crate::runner_resource_security::open_verified_runner_resource(path, owner_sid, group_sid, kind)
-        .map_err(|error| match error {
-            crate::runner_resource_security::RunnerResourceSecurityError::Unsafe {
-                path,
-                detail,
-            } => WindowsSetupVerificationError::ProtectedPathUnsafe { path, detail },
-            crate::runner_resource_security::RunnerResourceSecurityError::Read { path, code } => {
-                WindowsSetupVerificationError::ProtectedAclRead { path, code }
-            }
-            crate::runner_resource_security::RunnerResourceSecurityError::Mismatch {
-                path,
-                descriptor,
-            } => WindowsSetupVerificationError::ProtectedSecurityDescriptorMismatch {
-                path,
-                actual: descriptor,
-            },
-        })
+        .map_err(map_runner_resource_error)
+}
+
+pub(crate) fn verify_open_runner_resource_dacl(
+    file: &File,
+    path: &Path,
+    owner_sid: &str,
+    group_sid: &str,
+    kind: crate::runner_resource_security::RunnerResourceKind,
+) -> Result<(), WindowsSetupVerificationError> {
+    crate::runner_resource_security::verify_open_runner_resource(
+        file, path, owner_sid, group_sid, kind,
+    )
+    .map_err(map_runner_resource_error)
+}
+
+fn map_runner_resource_error(
+    error: crate::runner_resource_security::RunnerResourceSecurityError,
+) -> WindowsSetupVerificationError {
+    match error {
+        crate::runner_resource_security::RunnerResourceSecurityError::Unsafe { path, detail } => {
+            WindowsSetupVerificationError::ProtectedPathUnsafe { path, detail }
+        }
+        crate::runner_resource_security::RunnerResourceSecurityError::Read { path, code } => {
+            WindowsSetupVerificationError::ProtectedAclRead { path, code }
+        }
+        crate::runner_resource_security::RunnerResourceSecurityError::Mismatch {
+            path,
+            descriptor,
+        } => WindowsSetupVerificationError::ProtectedSecurityDescriptorMismatch {
+            path,
+            actual: descriptor,
+        },
+    }
 }
 
 fn verify_dacl(
@@ -274,20 +292,22 @@ fn protected_descriptor_matches(
         return false;
     }
     let principals = ["S-1-5-18", "S-1-5-32-544", owner_sid];
-    let mut expected_aces = principals
-        .iter()
-        .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
-        .collect::<Vec<_>>();
-    match descriptor_kind {
+    let mut expected_aces = match descriptor_kind {
         ProtectedDescriptor::OwnerOnly { inherit: true } => {
-            let inherited_flags =
-                (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
-            expected_aces.extend(
-                principals
-                    .iter()
-                    .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
-            );
+            let inheritance = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8;
+            principals
+                .iter()
+                .map(|sid| ((*sid).to_string(), inheritance, FILE_ALL_ACCESS))
+                .collect::<Vec<_>>()
         }
+        ProtectedDescriptor::OwnerOnly { inherit: false }
+        | ProtectedDescriptor::RunnerDirectory { .. } => principals
+            .iter()
+            .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
+            .collect::<Vec<_>>(),
+    };
+    match descriptor_kind {
+        ProtectedDescriptor::OwnerOnly { inherit: true } => {}
         ProtectedDescriptor::OwnerOnly { inherit: false } => {}
         ProtectedDescriptor::RunnerDirectory { group_sid } => expected_aces.push((
             (*group_sid).to_string(),

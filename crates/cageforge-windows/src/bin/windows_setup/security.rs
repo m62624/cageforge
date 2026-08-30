@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use cageforge_path::paths_equal;
 use getrandom::fill;
 use windows_sys::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, GENERIC_ALL, GENERIC_WRITE, GetLastError, HLOCAL,
+    ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, GENERIC_WRITE, GetLastError, HLOCAL,
     INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
@@ -22,9 +22,9 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
     GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-    INHERIT_ONLY_ACE, IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
-    TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY,
+    TokenElevation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
@@ -841,25 +841,24 @@ fn protected_descriptor_matches(
                 FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
             ),
         ],
-        ProtectedDescriptor::OwnerOnly { .. }
+        ProtectedDescriptor::OwnerOnly { inherit: false }
         | ProtectedDescriptor::RunnerDirectory { .. }
         | ProtectedDescriptor::RunnerExecutable { .. }
         | ProtectedDescriptor::RunnerManifest { .. } => principals
             .iter()
             .map(|sid| ((*sid).to_string(), 0u8, FILE_ALL_ACCESS))
             .collect::<Vec<_>>(),
+        ProtectedDescriptor::OwnerOnly { inherit: true } => {
+            let inheritance = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8;
+            principals
+                .iter()
+                .map(|sid| ((*sid).to_string(), inheritance, FILE_ALL_ACCESS))
+                .collect::<Vec<_>>()
+        }
     };
     match descriptor_kind {
-        ProtectedDescriptor::SharedStateDirectory => {}
-        ProtectedDescriptor::OwnerOnly { inherit: true } => {
-            let inherited_flags =
-                (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE) as u8;
-            expected_aces.extend(
-                principals
-                    .iter()
-                    .map(|sid| ((*sid).to_string(), inherited_flags, GENERIC_ALL)),
-            );
-        }
+        ProtectedDescriptor::SharedStateDirectory
+        | ProtectedDescriptor::OwnerOnly { inherit: true } => {}
         ProtectedDescriptor::OwnerOnly { inherit: false } => {}
         ProtectedDescriptor::RunnerDirectory { group_sid }
         | ProtectedDescriptor::RunnerExecutable { group_sid } => expected_aces.push((
@@ -961,5 +960,36 @@ fn wide_pointer_to_string(value: *const u16) -> String {
             length += 1;
         }
         String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn inherited_owner_directory_accepts_the_kernel_canonical_descriptor() {
+        let encoded = wide("O:LSD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LS)");
+        let mut descriptor = std::ptr::null_mut();
+        assert_ne!(
+            unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    encoded.as_ptr(),
+                    SDDL_REVISION_1,
+                    &mut descriptor,
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+            "canonical directory security descriptor"
+        );
+        let descriptor = LocalSecurityDescriptor(descriptor);
+
+        assert!(protected_descriptor_matches(
+            descriptor.0,
+            "S-1-5-19",
+            &ProtectedDescriptor::OwnerOnly { inherit: true },
+        ));
     }
 }

@@ -284,6 +284,41 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let backend =
         WindowsBackend::new(WindowsBackendConfig::new().with_setup(setup.config().clone()))
             .expect("backend after capability-state recovery");
+    let runner_path = backend.command_runner_path();
+    assert!(
+        fs::OpenOptions::new()
+            .write(true)
+            .open(runner_path)
+            .is_err(),
+        "a verified backend did not pin its command runner against writes"
+    );
+    assert!(
+        fs::rename(
+            runner_path,
+            temporary.path().join("displaced-command-runner.exe")
+        )
+        .is_err(),
+        "a verified backend did not pin its command runner against replacement"
+    );
+    let runner_manifest_path = first
+        .state_directory()
+        .join("bin")
+        .join("runner-manifest.json");
+    assert!(
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&runner_manifest_path)
+            .is_err(),
+        "a verified backend did not pin its runner manifest against writes"
+    );
+    assert!(
+        fs::rename(
+            &runner_manifest_path,
+            temporary.path().join("displaced-runner-manifest.json"),
+        )
+        .is_err(),
+        "a verified backend did not pin its runner manifest against replacement"
+    );
     let workspace = tempfile::tempdir().expect("sandbox workspace");
     let powershell = PathBuf::from(std::env::var_os("WINDIR").expect("WINDIR"))
         .join("System32")

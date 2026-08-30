@@ -33,6 +33,7 @@ use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, P
 use crate::runner_pipe::{
     ParentPipeDirection, ParentRunnerPipe, ParentRunnerPipeError, RunnerPipeNames,
 };
+use crate::setup_verification::PinnedRunnerResources;
 use crate::setup_verification::credentials::AccountCredential;
 
 const RUNNER_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -69,6 +70,8 @@ pub(crate) enum RunnerLaunchError {
     Desktop(#[from] ParentDesktopError),
     #[error(transparent)]
     Boundary(#[from] ParentBoundaryError),
+    #[error(transparent)]
+    RunnerResource(#[from] crate::error::WindowsSetupVerificationError),
     #[error("command-runner path is not valid Unicode")]
     RunnerPathEncoding,
     #[error("command-runner working directory is not valid Unicode")]
@@ -142,15 +145,21 @@ impl Drop for LocalWideString {
 
 impl RunnerLaunch {
     pub(crate) fn start(
-        runner_path: &Path,
+        runner_resources: &PinnedRunnerResources,
         working_directory: &Path,
         credential: &AccountCredential,
         owner_sid: &str,
+        group_sid: &str,
     ) -> Result<Self, RunnerLaunchError> {
+        runner_resources.verify_launch_security(owner_sid, group_sid)?;
         let names = RunnerPipeNames::generate()?;
         let job = ParentJob::new()?;
-        let mut runner =
-            SuspendedRunner::start(runner_path, working_directory, credential, &names)?;
+        let mut runner = SuspendedRunner::start(
+            runner_resources.command_runner_path(),
+            working_directory,
+            credential,
+            &names,
+        )?;
         let logon_sid = runner.logon_sid()?;
         let request = ParentRunnerPipe::create(
             &names.request,

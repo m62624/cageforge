@@ -686,6 +686,11 @@ The Cageforge setup protocol retains the following boundaries:
 - state-directory creation is anchored to a handle-pinned, non-reparse ancestor
   chain; the frozen baseline's path-based recursive creation is not retained
   across the elevated Cageforge boundary;
+- protected directory read-back compares the concrete kernel-canonical ACEs:
+  an inheritable `GA` declaration is returned as one `OICI` `FILE_ALL_ACCESS`
+  ACE per principal, not as separate direct and inherit-only ACEs. Equivalent
+  normalization is accepted, while any principal, flag, mask, owner, or
+  protected-DACL difference remains fatal;
 - setup-owned files are committed from newly created, descriptor-verified
   sibling handles instead of truncating an existing destination, so a stale or
   attacker-created reparse point cannot redirect elevated writes;
@@ -788,6 +793,15 @@ establish a trusted endpoint. The frozen runner lookup passes a path from
 `find_runner_exe` to `CreateProcessWithLogonW`; Cageforge treats that behavior as
 the baseline to harden, not as evidence that a pathname is an execution
 identity.
+
+`WindowsBackend` independently reopens and verifies the installed runner and
+manifest and retains both no-write/no-delete-share handles for its complete
+lifetime. Native runner launch accepts that pinned resource object rather than
+an unbound path, rechecks both descriptors immediately before process creation,
+and passes the still-pinned executable name to `CreateProcessWithLogonW`.
+Consequently setup reconciliation or another owner process cannot write,
+rename, or replace either launch identity while a backend can still spawn from
+it; a new backend is required after an explicit setup update.
 
 Each protected setup directory and file also has the real setup owner SID as
 its Windows object owner, and read-back verifies that owner together with the
