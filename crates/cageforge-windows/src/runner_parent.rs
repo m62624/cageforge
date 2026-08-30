@@ -18,8 +18,9 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_UI_RESTRICTIONS,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
     JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
-    SetInformationJobObject, TerminateJobObject,
+    SetInformationJobObject, TerminateJobObject, UserHandleGrantAccess,
 };
+use windows_sys::Win32::System::StationsAndDesktops::HDESK;
 use windows_sys::Win32::System::SystemServices::{
     JOB_OBJECT_ASSIGN_PROCESS, JOB_OBJECT_UILIMIT_ALL,
 };
@@ -83,6 +84,10 @@ pub(crate) enum ParentJobError {
     LimitMismatch,
     #[error("Job Object read-back did not contain every user-interface isolation limit")]
     UiLimitMismatch,
+    #[error(
+        "failed to grant the launch-private desktop to its Windows Job Object: Windows error {code}"
+    )]
+    PrivateDesktopGrant { code: u32 },
     #[error(
         "failed to duplicate assign-only Job Object authority into the runner: Windows error {code}"
     )]
@@ -345,6 +350,20 @@ impl ParentJob {
         }
         job.verify_limits()?;
         Ok(job)
+    }
+
+    #[allow(unsafe_code)]
+    pub(crate) fn grant_private_desktop_access(
+        &self,
+        desktop: HDESK,
+    ) -> Result<(), ParentJobError> {
+        if unsafe { UserHandleGrantAccess(desktop, self.handle.as_raw_handle() as _, 1) } == 0 {
+            Err(ParentJobError::PrivateDesktopGrant {
+                code: unsafe { GetLastError() },
+            })
+        } else {
+            Ok(())
+        }
     }
 
     #[allow(unsafe_code)]

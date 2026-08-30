@@ -250,6 +250,7 @@ impl RunnerLaunch {
             ParentPipeDirection::Response,
         )?;
         let desktop = ParentDesktop::create(owner_sid, &logon_sid)?;
+        job.grant_private_desktop_access(desktop.raw())?;
         let window_station = ParentWindowStation::open_interactive()?;
         protect_kernel_object(
             runner.process.as_raw_handle() as _,

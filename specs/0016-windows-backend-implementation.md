@@ -284,7 +284,11 @@ launch-unique desktop, and verifies the protected owner/Admin/SYSTEM/logon-SID
 descriptor before resuming the runner. Full desktop access is necessary for
 Windows process initialization and is not access to the host default desktop:
 Job UI limits and the isolated object DACL still prohibit cross-job or host
-desktop interaction. The runner receives only the desktop name and one
+desktop interaction. Because `JOB_OBJECT_UILIMIT_HANDLES` blocks a Job from
+using a USER object created outside it, the trusted parent invokes
+`UserHandleGrantAccess` once for that exact private desktop and fresh Job;
+this does not grant the Job any handle to, or access on, the host desktop.
+The runner receives only the desktop name and one
 explicitly inherited `WinSta0` handle with only `WINSTA_ENUMDESKTOPS`. Windows
 uses that handle to connect the new process to the station before user code
 starts; omitting it from a complete explicit-handle list can leave a restricted
