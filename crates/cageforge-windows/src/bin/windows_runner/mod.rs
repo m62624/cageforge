@@ -65,8 +65,15 @@ impl AuthenticatedTransport {
         request: &File,
         response: &File,
         parent_process_handle: u64,
+        parent_token_handle: u64,
     ) -> Result<identity::AuthenticatedRunnerAccount, identity::RunnerAuthenticationError> {
-        identity::authenticate_transport(installed, request, response, parent_process_handle)
+        identity::authenticate_transport(
+            installed,
+            request,
+            response,
+            parent_process_handle,
+            parent_token_handle,
+        )
     }
 
     fn fail(&mut self, failure: WindowsRunnerFailure) -> ExitCode {
@@ -103,7 +110,10 @@ pub(super) fn run() -> ExitCode {
         Err(error) => return report_bootstrap_failure(&mut response, &error),
     };
     let parent_process_handle = match read_frame(&mut request) {
-        Ok(RunnerMessage::ParentIdentity { process_handle }) => process_handle,
+        Ok(RunnerMessage::ParentIdentity {
+            process_handle,
+            token_handle,
+        }) => (process_handle, token_handle),
         Ok(message) => {
             return report_bootstrap_failure(
                 &mut response,
@@ -123,7 +133,8 @@ pub(super) fn run() -> ExitCode {
         &installed,
         &request,
         &response,
-        parent_process_handle,
+        parent_process_handle.0,
+        parent_process_handle.1,
     ) {
         Ok(account) => account,
         Err(error) => return report_bootstrap_failure(&mut response, &error),
@@ -317,11 +328,14 @@ fn authentication_failure(error: &identity::RunnerAuthenticationError) -> Window
         | identity::RunnerAuthenticationError::ParentIdentityPidMismatch { .. } => {
             WindowsRunnerFailureCode::ParentIdentityHandle
         }
-        identity::RunnerAuthenticationError::ProcessTokenOpen { .. }
+        identity::RunnerAuthenticationError::ParentIdentityToken { .. } => {
+            WindowsRunnerFailureCode::ParentIdentityToken
+        }
+        identity::RunnerAuthenticationError::RunnerTokenOpen { .. }
         | identity::RunnerAuthenticationError::TokenUserRead { .. }
         | identity::RunnerAuthenticationError::InvalidTokenUser
         | identity::RunnerAuthenticationError::TokenUserFormat { .. } => {
-            WindowsRunnerFailureCode::ServerTokenOpen
+            WindowsRunnerFailureCode::RunnerTokenOpen
         }
         identity::RunnerAuthenticationError::RunnerAccountMismatch => {
             WindowsRunnerFailureCode::RunnerAccountMismatch

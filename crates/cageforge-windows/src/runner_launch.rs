@@ -122,7 +122,15 @@ pub(crate) enum RunnerLaunchError {
     #[error(
         "failed to duplicate the query-only parent process handle into the runner: Windows error {code}"
     )]
-    ParentIdentityHandle { code: u32 },
+    ParentIdentityProcessHandle { code: u32 },
+    #[error(
+        "failed to open the parent token for query-only runner authentication: Windows error {code}"
+    )]
+    ParentIdentityTokenOpen { code: u32 },
+    #[error(
+        "failed to duplicate the query-only parent token handle into the runner: Windows error {code}"
+    )]
+    ParentIdentityTokenHandle { code: u32 },
     #[error(transparent)]
     ParentIdentityFrame(#[from] WindowsRunnerProtocolError),
     #[error("the {direction:?} runner-pipe accept worker stopped before becoming ready")]
@@ -248,10 +256,13 @@ impl RunnerLaunch {
         let job_handle = job.duplicate_assign_only_into(runner.process.as_raw_handle() as _)?;
         connect_runner_pipes(&mut runner, &request, &response)?;
         let mut request = request.into_file();
-        let process_handle = runner.duplicate_parent_identity_handle()?;
+        let (process_handle, token_handle) = runner.duplicate_parent_identity_handles()?;
         write_frame(
             &mut request,
-            RunnerMessage::ParentIdentity { process_handle },
+            RunnerMessage::ParentIdentity {
+                process_handle,
+                token_handle,
+            },
         )?;
         let boundary = Arc::new(BoundaryTerminator::new(job, &runner.process)?);
         runner.released = true;
@@ -396,25 +407,52 @@ impl SuspendedRunner {
     }
 
     #[allow(unsafe_code)]
-    fn duplicate_parent_identity_handle(&self) -> Result<u64, RunnerLaunchError> {
-        let mut duplicate = std::ptr::null_mut();
+    fn duplicate_parent_identity_handles(&self) -> Result<(u64, u64), RunnerLaunchError> {
+        let mut process_duplicate = std::ptr::null_mut();
         if unsafe {
             DuplicateHandle(
                 GetCurrentProcess(),
                 GetCurrentProcess(),
                 self.process.as_raw_handle() as _,
-                &mut duplicate,
+                &mut process_duplicate,
                 PROCESS_QUERY_LIMITED_INFORMATION,
                 0,
                 0,
             )
         } == 0
         {
-            return Err(RunnerLaunchError::ParentIdentityHandle {
+            return Err(RunnerLaunchError::ParentIdentityProcessHandle {
                 code: unsafe { GetLastError() },
             });
         }
-        Ok(duplicate as usize as u64)
+        let mut source_token = std::ptr::null_mut();
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut source_token) } == 0 {
+            return Err(RunnerLaunchError::ParentIdentityTokenOpen {
+                code: unsafe { GetLastError() },
+            });
+        }
+        let source_token = unsafe { OwnedHandle::from_raw_handle(source_token as RawHandle) };
+        let mut token_duplicate = std::ptr::null_mut();
+        if unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                source_token.as_raw_handle() as _,
+                self.process.as_raw_handle() as _,
+                &mut token_duplicate,
+                TOKEN_QUERY,
+                0,
+                0,
+            )
+        } == 0
+        {
+            return Err(RunnerLaunchError::ParentIdentityTokenHandle {
+                code: unsafe { GetLastError() },
+            });
+        }
+        Ok((
+            process_duplicate as usize as u64,
+            token_duplicate as usize as u64,
+        ))
     }
 
     #[allow(unsafe_code)]

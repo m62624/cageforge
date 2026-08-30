@@ -115,10 +115,16 @@ pub(super) enum RunnerAuthenticationError {
     ParentIdentityHandle { code: u32 },
     #[error("the parent identity handle PID {actual} differs from pipe server PID {expected}")]
     ParentIdentityPidMismatch { expected: u32, actual: u32 },
+    #[error(
+        "the parent identity bootstrap frame contains an unreadable token handle: Windows error {code}"
+    )]
+    ParentIdentityToken { code: u32 },
     #[error("Windows returned an invalid zero pipe-server PID")]
     InvalidPipeServerPid,
-    #[error("failed to open a process token for identity verification: Windows error {code}")]
-    ProcessTokenOpen { code: u32 },
+    #[error(
+        "failed to open the command-runner token for identity verification: Windows error {code}"
+    )]
+    RunnerTokenOpen { code: u32 },
     #[error("failed to read a process token user SID: Windows error {code}")]
     TokenUserRead { code: u32 },
     #[error("Windows returned an invalid process token user record")]
@@ -287,8 +293,9 @@ impl RunnerAuthenticationError {
             | Self::ParentIdentityMessage { .. }
             | Self::ParentIdentityHandle { .. }
             | Self::ParentIdentityPidMismatch { .. }
+            | Self::ParentIdentityToken { .. }
             | Self::InvalidPipeServerPid
-            | Self::ProcessTokenOpen { .. }
+            | Self::RunnerTokenOpen { .. }
             | Self::TokenUserRead { .. }
             | Self::InvalidTokenUser
             | Self::TokenUserFormat { .. }
@@ -302,7 +309,8 @@ impl RunnerAuthenticationError {
             Self::PipeOpen { code, .. }
             | Self::PipeServerPidRead { code, .. }
             | Self::ParentIdentityHandle { code }
-            | Self::ProcessTokenOpen { code }
+            | Self::ParentIdentityToken { code }
+            | Self::RunnerTokenOpen { code }
             | Self::TokenUserRead { code }
             | Self::TokenUserFormat { code } => Some(*code),
             Self::MissingPipeArguments
@@ -369,13 +377,15 @@ pub(super) fn authenticate_transport(
     request: &File,
     response: &File,
     parent_process_handle: u64,
+    parent_token_handle: u64,
 ) -> Result<AuthenticatedRunnerAccount, RunnerAuthenticationError> {
     let request_pid = pipe_server_pid(request, PipeDirection::Read)?;
     let response_pid = pipe_server_pid(response, PipeDirection::Write)?;
     if request_pid != response_pid {
         return Err(RunnerAuthenticationError::PipeServerMismatch);
     }
-    let server = parent_process_token_identity(parent_process_handle, request_pid)?;
+    let server =
+        parent_process_token_identity(parent_process_handle, parent_token_handle, request_pid)?;
     if !server
         .user_sid
         .eq_ignore_ascii_case(&installed.manifest.owner_sid)
@@ -424,14 +434,16 @@ fn pipe_server_pid(
 
 #[allow(unsafe_code)]
 fn parent_process_token_identity(
-    value: u64,
+    process_value: u64,
+    token_value: u64,
     expected_process_id: u32,
 ) -> Result<ProcessTokenIdentity, RunnerAuthenticationError> {
-    let handle =
-        usize::try_from(value).map_err(|_| RunnerAuthenticationError::ParentIdentityHandle {
+    let process_handle = usize::try_from(process_value).map_err(|_| {
+        RunnerAuthenticationError::ParentIdentityHandle {
             code: windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE,
-        })? as *mut c_void;
-    let process_id = unsafe { GetProcessId(handle) };
+        }
+    })? as *mut c_void;
+    let process_id = unsafe { GetProcessId(process_handle) };
     if process_id == 0 {
         return Err(RunnerAuthenticationError::ParentIdentityHandle {
             code: unsafe { GetLastError() },
@@ -443,21 +455,32 @@ fn parent_process_token_identity(
             actual: process_id,
         });
     }
-    token_identity_for_process(handle)
+    let token_handle = usize::try_from(token_value).map_err(|_| {
+        RunnerAuthenticationError::ParentIdentityToken {
+            code: windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE,
+        }
+    })? as *mut c_void;
+    let user_sid = match token_user_sid(token_handle) {
+        Ok(user_sid) => user_sid,
+        Err(RunnerAuthenticationError::TokenUserRead { code })
+        | Err(RunnerAuthenticationError::TokenUserFormat { code }) => {
+            return Err(RunnerAuthenticationError::ParentIdentityToken { code });
+        }
+        Err(RunnerAuthenticationError::InvalidTokenUser) => {
+            return Err(RunnerAuthenticationError::ParentIdentityToken {
+                code: windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE,
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(ProcessTokenIdentity { user_sid })
 }
 
 #[allow(unsafe_code)]
 fn current_process_token_identity() -> Result<ProcessTokenIdentity, RunnerAuthenticationError> {
-    token_identity_for_process(unsafe { GetCurrentProcess() })
-}
-
-#[allow(unsafe_code)]
-fn token_identity_for_process(
-    process: *mut c_void,
-) -> Result<ProcessTokenIdentity, RunnerAuthenticationError> {
     let mut token = std::ptr::null_mut();
-    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
-        return Err(RunnerAuthenticationError::ProcessTokenOpen {
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(RunnerAuthenticationError::RunnerTokenOpen {
             code: unsafe { GetLastError() },
         });
     }

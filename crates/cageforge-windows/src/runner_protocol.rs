@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 4;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 5;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -19,12 +19,23 @@ pub(crate) struct RunnerFrame {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RunnerMessage {
-    ParentIdentity { process_handle: u64 },
+    ParentIdentity {
+        process_handle: u64,
+        token_handle: u64,
+    },
     Ready,
-    Spawn { request: RunnerSpawnRequest },
-    Spawned { process_id: u32 },
-    Exited { exit_code: u32 },
-    Failed { failure: WindowsRunnerFailure },
+    Spawn {
+        request: RunnerSpawnRequest,
+    },
+    Spawned {
+        process_id: u32,
+    },
+    Exited {
+        exit_code: u32,
+    },
+    Failed {
+        failure: WindowsRunnerFailure,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -107,8 +118,10 @@ pub enum WindowsRunnerFailureCode {
     ParentIdentityFrame,
     /// The passed parent process handle was invalid or did not name the pipe server.
     ParentIdentityHandle,
-    /// The named-pipe server token could not be opened.
-    ServerTokenOpen,
+    /// The passed query-only parent token handle was invalid or unreadable.
+    ParentIdentityToken,
+    /// The command-runner token could not be opened or queried.
+    RunnerTokenOpen,
     /// The named-pipe server token owner differs from the setup owner.
     ServerOwnerMismatch,
     /// The runner token user is neither provisioned sandbox account.
@@ -396,6 +409,7 @@ mod tests {
             &mut encoded,
             RunnerMessage::ParentIdentity {
                 process_handle: 0x1234_5678,
+                token_handle: 0x8765_4321,
             },
         )
         .expect("write parent identity frame");
@@ -404,7 +418,8 @@ mod tests {
         assert!(matches!(
             message,
             RunnerMessage::ParentIdentity {
-                process_handle: 0x1234_5678
+                process_handle: 0x1234_5678,
+                token_handle: 0x8765_4321,
             }
         ));
     }
