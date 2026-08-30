@@ -287,23 +287,22 @@ logon of the same file owner retains implicit descriptor-control rights. The
 desktop, token, process, thread, pipe, and job handles use owned RAII wrappers
 and are never inherited unless explicitly present in the process handle list.
 
-The parent obtains the dedicated account's primary token with
-`LogonUserW(LOGON32_LOGON_BATCH)` and creates the suspended command runner from
-that token. It first uses `CreateProcessWithTokenW`; only an
-`ERROR_PRIVILEGE_NOT_HELD` result permits the documented
-`CreateProcessAsUserW` fallback, and a failure of either mechanism remains a
-typed launch error. Cageforge never responds by granting interactive-logon
-rights to the sandbox account: setup intentionally grants `SeBatchLogonRight`
-and denies interactive and remote-interactive logon. The runner receives a
-versioned authenticated request over one random private named-pipe pair. Both
-directions are identity-bound: the parent verifies that both pipe clients have
-the exact PID returned for the launched runner, while the runner verifies that
-both pipe servers have the same PID and that the server process `TokenUser` is
-the setup owner recorded in a protected runner manifest. The runner also
-verifies the exact owner and DACL of its own executable and manifest, its
-executable digest, its own `TokenUser` against the selected manifest account
-SID, and the deterministic relation between that account name and the setup-owner
-SID. No one check is treated as a root of trust by itself.
+The parent launches the command runner with `CreateProcessWithLogonW`, so an
+ordinary Cageforge application needs no per-launch Windows privilege or
+post-install account-right configuration. Setup denies remote-interactive
+logon, but does not deny local interactive logon: that Windows API requires an
+interactive logon session, and substituting a batch-token API would require a
+host `SeImpersonatePrivilege` or a privileged runtime service. This is an
+intentional usability boundary, not a bypass of process isolation. The runner
+receives a versioned authenticated request over one random private named-pipe
+pair. Both directions are identity-bound: the parent verifies that both pipe
+clients have the exact PID returned for the launched runner, while the runner
+verifies that both pipe servers have the same PID and that the server process
+`TokenUser` is the setup owner recorded in a protected runner manifest. The
+runner also verifies the exact owner and DACL of its own executable and
+manifest, its executable digest, its own `TokenUser` against the selected
+manifest account SID, and the deterministic relation between that account name
+and the setup-owner SID. No one check is treated as a root of trust by itself.
 The staged runner and manifest are readable and executable, but not writable,
 by the managed sandbox group. A copied runner with a forged adjacent manifest
 can imitate file contents, but it cannot simultaneously run as the provisioned
@@ -758,8 +757,8 @@ The Cageforge setup protocol retains the following boundaries:
 
 Intentional differences are exact typed errors instead of product error codes,
 owner-SID-derived account and object identities instead of machine-global Codex
-names, checked group-membership updates, a required `SeBatchLogonRight`, fatal
-WFP failure, and no telemetry or product directory conventions. The
+names, checked group-membership updates, explicit remote-interactive logon
+denial, fatal WFP failure, and no telemetry or product directory conventions. The
 Cageforge-authored implementation uses the Windows APIs directly and does not
 copy the reviewed source files.
 
@@ -824,13 +823,13 @@ copied binary, attacker-selected manifest, or pathname replacement race cannot
 establish a trusted endpoint. The frozen runner lookup passes a path from
 `find_runner_exe` to `CreateProcessWithLogonW`; Cageforge treats that behavior as
 the baseline to harden, not as evidence that a pathname is an execution
-identity, and uses a batch token rather than an interactive account logon.
+identity.
 
 `WindowsBackend` independently reopens and verifies the installed runner and
 manifest and retains both no-write/no-delete-share handles for its complete
 lifetime. Native runner launch accepts that pinned resource object rather than
 an unbound path, rechecks both descriptors immediately before process creation,
-and passes the still-pinned executable name to the batch-token process creator.
+and passes the still-pinned executable name to `CreateProcessWithLogonW`.
 Consequently setup reconciliation or another owner process cannot write,
 rename, or replace either launch identity while a backend can still spawn from
 it; a new backend is required after an explicit setup update.

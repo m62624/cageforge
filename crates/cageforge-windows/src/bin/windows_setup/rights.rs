@@ -7,7 +7,7 @@ use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Security::Authentication::Identity::{
     LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose,
     LsaEnumerateAccountRights, LsaFreeMemory, LsaNtStatusToWinError, LsaOpenPolicy,
-    POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
+    LsaRemoveAccountRights, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
 };
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 
@@ -15,11 +15,8 @@ use crate::setup_protocol::{SetupFailureCode, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult};
 
-const REQUIRED_RIGHTS: [&str; 3] = [
-    "SeBatchLogonRight",
-    "SeDenyInteractiveLogonRight",
-    "SeDenyRemoteInteractiveLogonRight",
-];
+const REQUIRED_RIGHTS: [&str; 1] = ["SeDenyRemoteInteractiveLogonRight"];
+const REMOVED_RIGHTS: [&str; 2] = ["SeBatchLogonRight", "SeDenyInteractiveLogonRight"];
 
 struct PolicyHandle(LSA_HANDLE);
 
@@ -72,6 +69,27 @@ pub(super) fn apply_and_verify(account_sid: &str) -> NativeSetupResult<()> {
             SetupFailureCode::BatchLogonRight,
             status,
             format!("failed to grant sandbox logon rights to {account_sid}"),
+        ));
+    }
+    let mut removed_right_buffers = REMOVED_RIGHTS.map(wide_without_nul);
+    let removed_rights = removed_right_buffers
+        .iter_mut()
+        .map(|buffer| lsa_string(buffer))
+        .collect::<NativeSetupResult<Vec<_>>>()?;
+    let status = unsafe {
+        LsaRemoveAccountRights(
+            policy.0,
+            sid.0,
+            false,
+            removed_rights.as_ptr(),
+            removed_rights.len() as u32,
+        )
+    };
+    if status != 0 {
+        return Err(lsa_failure(
+            SetupFailureCode::BatchLogonRight,
+            status,
+            format!("failed to remove obsolete sandbox logon rights from {account_sid}"),
         ));
     }
     verify_rights(&policy, &sid, account_sid)
@@ -152,6 +170,19 @@ fn verify_rights(
                 SetupFailureCode::BatchLogonRight,
                 None,
                 format!("sandbox account {account_sid} is missing required right {required}"),
+            ));
+        }
+    }
+    for removed in REMOVED_RIGHTS {
+        if actual
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(removed))
+        {
+            return Err(NativeSetupFailure::new(
+                SetupStage::AccountRights,
+                SetupFailureCode::BatchLogonRight,
+                None,
+                format!("sandbox account {account_sid} retains obsolete right {removed}"),
             ));
         }
     }

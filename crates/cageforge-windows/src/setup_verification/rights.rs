@@ -12,11 +12,8 @@ use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 
 use crate::error::WindowsSetupVerificationError;
 
-const REQUIRED_RIGHTS: [&str; 3] = [
-    "SeBatchLogonRight",
-    "SeDenyInteractiveLogonRight",
-    "SeDenyRemoteInteractiveLogonRight",
-];
+const REQUIRED_RIGHTS: [&str; 1] = ["SeDenyRemoteInteractiveLogonRight"];
+const INCOMPATIBLE_RIGHTS: [&str; 2] = ["SeBatchLogonRight", "SeDenyInteractiveLogonRight"];
 
 struct PolicyHandle(LSA_HANDLE);
 
@@ -105,6 +102,17 @@ pub(super) fn verify(account_sid: &str) -> Result<(), WindowsSetupVerificationEr
             .any(|actual| actual.eq_ignore_ascii_case(right))
         {
             return Err(WindowsSetupVerificationError::MissingAccountRight {
+                account: account_sid.to_string(),
+                right,
+            });
+        }
+    }
+    for right in INCOMPATIBLE_RIGHTS {
+        if actual
+            .iter()
+            .any(|actual| actual.eq_ignore_ascii_case(right))
+        {
+            return Err(WindowsSetupVerificationError::UnexpectedAccountRight {
                 account: account_sid.to_string(),
                 right,
             });

@@ -211,6 +211,14 @@ pub enum WindowsSetupVerificationError {
         /// Required LSA right.
         right: &'static str,
     },
+    /// A sandbox account retains an incompatible logon right.
+    #[error("Windows sandbox account {account:?} retains incompatible right {right}")]
+    UnexpectedAccountRight {
+        /// Sandbox account SID.
+        account: String,
+        /// Incompatible LSA right.
+        right: &'static str,
+    },
     /// A protected setup path DACL could not be read.
     #[error("failed to read protected Windows setup DACL {path:?}: error {code}")]
     ProtectedAclRead {
