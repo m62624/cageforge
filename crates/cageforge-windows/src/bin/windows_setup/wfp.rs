@@ -12,7 +12,7 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_EMPTY, FWP_MATCH_EQUAL,
     FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_VALUE0, FWP_VALUE0_0,
     FWPM_ACTION0, FWPM_ACTION0_0, FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_IP_PROTOCOL,
-    FWPM_CONDITION_IP_REMOTE_ADDRESS_V4, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
+    FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
     FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0, FWPM_FILTER0_0,
     FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
@@ -42,6 +42,7 @@ use super::{NativeSetupFailure, NativeSetupResult};
 
 const PROVIDER_KEY: GUID = GUID::from_u128(0x6d27a6ef_979d_42bf_97e7_6c7a61c86281);
 const SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8213_6db9db995224);
+const IPV4_LOOPBACK_HOST_ORDER: u32 = u32::from_be_bytes([127, 0, 0, 1]);
 
 struct FilterSpec {
     key: GUID,
@@ -499,7 +500,7 @@ fn build_conditions(specs: &[ConditionSpec], user: &UserCondition) -> Vec<FWPM_F
                 },
             },
             ConditionSpec::RemoteAddressV4(address) => FWPM_FILTER_CONDITION0 {
-                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS_V4,
+                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
                 matchType: FWP_MATCH_EQUAL,
                 conditionValue: FWP_CONDITION_VALUE0 {
                     r#type: FWP_UINT32,
@@ -537,7 +538,7 @@ fn condition_matches(
                 && unsafe { actual.conditionValue.Anonymous.uint8 } == *protocol
         }
         ConditionSpec::RemoteAddressV4(address) => {
-            guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_ADDRESS_V4)
+            guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_ADDRESS)
                 && actual.conditionValue.r#type == FWP_UINT32
                 && unsafe { actual.conditionValue.Anonymous.uint32 } == *address
         }
@@ -714,7 +715,7 @@ fn filter_specs(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterSpec> {
             conditions: vec![
                 ConditionSpec::User,
                 ConditionSpec::Protocol(IPPROTO_TCP as u8),
-                ConditionSpec::RemoteAddressV4(u32::from_ne_bytes([127, 0, 0, 1])),
+                ConditionSpec::RemoteAddressV4(IPV4_LOOPBACK_HOST_ORDER),
                 ConditionSpec::RemotePort(*port),
             ],
         });
@@ -859,7 +860,7 @@ mod tests {
     };
     use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
 
-    use super::{ConditionSpec, filter_specs, guid_string};
+    use super::{ConditionSpec, IPV4_LOOPBACK_HOST_ORDER, filter_specs, guid_string};
 
     #[test]
     fn owner_scoped_filter_keys_and_names_are_unique() {
@@ -904,7 +905,7 @@ mod tests {
                 ConditionSpec::RemoteAddressV4(address),
                 ConditionSpec::RemotePort(40_000),
             ] if *protocol == IPPROTO_TCP as u8
-                && *address == u32::from_ne_bytes([127, 0, 0, 1])
+                && *address == IPV4_LOOPBACK_HOST_ORDER
         ));
 
         assert!(
