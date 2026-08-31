@@ -209,6 +209,16 @@ enum AclEntryScope {
     Inherited,
 }
 
+#[derive(Debug)]
+enum AclRestoreOutcome {
+    Restored,
+    Deferred {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum FilesystemAclError {
     #[error(transparent)]
@@ -272,9 +282,11 @@ pub(crate) enum FilesystemAclError {
     #[error("complete DACL bytes differ after read-back for {path:?}")]
     DescriptorSnapshotMismatch { path: PathBuf },
     #[error(
-        "managed ACL restoration cannot make progress without changing an inheritance dependency: {paths:?}"
+        "managed ACL restoration cannot make progress without changing an inheritance dependency: {blockers:?}"
     )]
-    AclRestoreDependency { paths: Vec<PathBuf> },
+    AclRestoreDependency {
+        blockers: Vec<(PathBuf, String, String)>,
+    },
     #[error("effective {mode} ACE for SID {sid} on {path:?} differs from mask {expected:#x}")]
     AceMismatch {
         path: PathBuf,
@@ -1893,21 +1905,23 @@ fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), Fi
     while !objects.is_empty() {
         objects.sort_by_key(|object| std::cmp::Reverse(object.path().components().count()));
         let mut deferred = Vec::new();
+        let mut blockers = Vec::new();
         let mut restored = false;
         for object in objects {
-            if restore_managed_acl(state, &object)? {
-                restored = true;
-            } else {
-                deferred.push(object);
+            match restore_managed_acl(state, &object)? {
+                AclRestoreOutcome::Restored => restored = true,
+                AclRestoreOutcome::Deferred {
+                    path,
+                    expected,
+                    actual,
+                } => {
+                    deferred.push(object);
+                    blockers.push((path, expected, actual));
+                }
             }
         }
         if !restored {
-            return Err(FilesystemAclError::AclRestoreDependency {
-                paths: deferred
-                    .iter()
-                    .map(|object| object.path().to_path_buf())
-                    .collect(),
-            });
+            return Err(FilesystemAclError::AclRestoreDependency { blockers });
         }
         objects = deferred;
     }
@@ -1917,7 +1931,7 @@ fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), Fi
 fn restore_managed_acl(
     state: &mut CapabilityStateSession<'_>,
     object: &ManagedAclObject,
-) -> Result<bool, FilesystemAclError> {
+) -> Result<AclRestoreOutcome, FilesystemAclError> {
     let path = ValidatedPath::open_for_acl(object.path())?;
     let identity = persisted_identity(&path);
     if &identity != object.identity() {
@@ -1950,7 +1964,7 @@ fn restore_managed_acl(
                 path: object.path().to_path_buf(),
             });
         }
-        return Ok(true);
+        return Ok(AclRestoreOutcome::Restored);
     }
     apply_persisted_dacl(&path, object.current())?;
     let restored_current = SecurityDescriptor::read(&path)?.snapshot(&path)?;
@@ -1965,7 +1979,11 @@ fn restore_managed_acl(
             path: object.path().to_path_buf(),
         });
     }
-    Ok(false)
+    Ok(AclRestoreOutcome::Deferred {
+        path: object.path().to_path_buf(),
+        expected: dacl_fingerprint(object.original()),
+        actual: dacl_fingerprint(&read_back),
+    })
 }
 
 fn recover_pending_materialization_removal(
