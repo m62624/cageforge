@@ -493,7 +493,7 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
                 format!("protected capability lock path {lock_path:?} is unsafe: {error}"),
             )
         })?;
-    security::verify_owner_file(&lock_path, &request.owner_sid)?;
+    security::verify_open_owner_file(&lock_path, &pinned_lock, &request.owner_sid)?;
     let lock_file = pinned_lock.try_clone().map_err(|error| {
         NativeSetupFailure::new(
             SetupStage::Uninstall,

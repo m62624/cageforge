@@ -433,9 +433,17 @@ pub(super) fn verify_owner_file(path: &Path, owner_sid: &str) -> NativeSetupResu
             format!("protected setup file path is unsafe at {path:?}: {error}"),
         )
     })?;
+    verify_open_owner_file(path, &file, owner_sid)
+}
+
+pub(super) fn verify_open_owner_file(
+    path: &Path,
+    file: &File,
+    owner_sid: &str,
+) -> NativeSetupResult<()> {
     verify_file_descriptor(
         path,
-        &file,
+        file,
         owner_sid,
         &ProtectedDescriptor::OwnerOnly { inherit: false },
     )
