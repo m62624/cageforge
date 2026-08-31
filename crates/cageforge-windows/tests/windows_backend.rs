@@ -800,7 +800,25 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let status = descendant_child
         .wait()
         .expect("wait for root process and complete Job Object");
-    assert!(status.success(), "descendant probe root failed: {status}");
+    if !status.success() {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        descendant_child
+            .stdout()
+            .expect("captured descendant probe stdout")
+            .read_to_string(&mut stdout)
+            .expect("read descendant probe stdout");
+        descendant_child
+            .stderr()
+            .expect("captured descendant probe stderr")
+            .read_to_string(&mut stderr)
+            .expect("read descendant probe stderr");
+        panic!(
+            "descendant probe root failed: {status}; stdout: {stdout}; stderr: {stderr}; workspace ACL: {}; fixture ACL: {}",
+            acl_diagnostic(workspace.path()),
+            acl_diagnostic(&fixture),
+        );
+    }
     assert!(
         descendant_ready.is_file(),
         "descendant did not reach the pre-exit synchronization point"
