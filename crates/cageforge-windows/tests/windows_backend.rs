@@ -151,7 +151,7 @@ fn raw_acl_diagnostic(path: &Path) -> String {
 fn raw_dacl_fingerprint(path: &Path) -> String {
     let literal_path = path.to_string_lossy().replace('\'', "''");
     let script = format!(
-        "$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new((Get-Acl -LiteralPath '{literal_path}').GetSecurityDescriptorBinaryForm(), 0); $bytes = New-Object byte[] $descriptor.DiscretionaryAcl.BinaryLength; $descriptor.DiscretionaryAcl.GetBinaryForm($bytes, 0); $hash = [System.Security.Cryptography.SHA256]::HashData($bytes); \"bytes=$($bytes.Length) sha256=$([Convert]::ToHexString($hash).ToLowerInvariant())\""
+        "$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new((Get-Acl -LiteralPath '{literal_path}').GetSecurityDescriptorBinaryForm(), 0); $bytes = New-Object byte[] $descriptor.DiscretionaryAcl.BinaryLength; $descriptor.DiscretionaryAcl.GetBinaryForm($bytes, 0); $hasher = [System.Security.Cryptography.SHA256]::Create(); try {{ $hash = $hasher.ComputeHash($bytes) }} finally {{ $hasher.Dispose() }}; \"bytes=$($bytes.Length) sha256=$([BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant())\""
     );
     match Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -768,6 +768,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         "denied-read fixture did not report its typed access result: {access_stdout}"
     );
     let workspace_acl_before_descendant = acl_diagnostic(workspace.path());
+    let workspace_raw_dacl_before_descendant = raw_dacl_fingerprint(workspace.path());
     let access_progress_acl_before_descendant = acl_diagnostic(&access_progress);
     let access_progress_raw_acl_before_descendant = raw_acl_diagnostic(&access_progress);
     let filesystem_authorities_before_descendant =
@@ -881,8 +882,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
 
     setup.uninstall().unwrap_or_else(|error| {
         panic!(
-            "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; workspace raw DACL before descendant: {}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}; denied-read progress raw ACL before descendant: {access_progress_raw_acl_before_descendant}; filesystem authorities before descendant: {filesystem_authorities_before_descendant}",
-            raw_dacl_fingerprint(workspace.path())
+            "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; workspace raw DACL before descendant: {workspace_raw_dacl_before_descendant}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}; denied-read progress raw ACL before descendant: {access_progress_raw_acl_before_descendant}; filesystem authorities before descendant: {filesystem_authorities_before_descendant}"
         )
     });
     cleanup.armed = false;
