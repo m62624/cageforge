@@ -1803,7 +1803,7 @@ fn recover_pending_acl_mutation(
 
 fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
     let mut objects = state.managed_acl_objects().to_vec();
-    objects.sort_by_key(|object| std::cmp::Reverse(object.path().components().count()));
+    objects.sort_by_key(|object| object.path().components().count());
     for object in objects {
         let path = ValidatedPath::open_for_acl(object.path())?;
         let identity = persisted_identity(&path);
