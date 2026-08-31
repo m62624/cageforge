@@ -491,11 +491,12 @@ impl FilesystemAclPlan {
             .collect::<Vec<_>>();
         operations.extend(self.continuation);
         operations.sort_by(|left, right| {
-            left.path
+            right
+                .path
                 .sort_path()
                 .components()
                 .count()
-                .cmp(&right.path.sort_path().components().count())
+                .cmp(&left.path.sort_path().components().count())
                 .then_with(|| {
                     NativePathKey::new(left.path.sort_path())
                         .cmp(&NativePathKey::new(right.path.sort_path()))
@@ -678,7 +679,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                     &mut self.continuation,
                     &descendant.path,
                     entries_for_existing_path(&entries, descendant.is_directory),
-                    false,
+                    true,
                     Vec::new(),
                     Vec::new(),
                 );
@@ -705,7 +706,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                     &mut self.continuation,
                     &descendant.path,
                     entries_for_existing_path(&entries, descendant.is_directory),
-                    false,
+                    true,
                     Vec::new(),
                     Vec::new(),
                 );
