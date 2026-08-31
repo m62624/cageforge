@@ -869,11 +869,11 @@ impl PreparedAclOperation {
             }
         }
         let filtered;
-        let base = if self.remove_sids.is_empty() {
-            self.original.dacl
-        } else {
+        let base = if self.protect_dacl || !self.remove_sids.is_empty() {
             filtered = filter_acl(&self.path, self.original.dacl, &self.remove_sids)?;
             filtered.as_ptr()
+        } else {
+            self.original.dacl
         };
         let acl = canonical_acl(&self.path, base, &self.entries)?;
         let protected = self.protect_dacl || before.is_protected();
