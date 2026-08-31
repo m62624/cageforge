@@ -22,6 +22,7 @@ use cageforge_windows::{
     WindowsSetupVerificationError,
 };
 use pretty_assertions::assert_eq;
+use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE, STILL_ACTIVE};
 use windows_sys::Win32::System::Diagnostics::Debug::{
     CloseThreadWaitChainSession, GetThreadWaitChain, OpenThreadWaitChainSession,
@@ -147,6 +148,27 @@ fn raw_acl_diagnostic(path: &Path) -> String {
     }
 }
 
+fn raw_dacl_fingerprint(path: &Path) -> String {
+    let literal_path = path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new((Get-Acl -LiteralPath '{literal_path}').GetSecurityDescriptorBinaryForm(), 0); $bytes = New-Object byte[] $descriptor.DiscretionaryAcl.BinaryLength; $descriptor.DiscretionaryAcl.GetBinaryForm($bytes, 0); $hash = [System.Security.Cryptography.SHA256]::HashData($bytes); \"bytes=$($bytes.Length) sha256=$([Convert]::ToHexString($hash).ToLowerInvariant())\""
+    );
+    match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        Ok(output) => format!(
+            "raw DACL fingerprint failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => format!("could not fingerprint raw DACL: {error}"),
+    }
+}
+
 fn filesystem_authority_diagnostic(capability_state: &Path, group_sid: &str) -> String {
     let state = match fs::read(capability_state)
         .map_err(|error| error.to_string())
@@ -198,15 +220,13 @@ fn filesystem_authority_diagnostic(capability_state: &Path, group_sid: &str) -> 
                         .unwrap_or("<missing>");
                     let original = object
                         .get("original")
-                        .and_then(|descriptor| descriptor.get("bytes"))
-                        .and_then(serde_json::Value::as_array)
-                        .map_or(0, Vec::len);
+                        .map(dacl_state_fingerprint)
+                        .unwrap_or_else(|| "<missing>".to_string());
                     let current = object
                         .get("current")
-                        .and_then(|descriptor| descriptor.get("bytes"))
-                        .and_then(serde_json::Value::as_array)
-                        .map_or(0, Vec::len);
-                    format!("{path}:original_bytes={original},current_bytes={current}")
+                        .map(dacl_state_fingerprint)
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    format!("{path}:original={original},current={current}")
                 })
                 .collect::<Vec<_>>()
                 .join(",")
@@ -214,6 +234,34 @@ fn filesystem_authority_diagnostic(capability_state: &Path, group_sid: &str) -> 
         .unwrap_or_else(|| "<missing>".to_string());
     format!(
         "group={group_sid}; read_base={namespace_sid}-1; capabilities=[{entries}]; acl_objects=[{acl_objects}]"
+    )
+}
+
+fn dacl_state_fingerprint(descriptor: &serde_json::Value) -> String {
+    let Some(bytes) = descriptor
+        .get("bytes")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|bytes| {
+            bytes
+                .iter()
+                .map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
+                .collect::<Option<Vec<_>>>()
+        })
+    else {
+        return "<invalid>".to_string();
+    };
+    let digest = Sha256::digest(&bytes);
+    let sha256 = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let protected = descriptor
+        .get("protected")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    format!(
+        "protected={protected} bytes={} sha256={sha256}",
+        bytes.len()
     )
 }
 
@@ -833,7 +881,8 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
 
     setup.uninstall().unwrap_or_else(|error| {
         panic!(
-            "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}; denied-read progress raw ACL before descendant: {access_progress_raw_acl_before_descendant}; filesystem authorities before descendant: {filesystem_authorities_before_descendant}"
+            "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; workspace raw DACL before descendant: {}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}; denied-read progress raw ACL before descendant: {access_progress_raw_acl_before_descendant}; filesystem authorities before descendant: {filesystem_authorities_before_descendant}",
+            raw_dacl_fingerprint(workspace.path())
         )
     });
     cleanup.armed = false;
