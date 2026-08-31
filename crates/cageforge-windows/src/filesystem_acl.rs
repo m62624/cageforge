@@ -861,7 +861,7 @@ impl PreparedAclOperation {
         let before = self.original.snapshot(&self.path)?;
         let identity = persisted_identity(&self.path);
         if self.matches_current_managed_acl(state, &identity, &before) {
-            match self.verify_root(&before) {
+            match self.verify_required_root(&before) {
                 Ok(_) => return Ok(()),
                 Err(FilesystemAclError::AceMismatch { .. }) => {}
                 Err(error) => return Err(error),
@@ -946,7 +946,7 @@ impl PreparedAclOperation {
             });
         }
         for entry in &self.entries {
-            verify_entry(&self.path, descriptor.dacl, entry, true)?;
+            verify_entry(&self.path, descriptor.dacl, entry, true, true)?;
         }
         for sid in &self.remove_sids {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
@@ -955,6 +955,26 @@ impl PreparedAclOperation {
             return Err(FilesystemAclError::DescriptorSnapshotMismatch {
                 path: self.path.final_path().to_path_buf(),
             });
+        }
+        Ok(actual)
+    }
+
+    fn verify_required_root(
+        &self,
+        expected: &PersistedDacl,
+    ) -> Result<PersistedDacl, FilesystemAclError> {
+        let descriptor = SecurityDescriptor::read(&self.path)?;
+        let actual = descriptor.snapshot(&self.path)?;
+        if &actual != expected || (self.protect_dacl && !actual.is_protected()) {
+            return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+                path: self.path.final_path().to_path_buf(),
+            });
+        }
+        for entry in &self.entries {
+            verify_entry(&self.path, descriptor.dacl, entry, true, false)?;
+        }
+        for sid in &self.remove_sids {
+            verify_sid_absent(&self.path, descriptor.dacl, sid)?;
         }
         Ok(actual)
     }
@@ -2429,6 +2449,7 @@ fn verify_entry(
     dacl: *mut ACL,
     expected: &PreparedAclEntry,
     explicit_only: bool,
+    exact_mask: bool,
 ) -> Result<(), FilesystemAclError> {
     let information = acl_information(path, dacl)?;
     let mut expected_mask = 0u32;
@@ -2473,7 +2494,11 @@ fn verify_entry(
             opposite = true;
         }
     }
-    if expected_mask == expected.declaration.mask && !opposite {
+    if !opposite
+        && (expected_mask == expected.declaration.mask
+            || (!exact_mask
+                && expected_mask & expected.declaration.mask == expected.declaration.mask))
+    {
         Ok(())
     } else {
         Err(FilesystemAclError::AceMismatch {
