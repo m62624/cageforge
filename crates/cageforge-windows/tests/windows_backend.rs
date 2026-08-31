@@ -1036,6 +1036,24 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .expect("routed HTTP fixture thread")
         .expect("exactly allowed routed target");
 
+    let (socks_target, socks_server) = start_http_server();
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::enabled()
+            .with_domain_mode(DomainMode::Restricted)
+            .with_unix_socket_mode(UnixSocketMode::Enabled)
+            .with_domain("127.0.0.1", DomainAccess::Allow)
+            .expect("allowed SOCKS loopback policy"),
+        "socks5",
+        socks_target,
+    );
+    socks_server
+        .join()
+        .expect("routed SOCKS fixture thread")
+        .expect("exactly allowed SOCKS target");
+
     let denied_target =
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("denied routed target listener");
     let denied_address = denied_target
@@ -1052,6 +1070,23 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         denied_address,
     );
     assert_no_connection(&denied_target, "denied Windows proxy route");
+
+    let denied_socks_target =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("denied SOCKS target listener");
+    let denied_socks_address = denied_socks_target
+        .local_addr()
+        .expect("denied SOCKS target address");
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::enabled()
+            .with_domain_mode(DomainMode::Restricted)
+            .with_unix_socket_mode(UnixSocketMode::Enabled),
+        "socks5-denied",
+        denied_socks_address,
+    );
+    assert_no_connection(&denied_socks_target, "denied Windows SOCKS route");
 
     let bypass_target =
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("routed direct-bypass target listener");

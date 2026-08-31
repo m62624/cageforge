@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -31,6 +31,8 @@ fn run() -> Result<(), String> {
         "direct-http" => direct_http(),
         "http-proxy" => http_proxy(false),
         "http-proxy-denied" => http_proxy(true),
+        "socks5" => socks5(false),
+        "socks5-denied" => socks5(true),
         _ => Err(format!("unsupported fixture mode {mode:?}")),
     }
 }
@@ -97,6 +99,53 @@ fn http_proxy(expect_denial: bool) -> Result<(), String> {
         )),
         Err(_) if expect_denial => Ok(()),
         Err(error) => Err(format!("read proxy response: {error}")),
+    }
+}
+
+fn socks5(expect_denial: bool) -> Result<(), String> {
+    let target = network_target()?;
+    let proxy = proxy_endpoint("ALL_PROXY")?;
+    let mut stream = connect(proxy)?;
+    stream
+        .write_all(&[5, 1, 0])
+        .map_err(|error| format!("write SOCKS5 greeting: {error}"))?;
+    let mut greeting = [0; 2];
+    stream
+        .read_exact(&mut greeting)
+        .map_err(|error| format!("read SOCKS5 greeting: {error}"))?;
+    if greeting != [5, 0] {
+        return Err(format!(
+            "SOCKS5 proxy rejected no-authentication: {greeting:?}"
+        ));
+    }
+    let IpAddr::V4(address) = target.ip() else {
+        return Err(format!(
+            "SOCKS5 fixture requires an IPv4 target, found {target}"
+        ));
+    };
+    let mut request = vec![5, 1, 0, 1];
+    request.extend_from_slice(&address.octets());
+    request.extend_from_slice(&target.port().to_be_bytes());
+    stream
+        .write_all(&request)
+        .map_err(|error| format!("write SOCKS5 connect request: {error}"))?;
+    let mut response = [0; 10];
+    match stream.read_exact(&mut response) {
+        Ok(()) if expect_denial && response[1] != 0 => Ok(()),
+        Ok(()) if expect_denial => Err("SOCKS5 proxy reached a denied network target".to_string()),
+        Ok(()) if response[1] == 0 => {
+            write!(
+                stream,
+                "GET / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"
+            )
+            .map_err(|error| format!("write tunneled HTTP request: {error}"))?;
+            require_success_response(&mut stream)
+        }
+        Ok(()) => Err(format!(
+            "SOCKS5 proxy rejected allowed target: {response:?}"
+        )),
+        Err(_) if expect_denial => Ok(()),
+        Err(error) => Err(format!("read SOCKS5 connect response: {error}")),
     }
 }
 
