@@ -22,7 +22,7 @@ use cageforge_policy::{
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use cageforge_windows::{
     WindowsBackend, WindowsBackendConfig, WindowsBackendConfigError, WindowsBackendError,
-    WindowsSetup, WindowsSetupConfig, WindowsSetupError, WindowsSetupStatus,
+    WindowsChild, WindowsSetup, WindowsSetupConfig, WindowsSetupError, WindowsSetupStatus,
     WindowsSetupVerificationError,
 };
 use pretty_assertions::assert_eq;
@@ -153,6 +153,18 @@ fn run_network_probe(
     mode: &str,
     target: SocketAddr,
 ) {
+    let mut child = spawn_network_probe(backend, workspace, fixture, network, mode, target);
+    wait_for_network_probe(&mut child, mode);
+}
+
+fn spawn_network_probe(
+    backend: &WindowsBackend,
+    workspace: &Path,
+    fixture: &Path,
+    network: NetworkPolicy,
+    mode: &str,
+    target: SocketAddr,
+) -> WindowsChild {
     let (command, effective, context) = request_with_environment(
         workspace,
         network,
@@ -162,7 +174,10 @@ fn run_network_probe(
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare network probe");
-    let mut child = backend.spawn(prepared).expect("spawn network probe");
+    backend.spawn(prepared).expect("spawn network probe")
+}
+
+fn wait_for_network_probe(child: &mut WindowsChild, mode: &str) {
     let status = child.wait().expect("wait for network probe");
     let mut stdout = String::new();
     child
@@ -183,7 +198,11 @@ fn run_network_probe(
 }
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("HTTP listener");
+    start_http_server_on(Ipv4Addr::LOCALHOST)
+}
+
+fn start_http_server_on(address: Ipv4Addr) -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
+    let listener = TcpListener::bind((address, 0)).expect("HTTP listener");
     let address = listener.local_addr().expect("HTTP server address");
     let server = thread::spawn(move || {
         listener.set_nonblocking(true)?;
@@ -1053,6 +1072,67 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         bypass_address,
     );
     assert_no_connection(&bypass_target, "proxy-routed Windows sandbox direct bypass");
+
+    let parallel_workspace = tempfile::tempdir().expect("parallel sandbox workspace");
+    let parallel_fixture = parallel_workspace
+        .path()
+        .join("cageforge-windows-access-fixture.exe");
+    fs::copy(&access_fixture, &parallel_fixture)
+        .expect("copy parallel network fixture into its writable workspace");
+    let parallel_backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(END_TO_END_PROBE_TIMEOUT)
+            .expect("bounded parallel probe timeout"),
+    )
+    .expect("second backend from the same verified setup");
+    let (first_parallel_target, first_parallel_server) = start_http_server_on(Ipv4Addr::LOCALHOST);
+    let (second_parallel_target, second_parallel_server) =
+        start_http_server_on(Ipv4Addr::new(127, 0, 0, 2));
+    let first_parallel_policy = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
+        .with_domain("127.0.0.1", DomainAccess::Allow)
+        .expect("first parallel loopback policy");
+    let second_parallel_policy = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
+        .with_domain("127.0.0.2", DomainAccess::Allow)
+        .expect("second parallel loopback policy");
+    let mut first_parallel_child = spawn_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        first_parallel_policy,
+        "http-proxy",
+        first_parallel_target,
+    );
+    let mut second_parallel_child = spawn_network_probe(
+        &parallel_backend,
+        parallel_workspace.path(),
+        &parallel_fixture,
+        second_parallel_policy,
+        "http-proxy",
+        second_parallel_target,
+    );
+    assert_ne!(
+        first_parallel_child.id(),
+        second_parallel_child.id(),
+        "parallel backends must own distinct Windows command processes"
+    );
+    wait_for_network_probe(&mut first_parallel_child, "parallel first HTTP proxy");
+    wait_for_network_probe(&mut second_parallel_child, "parallel second HTTP proxy");
+    first_parallel_server
+        .join()
+        .expect("first parallel HTTP fixture thread")
+        .expect("first parallel route stayed isolated");
+    second_parallel_server
+        .join()
+        .expect("second parallel HTTP fixture thread")
+        .expect("second parallel route stayed isolated");
+    drop(first_parallel_child);
+    drop(second_parallel_child);
+    drop(parallel_backend);
 
     let workspace_acl_before_descendant = acl_diagnostic(workspace.path());
     let workspace_raw_dacl_before_descendant = raw_dacl_fingerprint(workspace.path());
