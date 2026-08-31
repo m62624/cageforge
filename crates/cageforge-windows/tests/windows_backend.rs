@@ -989,7 +989,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         &backend,
         workspace.path(),
         &access_fixture,
-        NetworkPolicy::unrestricted().with_unix_socket_mode(UnixSocketMode::Disabled),
+        NetworkPolicy::unrestricted(),
         "direct-http",
         direct_target,
     );
@@ -1000,6 +1000,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
 
     let allowed_network = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
         .with_domain("127.0.0.1", DomainAccess::Allow)
         .expect("allowed loopback policy");
     let (routed_target, routed_server) = start_http_server();
@@ -1025,7 +1026,9 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         &backend,
         workspace.path(),
         &access_fixture,
-        NetworkPolicy::enabled().with_domain_mode(DomainMode::Restricted),
+        NetworkPolicy::enabled()
+            .with_domain_mode(DomainMode::Restricted)
+            .with_unix_socket_mode(UnixSocketMode::Enabled),
         "http-proxy-denied",
         denied_address,
     );
@@ -1038,6 +1041,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .expect("routed direct-bypass target address");
     let allowed_network = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
         .with_domain("127.0.0.1", DomainAccess::Allow)
         .expect("routed direct-bypass policy");
     run_network_probe(
