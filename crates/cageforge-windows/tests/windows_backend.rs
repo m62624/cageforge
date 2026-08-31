@@ -112,6 +112,20 @@ fn access_fixture_command(path: &Path) -> CommandSpec {
     CommandSpec::new(path).expect("denied-read fixture command")
 }
 
+fn acl_diagnostic(path: &Path) -> String {
+    match Command::new("icacls").arg(path).output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        Ok(output) => format!(
+            "icacls exited with {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ),
+        Err(error) => format!("could not run icacls: {error}"),
+    }
+}
+
 #[allow(unsafe_code)]
 fn process_exit_code(process_id: u32) -> Result<Option<u32>, u32> {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
@@ -630,9 +644,13 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare descendant probe");
-    let mut descendant_child = backend
-        .spawn(prepared)
-        .expect("spawn descendant lifecycle probe");
+    let mut descendant_child = backend.spawn(prepared).unwrap_or_else(|error| {
+        panic!(
+            "spawn descendant lifecycle probe: {error}; workspace ACL: {}; access fixture ACL: {}",
+            acl_diagnostic(workspace.path()),
+            acl_diagnostic(&access_fixture),
+        );
+    });
     let status = descendant_child
         .wait()
         .expect("wait for root process and complete Job Object");
