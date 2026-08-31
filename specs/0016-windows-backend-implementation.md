@@ -505,26 +505,32 @@ non-inheriting on ancestors is also insufficient: another concurrent sandbox
 could create a sibling after enumeration and before launch.
 
 The backend therefore keeps each deny and read-only ACE inheritable across its
-complete subtree and turns every resolved root and each enumerated existing
-descendant into a protected-DACL boundary. A more-specific root removes every
-Cageforge write-root capability SID inherited from its less-specific writable
-ancestors before it installs its own allow set; a read root therefore cannot
-retain write authority merely because it is nested below the workspace root.
-Ancestor continuation scans exclude all more-specific roots, which prevents a
-broader grant from being reapplied after that boundary is established. The
-protected DACL is built from the handle-read effective DACL, removes only the
-current profile-guard SID and the superseded ancestor write capabilities,
+complete subtree and turns every resolved root and each initially enumerated
+existing descendant into a protected-DACL boundary. A more-specific root removes
+every Cageforge write-root capability SID inherited from its less-specific
+writable ancestors before it installs its own allow set; a read root therefore
+cannot retain write authority merely because it is nested below the workspace
+root. Ancestor continuation scans exclude all more-specific roots, which
+prevents a broader grant from being reapplied after that boundary is established.
+The protected DACL is built from the handle-read effective DACL, removes only
+the current profile-guard SID and the superseded ancestor write capabilities,
 converts retained inherited ACEs to explicit ACEs without changing their masks,
 and installs the root's required group and capability ACEs. Cageforge applies
-the enumerated descendants deepest-first and only then their parent roots. This
-ordering prevents a root's inheritable ACE from being propagated into an
-existing child after that child already received its explicitly journaled grant;
-it does not assume a particular Windows retroactive-propagation behavior. A
-subsequent equivalent plan first proves that the current handle descriptor
-exactly matches its persisted managed descriptor and required entries; it then
-performs no `SetSecurityInfo` write. Thus an idempotent launch cannot cause
-duplicate inherited ACEs in existing descendants. New descendants inherit from
-the protected root while new siblings outside it continue to inherit the deny.
+the initially enumerated descendants deepest-first and only then their parent
+roots. This ordering prevents a root's inheritable ACE from being propagated
+into an existing child after that child already received its explicitly
+journaled grant; it does not assume a particular Windows
+retroactive-propagation behavior. A later-created ordinary descendant need not
+be separately journaled: Cageforge skips that mutation only when the descendant
+is unprotected, has no explicit ACE for a required managed SID, inherits every
+exact required ACE, and its nearest managed ancestor has the exact recorded
+identity and descriptor when reopened by handle. Any other descendant is pinned,
+protected, journaled, and read back. A subsequent equivalent plan first proves
+that the current handle descriptor exactly matches its persisted managed
+descriptor and required entries; it then performs no `SetSecurityInfo` write.
+Thus an idempotent launch cannot cause duplicate inherited ACEs in existing
+descendants. New descendants inherit from the protected root while new siblings
+outside it continue to inherit the deny.
 The scan retains each object's directory-or-file kind: direct ACEs on existing
 files are exact, while ACEs on existing directories retain their required
 inheritance flags for future children. Windows correctly strips inheritance

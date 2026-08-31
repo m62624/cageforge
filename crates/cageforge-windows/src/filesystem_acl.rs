@@ -129,6 +129,7 @@ struct PreparedAclPlan {
 struct PreparedAclOperation {
     path: ValidatedPath,
     retain_path: bool,
+    inherited_continuation: bool,
     entries: Vec<PreparedAclEntry>,
     remove_sids: Vec<LocalSid>,
     protect_dacl: bool,
@@ -200,6 +201,12 @@ enum AclAccessMode {
 enum AclInheritance {
     Exact,
     Subtree,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AclEntryScope {
+    Explicit,
+    Inherited,
 }
 
 #[derive(Debug, Error)]
@@ -778,10 +785,10 @@ impl PendingAclOperation {
 
 impl AclOperation {
     fn prepare(self) -> Result<Option<PreparedAclOperation>, FilesystemAclError> {
-        let (path, retain_path) = match self.path {
-            AclOperationPath::Pinned(path) => (path, true),
+        let (path, retain_path, inherited_continuation) = match self.path {
+            AclOperationPath::Pinned(path) => (path, true, false),
             AclOperationPath::Discovered(path) => match open_discovered_acl_path(&path)? {
-                Some(path) => (path, false),
+                Some(path) => (path, false, true),
                 None => return Ok(None),
             },
         };
@@ -802,6 +809,7 @@ impl AclOperation {
         Ok(Some(PreparedAclOperation {
             path,
             retain_path,
+            inherited_continuation,
             entries,
             remove_sids,
             protect_dacl: self.protect_dacl,
@@ -871,6 +879,9 @@ impl PreparedAclOperation {
                 Err(FilesystemAclError::AceMismatch { .. }) => {}
                 Err(error) => return Err(error),
             }
+        }
+        if self.inherited_continuation && self.inherits_verified_managed_boundary(state, &before)? {
+            return Ok(());
         }
         let filtered;
         let base = if self.protect_dacl || !self.remove_sids.is_empty() {
@@ -942,6 +953,66 @@ impl PreparedAclOperation {
             })
     }
 
+    fn inherits_verified_managed_boundary(
+        &self,
+        state: &CapabilityStateSession<'_>,
+        descriptor: &PersistedDacl,
+    ) -> Result<bool, FilesystemAclError> {
+        if descriptor.is_protected() {
+            return Ok(false);
+        }
+        let Some(ancestor) = state
+            .managed_acl_objects()
+            .iter()
+            .filter(|object| {
+                !paths_equal(object.path(), self.path.final_path())
+                    && is_within(self.path.final_path(), object.path())
+            })
+            .max_by_key(|object| object.path().components().count())
+        else {
+            return Ok(false);
+        };
+        let ancestor_path = ValidatedPath::open_for_acl(ancestor.path())?;
+        let ancestor_identity = persisted_identity(&ancestor_path);
+        if &ancestor_identity != ancestor.identity() {
+            return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+                path: ancestor.path().to_path_buf(),
+            }
+            .into());
+        }
+        let ancestor_current =
+            SecurityDescriptor::read(&ancestor_path)?.snapshot(&ancestor_path)?;
+        if &ancestor_current != ancestor.current() {
+            return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+                path: ancestor.path().to_path_buf(),
+                expected: dacl_fingerprint(ancestor.current()),
+                actual: dacl_fingerprint(&ancestor_current),
+            }
+            .into());
+        }
+        for entry in &self.entries {
+            match verify_entry(
+                &self.path,
+                self.original.dacl,
+                entry,
+                AclEntryScope::Inherited,
+                true,
+            ) {
+                Ok(()) => {}
+                Err(FilesystemAclError::AceMismatch { .. }) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        for sid in &self.remove_sids {
+            match verify_sid_absent(&self.path, self.original.dacl, sid) {
+                Ok(()) => {}
+                Err(FilesystemAclError::AceMismatch { .. }) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(true)
+    }
+
     fn verify_root(&self, expected: &PersistedDacl) -> Result<PersistedDacl, FilesystemAclError> {
         let descriptor = SecurityDescriptor::read(&self.path)?;
         let actual = descriptor.snapshot(&self.path)?;
@@ -951,7 +1022,13 @@ impl PreparedAclOperation {
             });
         }
         for entry in &self.entries {
-            verify_entry(&self.path, descriptor.dacl, entry, true, true)?;
+            verify_entry(
+                &self.path,
+                descriptor.dacl,
+                entry,
+                AclEntryScope::Explicit,
+                true,
+            )?;
         }
         for sid in &self.remove_sids {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
@@ -976,7 +1053,13 @@ impl PreparedAclOperation {
             });
         }
         for entry in &self.entries {
-            verify_entry(&self.path, descriptor.dacl, entry, true, false)?;
+            verify_entry(
+                &self.path,
+                descriptor.dacl,
+                entry,
+                AclEntryScope::Explicit,
+                false,
+            )?;
         }
         for sid in &self.remove_sids {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
@@ -2494,7 +2577,7 @@ fn verify_entry(
     path: &ValidatedPath,
     dacl: *mut ACL,
     expected: &PreparedAclEntry,
-    explicit_only: bool,
+    scope: AclEntryScope,
     exact_mask: bool,
 ) -> Result<(), FilesystemAclError> {
     let information = acl_information(path, dacl)?;
@@ -2504,7 +2587,6 @@ fn verify_entry(
         let raw = ace(path, dacl, index)?;
         let header = unsafe { &*raw.cast::<ACE_HEADER>() };
         if header.AceFlags & INHERIT_ONLY_ACE as u8 != 0
-            || (explicit_only && header.AceFlags & INHERITED_ACE as u8 != 0)
             || !matches!(
                 header.AceType,
                 ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE
@@ -2529,10 +2611,17 @@ fn verify_entry(
         if unsafe { EqualSid(sid, expected.sid.0) } == 0 {
             continue;
         }
+        let inherited = header.AceFlags & INHERITED_ACE as u8 != 0;
+        if matches!(scope, AclEntryScope::Explicit) && inherited {
+            continue;
+        }
+        if matches!(scope, AclEntryScope::Inherited) && !inherited {
+            opposite = true;
+            continue;
+        }
         if header.AceType == expected.declaration.mode.ace_type() {
-            if !explicit_only
-                || u32::from(header.AceFlags & !(INHERITED_ACE as u8))
-                    == expected.declaration.inheritance.native()
+            if u32::from(header.AceFlags & !(INHERITED_ACE as u8))
+                == expected.declaration.inheritance.native()
             {
                 expected_mask |= value.Mask;
             }
