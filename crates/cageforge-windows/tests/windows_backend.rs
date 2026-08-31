@@ -4,17 +4,20 @@
 
 use std::ffi::c_void;
 use std::fs;
+use std::io::{self, Read, Write};
 use std::mem::offset_of;
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use cageforge_backend_api::BackendRequest;
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
 use cageforge_policy::{
-    AccessMode, FilesystemPolicy, FilesystemRule, NetworkPolicy, PathResolutionContext,
-    PathSelector, SandboxPolicy,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, NetworkPolicy,
+    PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use cageforge_windows::{
@@ -49,6 +52,7 @@ const SANDBOX_FIXTURE_MARKER: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MARKER";
 const SANDBOX_FIXTURE_DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
 const SANDBOX_FIXTURE_DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const SANDBOX_FIXTURE_PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
+const SANDBOX_FIXTURE_NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -83,6 +87,19 @@ fn restricted_request_with_environment(
     cageforge_policy_compose::EffectiveSandbox,
     PathResolutionContext,
 ) {
+    request_with_environment(workspace, NetworkPolicy::disabled(), command, environment)
+}
+
+fn request_with_environment(
+    workspace: &Path,
+    network: NetworkPolicy,
+    command: CommandSpec,
+    environment: EnvironmentSpec,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
     let minimal = workspace.join(".cageforge-test-runtime");
     fs::create_dir_all(&minimal).expect("minimal runtime fixture directory");
     let filesystem = FilesystemPolicy::restricted([
@@ -91,7 +108,7 @@ fn restricted_request_with_environment(
     ])
     .with_additional_protected_relative_path(".cageforge-test-protected")
     .expect("protected test path");
-    let policy = SandboxPolicy::new(filesystem, NetworkPolicy::disabled());
+    let policy = SandboxPolicy::new(filesystem, network);
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
         .expect("policies compose");
@@ -118,6 +135,112 @@ fn fixture_command(path: &Path) -> CommandSpec {
 
 fn access_fixture_command(path: &Path) -> CommandSpec {
     CommandSpec::new(path).expect("denied-read fixture command")
+}
+
+fn network_environment(mode: &str, target: SocketAddr) -> EnvironmentSpec {
+    EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, mode)
+        .expect("network fixture mode")
+        .with_var(SANDBOX_FIXTURE_NETWORK_TARGET, target.to_string())
+        .expect("network fixture target")
+}
+
+fn run_network_probe(
+    backend: &WindowsBackend,
+    workspace: &Path,
+    fixture: &Path,
+    network: NetworkPolicy,
+    mode: &str,
+    target: SocketAddr,
+) {
+    let (command, effective, context) = request_with_environment(
+        workspace,
+        network,
+        access_fixture_command(fixture),
+        network_environment(mode, target),
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare network probe");
+    let mut child = backend.spawn(prepared).expect("spawn network probe");
+    let status = child.wait().expect("wait for network probe");
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .expect("captured network probe stdout")
+        .read_to_string(&mut stdout)
+        .expect("read network probe stdout");
+    let mut stderr = String::new();
+    child
+        .stderr()
+        .expect("captured network probe stderr")
+        .read_to_string(&mut stderr)
+        .expect("read network probe stderr");
+    assert!(
+        status.success(),
+        "network probe {mode:?} failed with {status}; stdout: {stdout}; stderr: {stderr}"
+    );
+}
+
+fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("HTTP listener");
+    let address = listener.local_addr().expect("HTTP server address");
+    let server = thread::spawn(move || {
+        listener.set_nonblocking(true)?;
+        let deadline = Instant::now() + FIXTURE_START_DEADLINE;
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "sandboxed client did not reach the HTTP fixture",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        let mut request = Vec::new();
+        let mut chunk = [0; 1024];
+        loop {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "sandboxed client closed before a complete HTTP request",
+                ));
+            }
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+            if request.len() > 16 * 1024 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "sandboxed HTTP request exceeded the fixture header limit",
+                ));
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")?;
+        stream.shutdown(Shutdown::Write)
+    });
+    (address, server)
+}
+
+fn assert_no_connection(listener: &TcpListener, boundary: &str) {
+    listener
+        .set_nonblocking(true)
+        .expect("set denied target nonblocking");
+    match listener.accept() {
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("{boundary} reached the denied host target"),
+        Err(error) => panic!("inspect denied host target: {error}"),
+    }
 }
 
 fn current_token_diagnostic() -> String {
@@ -845,6 +968,88 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         access_stdout.contains("denied"),
         "denied-read fixture did not report its typed access result: {access_stdout}"
     );
+
+    let disabled_target =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("disabled-network target listener");
+    let disabled_address = disabled_target
+        .local_addr()
+        .expect("disabled-network target address");
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::disabled(),
+        "direct-denied",
+        disabled_address,
+    );
+    assert_no_connection(&disabled_target, "disabled Windows sandbox network");
+
+    let (direct_target, direct_server) = start_http_server();
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::unrestricted().with_unix_socket_mode(UnixSocketMode::Disabled),
+        "direct-http",
+        direct_target,
+    );
+    direct_server
+        .join()
+        .expect("direct HTTP fixture thread")
+        .expect("direct Windows sandbox network");
+
+    let allowed_network = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_domain("127.0.0.1", DomainAccess::Allow)
+        .expect("allowed loopback policy");
+    let (routed_target, routed_server) = start_http_server();
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        allowed_network,
+        "http-proxy",
+        routed_target,
+    );
+    routed_server
+        .join()
+        .expect("routed HTTP fixture thread")
+        .expect("exactly allowed routed target");
+
+    let denied_target =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("denied routed target listener");
+    let denied_address = denied_target
+        .local_addr()
+        .expect("denied routed target address");
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::enabled().with_domain_mode(DomainMode::Restricted),
+        "http-proxy-denied",
+        denied_address,
+    );
+    assert_no_connection(&denied_target, "denied Windows proxy route");
+
+    let bypass_target =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("routed direct-bypass target listener");
+    let bypass_address = bypass_target
+        .local_addr()
+        .expect("routed direct-bypass target address");
+    let allowed_network = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_domain("127.0.0.1", DomainAccess::Allow)
+        .expect("routed direct-bypass policy");
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        allowed_network,
+        "direct-denied",
+        bypass_address,
+    );
+    assert_no_connection(&bypass_target, "proxy-routed Windows sandbox direct bypass");
+
     let workspace_acl_before_descendant = acl_diagnostic(workspace.path());
     let workspace_raw_dacl_before_descendant = raw_dacl_fingerprint(workspace.path());
     let workspace_raw_acl_before_descendant = raw_acl_diagnostic(workspace.path());

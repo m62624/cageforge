@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 const MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
 const DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
+const NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
 
 fn main() -> ExitCode {
     match run() {
@@ -21,10 +24,18 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let mode = environment(MODE)?;
-    if mode != "denied-read" {
-        return Err(format!("unsupported fixture mode {mode:?}"));
+    let mode = environment(MODE)?.to_string_lossy().into_owned();
+    match mode.as_str() {
+        "denied-read" => denied_read(),
+        "direct-denied" => direct_denied(),
+        "direct-http" => direct_http(),
+        "http-proxy" => http_proxy(false),
+        "http-proxy-denied" => http_proxy(true),
+        _ => Err(format!("unsupported fixture mode {mode:?}")),
     }
+}
+
+fn denied_read() -> Result<(), String> {
     let denied_read = PathBuf::from(environment(DENIED_READ)?);
     let denied_write = PathBuf::from(environment(DENIED_WRITE)?);
     let progress = PathBuf::from(environment(PROGRESS)?);
@@ -54,6 +65,97 @@ fn run() -> Result<(), String> {
         }
         Err(error) => Err(format!("read denied host file: {error}")),
     }
+}
+
+fn direct_denied() -> Result<(), String> {
+    match TcpStream::connect_timeout(&network_target()?, Duration::from_secs(2)) {
+        Ok(_) => Err("direct network connection unexpectedly succeeded".to_string()),
+        Err(_) => Ok(()),
+    }
+}
+
+fn direct_http() -> Result<(), String> {
+    let target = network_target()?;
+    let mut stream = connect(target)?;
+    send_http_request(&mut stream, target)?;
+    require_success_response(&mut stream)
+}
+
+fn http_proxy(expect_denial: bool) -> Result<(), String> {
+    let target = network_target()?;
+    let proxy = proxy_endpoint("HTTP_PROXY")?;
+    let mut stream = connect(proxy)?;
+    send_http_request(&mut stream, target)?;
+    let mut response = Vec::new();
+    match stream.read_to_end(&mut response) {
+        Ok(_) if expect_denial && !is_success_response(&response) => Ok(()),
+        Ok(_) if expect_denial => Err("proxy reached a denied network target".to_string()),
+        Ok(_) if is_success_response(&response) => Ok(()),
+        Ok(_) => Err(format!(
+            "proxy response was not successful: {}",
+            String::from_utf8_lossy(&response)
+        )),
+        Err(_) if expect_denial => Ok(()),
+        Err(error) => Err(format!("read proxy response: {error}")),
+    }
+}
+
+fn network_target() -> Result<SocketAddr, String> {
+    environment(NETWORK_TARGET)?
+        .to_string_lossy()
+        .parse()
+        .map_err(|error| format!("parse network target: {error}"))
+}
+
+fn proxy_endpoint(name: &str) -> Result<SocketAddr, String> {
+    let value = environment(name)?.to_string_lossy().into_owned();
+    let authority = value
+        .split_once("://")
+        .map(|(_, authority)| authority)
+        .unwrap_or(value.as_str());
+    authority
+        .trim_end_matches('/')
+        .parse()
+        .map_err(|error| format!("parse {name} endpoint: {error}"))
+}
+
+fn connect(address: SocketAddr) -> Result<TcpStream, String> {
+    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(|error| format!("connect to {address}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| format!("set read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| format!("set write timeout: {error}"))?;
+    Ok(stream)
+}
+
+fn send_http_request(stream: &mut TcpStream, target: SocketAddr) -> Result<(), String> {
+    write!(
+        stream,
+        "GET http://{target}/ HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|error| format!("write HTTP request: {error}"))
+}
+
+fn require_success_response(stream: &mut TcpStream) -> Result<(), String> {
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("read HTTP response: {error}"))?;
+    if is_success_response(&response) {
+        Ok(())
+    } else {
+        Err(format!(
+            "HTTP response was not successful: {}",
+            String::from_utf8_lossy(&response)
+        ))
+    }
+}
+
+fn is_success_response(response: &[u8]) -> bool {
+    response.starts_with(b"HTTP/1.1 200 ") || response.starts_with(b"HTTP/1.0 200 ")
 }
 
 fn environment(name: &str) -> Result<OsString, String> {
