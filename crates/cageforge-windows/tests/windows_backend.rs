@@ -1307,6 +1307,39 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     drop(access_child);
     drop(backend);
 
+    let drop_backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(END_TO_END_PROBE_TIMEOUT)
+            .expect("bounded drop probe timeout"),
+    )
+    .expect("drop lifecycle backend");
+    let drop_environment = EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, "sleep")
+        .expect("drop fixture mode");
+    let (drop_command, drop_effective, drop_context) = restricted_request_with_environment(
+        workspace.path(),
+        fixture_command(&fixture),
+        drop_environment,
+    );
+    let drop_prepared = drop_backend
+        .prepare(
+            BackendRequest::new(&drop_command, &drop_effective),
+            &drop_context,
+        )
+        .expect("prepare drop lifecycle launch");
+    let drop_child = drop_backend
+        .spawn(drop_prepared)
+        .expect("spawn drop lifecycle child");
+    let dropped_process_id = drop_child.id();
+    drop(drop_child);
+    wait_for_fixture_exit(dropped_process_id).unwrap_or_else(|detail| {
+        panic!(
+            "dropping WindowsChild did not terminate its complete Job Object before releasing cleanup state: {detail}"
+        )
+    });
+    drop(drop_backend);
+
     setup.uninstall().unwrap_or_else(|error| {
         panic!(
             "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; workspace raw DACL before descendant: {workspace_raw_dacl_before_descendant}; workspace raw ACL before descendant: {workspace_raw_acl_before_descendant}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}; denied-read progress raw ACL before descendant: {access_progress_raw_acl_before_descendant}; filesystem authorities before descendant: {filesystem_authorities_before_descendant}"
