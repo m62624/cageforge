@@ -2342,9 +2342,6 @@ fn disabled_network_blocks_pathname_unix_datagrams_sent_with_sendmsg() {
     let workspace = TempDir::new().expect("temporary workspace");
     let unix_target = workspace.path().join("disabled-network.sock");
     let unix_listener = UnixDatagram::bind(&unix_target).expect("Unix datagram target");
-    unix_listener
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .expect("Unix target timeout");
     let environment = EnvironmentSpec::inherit_all()
         .with_var(DISABLED_NETWORK_UNIX_BYPASS_FIXTURE, "1")
         .expect("fixture environment")
@@ -2371,20 +2368,7 @@ fn disabled_network_blocks_pathname_unix_datagrams_sent_with_sendmsg() {
     let mut child = backend.spawn(prepared).expect("spawn");
 
     assert_eq!(child.wait().expect("wait").code(), Some(0));
-    let mut datagram = [0; 16];
-    match unix_listener.recv(&mut datagram) {
-        Ok(size) => panic!(
-            "disabled network reached pathname Unix target: {:?}",
-            &datagram[..size]
-        ),
-        Err(error) => assert!(
-            matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ),
-            "unexpected Unix datagram receive error: {error:?}"
-        ),
-    }
+    assert_no_unix_datagram(&unix_listener, "disabled network");
 }
 
 #[test]
@@ -2476,9 +2460,6 @@ fn assert_common_seccomp_policy(network: NetworkPolicy) {
     let workspace = TempDir::new().expect("temporary workspace");
     let unix_target = workspace.path().join("target.sock");
     let unix_listener = UnixDatagram::bind(&unix_target).expect("Unix datagram target");
-    unix_listener
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .expect("Unix target timeout");
     let filesystem = FilesystemPolicy::restricted([
         FilesystemRule::new(PathSelector::root(), AccessMode::Read),
         FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
@@ -2502,19 +2483,24 @@ fn assert_common_seccomp_policy(network: NetworkPolicy) {
     let mut child = backend.spawn(prepared).expect("spawn");
 
     assert_eq!(child.wait().expect("wait").code(), Some(0));
+    assert_no_unix_datagram(&unix_listener, "socketpair endpoint");
+}
+
+fn assert_no_unix_datagram(listener: &UnixDatagram, source: &str) {
+    listener
+        .set_nonblocking(true)
+        .expect("set Unix datagram listener non-blocking");
     let mut datagram = [0; 16];
-    match unix_listener.recv(&mut datagram) {
-        Ok(size) => panic!(
-            "socketpair endpoint reached pathname Unix target: {:?}",
-            &datagram[..size]
-        ),
-        Err(error) => assert!(
-            matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    loop {
+        match listener.recv(&mut datagram) {
+            Ok(size) => panic!(
+                "{source} reached pathname Unix target: {:?}",
+                &datagram[..size]
             ),
-            "unexpected Unix datagram receive error: {error:?}"
-        ),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return,
+            Err(error) => panic!("unexpected Unix datagram receive error: {error:?}"),
+        }
     }
 }
 
