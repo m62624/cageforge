@@ -210,13 +210,15 @@ enum AclEntryScope {
 }
 
 #[derive(Debug)]
+pub(crate) struct AclRestoreBlocker {
+    path: PathBuf,
+    expected: String,
+    actual: String,
+}
+
 enum AclRestoreOutcome {
     Restored,
-    Deferred {
-        path: PathBuf,
-        expected: String,
-        actual: String,
-    },
+    Deferred { blocker: AclRestoreBlocker },
 }
 
 #[derive(Debug, Error)]
@@ -284,9 +286,7 @@ pub(crate) enum FilesystemAclError {
     #[error(
         "managed ACL restoration cannot make progress without changing an inheritance dependency: {blockers:?}"
     )]
-    AclRestoreDependency {
-        blockers: Vec<(PathBuf, String, String)>,
-    },
+    AclRestoreDependency { blockers: Vec<AclRestoreBlocker> },
     #[error("effective {mode} ACE for SID {sid} on {path:?} differs from mask {expected:#x}")]
     AceMismatch {
         path: PathBuf,
@@ -370,6 +370,16 @@ pub(crate) enum FilesystemAclError {
         original: Box<FilesystemAclError>,
         recovery: Box<FilesystemAclError>,
     },
+}
+
+impl std::fmt::Display for AclRestoreBlocker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "path={:?}; expected={}; actual={}",
+            self.path, self.expected, self.actual
+        )
+    }
 }
 
 impl FilesystemAclEnforcement {
@@ -1910,13 +1920,9 @@ fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), Fi
         for object in objects {
             match restore_managed_acl(state, &object)? {
                 AclRestoreOutcome::Restored => restored = true,
-                AclRestoreOutcome::Deferred {
-                    path,
-                    expected,
-                    actual,
-                } => {
+                AclRestoreOutcome::Deferred { blocker } => {
                     deferred.push(object);
-                    blockers.push((path, expected, actual));
+                    blockers.push(blocker);
                 }
             }
         }
@@ -1980,9 +1986,15 @@ fn restore_managed_acl(
         });
     }
     Ok(AclRestoreOutcome::Deferred {
-        path: object.path().to_path_buf(),
-        expected: dacl_fingerprint(object.original()),
-        actual: dacl_fingerprint(&read_back),
+        blocker: AclRestoreBlocker {
+            path: object.path().to_path_buf(),
+            expected: dacl_fingerprint(object.original()),
+            actual: format!(
+                "{} {}",
+                dacl_fingerprint(&read_back),
+                dacl_entry_summary(&path, &read_back)?
+            ),
+        },
     })
 }
 
@@ -2199,6 +2211,34 @@ fn apply_persisted_dacl(
             code: status,
         })
     }
+}
+
+#[allow(unsafe_code)]
+fn dacl_entry_summary(
+    path: &ValidatedPath,
+    descriptor: &PersistedDacl,
+) -> Result<String, FilesystemAclError> {
+    let acl = OwnedAclBuffer::from_persisted(descriptor);
+    let information = acl_information(path, acl.as_ptr())?;
+    let mut entries = Vec::with_capacity(information.AceCount as usize);
+    for index in 0..information.AceCount {
+        let raw = ace(path, acl.as_ptr(), index)?;
+        let header = unsafe { &*raw.cast::<ACE_HEADER>() };
+        let mask = if matches!(
+            header.AceType,
+            ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE
+        ) && (header.AceSize as usize) >= size_of::<ACCESS_ALLOWED_ACE>()
+        {
+            unsafe { (*raw.cast::<ACCESS_ALLOWED_ACE>()).Mask }
+        } else {
+            0
+        };
+        entries.push(format!(
+            "type={:#x}/flags={:#x}/mask={mask:#x}",
+            header.AceType, header.AceFlags
+        ));
+    }
+    Ok(format!("entries=[{}]", entries.join(",")))
 }
 
 #[allow(unsafe_code)]
