@@ -769,6 +769,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     );
     let workspace_acl_before_descendant = acl_diagnostic(workspace.path());
     let workspace_raw_dacl_before_descendant = raw_dacl_fingerprint(workspace.path());
+    let workspace_raw_acl_before_descendant = raw_acl_diagnostic(workspace.path());
     let access_progress_acl_before_descendant = acl_diagnostic(&access_progress);
     let access_progress_raw_acl_before_descendant = raw_acl_diagnostic(&access_progress);
     let filesystem_authorities_before_descendant =
@@ -882,7 +883,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
 
     setup.uninstall().unwrap_or_else(|error| {
         panic!(
-            "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; workspace raw DACL before descendant: {workspace_raw_dacl_before_descendant}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}; denied-read progress raw ACL before descendant: {access_progress_raw_acl_before_descendant}; filesystem authorities before descendant: {filesystem_authorities_before_descendant}"
+            "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; workspace raw DACL before descendant: {workspace_raw_dacl_before_descendant}; workspace raw ACL before descendant: {workspace_raw_acl_before_descendant}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}; denied-read progress raw ACL before descendant: {access_progress_raw_acl_before_descendant}; filesystem authorities before descendant: {filesystem_authorities_before_descendant}"
         )
     });
     cleanup.armed = false;
