@@ -116,7 +116,7 @@ pub(super) fn verify_runner_executable_dacl(
         path,
         owner_sid,
         group_sid,
-        crate::runner_resource_security::RunnerResourceKind::Executable,
+        crate::runner::resource_security::RunnerResourceKind::Executable,
     )
 }
 
@@ -129,7 +129,7 @@ pub(super) fn verify_runner_manifest_dacl(
         path,
         owner_sid,
         group_sid,
-        crate::runner_resource_security::RunnerResourceKind::Manifest,
+        crate::runner::resource_security::RunnerResourceKind::Manifest,
     )
 }
 
@@ -137,17 +137,17 @@ fn verify_shared_runner_resource(
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
-    kind: crate::runner_resource_security::RunnerResourceKind,
+    kind: crate::runner::resource_security::RunnerResourceKind,
 ) -> Result<File, WindowsSetupVerificationError> {
-    let file = crate::setup_pinned_file::open_for_readback(path, true).map_err(|error| {
+    let file = crate::setup::pinned::file::open_for_readback(path, true).map_err(|error| {
         map_runner_resource_error(
-            crate::runner_resource_security::RunnerResourceSecurityError::Unsafe {
+            crate::runner::resource_security::RunnerResourceSecurityError::Unsafe {
                 path: path.to_path_buf(),
                 detail: error.to_string(),
             },
         )
     })?;
-    crate::runner_resource_security::verify_open_runner_resource(
+    crate::runner::resource_security::verify_open_runner_resource(
         &file, path, owner_sid, group_sid, kind,
     )
     .map_err(map_runner_resource_error)?;
@@ -159,25 +159,25 @@ pub(crate) fn verify_open_runner_resource_dacl(
     path: &Path,
     owner_sid: &str,
     group_sid: &str,
-    kind: crate::runner_resource_security::RunnerResourceKind,
+    kind: crate::runner::resource_security::RunnerResourceKind,
 ) -> Result<(), WindowsSetupVerificationError> {
-    crate::runner_resource_security::verify_open_runner_resource(
+    crate::runner::resource_security::verify_open_runner_resource(
         file, path, owner_sid, group_sid, kind,
     )
     .map_err(map_runner_resource_error)
 }
 
 fn map_runner_resource_error(
-    error: crate::runner_resource_security::RunnerResourceSecurityError,
+    error: crate::runner::resource_security::RunnerResourceSecurityError,
 ) -> WindowsSetupVerificationError {
     match error {
-        crate::runner_resource_security::RunnerResourceSecurityError::Unsafe { path, detail } => {
+        crate::runner::resource_security::RunnerResourceSecurityError::Unsafe { path, detail } => {
             WindowsSetupVerificationError::ProtectedPathUnsafe { path, detail }
         }
-        crate::runner_resource_security::RunnerResourceSecurityError::Read { path, code } => {
+        crate::runner::resource_security::RunnerResourceSecurityError::Read { path, code } => {
             WindowsSetupVerificationError::ProtectedAclRead { path, code }
         }
-        crate::runner_resource_security::RunnerResourceSecurityError::Mismatch {
+        crate::runner::resource_security::RunnerResourceSecurityError::Mismatch {
             path,
             descriptor,
         } => WindowsSetupVerificationError::ProtectedSecurityDescriptorMismatch {
@@ -194,9 +194,9 @@ fn verify_dacl(
     directory: bool,
 ) -> Result<File, WindowsSetupVerificationError> {
     let file = if directory {
-        crate::setup_pinned_directory::open_for_pin(path)
+        crate::setup::pinned::setup::open_for_pin(path)
     } else {
-        crate::setup_pinned_file::open_for_readback(path, true)
+        crate::setup::pinned::file::open_for_readback(path, true)
     }
     .map_err(|error| WindowsSetupVerificationError::ProtectedPathUnsafe {
         path: path.to_path_buf(),

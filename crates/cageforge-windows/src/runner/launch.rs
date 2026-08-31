@@ -32,15 +32,15 @@ use windows_sys::Win32::System::Threading::{
     THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
 };
 
-use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, ParentJobError};
-use crate::runner_pipe::{
+use crate::runner::parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, ParentJobError};
+use crate::runner::pipe::{
     ParentPipeDirection, ParentRunnerPipe, ParentRunnerPipeError, RunnerPipeNames,
 };
-use crate::runner_protocol::{
+use crate::runner::protocol::{
     RunnerBootstrapStage, RunnerMessage, WindowsRunnerProtocolError, write_frame,
 };
-use crate::setup_verification::PinnedRunnerResources;
-use crate::setup_verification::credentials::AccountCredential;
+use crate::setup::verification::PinnedRunnerResources;
+use crate::setup::verification::credentials::AccountCredential;
 
 const RUNNER_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
@@ -749,7 +749,7 @@ fn wide_string(value: *const u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::{RunnerBootstrapStatus, decode_runner_bootstrap_status};
-    use crate::runner_protocol::RunnerBootstrapStage;
+    use crate::runner::protocol::RunnerBootstrapStage;
 
     #[test]
     fn bootstrap_status_accepts_only_reserved_stages() {

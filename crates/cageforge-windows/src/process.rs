@@ -7,11 +7,11 @@ use std::process::ExitStatus;
 use std::thread;
 use std::time::Duration;
 
-use crate::capability_store::CapabilityActiveLease;
+use crate::capability::store::CapabilityActiveLease;
 use crate::error::WindowsBackendError;
-use crate::filesystem_acl::FilesystemAclEnforcement;
+use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::network::WindowsProxyRoute;
-use crate::runner_session::RunnerSession;
+use crate::runner::session::RunnerSession;
 
 /// A child launched inside the complete Windows sandbox boundary.
 pub struct WindowsChild {

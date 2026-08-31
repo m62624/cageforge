@@ -38,19 +38,19 @@ use windows_sys::Win32::Storage::FileSystem::{
     SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
 
-use crate::capability_state::{
+use crate::capability::state::{
     CapabilityRole, CapabilityStateError, ManagedAclObject, ManagedAclParent,
     MaterializationRemovalPhase, MaterializedObject, PersistedDacl, PersistedFileIdentity,
 };
-use crate::capability_state_runtime::{
+use crate::capability::state_runtime::{
     AclMutationRecovery, CapabilityStateTransitionError, InheritedAclReleaseRecovery,
     MaterializationEvidence, MaterializationRecovery, dacl_fingerprint,
 };
-use crate::capability_store::{
+use crate::capability::store::{
     CapabilityStateSession, CapabilityStateStore, CapabilityStateStoreError,
 };
-use crate::filesystem_path::{ValidatedPath, ValidatedPathError};
-use crate::filesystem_plan::{FilesystemPlan, FilesystemPlanAccess, MissingFilesystemTargetKind};
+use crate::filesystem::path::{ValidatedPath, ValidatedPathError};
+use crate::filesystem::plan::{FilesystemPlan, FilesystemPlanAccess, MissingFilesystemTargetKind};
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
@@ -1918,7 +1918,7 @@ fn create_materialized_component(
 }
 
 fn verify_recorded_materialization(
-    recorded: &crate::capability_state::MaterializedObject,
+    recorded: &crate::capability::state::MaterializedObject,
     owner: &LocalSid,
 ) -> Result<VerifiedMaterialization, FilesystemAclError> {
     let verified = verify_materialization(

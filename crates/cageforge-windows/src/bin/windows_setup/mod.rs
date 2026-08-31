@@ -22,6 +22,7 @@ use crate::setup_state::{SETUP_STATE_VERSION, SetupMarker, SetupMarkerAccounts};
 mod accounts;
 mod credentials;
 mod firewall;
+mod pinned;
 mod resources;
 mod rights;
 mod security;
@@ -484,15 +485,14 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
     let lock_path = request
         .state_directory
         .join(crate::capability_state::CAPABILITY_LOCK_NAME);
-    let pinned_lock =
-        crate::setup_pinned_mutation::open_for_cleanup(&lock_path).map_err(|error| {
-            NativeSetupFailure::new(
-                SetupStage::Uninstall,
-                SetupFailureCode::Cleanup,
-                None,
-                format!("protected capability lock path {lock_path:?} is unsafe: {error}"),
-            )
-        })?;
+    let pinned_lock = pinned::open_for_cleanup(&lock_path).map_err(|error| {
+        NativeSetupFailure::new(
+            SetupStage::Uninstall,
+            SetupFailureCode::Cleanup,
+            None,
+            format!("protected capability lock path {lock_path:?} is unsafe: {error}"),
+        )
+    })?;
     security::verify_open_owner_file(&lock_path, &pinned_lock, &request.owner_sid)?;
     let lock_file = pinned_lock.try_clone().map_err(|error| {
         NativeSetupFailure::new(

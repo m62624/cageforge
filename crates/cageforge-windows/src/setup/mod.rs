@@ -2,6 +2,12 @@
 
 //! Versioned elevated-setup discovery and read-back.
 
+pub(crate) mod pinned;
+pub(crate) mod protocol;
+pub(crate) mod state;
+pub(crate) mod state_path;
+pub(crate) mod verification;
+
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::windows::fs::OpenOptionsExt;
@@ -10,17 +16,17 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
-use crate::capability_store::{CapabilityStateStore, CapabilityStateStoreError};
+use crate::capability::store::{CapabilityStateStore, CapabilityStateStoreError};
 use crate::config::{
     CommandRunnerSource, SetupHelperSource, WindowsSetupConfig, WindowsStateDirectorySource,
 };
 use crate::error::WindowsSetupError;
-use crate::filesystem_acl::FilesystemAclEnforcement;
-use crate::filesystem_path::ValidatedPath;
-use crate::setup_protocol::{
+use crate::filesystem::acl::FilesystemAclEnforcement;
+use crate::filesystem::path::ValidatedPath;
+use crate::setup::protocol::{
     SETUP_PROTOCOL_VERSION, SetupOperation, SetupOutcome, SetupRequest, SetupResponse,
 };
-use crate::setup_state::{SETUP_STATE_VERSION, SetupMarker};
+use crate::setup::state::{SETUP_STATE_VERSION, SetupMarker};
 
 /// Current on-disk Windows setup contract version.
 pub const WINDOWS_SETUP_VERSION: u32 = SETUP_STATE_VERSION;
@@ -226,7 +232,7 @@ impl WindowsSetup {
             }
             Ok(_) => {}
         }
-        let mut marker_file = crate::setup_pinned_file::open_for_readback(&marker_path, true)
+        let mut marker_file = crate::setup::pinned::file::open_for_readback(&marker_path, true)
             .map_err(|error| WindowsSetupError::StatePathUnsafe {
                 path: marker_path.clone(),
                 detail: error.to_string(),
@@ -274,7 +280,7 @@ impl WindowsSetup {
         }
         let details = marker.into_details(state_directory);
         verify_accounts(&details)?;
-        crate::setup_verification::verify(&details, marker_file)?;
+        crate::setup::verification::verify(&details, marker_file)?;
         Ok(WindowsSetupStatus::Ready(Box::new(details)))
     }
 
@@ -457,7 +463,7 @@ impl WindowsSetup {
             SetupOutcome::Complete if exit_code == 0 => Ok(()),
             SetupOutcome::Complete => Err(WindowsSetupError::HelperExitMismatch { exit_code }),
             SetupOutcome::Failed {
-                code: crate::setup_protocol::SetupFailureCode::ActiveSandboxes,
+                code: crate::setup::protocol::SetupFailureCode::ActiveSandboxes,
                 ..
             } => Err(WindowsSetupError::ActiveSandboxes),
             SetupOutcome::Failed {
@@ -477,7 +483,7 @@ impl WindowsSetup {
     fn state_directory_for(&self, owner_sid: &str) -> Result<PathBuf, WindowsSetupError> {
         let base = match self.config.state_directory_source() {
             WindowsStateDirectorySource::ProgramData => {
-                return crate::setup_state_path::default_state_directory(owner_sid)
+                return crate::setup::state_path::default_state_directory(owner_sid)
                     .map_err(|code| WindowsSetupError::ProgramDataUnavailable { code });
             }
             WindowsStateDirectorySource::Explicit(path) => path.clone(),

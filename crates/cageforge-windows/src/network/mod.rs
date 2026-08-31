@@ -2,6 +2,8 @@
 
 //! Process-wide Windows proxy ingress and per-launch route isolation.
 
+pub(crate) mod attribution;
+
 use std::collections::HashMap;
 use std::io;
 use std::mem::size_of;
@@ -27,7 +29,7 @@ use windows_sys::Win32::Networking::WinSock::{
     WSAGetLastError, WSAStartup, bind, closesocket, listen, setsockopt, socket,
 };
 
-use crate::network_attribution::{
+use crate::network::attribution::{
     WindowsNetworkAttributionError, restricting_sids_for_tcp_connection,
 };
 

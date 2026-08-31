@@ -348,15 +348,14 @@ fn pin_existing_directory_chain(path: &Path) -> NativeSetupResult<Vec<File>> {
     ancestors.reverse();
     let mut pinned = Vec::with_capacity(ancestors.len());
     for ancestor in ancestors {
-        let directory =
-            crate::setup_pinned_directory::open_for_pin(&ancestor).map_err(|error| {
-                NativeSetupFailure::new(
-                    SetupStage::StateDirectory,
-                    SetupFailureCode::InvalidStateDirectory,
-                    None,
-                    format!("setup directory chain is unsafe at {ancestor:?}: {error}"),
-                )
-            })?;
+        let directory = crate::setup_pinned::open_for_pin(&ancestor).map_err(|error| {
+            NativeSetupFailure::new(
+                SetupStage::StateDirectory,
+                SetupFailureCode::InvalidStateDirectory,
+                None,
+                format!("setup directory chain is unsafe at {ancestor:?}: {error}"),
+            )
+        })?;
         pinned.push(directory);
     }
     Ok(pinned)
@@ -387,7 +386,7 @@ fn create_or_verify_directory(
             ));
         }
     }
-    let directory = crate::setup_pinned_directory::open_for_pin(path).map_err(|error| {
+    let directory = crate::setup_pinned::open_for_pin(path).map_err(|error| {
         NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::InvalidStateDirectory,
@@ -539,7 +538,7 @@ fn replace_file_with_descriptor(
             format!("failed to atomically replace {} {path:?}", context.label),
         ));
     }
-    crate::setup_pinned_mutation::verify_open_file_path(path, &pending.file).map_err(|error| {
+    super::pinned::verify_open_file_path(path, &pending.file).map_err(|error| {
         NativeSetupFailure::new(
             context.stage,
             context.acl_code,
@@ -659,7 +658,7 @@ fn create_file_with_descriptor(
         ));
     }
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    crate::setup_pinned_mutation::verify_open_file_path(path, &file).map_err(|error| {
+    super::pinned::verify_open_file_path(path, &file).map_err(|error| {
         NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::CredentialAcl,

@@ -15,19 +15,19 @@ use windows_sys::Win32::Storage::FileSystem::{
     MoveFileExW, REPLACEFILE_WRITE_THROUGH, ReplaceFileW,
 };
 
-use crate::capability_lock::{CapabilityLock, CapabilityLockError};
-use crate::capability_state::{
+use crate::capability::lock::{CapabilityLock, CapabilityLockError};
+use crate::capability::state::{
     CAPABILITY_LOCK_NAME, CAPABILITY_STATE_NAME, CapabilityRole, CapabilityState,
     CapabilityStateError, ManagedAclObject, ManagedAclParent, MaterializedObject, PersistedDacl,
     PersistedFileIdentity,
 };
-use crate::capability_state_runtime::{
+use crate::capability::state_runtime::{
     AclMutationRecovery, CapabilityStateTransitionError, InheritedAclReleaseRecovery,
     MaterializationEvidence, MaterializationRecovery, PendingMaterializationRemovalView,
     PendingMaterializationView,
 };
 use crate::error::WindowsSetupVerificationError;
-use crate::filesystem_path::{ValidatedPath, ValidatedPathError};
+use crate::filesystem::path::{ValidatedPath, ValidatedPathError};
 
 pub(crate) struct CapabilityStateStore {
     state_path: PathBuf,
@@ -173,7 +173,7 @@ impl CapabilityStateStore {
                 source,
             }
         })?;
-        crate::setup_verification::paths::verify_protected_dacl(path, &self.owner_sid, false)?;
+        crate::setup::verification::paths::verify_protected_dacl(path, &self.owner_sid, false)?;
         pinned
             .try_clone_file()
             .map_err(|source| CapabilityStateStoreError::ProtectedHandleClone {

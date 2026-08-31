@@ -520,7 +520,7 @@ mod tests {
         FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
         client_access_mask,
     };
-    use crate::runner_pipe::ParentPipeDirection;
+    use crate::runner::pipe::ParentPipeDirection;
 
     #[test]
     fn client_pipe_access_is_directional_without_create_pipe_instance() {

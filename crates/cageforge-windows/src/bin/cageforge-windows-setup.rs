@@ -8,29 +8,27 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-#[path = "../capability_lock.rs"]
+#[path = "../capability/lock.rs"]
 mod capability_lock;
-#[path = "../capability_state.rs"]
+#[path = "../capability/state.rs"]
 mod capability_state;
-#[path = "../capability_state_setup.rs"]
+#[path = "../capability/state_setup.rs"]
 mod capability_state_setup;
 #[path = "../firewall_contract.rs"]
 mod firewall_contract;
 #[path = "../owner_identity.rs"]
 mod owner_identity;
-#[path = "../runner_manifest.rs"]
+#[path = "../runner/manifest.rs"]
 mod runner_manifest;
-#[path = "../setup_pinned_directory.rs"]
-mod setup_pinned_directory;
-#[path = "../setup_pinned_file.rs"]
+#[path = "../setup/pinned/setup.rs"]
+mod setup_pinned;
+#[path = "../setup/pinned/file.rs"]
 mod setup_pinned_file;
-#[path = "../setup_pinned_mutation.rs"]
-mod setup_pinned_mutation;
-#[path = "../setup_protocol.rs"]
+#[path = "../setup/protocol.rs"]
 mod setup_protocol;
-#[path = "../setup_state.rs"]
+#[path = "../setup/state.rs"]
 mod setup_state;
-#[path = "../setup_state_path.rs"]
+#[path = "../setup/state_path.rs"]
 mod setup_state_path;
 mod windows_setup;
 

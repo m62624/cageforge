@@ -10,15 +10,15 @@ use cageforge_command::CommandError;
 use cageforge_policy::{FilesystemMode, NetworkMode};
 use thiserror::Error;
 
-use crate::filesystem_plan::FilesystemPlanError;
+use crate::filesystem::plan::FilesystemPlanError;
 use crate::network::{WindowsNetworkGatewayError, WindowsNetworkRuntimeError};
-use crate::runner_launch::RunnerLaunchError;
-use crate::runner_protocol::{
+use crate::runner::launch::RunnerLaunchError;
+use crate::runner::protocol::{
     WindowsRunnerFailureCode, WindowsRunnerFailureStage, WindowsRunnerProtocolError,
 };
-use crate::runner_session::RunnerSessionError;
-use crate::runner_stdio::WindowsStandardStreamError;
-use crate::setup_protocol::{SetupFailureCode, SetupStage};
+use crate::runner::session::RunnerSessionError;
+use crate::runner::stdio::WindowsStandardStreamError;
+use crate::setup::protocol::{SetupFailureCode, SetupStage};
 
 /// Failure while resolving one Windows account or group SID.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

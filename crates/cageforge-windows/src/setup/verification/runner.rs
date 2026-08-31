@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::error::WindowsSetupVerificationError;
-use crate::runner_manifest::{RUNNER_MANIFEST_VERSION, RunnerManifest};
+use crate::runner::manifest::{RUNNER_MANIFEST_VERSION, RunnerManifest};
 use crate::setup::WindowsSetupDetails;
 
 pub(super) fn verify(

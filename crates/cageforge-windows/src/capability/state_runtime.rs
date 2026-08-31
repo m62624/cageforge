@@ -8,7 +8,7 @@ use cageforge_path::NativePathKey;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::capability_state::{
+use crate::capability::state::{
     CapabilityRole, CapabilityState, CapabilityStateError, FilesystemCapability, ManagedAclObject,
     ManagedAclParent, MaterializationRemovalPhase, MaterializedObject, PendingAclMutation,
     PendingInheritedAclRelease, PendingMaterialization, PendingMaterializationRemoval,
@@ -808,7 +808,7 @@ mod tests {
     use pretty_assertions::{assert_eq, assert_ne};
     use windows_sys::Win32::Security::{ACL, ACL_REVISION, ACL_REVISION_DS, InitializeAcl};
 
-    use crate::capability_state::CAPABILITY_STATE_VERSION;
+    use crate::capability::state::CAPABILITY_STATE_VERSION;
 
     use super::{
         AclMutationRecovery, CapabilityRole, CapabilityState, CapabilityStateTransitionError,

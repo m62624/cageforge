@@ -16,14 +16,14 @@ use thiserror::Error;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
-use crate::runner_launch::{RunnerBootstrapStatus, RunnerLaunch, RunnerLaunchError};
-use crate::runner_parent::{BoundaryTerminator, ParentBoundaryError};
-use crate::runner_protocol::{
+use crate::runner::launch::{RunnerBootstrapStatus, RunnerLaunch, RunnerLaunchError};
+use crate::runner::parent::{BoundaryTerminator, ParentBoundaryError};
+use crate::runner::protocol::{
     MAX_RUNNER_FRAME_BYTES, RunnerAccount, RunnerBootstrapStage, RunnerMessage, RunnerSpawnRequest,
     RunnerStandardHandles, WindowsRunnerFailure, WindowsRunnerProtocolError, read_frame,
     write_frame,
 };
-use crate::runner_stdio::{ParentStdio, WindowsStandardStreamError};
+use crate::runner::stdio::{ParentStdio, WindowsStandardStreamError};
 
 const SPAWN_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -81,8 +81,8 @@ pub(crate) enum RunnerSessionError {
     Boundary(#[from] ParentBoundaryError),
     #[error("Windows command runner failed during {stage:?}/{code:?} ({native_code:?}): {detail}")]
     RunnerFailure {
-        stage: crate::runner_protocol::WindowsRunnerFailureStage,
-        code: crate::runner_protocol::WindowsRunnerFailureCode,
+        stage: crate::runner::protocol::WindowsRunnerFailureStage,
+        code: crate::runner::protocol::WindowsRunnerFailureCode,
         native_code: Option<u32>,
         detail: String,
     },
@@ -546,7 +546,7 @@ fn runner_bootstrap_failure(
     let Some(exit_code) = boundary.wait_runner(Duration::ZERO)? else {
         return Ok(None);
     };
-    Ok(crate::runner_launch::decode_runner_bootstrap_status(
+    Ok(crate::runner::launch::decode_runner_bootstrap_status(
         exit_code,
     ))
 }

@@ -15,36 +15,19 @@
 
 mod account_identity;
 mod backend;
-mod capability_lock;
-mod capability_state;
-mod capability_state_runtime;
-mod capability_store;
+mod capability;
 mod config;
 mod error;
-mod filesystem_acl;
-mod filesystem_path;
-mod filesystem_plan;
+mod filesystem;
 mod firewall_contract;
 mod network;
-mod network_attribution;
 mod owner_identity;
 mod process;
-mod runner_launch;
-mod runner_manifest;
-mod runner_parent;
-mod runner_pipe;
-mod runner_protocol;
-mod runner_resource_security;
-mod runner_session;
-mod runner_stdio;
+mod runner;
 mod setup;
-mod setup_pinned_directory;
-mod setup_pinned_file;
-mod setup_protocol;
-mod setup_state;
-mod setup_state_path;
-mod setup_verification;
 mod win;
+
+pub(crate) use setup::pinned::file as setup_pinned_file;
 
 pub use backend::WindowsBackend;
 pub use config::{
@@ -56,20 +39,20 @@ pub use error::{
     WindowsFilesystemShapeError, WindowsNetworkCombinationError, WindowsSetupError,
     WindowsSetupVerificationError,
 };
+pub use network::attribution::WindowsNetworkAttributionError;
 pub use network::{
     WindowsNetworkGatewayError, WindowsNetworkRuntimeError, WindowsNetworkRuntimeFailure,
 };
-pub use network_attribution::WindowsNetworkAttributionError;
 pub use process::WindowsChild;
-pub use runner_protocol::{
+pub use runner::protocol::{
     WindowsRunnerFailure, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
     WindowsRunnerProtocolError,
 };
-pub use runner_stdio::WindowsStandardStreamError;
+pub use runner::stdio::WindowsStandardStreamError;
+pub use setup::protocol::{
+    SetupFailureCode as WindowsSetupFailureCode, SetupStage as WindowsSetupStage,
+};
 pub use setup::{
     WindowsSandboxAccounts, WindowsSetup, WindowsSetupDetails, WindowsSetupStaleReason,
     WindowsSetupStatus,
-};
-pub use setup_protocol::{
-    SetupFailureCode as WindowsSetupFailureCode, SetupStage as WindowsSetupStage,
 };

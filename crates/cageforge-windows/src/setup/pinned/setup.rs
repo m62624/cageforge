@@ -9,10 +9,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
 };
 
-use crate::setup_pinned_file::SetupPinnedFileError;
+use crate::setup_pinned_file::{self, SetupPinnedFileError};
 
 pub(crate) fn open_for_pin(path: &Path) -> Result<File, SetupPinnedFileError> {
-    crate::setup_pinned_file::open_with_options(
+    setup_pinned_file::open_with_options(
         path,
         READ_CONTROL | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE,

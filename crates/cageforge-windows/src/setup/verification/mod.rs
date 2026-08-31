@@ -32,7 +32,8 @@ impl PinnedRunnerResources {
     ) -> Result<Self, WindowsSetupVerificationError> {
         let bin_directory = details.state_directory().join("bin");
         let command_runner_path = bin_directory.join(COMMAND_RUNNER_NAME);
-        let runner_manifest_path = bin_directory.join(crate::runner_manifest::RUNNER_MANIFEST_NAME);
+        let runner_manifest_path =
+            bin_directory.join(crate::runner::manifest::RUNNER_MANIFEST_NAME);
         let mut command_runner = paths::verify_runner_executable_dacl(
             &command_runner_path,
             details.owner_sid(),
@@ -72,14 +73,14 @@ impl PinnedRunnerResources {
             &self.command_runner_path,
             owner_sid,
             group_sid,
-            crate::runner_resource_security::RunnerResourceKind::Executable,
+            crate::runner::resource_security::RunnerResourceKind::Executable,
         )?;
         paths::verify_open_runner_resource_dacl(
             &self.runner_manifest,
             &self.runner_manifest_path,
             owner_sid,
             group_sid,
-            crate::runner_resource_security::RunnerResourceKind::Manifest,
+            crate::runner::resource_security::RunnerResourceKind::Manifest,
         )
     }
 }
@@ -92,8 +93,8 @@ pub(super) fn verify(
     let state = details.state_directory();
     let bin_directory = state.join("bin");
     let credentials_path = state.join("credentials.json.dpapi");
-    let capability_state_path = state.join(crate::capability_state::CAPABILITY_STATE_NAME);
-    let capability_lock_path = state.join(crate::capability_state::CAPABILITY_LOCK_NAME);
+    let capability_state_path = state.join(crate::capability::state::CAPABILITY_STATE_NAME);
+    let capability_lock_path = state.join(crate::capability::state::CAPABILITY_LOCK_NAME);
     let setup_helper_path = bin_directory.join(SETUP_HELPER_NAME);
     let _state_directory = paths::verify_protected_dacl(state, details.owner_sid(), true)?;
     let _bin_directory = paths::verify_runner_directory_dacl(
@@ -135,11 +136,11 @@ fn verify_capability_state(
     state_directory: &Path,
     owner_sid: &str,
 ) -> Result<(), WindowsSetupVerificationError> {
-    crate::capability_store::CapabilityStateStore::new(state_directory, owner_sid)
+    crate::capability::store::CapabilityStateStore::new(state_directory, owner_sid)
         .verify()
         .map_err(
             |error| WindowsSetupVerificationError::CapabilityStateInvalid {
-                path: state_directory.join(crate::capability_state::CAPABILITY_STATE_NAME),
+                path: state_directory.join(crate::capability::state::CAPABILITY_STATE_NAME),
                 detail: error.to_string(),
             },
         )

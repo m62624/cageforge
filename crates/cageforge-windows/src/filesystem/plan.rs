@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
-use crate::filesystem_path::{ValidatedPath, ValidatedPathError};
+use crate::filesystem::path::{ValidatedPath, ValidatedPathError};
 
 pub(crate) struct FilesystemPlan {
     profile_sha256: String,
@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     fn target_access(plan: &FilesystemPlan, path: &Path) -> Option<FilesystemPlanAccess> {
-        let validated = crate::filesystem_path::ValidatedPath::open_for_acl(path)
+        let validated = crate::filesystem::path::ValidatedPath::open_for_acl(path)
             .expect("validated assertion path");
         plan.targets()
             .iter()

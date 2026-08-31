@@ -17,8 +17,8 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 
-use crate::runner_parent::{BoundaryTerminator, RunnerHandleDuplicateError};
-use crate::runner_protocol::RunnerStandardHandles;
+use crate::runner::parent::{BoundaryTerminator, RunnerHandleDuplicateError};
+use crate::runner::protocol::RunnerStandardHandles;
 
 pub(crate) struct ParentStdio {
     handles: RunnerStandardHandles,

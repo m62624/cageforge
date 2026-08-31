@@ -9,13 +9,13 @@ use std::process::ExitCode;
 mod account_identity;
 #[path = "../owner_identity.rs"]
 mod owner_identity;
-#[path = "../runner_manifest.rs"]
+#[path = "../runner/manifest.rs"]
 mod runner_manifest;
-#[path = "../runner_protocol.rs"]
+#[path = "../runner/protocol.rs"]
 mod runner_protocol;
-#[path = "../runner_resource_security.rs"]
+#[path = "../runner/resource_security.rs"]
 mod runner_resource_security;
-#[path = "../setup_pinned_file.rs"]
+#[path = "../setup/pinned/file.rs"]
 mod setup_pinned_file;
 mod windows_runner;
 

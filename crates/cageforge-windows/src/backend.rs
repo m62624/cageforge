@@ -18,21 +18,21 @@ use cageforge_command::{
 };
 use cageforge_policy::{FilesystemMode, NetworkMode};
 
-use crate::capability_store::CapabilityStateStore;
+use crate::capability::store::CapabilityStateStore;
 use crate::config::WindowsBackendConfig;
 use crate::error::{
     WindowsBackendError, WindowsFilesystemShapeError, WindowsNetworkCombinationError,
 };
-use crate::filesystem_acl::FilesystemAclEnforcement;
-use crate::filesystem_plan::{FilesystemPlan, FilesystemPlanError};
+use crate::filesystem::acl::FilesystemAclEnforcement;
+use crate::filesystem::plan::{FilesystemPlan, FilesystemPlanError};
 use crate::network::{ProxyAddresses, WindowsProxyIngress, WindowsProxyRoute};
 use crate::process::WindowsChild;
-use crate::runner_launch::RunnerLaunch;
-use crate::runner_protocol::RunnerAccount;
-use crate::runner_session::{PendingRunnerSpawnRequest, RunnerSession};
+use crate::runner::launch::RunnerLaunch;
+use crate::runner::protocol::RunnerAccount;
+use crate::runner::session::{PendingRunnerSpawnRequest, RunnerSession};
+use crate::setup::verification::PinnedRunnerResources;
+use crate::setup::verification::credentials::{AccountCredential, SandboxCredentials};
 use crate::setup::{WindowsSetup, WindowsSetupDetails};
-use crate::setup_verification::PinnedRunnerResources;
-use crate::setup_verification::credentials::{AccountCredential, SandboxCredentials};
 
 /// A Windows-native Cageforge backend bound to one verified elevated setup.
 pub struct WindowsBackend {
@@ -76,7 +76,7 @@ impl WindowsBackend {
     /// Constructs a backend after verifying the complete elevated setup.
     pub fn new(config: WindowsBackendConfig) -> Result<Self, WindowsBackendError> {
         let setup = WindowsSetup::new(config.setup().clone()).verify()?;
-        let credentials = crate::setup_verification::read_credentials(&setup)
+        let credentials = crate::setup::verification::read_credentials(&setup)
             .map_err(crate::error::WindowsSetupError::from)?;
         let capability_state =
             CapabilityStateStore::new(setup.state_directory(), setup.owner_sid());
