@@ -203,12 +203,6 @@ enum AclInheritance {
     Subtree,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AclEntryScope {
-    Explicit,
-    Inherited,
-}
-
 #[derive(Debug)]
 pub(crate) struct AclRestoreBlocker {
     path: PathBuf,
@@ -1013,13 +1007,7 @@ impl PreparedAclOperation {
             .into());
         }
         for entry in &self.entries {
-            match verify_entry(
-                &self.path,
-                self.original.dacl,
-                entry,
-                AclEntryScope::Inherited,
-                true,
-            ) {
+            match verify_exact_inherited_entry(&self.path, self.original.dacl, entry) {
                 Ok(()) => {}
                 Err(FilesystemAclError::AceMismatch { .. }) => return Ok(false),
                 Err(error) => return Err(error),
@@ -1044,13 +1032,7 @@ impl PreparedAclOperation {
             });
         }
         for entry in &self.entries {
-            verify_entry(
-                &self.path,
-                descriptor.dacl,
-                entry,
-                AclEntryScope::Explicit,
-                true,
-            )?;
+            verify_entry(&self.path, descriptor.dacl, entry, true)?;
         }
         for sid in &self.remove_sids {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
@@ -1075,13 +1057,7 @@ impl PreparedAclOperation {
             });
         }
         for entry in &self.entries {
-            verify_entry(
-                &self.path,
-                descriptor.dacl,
-                entry,
-                AclEntryScope::Explicit,
-                false,
-            )?;
+            verify_entry(&self.path, descriptor.dacl, entry, false)?;
         }
         for sid in &self.remove_sids {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
@@ -2635,7 +2611,6 @@ fn verify_entry(
     path: &ValidatedPath,
     dacl: *mut ACL,
     expected: &PreparedAclEntry,
-    scope: AclEntryScope,
     exact_mask: bool,
 ) -> Result<(), FilesystemAclError> {
     let information = acl_information(path, dacl)?;
@@ -2674,11 +2649,7 @@ fn verify_entry(
             continue;
         }
         let inherited = header.AceFlags & INHERITED_ACE as u8 != 0;
-        if matches!(scope, AclEntryScope::Explicit) && inherited {
-            continue;
-        }
-        if matches!(scope, AclEntryScope::Inherited) && !inherited {
-            opposite = true;
+        if inherited {
             continue;
         }
         if header.AceType == expected.declaration.mode.ace_type() {
@@ -2696,6 +2667,81 @@ fn verify_entry(
             || (!exact_mask
                 && expected_mask & expected.declaration.mask == expected.declaration.mask))
     {
+        Ok(())
+    } else {
+        Err(FilesystemAclError::AceMismatch {
+            path: path.final_path().to_path_buf(),
+            sid: expected.declaration.sid.clone(),
+            mode: expected.declaration.mode.label(),
+            expected: expected.declaration.mask,
+        })
+    }
+}
+
+#[allow(unsafe_code)]
+fn verify_exact_inherited_entry(
+    path: &ValidatedPath,
+    dacl: *mut ACL,
+    expected: &PreparedAclEntry,
+) -> Result<(), FilesystemAclError> {
+    let information = acl_information(path, dacl)?;
+    let mut matched = false;
+    for index in 0..information.AceCount {
+        let raw = ace(path, dacl, index)?;
+        let header = unsafe { &*raw.cast::<ACE_HEADER>() };
+        if header.AceFlags & INHERIT_ONLY_ACE as u8 != 0
+            || !matches!(
+                header.AceType,
+                ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE
+            )
+        {
+            continue;
+        }
+        if (header.AceSize as usize) < size_of::<ACCESS_ALLOWED_ACE>() {
+            return Err(FilesystemAclError::MalformedAce {
+                path: path.final_path().to_path_buf(),
+                index,
+            });
+        }
+        let value = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+        let sid = unsafe {
+            raw.cast::<u8>()
+                .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
+        }
+        .cast::<c_void>();
+        if unsafe { IsValidSid(sid) } == 0 {
+            return Err(FilesystemAclError::MalformedAce {
+                path: path.final_path().to_path_buf(),
+                index,
+            });
+        }
+        if unsafe { EqualSid(sid, expected.sid.0) } == 0 {
+            continue;
+        }
+        if header.AceFlags & INHERITED_ACE as u8 == 0
+            || header.AceType != expected.declaration.mode.ace_type()
+            || u32::from(header.AceFlags & !(INHERITED_ACE as u8))
+                != expected.declaration.inheritance.native()
+            || value.Mask != expected.declaration.mask
+        {
+            return Err(FilesystemAclError::AceMismatch {
+                path: path.final_path().to_path_buf(),
+                sid: expected.declaration.sid.clone(),
+                mode: expected.declaration.mode.label(),
+                expected: expected.declaration.mask,
+            });
+        }
+        if matched {
+            return Err(FilesystemAclError::AceMismatch {
+                path: path.final_path().to_path_buf(),
+                sid: expected.declaration.sid.clone(),
+                mode: expected.declaration.mode.label(),
+                expected: expected.declaration.mask,
+            });
+        }
+        matched = true;
+    }
+    if matched {
         Ok(())
     } else {
         Err(FilesystemAclError::AceMismatch {
