@@ -113,6 +113,20 @@ fn access_fixture_command(path: &Path) -> CommandSpec {
     CommandSpec::new(path).expect("denied-read fixture command")
 }
 
+fn current_token_diagnostic() -> String {
+    match Command::new("whoami").arg("/all").output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        Ok(output) => format!(
+            "whoami /all exited with {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ),
+        Err(error) => format!("could not run whoami /all: {error}"),
+    }
+}
+
 fn acl_diagnostic(path: &Path) -> String {
     match Command::new("icacls").arg(path).output() {
         Ok(output) if output.status.success() => {
@@ -443,7 +457,12 @@ fn sandbox_process_fixture() {
             let marker = PathBuf::from(
                 std::env::var_os(SANDBOX_FIXTURE_MARKER).expect("descendant marker path"),
             );
-            fs::write(ready, b"ready").expect("write descendant readiness marker");
+            fs::write(&ready, b"ready").unwrap_or_else(|error| {
+                panic!(
+                    "write descendant readiness marker: {error}; token: {}",
+                    current_token_diagnostic(),
+                )
+            });
             std::thread::sleep(Duration::from_secs(2));
             fs::write(marker, b"escaped").expect("write descendant escape marker");
         }
