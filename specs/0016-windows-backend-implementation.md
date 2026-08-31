@@ -197,11 +197,15 @@ the object still matches `before`, so the prior record remains, or it matches
 state is typed drift and fails closed; recovery never guesses which descriptor
 to restore and never overwrites an unrelated owner change.
 
-Cleanup restores managed ACLs from ancestor to descendant. A managed child
-remains protected while its ancestor is restored; only after the ancestor again
-has its recorded original descriptor may the child return to its own original,
-possibly unprotected descriptor. This prevents Windows from regenerating
-inheritance into a child between its exact read-back and journal commit.
+Cleanup resolves ACL restoration in dependency order. A child created while an
+ancestor boundary is active must be restored before that ancestor, because its
+recorded original descriptor legitimately inherits the active ancestor's ACEs;
+a child that predates its managed ancestor must instead be restored after it.
+Cageforge therefore attempts each exact handle-pinned restore under the journal,
+rolls an inheritance-dependent third state back to its verified current
+descriptor, and retries after other objects have converged. A complete pass
+that restores no object is a typed fail-closed dependency error. No third
+descriptor is accepted, persisted, or used as a cleanup baseline.
 
 This is an intentional strengthening over the per-root capability identity in
 the frozen implementation recorded by [the upstream baseline](../UPSTREAM.md).

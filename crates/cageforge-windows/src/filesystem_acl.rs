@@ -39,8 +39,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use crate::capability_state::{
-    CapabilityRole, CapabilityStateError, MaterializationRemovalPhase, MaterializedObject,
-    PersistedDacl, PersistedFileIdentity,
+    CapabilityRole, CapabilityStateError, ManagedAclObject, MaterializationRemovalPhase,
+    MaterializedObject, PersistedDacl, PersistedFileIdentity,
 };
 use crate::capability_state_runtime::{
     AclMutationRecovery, CapabilityStateTransitionError, MaterializationEvidence,
@@ -264,6 +264,10 @@ pub(crate) enum FilesystemAclError {
     ProtectionMismatch { path: PathBuf },
     #[error("complete DACL bytes differ after read-back for {path:?}")]
     DescriptorSnapshotMismatch { path: PathBuf },
+    #[error(
+        "managed ACL restoration cannot make progress without changing an inheritance dependency: {paths:?}"
+    )]
+    AclRestoreDependency { paths: Vec<PathBuf> },
     #[error("effective {mode} ACE for SID {sid} on {path:?} differs from mask {expected:#x}")]
     AceMismatch {
         path: PathBuf,
@@ -1803,41 +1807,82 @@ fn recover_pending_acl_mutation(
 
 fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
     let mut objects = state.managed_acl_objects().to_vec();
-    objects.sort_by_key(|object| object.path().components().count());
-    for object in objects {
-        let path = ValidatedPath::open_for_acl(object.path())?;
-        let identity = persisted_identity(&path);
-        if &identity != object.identity() {
-            return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
-                path: object.path().to_path_buf(),
+    while !objects.is_empty() {
+        objects.sort_by_key(|object| std::cmp::Reverse(object.path().components().count()));
+        let mut deferred = Vec::new();
+        let mut restored = false;
+        for object in objects {
+            if restore_managed_acl(state, &object)? {
+                restored = true;
+            } else {
+                deferred.push(object);
             }
-            .into());
         }
-        let actual = SecurityDescriptor::read(&path)?.snapshot(&path)?;
-        if &actual != object.current() {
-            return Err(CapabilityStateTransitionError::AclBeforeMismatch {
-                path: object.path().to_path_buf(),
-                expected: dacl_fingerprint(object.current()),
-                actual: dacl_fingerprint(&actual),
-            }
-            .into());
+        if !restored {
+            return Err(FilesystemAclError::AclRestoreDependency {
+                paths: deferred
+                    .iter()
+                    .map(|object| object.path().to_path_buf())
+                    .collect(),
+            });
         }
-        state.begin_acl_mutation(
-            object.path().to_path_buf(),
-            identity.clone(),
-            actual,
-            object.original().clone(),
-        )?;
-        apply_persisted_dacl(&path, object.original())?;
-        let read_back = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+        objects = deferred;
+    }
+    Ok(())
+}
+
+fn restore_managed_acl(
+    state: &mut CapabilityStateSession<'_>,
+    object: &ManagedAclObject,
+) -> Result<bool, FilesystemAclError> {
+    let path = ValidatedPath::open_for_acl(object.path())?;
+    let identity = persisted_identity(&path);
+    if &identity != object.identity() {
+        return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+            path: object.path().to_path_buf(),
+        }
+        .into());
+    }
+    let current = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+    if &current != object.current() {
+        return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+            path: object.path().to_path_buf(),
+            expected: dacl_fingerprint(object.current()),
+            actual: dacl_fingerprint(&current),
+        }
+        .into());
+    }
+    state.begin_acl_mutation(
+        object.path().to_path_buf(),
+        identity.clone(),
+        current,
+        object.original().clone(),
+    )?;
+    apply_persisted_dacl(&path, object.original())?;
+    let read_back = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+    if &read_back == object.original() {
         let outcome = state.resolve_acl_mutation(&identity, &read_back)?;
-        if outcome != AclMutationRecovery::Next || &read_back != object.original() {
+        if outcome != AclMutationRecovery::Next {
             return Err(FilesystemAclError::DescriptorSnapshotMismatch {
                 path: object.path().to_path_buf(),
             });
         }
+        return Ok(true);
     }
-    Ok(())
+    apply_persisted_dacl(&path, object.current())?;
+    let restored_current = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+    if &restored_current != object.current() {
+        return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+            path: object.path().to_path_buf(),
+        });
+    }
+    let outcome = state.resolve_acl_mutation(&identity, &restored_current)?;
+    if outcome != AclMutationRecovery::Prior {
+        return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+            path: object.path().to_path_buf(),
+        });
+    }
+    Ok(false)
 }
 
 fn recover_pending_materialization_removal(
