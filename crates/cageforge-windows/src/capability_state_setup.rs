@@ -12,6 +12,7 @@ impl CapabilityState {
             entries: Vec::new(),
             acl_objects: Vec::new(),
             pending_acl_mutation: None,
+            pending_inherited_acl_release: None,
             materialized_objects: Vec::new(),
             pending_materialization: None,
             pending_materialization_removal: None,
@@ -23,6 +24,7 @@ impl CapabilityState {
     pub(crate) fn filesystem_cleanup_complete(&self) -> bool {
         self.acl_objects.is_empty()
             && self.pending_acl_mutation.is_none()
+            && self.pending_inherited_acl_release.is_none()
             && self.materialized_objects.is_empty()
             && self.pending_materialization.is_none()
             && self.pending_materialization_removal.is_none()
@@ -30,6 +32,7 @@ impl CapabilityState {
 
     pub(crate) fn setup_reconciliation_safe(&self) -> bool {
         self.pending_acl_mutation.is_none()
+            && self.pending_inherited_acl_release.is_none()
             && self.pending_materialization.is_none()
             && self.pending_materialization_removal.is_none()
     }

@@ -469,6 +469,7 @@ fn capability_state_model_failure(
         | crate::capability_state::CapabilityStateError::NonCanonicalAclOrder
         | crate::capability_state::CapabilityStateError::RedundantAclObject
         | crate::capability_state::CapabilityStateError::InvalidAclMutation
+        | crate::capability_state::CapabilityStateError::InvalidInheritedAclDependency
         | crate::capability_state::CapabilityStateError::DuplicateMaterializedObject
         | crate::capability_state::CapabilityStateError::NonCanonicalMaterializedOrder
         | crate::capability_state::CapabilityStateError::InvalidMaterialization

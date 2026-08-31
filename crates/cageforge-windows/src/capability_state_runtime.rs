@@ -10,11 +10,11 @@ use thiserror::Error;
 
 use crate::capability_state::{
     CapabilityRole, CapabilityState, CapabilityStateError, FilesystemCapability, ManagedAclObject,
-    MaterializationRemovalPhase, MaterializedObject, PendingAclMutation, PendingMaterialization,
-    PendingMaterializationRemoval, PersistedDacl, PersistedFileIdentity, authority_key,
-    canonical_sid, entry_key, managed_acl_key, materialized_object_key,
-    validate_materialization_paths, validate_materialized_objects, validate_profile_identity,
-    validate_root,
+    ManagedAclParent, MaterializationRemovalPhase, MaterializedObject, PendingAclMutation,
+    PendingInheritedAclRelease, PendingMaterialization, PendingMaterializationRemoval,
+    PersistedDacl, PersistedFileIdentity, authority_key, canonical_sid, entry_key, managed_acl_key,
+    materialized_object_key, validate_materialization_paths, validate_materialized_objects,
+    validate_profile_identity, validate_root,
 };
 
 const READ_BASE_SUBAUTHORITY: &str = "1";
@@ -52,6 +52,12 @@ pub(crate) enum MaterializationRecovery {
     Present,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InheritedAclReleaseRecovery {
+    Current,
+    Released,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum CapabilityStateTransitionError {
     #[error(transparent)]
@@ -64,6 +70,10 @@ pub(crate) enum CapabilityStateTransitionError {
     PendingAclMutation { path: PathBuf },
     #[error("no ACL mutation journal is pending")]
     MissingAclMutation,
+    #[error("an inherited ACL release journal is already pending for {path:?}")]
+    PendingInheritedAclRelease { path: PathBuf },
+    #[error("no inherited ACL release journal is pending")]
+    MissingInheritedAclRelease,
     #[error("managed ACL object identity changed at {path:?}")]
     AclObjectIdentityMismatch { path: PathBuf },
     #[error(
@@ -159,6 +169,12 @@ impl CapabilityState {
             .map(|mutation| mutation.path.as_path())
     }
 
+    pub(crate) fn pending_inherited_acl_release(&self) -> Option<&ManagedAclObject> {
+        self.pending_inherited_acl_release
+            .as_ref()
+            .map(|pending| &pending.object)
+    }
+
     pub(crate) fn begin_acl_mutation(
         &mut self,
         path: PathBuf,
@@ -166,9 +182,36 @@ impl CapabilityState {
         before: PersistedDacl,
         after: PersistedDacl,
     ) -> Result<(), CapabilityStateTransitionError> {
+        self.begin_acl_mutation_with_parent(path, identity, before, after, None)
+    }
+
+    pub(crate) fn begin_inherited_acl_mutation(
+        &mut self,
+        path: PathBuf,
+        identity: PersistedFileIdentity,
+        before: PersistedDacl,
+        after: PersistedDacl,
+        parent: ManagedAclParent,
+    ) -> Result<(), CapabilityStateTransitionError> {
+        self.begin_acl_mutation_with_parent(path, identity, before, after, Some(parent))
+    }
+
+    fn begin_acl_mutation_with_parent(
+        &mut self,
+        path: PathBuf,
+        identity: PersistedFileIdentity,
+        before: PersistedDacl,
+        after: PersistedDacl,
+        restore_parent: Option<ManagedAclParent>,
+    ) -> Result<(), CapabilityStateTransitionError> {
         if let Some(pending) = &self.pending_acl_mutation {
             return Err(CapabilityStateTransitionError::PendingAclMutation {
                 path: pending.path.clone(),
+            });
+        }
+        if let Some(pending) = &self.pending_inherited_acl_release {
+            return Err(CapabilityStateTransitionError::PendingInheritedAclRelease {
+                path: pending.object.path.clone(),
             });
         }
         if let Some(pending) = &self.pending_materialization {
@@ -204,6 +247,13 @@ impl CapabilityState {
                 });
             }
         }
+        let restore_parent = match (prior.as_ref(), restore_parent) {
+            (Some(prior), Some(parent)) if prior.restore_parent.as_ref() != Some(&parent) => {
+                return Err(CapabilityStateError::InvalidInheritedAclDependency.into());
+            }
+            (Some(prior), _) => prior.restore_parent.clone(),
+            (None, parent) => parent,
+        };
         let original = prior
             .as_ref()
             .map_or_else(|| before.clone(), |object| object.original.clone());
@@ -215,6 +265,7 @@ impl CapabilityState {
                 identity: identity.clone(),
                 original,
                 current: after.clone(),
+                restore_parent,
             })
         };
         self.pending_acl_mutation = Some(PendingAclMutation {
@@ -309,6 +360,11 @@ impl CapabilityState {
                 path: pending.path.clone(),
             });
         }
+        if let Some(pending) = &self.pending_inherited_acl_release {
+            return Err(CapabilityStateTransitionError::PendingInheritedAclRelease {
+                path: pending.object.path.clone(),
+            });
+        }
         if let Some(pending) = &self.pending_materialization {
             return Err(CapabilityStateTransitionError::PendingMaterialization {
                 path: pending.path.clone(),
@@ -337,6 +393,75 @@ impl CapabilityState {
             marker_descriptor,
             marker_nonce,
         });
+        self.validate()
+            .map_err(CapabilityStateTransitionError::from)
+    }
+
+    pub(crate) fn begin_inherited_acl_release(
+        &mut self,
+        path: &Path,
+        identity: &PersistedFileIdentity,
+    ) -> Result<(), CapabilityStateTransitionError> {
+        if let Some(pending) = &self.pending_acl_mutation {
+            return Err(CapabilityStateTransitionError::PendingAclMutation {
+                path: pending.path.clone(),
+            });
+        }
+        if let Some(pending) = &self.pending_inherited_acl_release {
+            return Err(CapabilityStateTransitionError::PendingInheritedAclRelease {
+                path: pending.object.path.clone(),
+            });
+        }
+        if let Some(pending) = &self.pending_materialization {
+            return Err(CapabilityStateTransitionError::PendingMaterialization {
+                path: pending.path.clone(),
+            });
+        }
+        if let Some(pending) = &self.pending_materialization_removal {
+            return Err(
+                CapabilityStateTransitionError::PendingMaterializationRemoval {
+                    path: pending.object.path.clone(),
+                },
+            );
+        }
+        let key = NativePathKey::new(path);
+        let object = self
+            .acl_objects
+            .iter()
+            .find(|object| NativePathKey::new(&object.path) == key)
+            .cloned()
+            .ok_or_else(
+                || CapabilityStateTransitionError::AclObjectIdentityMismatch {
+                    path: path.to_path_buf(),
+                },
+            )?;
+        if &object.identity != identity || object.restore_parent.is_none() {
+            return Err(CapabilityStateError::InvalidInheritedAclDependency.into());
+        }
+        self.pending_inherited_acl_release = Some(PendingInheritedAclRelease { object });
+        self.validate()
+            .map_err(CapabilityStateTransitionError::from)
+    }
+
+    pub(crate) fn resolve_inherited_acl_release(
+        &mut self,
+        identity: &PersistedFileIdentity,
+        recovery: InheritedAclReleaseRecovery,
+    ) -> Result<(), CapabilityStateTransitionError> {
+        let pending = self
+            .pending_inherited_acl_release
+            .take()
+            .ok_or(CapabilityStateTransitionError::MissingInheritedAclRelease)?;
+        if &pending.object.identity != identity {
+            let path = pending.object.path.clone();
+            self.pending_inherited_acl_release = Some(pending);
+            return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch { path });
+        }
+        if recovery == InheritedAclReleaseRecovery::Released {
+            let key = NativePathKey::new(&pending.object.path);
+            self.acl_objects
+                .retain(|object| NativePathKey::new(&object.path) != key);
+        }
         self.validate()
             .map_err(CapabilityStateTransitionError::from)
     }
@@ -404,6 +529,11 @@ impl CapabilityState {
         if let Some(pending) = &self.pending_acl_mutation {
             return Err(CapabilityStateTransitionError::PendingAclMutation {
                 path: pending.path.clone(),
+            });
+        }
+        if let Some(pending) = &self.pending_inherited_acl_release {
+            return Err(CapabilityStateTransitionError::PendingInheritedAclRelease {
+                path: pending.object.path.clone(),
             });
         }
         if let Some(pending) = &self.pending_materialization {
@@ -491,6 +621,36 @@ impl ManagedAclObject {
 
     pub(crate) fn current(&self) -> &PersistedDacl {
         &self.current
+    }
+
+    pub(crate) fn restore_parent(&self) -> Option<&ManagedAclParent> {
+        self.restore_parent.as_ref()
+    }
+}
+
+impl ManagedAclParent {
+    pub(crate) fn new(
+        path: PathBuf,
+        identity: PersistedFileIdentity,
+        release_descriptor: PersistedDacl,
+    ) -> Self {
+        Self {
+            path,
+            identity,
+            release_descriptor,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn identity(&self) -> &PersistedFileIdentity {
+        &self.identity
+    }
+
+    pub(crate) fn release_descriptor(&self) -> &PersistedDacl {
+        &self.release_descriptor
     }
 }
 
@@ -652,8 +812,8 @@ mod tests {
 
     use super::{
         AclMutationRecovery, CapabilityRole, CapabilityState, CapabilityStateTransitionError,
-        MaterializationEvidence, MaterializationRecovery, MaterializationRemovalPhase,
-        PersistedDacl, PersistedFileIdentity,
+        InheritedAclReleaseRecovery, ManagedAclParent, MaterializationEvidence,
+        MaterializationRecovery, MaterializationRemovalPhase, PersistedDacl, PersistedFileIdentity,
     };
 
     const PROFILE_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -666,6 +826,7 @@ mod tests {
             entries: Vec::new(),
             acl_objects: Vec::new(),
             pending_acl_mutation: None,
+            pending_inherited_acl_release: None,
             materialized_objects: Vec::new(),
             pending_materialization: None,
             pending_materialization_removal: None,
@@ -781,6 +942,55 @@ mod tests {
         assert_eq!(state.acl_objects[0].current, after);
         CapabilityState::decode(&state.encode().expect("encode committed state"))
             .expect("decode committed state");
+    }
+
+    #[test]
+    fn inherited_acl_release_removes_only_the_recorded_dependent_child() {
+        let mut state = fresh_state();
+        let parent_path = PathBuf::from(r"C:\Workspace");
+        let parent_identity = PersistedFileIdentity::new(70, [71; 16]);
+        let parent_original = empty_dacl(ACL_REVISION, false);
+        let parent_current = empty_dacl(ACL_REVISION, true);
+        state
+            .begin_acl_mutation(
+                parent_path.clone(),
+                parent_identity.clone(),
+                parent_original.clone(),
+                parent_current.clone(),
+            )
+            .expect("begin parent ACL journal");
+        state
+            .resolve_acl_mutation(&parent_identity, &parent_current)
+            .expect("commit parent ACL journal");
+
+        let child_path = parent_path.join("inherited-child.txt");
+        let child_identity = PersistedFileIdentity::new(70, [72; 16]);
+        let child_original = empty_dacl(ACL_REVISION_DS, false);
+        let child_current = empty_dacl(ACL_REVISION_DS, true);
+        state
+            .begin_inherited_acl_mutation(
+                child_path.clone(),
+                child_identity.clone(),
+                child_original,
+                child_current.clone(),
+                ManagedAclParent::new(parent_path, parent_identity, parent_original),
+            )
+            .expect("begin dependent child ACL journal");
+        state
+            .resolve_acl_mutation(&child_identity, &child_current)
+            .expect("commit dependent child ACL journal");
+
+        state
+            .begin_inherited_acl_release(&child_path, &child_identity)
+            .expect("begin inherited child release");
+        state
+            .resolve_inherited_acl_release(&child_identity, InheritedAclReleaseRecovery::Released)
+            .expect("commit inherited child release");
+
+        assert_eq!(state.acl_objects.len(), 1);
+        assert_eq!(state.acl_objects[0].path, PathBuf::from(r"C:\Workspace"));
+        CapabilityState::decode(&state.encode().expect("encode released state"))
+            .expect("decode released state");
     }
 
     #[test]

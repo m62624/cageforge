@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
-use cageforge_path::{NativePathKey, contains_parent_traversal};
+use cageforge_path::{NativePathKey, contains_parent_traversal, is_within, paths_equal};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
@@ -24,6 +24,8 @@ pub(crate) struct CapabilityState {
     pub(crate) entries: Vec<FilesystemCapability>,
     pub(crate) acl_objects: Vec<ManagedAclObject>,
     pub(crate) pending_acl_mutation: Option<PendingAclMutation>,
+    #[serde(default)]
+    pub(crate) pending_inherited_acl_release: Option<PendingInheritedAclRelease>,
     pub(crate) materialized_objects: Vec<MaterializedObject>,
     pub(crate) pending_materialization: Option<PendingMaterialization>,
     pub(crate) pending_materialization_removal: Option<PendingMaterializationRemoval>,
@@ -43,6 +45,15 @@ pub(crate) struct ManagedAclObject {
     pub(crate) identity: PersistedFileIdentity,
     pub(crate) original: PersistedDacl,
     pub(crate) current: PersistedDacl,
+    #[serde(default)]
+    pub(crate) restore_parent: Option<ManagedAclParent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ManagedAclParent {
+    pub(crate) path: PathBuf,
+    pub(crate) identity: PersistedFileIdentity,
+    pub(crate) release_descriptor: PersistedDacl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -53,6 +64,11 @@ pub(crate) struct PendingAclMutation {
     pub(crate) after: PersistedDacl,
     pub(crate) prior: Option<ManagedAclObject>,
     pub(crate) next: Option<ManagedAclObject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct PendingInheritedAclRelease {
+    pub(crate) object: ManagedAclObject,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,6 +176,8 @@ pub(crate) enum CapabilityStateError {
     RedundantAclObject,
     #[error("capability-SID state contains an incomplete or inconsistent ACL mutation journal")]
     InvalidAclMutation,
+    #[error("capability-SID state contains an invalid inherited ACL restore dependency")]
+    InvalidInheritedAclDependency,
     #[error("capability-SID state repeats one materialized filesystem object")]
     DuplicateMaterializedObject,
     #[error("capability-SID state materialized objects are not in canonical path order")]
@@ -244,8 +262,12 @@ impl CapabilityState {
         if let Some(pending) = &self.pending_acl_mutation {
             pending.validate(&self.acl_objects)?;
         }
+        if let Some(pending) = &self.pending_inherited_acl_release {
+            pending.validate(&self.acl_objects)?;
+        }
         validate_materialized_objects(&self.materialized_objects)?;
         let pending_journal_count = usize::from(self.pending_acl_mutation.is_some())
+            + usize::from(self.pending_inherited_acl_release.is_some())
             + usize::from(self.pending_materialization.is_some())
             + usize::from(self.pending_materialization_removal.is_some());
         if pending_journal_count > 1 {
@@ -268,6 +290,27 @@ impl ManagedAclObject {
         self.current.validate()?;
         if self.original == self.current {
             return Err(CapabilityStateError::RedundantAclObject);
+        }
+        if let Some(parent) = &self.restore_parent {
+            parent.validate(&self.path, &self.identity)?;
+        }
+        Ok(())
+    }
+}
+
+impl ManagedAclParent {
+    fn validate(
+        &self,
+        child_path: &Path,
+        child_identity: &PersistedFileIdentity,
+    ) -> Result<(), CapabilityStateError> {
+        validate_root(&self.path)?;
+        self.release_descriptor.validate()?;
+        if paths_equal(child_path, &self.path)
+            || !is_within(child_path, &self.path)
+            || &self.identity == child_identity
+        {
+            return Err(CapabilityStateError::InvalidInheritedAclDependency);
         }
         Ok(())
     }
@@ -314,6 +357,20 @@ impl PendingAclMutation {
                     return Err(CapabilityStateError::InvalidAclMutation);
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+impl PendingInheritedAclRelease {
+    fn validate(&self, objects: &[ManagedAclObject]) -> Result<(), CapabilityStateError> {
+        self.object.validate()?;
+        if self.object.restore_parent.is_none()
+            || objects.iter().find(|object| {
+                NativePathKey::new(&object.path) == NativePathKey::new(&self.object.path)
+            }) != Some(&self.object)
+        {
+            return Err(CapabilityStateError::InvalidInheritedAclDependency);
         }
         Ok(())
     }

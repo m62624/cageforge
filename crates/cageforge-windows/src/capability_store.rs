@@ -18,12 +18,13 @@ use windows_sys::Win32::Storage::FileSystem::{
 use crate::capability_lock::{CapabilityLock, CapabilityLockError};
 use crate::capability_state::{
     CAPABILITY_LOCK_NAME, CAPABILITY_STATE_NAME, CapabilityRole, CapabilityState,
-    CapabilityStateError, ManagedAclObject, MaterializedObject, PersistedDacl,
+    CapabilityStateError, ManagedAclObject, ManagedAclParent, MaterializedObject, PersistedDacl,
     PersistedFileIdentity,
 };
 use crate::capability_state_runtime::{
-    AclMutationRecovery, CapabilityStateTransitionError, MaterializationEvidence,
-    MaterializationRecovery, PendingMaterializationRemovalView, PendingMaterializationView,
+    AclMutationRecovery, CapabilityStateTransitionError, InheritedAclReleaseRecovery,
+    MaterializationEvidence, MaterializationRecovery, PendingMaterializationRemovalView,
+    PendingMaterializationView,
 };
 use crate::error::WindowsSetupVerificationError;
 use crate::filesystem_path::{ValidatedPath, ValidatedPathError};
@@ -414,6 +415,10 @@ impl CapabilityStateSession<'_> {
         self.state.pending_acl_path()
     }
 
+    pub(crate) fn pending_inherited_acl_release(&self) -> Option<&ManagedAclObject> {
+        self.state.pending_inherited_acl_release()
+    }
+
     pub(crate) fn begin_acl_mutation(
         &mut self,
         path: PathBuf,
@@ -426,6 +431,19 @@ impl CapabilityStateSession<'_> {
         self.persist()
     }
 
+    pub(crate) fn begin_inherited_acl_mutation(
+        &mut self,
+        path: PathBuf,
+        identity: PersistedFileIdentity,
+        before: PersistedDacl,
+        after: PersistedDacl,
+        parent: ManagedAclParent,
+    ) -> Result<(), CapabilityStateStoreError> {
+        self.state
+            .begin_inherited_acl_mutation(path, identity, before, after, parent)?;
+        self.persist()
+    }
+
     pub(crate) fn resolve_acl_mutation(
         &mut self,
         identity: &PersistedFileIdentity,
@@ -434,6 +452,25 @@ impl CapabilityStateSession<'_> {
         let recovery = self.state.resolve_acl_mutation(identity, actual)?;
         self.persist()?;
         Ok(recovery)
+    }
+
+    pub(crate) fn begin_inherited_acl_release(
+        &mut self,
+        path: &Path,
+        identity: &PersistedFileIdentity,
+    ) -> Result<(), CapabilityStateStoreError> {
+        self.state.begin_inherited_acl_release(path, identity)?;
+        self.persist()
+    }
+
+    pub(crate) fn resolve_inherited_acl_release(
+        &mut self,
+        identity: &PersistedFileIdentity,
+        recovery: InheritedAclReleaseRecovery,
+    ) -> Result<(), CapabilityStateStoreError> {
+        self.state
+            .resolve_inherited_acl_release(identity, recovery)?;
+        self.persist()
     }
 
     pub(crate) fn managed_acl_objects(&self) -> &[ManagedAclObject] {

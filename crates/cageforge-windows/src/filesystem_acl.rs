@@ -39,12 +39,12 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use crate::capability_state::{
-    CapabilityRole, CapabilityStateError, ManagedAclObject, MaterializationRemovalPhase,
-    MaterializedObject, PersistedDacl, PersistedFileIdentity,
+    CapabilityRole, CapabilityStateError, ManagedAclObject, ManagedAclParent,
+    MaterializationRemovalPhase, MaterializedObject, PersistedDacl, PersistedFileIdentity,
 };
 use crate::capability_state_runtime::{
-    AclMutationRecovery, CapabilityStateTransitionError, MaterializationEvidence,
-    MaterializationRecovery, dacl_fingerprint,
+    AclMutationRecovery, CapabilityStateTransitionError, InheritedAclReleaseRecovery,
+    MaterializationEvidence, MaterializationRecovery, dacl_fingerprint,
 };
 use crate::capability_store::{
     CapabilityStateSession, CapabilityStateStore, CapabilityStateStoreError,
@@ -384,6 +384,7 @@ impl FilesystemAclEnforcement {
     ) -> Result<Self, FilesystemAclError> {
         let mut state = state_store.begin()?;
         recover_pending_acl_mutation(&mut state)?;
+        recover_pending_inherited_acl_release(&mut state)?;
         let materialized = MaterializedMissingPaths::apply(filesystem, &mut state)?;
         let authorities = FilesystemAuthorities::load(filesystem, &mut state)?;
         let plan = FilesystemAclPlan::build(
@@ -420,6 +421,7 @@ impl FilesystemAclEnforcement {
     ) -> Result<(), FilesystemAclError> {
         let mut state = state_store.begin()?;
         recover_pending_acl_mutation(&mut state)?;
+        recover_pending_inherited_acl_release(&mut state)?;
         restore_managed_acls(&mut state)?;
         let owner_sid = state.owner_sid().to_string();
         let owner = LocalSid::parse("materialization owner", &owner_sid)?;
@@ -933,6 +935,11 @@ impl PreparedAclOperation {
         if self.inherited_continuation && self.inherits_verified_managed_boundary(state, &before)? {
             return Ok(());
         }
+        let inherited_parent = if self.inherited_continuation {
+            self.inherited_managed_parent(state, &before)?
+        } else {
+            None
+        };
         let filtered;
         let base = if self.protect_dacl || !self.remove_sids.is_empty() {
             filtered = filter_acl(&self.path, self.original.dacl, &self.remove_sids)?;
@@ -947,12 +954,22 @@ impl PreparedAclOperation {
             self.verify_root(&after)?;
             return Ok(());
         }
-        state.begin_acl_mutation(
-            self.path.final_path().to_path_buf(),
-            identity.clone(),
-            before,
-            after.clone(),
-        )?;
+        if let Some(parent) = inherited_parent {
+            state.begin_inherited_acl_mutation(
+                self.path.final_path().to_path_buf(),
+                identity.clone(),
+                before,
+                after.clone(),
+                parent,
+            )?;
+        } else {
+            state.begin_acl_mutation(
+                self.path.final_path().to_path_buf(),
+                identity.clone(),
+                before,
+                after.clone(),
+            )?;
+        }
         let security_information = DACL_SECURITY_INFORMATION
             | if self.protect_dacl {
                 PROTECTED_DACL_SECURITY_INFORMATION
@@ -1079,6 +1096,51 @@ impl PreparedAclOperation {
             }
         }
         Ok(true)
+    }
+
+    fn inherited_managed_parent(
+        &self,
+        state: &CapabilityStateSession<'_>,
+        descriptor: &PersistedDacl,
+    ) -> Result<Option<ManagedAclParent>, FilesystemAclError> {
+        if descriptor.is_protected() || !dacl_is_strictly_inherited(&self.path, self.original.dacl)?
+        {
+            return Ok(None);
+        }
+        let Some(ancestor) = state
+            .managed_acl_objects()
+            .iter()
+            .filter(|object| {
+                !paths_equal(object.path(), self.path.final_path())
+                    && is_within(self.path.final_path(), object.path())
+            })
+            .max_by_key(|object| object.path().components().count())
+        else {
+            return Ok(None);
+        };
+        let ancestor_path = ValidatedPath::open_for_acl(ancestor.path())?;
+        let ancestor_identity = persisted_identity(&ancestor_path);
+        if &ancestor_identity != ancestor.identity() {
+            return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+                path: ancestor.path().to_path_buf(),
+            }
+            .into());
+        }
+        let ancestor_current =
+            SecurityDescriptor::read(&ancestor_path)?.snapshot(&ancestor_path)?;
+        if &ancestor_current != ancestor.current() {
+            return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+                path: ancestor.path().to_path_buf(),
+                expected: dacl_fingerprint(ancestor.current()),
+                actual: dacl_fingerprint(&ancestor_current),
+            }
+            .into());
+        }
+        Ok(Some(ManagedAclParent::new(
+            ancestor.path().to_path_buf(),
+            ancestor.identity().clone(),
+            ancestor.original().clone(),
+        )))
     }
 
     fn verify_root(&self, expected: &PersistedDacl) -> Result<PersistedDacl, FilesystemAclError> {
@@ -1944,6 +2006,40 @@ fn recover_pending_acl_mutation(
     Ok(())
 }
 
+fn recover_pending_inherited_acl_release(
+    state: &mut CapabilityStateSession<'_>,
+) -> Result<(), FilesystemAclError> {
+    let Some(object) = state.pending_inherited_acl_release().cloned() else {
+        return Ok(());
+    };
+    let parent = object
+        .restore_parent()
+        .ok_or(CapabilityStateError::InvalidInheritedAclDependency)?;
+    let path = ValidatedPath::open_for_acl(object.path())?;
+    let identity = persisted_identity(&path);
+    if &identity != object.identity() {
+        return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+            path: object.path().to_path_buf(),
+        }
+        .into());
+    }
+    let current = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+    let recovery = if current == *object.current() {
+        InheritedAclReleaseRecovery::Current
+    } else if inherited_acl_release_is_verified(&path, parent)? {
+        InheritedAclReleaseRecovery::Released
+    } else {
+        return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+            path: object.path().to_path_buf(),
+            expected: dacl_fingerprint(object.current()),
+            actual: dacl_fingerprint(&current),
+        }
+        .into());
+    };
+    state.resolve_inherited_acl_release(&identity, recovery)?;
+    Ok(())
+}
+
 fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
     let mut objects = state.managed_acl_objects().to_vec();
     while !objects.is_empty() {
@@ -1952,7 +2048,26 @@ fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), Fi
         let mut blockers = Vec::new();
         let mut restored = false;
         for object in objects {
-            match restore_managed_acl(state, &object)? {
+            let outcome = if let Some(parent) = object.restore_parent() {
+                if state
+                    .managed_acl_objects()
+                    .iter()
+                    .any(|candidate| candidate.identity() == parent.identity())
+                {
+                    AclRestoreOutcome::Deferred {
+                        blocker: AclRestoreBlocker {
+                            path: object.path().to_path_buf(),
+                            expected: format!("restored parent {:?}", parent.path()),
+                            actual: "parent ACL record remains managed".to_string(),
+                        },
+                    }
+                } else {
+                    restore_inherited_managed_acl(state, &object)?
+                }
+            } else {
+                restore_managed_acl(state, &object)?
+            };
+            match outcome {
                 AclRestoreOutcome::Restored => restored = true,
                 AclRestoreOutcome::Deferred { blocker } => {
                     deferred.push(object);
@@ -1966,6 +2081,118 @@ fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), Fi
         objects = deferred;
     }
     Ok(())
+}
+
+fn restore_inherited_managed_acl(
+    state: &mut CapabilityStateSession<'_>,
+    object: &ManagedAclObject,
+) -> Result<AclRestoreOutcome, FilesystemAclError> {
+    let parent = object
+        .restore_parent()
+        .ok_or(CapabilityStateError::InvalidInheritedAclDependency)?;
+    let path = ValidatedPath::open_for_acl(object.path())?;
+    let identity = persisted_identity(&path);
+    if &identity != object.identity() {
+        return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+            path: object.path().to_path_buf(),
+        }
+        .into());
+    }
+    let current = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+    if &current != object.current() {
+        return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+            path: object.path().to_path_buf(),
+            expected: dacl_fingerprint(object.current()),
+            actual: dacl_fingerprint(&current),
+        }
+        .into());
+    }
+    state.begin_inherited_acl_release(object.path(), &identity)?;
+    if let Err(error) = apply_persisted_dacl(&path, object.original()) {
+        return Err(rollback_inherited_acl_release(
+            state, &path, &identity, object, error,
+        ));
+    }
+    match inherited_acl_release_is_verified(&path, parent) {
+        Ok(true) => {
+            state
+                .resolve_inherited_acl_release(&identity, InheritedAclReleaseRecovery::Released)?;
+            Ok(AclRestoreOutcome::Restored)
+        }
+        Ok(false) => {
+            let actual = SecurityDescriptor::read(&path)?.snapshot(&path)?;
+            let blocker = AclRestoreBlocker {
+                path: object.path().to_path_buf(),
+                expected: format!("inherited descriptor from {:?}", parent.path()),
+                actual: dacl_fingerprint(&actual),
+            };
+            restore_inherited_acl_current(state, &path, &identity, object)?;
+            Ok(AclRestoreOutcome::Deferred { blocker })
+        }
+        Err(error) => Err(rollback_inherited_acl_release(
+            state, &path, &identity, object, error,
+        )),
+    }
+}
+
+fn inherited_acl_release_is_verified(
+    path: &ValidatedPath,
+    parent: &ManagedAclParent,
+) -> Result<bool, FilesystemAclError> {
+    let parent_path = ValidatedPath::open_for_acl(parent.path())?;
+    if &persisted_identity(&parent_path) != parent.identity() {
+        return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch {
+            path: parent.path().to_path_buf(),
+        }
+        .into());
+    }
+    let parent_current = SecurityDescriptor::read(&parent_path)?.snapshot(&parent_path)?;
+    if &parent_current != parent.release_descriptor() {
+        return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+            path: parent.path().to_path_buf(),
+            expected: dacl_fingerprint(parent.release_descriptor()),
+            actual: dacl_fingerprint(&parent_current),
+        }
+        .into());
+    }
+    let descriptor = SecurityDescriptor::read(path)?;
+    if descriptor.snapshot(path)?.is_protected() {
+        return Ok(false);
+    }
+    dacl_is_strictly_inherited(path, descriptor.dacl)
+}
+
+fn restore_inherited_acl_current(
+    state: &mut CapabilityStateSession<'_>,
+    path: &ValidatedPath,
+    identity: &PersistedFileIdentity,
+    object: &ManagedAclObject,
+) -> Result<(), FilesystemAclError> {
+    apply_persisted_dacl(path, object.current())?;
+    let restored = SecurityDescriptor::read(path)?.snapshot(path)?;
+    if &restored != object.current() {
+        return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+            path: object.path().to_path_buf(),
+        });
+    }
+    state.resolve_inherited_acl_release(identity, InheritedAclReleaseRecovery::Current)?;
+    Ok(())
+}
+
+fn rollback_inherited_acl_release(
+    state: &mut CapabilityStateSession<'_>,
+    path: &ValidatedPath,
+    identity: &PersistedFileIdentity,
+    object: &ManagedAclObject,
+    original: FilesystemAclError,
+) -> FilesystemAclError {
+    match restore_inherited_acl_current(state, path, identity, object) {
+        Ok(()) => original,
+        Err(recovery) => FilesystemAclError::JournalRecovery {
+            original: Box::new(original),
+            recovery: Box::new(recovery),
+        },
+    }
 }
 
 fn restore_managed_acl(
@@ -2670,6 +2897,37 @@ fn explicit_entry(
             ptstrName: sid.0.cast(),
         },
     }
+}
+
+#[allow(unsafe_code)]
+fn dacl_is_strictly_inherited(
+    path: &ValidatedPath,
+    dacl: *mut ACL,
+) -> Result<bool, FilesystemAclError> {
+    let information = acl_information(path, dacl)?;
+    if information.AceCount == 0 {
+        return Ok(false);
+    }
+    for index in 0..information.AceCount {
+        let raw = ace(path, dacl, index)?;
+        let header = unsafe { &*raw.cast::<ACE_HEADER>() };
+        if (header.AceSize as usize) < size_of::<ACE_HEADER>() {
+            return Err(FilesystemAclError::MalformedAce {
+                path: path.final_path().to_path_buf(),
+                index,
+            });
+        }
+        if header.AceFlags & (INHERITED_ACE as u8) == 0
+            || header.AceFlags & (INHERIT_ONLY_ACE as u8) != 0
+            || !matches!(
+                header.AceType,
+                ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE
+            )
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 #[allow(unsafe_code)]

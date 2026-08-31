@@ -197,15 +197,22 @@ the object still matches `before`, so the prior record remains, or it matches
 state is typed drift and fails closed; recovery never guesses which descriptor
 to restore and never overwrites an unrelated owner change.
 
-Cleanup resolves ACL restoration in dependency order. A child created while an
-ancestor boundary is active must be restored before that ancestor, because its
-recorded original descriptor legitimately inherits the active ancestor's ACEs;
-a child that predates its managed ancestor must instead be restored after it.
-Cageforge therefore attempts each exact handle-pinned restore under the journal,
-rolls an inheritance-dependent third state back to its verified current
-descriptor, and retries after other objects have converged. A complete pass
-that restores no object is a typed fail-closed dependency error. No third
-descriptor is accepted, persisted, or used as a cleanup baseline.
+Cleanup resolves ACL restoration in dependency order. A child that predates its
+managed ancestor is restored before that ancestor through the ordinary exact
+descriptor journal. A previously unprotected child discovered while a managed
+ancestor is active is different: its recorded pre-mutation descriptor is an
+inherited view of that ancestor, so Windows legitimately recomputes it when the
+ancestor is restored. Cageforge records the exact parent path, file identity,
+and descriptor that must be present after release. It restores that parent
+first, then arms a separate write-ahead inherited-release journal for the child.
+The child is released only when its pinned identity remains unchanged, the
+parent matches that recorded release descriptor, and the child read-back is an
+unprotected DACL containing only effective inherited allow or deny ACEs. A
+crash before the release retains the child current descriptor; a crash after it
+accepts only that same verified parent-derived inherited state. Any changed
+parent identity or descriptor, explicit child ACE, malformed ACE, replacement,
+or other third state remains typed drift and blocks cleanup. A complete pass
+that restores no object is a typed fail-closed dependency error.
 
 This is an intentional strengthening over the per-root capability identity in
 the frozen implementation recorded by [the upstream baseline](../UPSTREAM.md).
@@ -551,8 +558,12 @@ All capability-state and ACL reconciliation uses the same protected
 cross-process lock. A later profile may preserve another profile's capability
 ACEs but must never revoke or rewrite them as its own. Persistent state records
 every Cageforge-created protected inheritance boundary and the descriptor it
-replaced so uninstall or a future no-longer-needed reconciliation can restore
-host inheritance only after no active profile depends on the boundary.
+replaced. For a dependent child it additionally records the verified release
+parent described above, so uninstall can restore host inheritance only after no
+active profile depends on the boundary. The additive optional dependency and
+release-journal fields decode absent in prior state records; such a legacy
+record never gains inherited-release authority and follows the ordinary
+fail-closed exact restore path.
 
 The filesystem profile digest is computed only after both mandatory lowering
 layers have been resolved, deny globs have been expanded, and every native path
