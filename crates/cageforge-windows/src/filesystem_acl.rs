@@ -643,6 +643,7 @@ impl<'plan> AclPlanBuilder<'plan> {
     }
 
     fn insert_deny(&mut self, path: &Path, entry: AclEntry) {
+        let inherited_write_sids = self.inherited_write_sids(path);
         let exclusions = self
             .write_roots
             .iter()
@@ -653,8 +654,8 @@ impl<'plan> AclPlanBuilder<'plan> {
             &mut self.denies,
             path,
             vec![entry],
-            false,
-            Vec::new(),
+            true,
+            inherited_write_sids,
             exclusions,
         );
     }
@@ -671,7 +672,7 @@ impl<'plan> AclPlanBuilder<'plan> {
             })
             .collect::<Vec<_>>();
         for (root, entries) in allow_roots {
-            let exclusions = nested_foundation_roots(&root, &self.foundation);
+            let exclusions = nested_acl_boundaries(&root, &self.foundation, &self.denies);
             for descendant in subtree_paths(&root, &exclusions)? {
                 merge_pending(
                     &mut self.continuation,
@@ -1099,12 +1100,14 @@ fn entries_for_existing_path(entries: &[AclEntry], is_directory: bool) -> Vec<Ac
         .collect()
 }
 
-fn nested_foundation_roots(
+fn nested_acl_boundaries(
     root: &Path,
     foundations: &BTreeMap<NativePathKey, PendingAclOperation>,
+    denies: &BTreeMap<NativePathKey, PendingAclOperation>,
 ) -> Vec<PathBuf> {
     foundations
         .values()
+        .chain(denies.values())
         .map(|operation| operation.path.as_path())
         .filter(|candidate| !paths_equal(candidate, root) && is_within(candidate, root))
         .map(Path::to_path_buf)
@@ -2588,7 +2591,7 @@ mod tests {
     use super::{
         AclAccessMode, AclEntry, AclInheritance, PendingAclOperation, READ_ALLOW_MASK,
         WRITE_ALLOW_MASK, entries_for_existing_path, materialization_components,
-        nested_foundation_roots, open_discovered_acl_path, subtree_paths,
+        nested_acl_boundaries, open_discovered_acl_path, subtree_paths,
     };
 
     #[test]
@@ -2666,9 +2669,10 @@ mod tests {
     }
 
     #[test]
-    fn broader_allow_scan_excludes_more_specific_foundation_root() {
+    fn broader_allow_scan_excludes_more_specific_acl_boundaries() {
         let workspace = PathBuf::from(r"C:\workspace");
         let minimal = workspace.join("runtime");
+        let protected = workspace.join("protected");
         let unrelated = PathBuf::from(r"C:\other");
         let mut foundations = BTreeMap::new();
         for path in [&workspace, &minimal, &unrelated] {
@@ -2677,10 +2681,15 @@ mod tests {
                 PendingAclOperation::new(path.clone()),
             );
         }
+        let mut denies = BTreeMap::new();
+        denies.insert(
+            NativePathKey::new(&protected),
+            PendingAclOperation::new(protected.clone()),
+        );
 
-        let exclusions = nested_foundation_roots(&workspace, &foundations);
+        let exclusions = nested_acl_boundaries(&workspace, &foundations, &denies);
 
-        assert_eq!(exclusions, vec![minimal]);
+        assert_eq!(exclusions, vec![minimal, protected]);
     }
 
     #[test]
