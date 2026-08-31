@@ -628,6 +628,8 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         access_stdout.contains("denied"),
         "denied-read fixture did not report its typed access result: {access_stdout}"
     );
+    let workspace_acl_before_descendant = acl_diagnostic(workspace.path());
+    let access_progress_acl_before_descendant = acl_diagnostic(&access_progress);
 
     let descendant_ready = workspace.path().join("descendant-ready.txt");
     let descendant_marker = workspace.path().join("descendant-escaped.txt");
@@ -735,7 +737,11 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         Err(WindowsBackendError::ProcessTimedOut)
     ));
 
-    setup.uninstall().expect("explicit setup cleanup");
+    setup.uninstall().unwrap_or_else(|error| {
+        panic!(
+            "explicit setup cleanup: {error}; workspace ACL before descendant: {workspace_acl_before_descendant}; denied-read progress ACL before descendant: {access_progress_acl_before_descendant}"
+        )
+    });
     cleanup.armed = false;
     assert!(
         !protected.exists(),
