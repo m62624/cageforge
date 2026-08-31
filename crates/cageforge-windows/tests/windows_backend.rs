@@ -6,10 +6,11 @@ use std::ffi::c_void;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::mem::offset_of;
-use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -237,33 +238,96 @@ fn start_http_server_at(address: SocketAddr) -> (SocketAddr, thread::JoinHandle<
                 Err(error) => return Err(error),
             }
         };
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        let mut request = Vec::new();
-        let mut chunk = [0; 1024];
-        loop {
-            let read = stream.read(&mut chunk)?;
-            if read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "sandboxed client closed before a complete HTTP request",
-                ));
-            }
-            request.extend_from_slice(&chunk[..read]);
-            if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
-            if request.len() > 16 * 1024 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "sandboxed HTTP request exceeded the fixture header limit",
-                ));
-            }
-        }
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")?;
-        stream.shutdown(Shutdown::Write)
+        serve_http_connection(&mut stream)
     });
     (address, server)
+}
+
+fn start_counting_http_server(
+    address: SocketAddr,
+    complete: mpsc::Receiver<()>,
+) -> (SocketAddr, thread::JoinHandle<io::Result<usize>>) {
+    let listener = TcpListener::bind(address).expect("counting HTTP listener");
+    let address = listener.local_addr().expect("counting HTTP server address");
+    let server = thread::spawn(move || {
+        listener.set_nonblocking(true)?;
+        let deadline = Instant::now() + FIXTURE_START_DEADLINE;
+        let mut connections = 0;
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    serve_http_connection(&mut stream)?;
+                    connections += 1;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    match complete.try_recv() {
+                        Err(mpsc::TryRecvError::Disconnected) if connections > 0 => loop {
+                            match listener.accept() {
+                                Ok((mut stream, _)) => {
+                                    serve_http_connection(&mut stream)?;
+                                    connections += 1;
+                                }
+                                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                                    return Ok(connections);
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        },
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                "parallel allowed sandbox did not reach the HTTP fixture",
+                            ));
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {}
+                        Ok(()) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "parallel HTTP fixture received an unexpected completion signal",
+                            ));
+                        }
+                    }
+                    if connections == 0 && Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "parallel allowed sandbox did not reach the HTTP fixture",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    });
+    (address, server)
+}
+
+fn serve_http_connection(stream: &mut TcpStream) -> io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let mut request = Vec::new();
+    let mut chunk = [0; 1024];
+    loop {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "sandboxed client closed before a complete HTTP request",
+            ));
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if request.len() > 16 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "sandboxed HTTP request exceeded the fixture header limit",
+            ));
+        }
+    }
+    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")?;
+    stream.shutdown(Shutdown::Write)
 }
 
 fn assert_no_connection(listener: &TcpListener, boundary: &str) {
@@ -1152,10 +1216,11 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
             .expect("bounded parallel probe timeout"),
     )
     .expect("second backend from the same verified setup");
-    let (first_parallel_target, first_parallel_server) =
-        start_http_server_at(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
-    let (second_parallel_target, second_parallel_server) =
-        start_http_server_at(SocketAddr::from((Ipv6Addr::LOCALHOST, 0)));
+    let (parallel_fixture_complete, parallel_fixture_finished) = mpsc::channel();
+    let (first_parallel_target, first_parallel_server) = start_counting_http_server(
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        parallel_fixture_finished,
+    );
     let first_parallel_policy = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
         .with_unix_socket_mode(UnixSocketMode::Enabled)
@@ -1163,9 +1228,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         .expect("first parallel loopback policy");
     let second_parallel_policy = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
-        .with_unix_socket_mode(UnixSocketMode::Enabled)
-        .with_domain("::1", DomainAccess::Allow)
-        .expect("second parallel loopback policy");
+        .with_unix_socket_mode(UnixSocketMode::Enabled);
     let mut first_parallel_child = spawn_network_probe(
         &backend,
         workspace.path(),
@@ -1179,8 +1242,8 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         parallel_workspace.path(),
         &parallel_fixture,
         second_parallel_policy,
-        "http-proxy",
-        second_parallel_target,
+        "http-proxy-denied",
+        first_parallel_target,
     );
     assert_ne!(
         first_parallel_child.id(),
@@ -1191,20 +1254,16 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         network_probe_result(&mut first_parallel_child, "parallel first HTTP proxy");
     let second_parallel_result =
         network_probe_result(&mut second_parallel_child, "parallel second HTTP proxy");
+    drop(parallel_fixture_complete);
     let first_parallel_server_result = first_parallel_server
         .join()
         .map_err(|_| "first parallel HTTP fixture thread panicked".to_string())
         .and_then(|result| result.map_err(|error| error.to_string()));
-    let second_parallel_server_result = second_parallel_server
-        .join()
-        .map_err(|_| "second parallel HTTP fixture thread panicked".to_string())
-        .and_then(|result| result.map_err(|error| error.to_string()));
     assert!(
         first_parallel_result.is_ok()
             && second_parallel_result.is_ok()
-            && first_parallel_server_result.is_ok()
-            && second_parallel_server_result.is_ok(),
-        "parallel proxy route results: first child={first_parallel_result:?}; second child={second_parallel_result:?}; first target {first_parallel_target}={first_parallel_server_result:?}; second target {second_parallel_target}={second_parallel_server_result:?}"
+            && first_parallel_server_result == Ok(1),
+        "parallel proxy route results: first child={first_parallel_result:?}; second child={second_parallel_result:?}; permitted target {first_parallel_target} connections={first_parallel_server_result:?}"
     );
     drop(first_parallel_child);
     drop(second_parallel_child);
