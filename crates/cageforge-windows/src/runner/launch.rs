@@ -4,7 +4,6 @@
 
 use std::ffi::c_void;
 use std::fs::File;
-use std::mem::{offset_of, size_of};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::sync::Arc;
@@ -12,38 +11,37 @@ use std::time::Duration;
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{
-    DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree, WAIT_FAILED,
-    WAIT_OBJECT_0, WAIT_TIMEOUT,
+    DuplicateHandle, GetLastError, HLOCAL, LocalFree, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
     SE_KERNEL_OBJECT, SetSecurityInfo,
 };
 use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-    GetTokenInformation, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    TOKEN_QUERY,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithLogonW,
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
-    PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread, STARTUPINFOW,
-    THREAD_ALL_ACCESS, TerminateProcess, WaitForSingleObject,
+    PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread, THREAD_ALL_ACCESS, TerminateProcess,
+    WaitForSingleObject,
 };
 
+use crate::runner::bootstrap::{BootstrapError, BootstrapResult};
 use crate::runner::parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, ParentJobError};
 use crate::runner::pipe::{
     ParentPipeDirection, ParentRunnerPipe, ParentRunnerPipeError, RunnerPipeNames,
 };
 use crate::runner::protocol::{
-    RunnerBootstrapStage, RunnerMessage, WindowsRunnerProtocolError, write_frame,
+    RunnerAccount, RunnerBootstrapStage, RunnerMessage, WindowsRunnerProtocolError, write_frame,
 };
+use crate::setup::WindowsSetupDetails;
 use crate::setup::verification::PinnedRunnerResources;
-use crate::setup::verification::credentials::AccountCredential;
+use crate::setup::verification::open_verified_credentials;
 
 const RUNNER_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 
 pub(crate) struct RunnerLaunch {
     request: Option<File>,
@@ -63,8 +61,6 @@ struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 struct LocalWideString(*mut u16);
 
-struct TokenBuffer(Vec<u8>);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RunnerBootstrapStatus {
     pub(crate) stage: RunnerBootstrapStage,
@@ -74,6 +70,8 @@ pub(crate) struct RunnerBootstrapStatus {
 #[derive(Debug, Error)]
 pub(crate) enum RunnerLaunchError {
     #[error(transparent)]
+    Bootstrap(#[from] BootstrapError),
+    #[error(transparent)]
     Job(#[from] ParentJobError),
     #[error(transparent)]
     Pipe(#[from] ParentRunnerPipeError),
@@ -81,28 +79,6 @@ pub(crate) enum RunnerLaunchError {
     Boundary(#[from] ParentBoundaryError),
     #[error(transparent)]
     RunnerResource(#[from] crate::error::WindowsSetupVerificationError),
-    #[error("command-runner path is not valid Unicode")]
-    RunnerPathEncoding,
-    #[error("command-runner working directory is not valid Unicode")]
-    WorkingDirectoryEncoding,
-    #[error(
-        "CreateProcessWithLogonW failed for the {account} sandbox account: Windows error {code}"
-    )]
-    Logon { account: String, code: u32 },
-    #[error("Windows returned invalid runner process information")]
-    InvalidProcessInformation,
-    #[error("failed to open the runner process token: Windows error {code}")]
-    RunnerTokenOpen { code: u32 },
-    #[error("failed to read runner token groups: Windows error {code}")]
-    TokenGroupsRead { code: u32 },
-    #[error("Windows returned a truncated runner token group record")]
-    TokenGroupsTruncated,
-    #[error("runner token has no unique logon SID")]
-    MissingLogonSid,
-    #[error("runner token has more than one logon SID")]
-    DuplicateLogonSid,
-    #[error("failed to format the runner logon SID: Windows error {code}")]
-    LogonSidFormat { code: u32 },
     #[error("failed to parse the protected runner process descriptor: Windows error {code}")]
     ProcessDescriptorParse { code: u32 },
     #[error("failed to inspect the protected runner process descriptor: Windows error {code}")]
@@ -209,42 +185,58 @@ impl Drop for LocalWideString {
 impl RunnerLaunch {
     pub(crate) fn start(
         runner_resources: &PinnedRunnerResources,
+        setup: &WindowsSetupDetails,
         working_directory: &Path,
-        credential: &AccountCredential,
-        owner_sid: &str,
-        group_sid: &str,
+        account: RunnerAccount,
     ) -> Result<Self, RunnerLaunchError> {
-        runner_resources.verify_launch_security(owner_sid, group_sid)?;
+        runner_resources.verify_launch_security(setup.owner_sid(), setup.accounts().group_sid())?;
         let names = RunnerPipeNames::generate()?;
         let job = ParentJob::new()?;
-        let mut runner = SuspendedRunner::start(
+        let credentials = open_verified_credentials(setup)?;
+        let report_name = RunnerPipeNames::bootstrap_report()?;
+        let report = ParentRunnerPipe::create(
+            &report_name,
+            setup.owner_sid(),
+            setup.owner_sid(),
+            ParentPipeDirection::Response,
+        )?;
+        let account_name = match account {
+            RunnerAccount::Offline => setup.accounts().offline_name(),
+            RunnerAccount::Online => setup.accounts().online_name(),
+        };
+        let bootstrap = BootstrapResult::start(
             runner_resources.command_runner_path(),
             working_directory,
-            credential,
+            &credentials,
+            setup.credential_sha256(),
+            account_name,
             &names,
+            &report_name,
+            report,
         )?;
-        let logon_sid = runner.logon_sid()?;
+        let logon_sid = bootstrap.logon_sid.clone();
+        let mut runner = SuspendedRunner::from_bootstrap(bootstrap);
         let request = ParentRunnerPipe::create(
             &names.request,
-            owner_sid,
+            setup.owner_sid(),
             &logon_sid,
             ParentPipeDirection::Request,
         )?;
         let response = ParentRunnerPipe::create(
             &names.response,
-            owner_sid,
+            setup.owner_sid(),
             &logon_sid,
             ParentPipeDirection::Response,
         )?;
         protect_kernel_object(
             runner.process.as_raw_handle() as _,
-            owner_sid,
+            setup.owner_sid(),
             "runner process",
             PROCESS_ALL_ACCESS,
         )?;
         protect_kernel_object(
             runner.thread.as_raw_handle() as _,
-            owner_sid,
+            setup.owner_sid(),
             "runner primary thread",
             THREAD_ALL_ACCESS,
         )?;
@@ -293,96 +285,13 @@ impl Drop for RunnerLaunch {
 }
 
 impl SuspendedRunner {
-    #[allow(unsafe_code)]
-    fn start(
-        runner_path: &Path,
-        working_directory: &Path,
-        credential: &AccountCredential,
-        names: &RunnerPipeNames,
-    ) -> Result<Self, RunnerLaunchError> {
-        let runner = runner_path
-            .to_str()
-            .ok_or(RunnerLaunchError::RunnerPathEncoding)?;
-        let cwd = working_directory
-            .to_str()
-            .ok_or(RunnerLaunchError::WorkingDirectoryEncoding)?;
-        let command_line = [runner, &names.request, &names.response]
-            .into_iter()
-            .map(crate::win::quote_argument)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let application = crate::win::to_wide(runner);
-        let mut command_line = crate::win::to_wide(&command_line);
-        let cwd = crate::win::to_wide(cwd);
-        let username = crate::win::to_wide(credential.name());
-        let domain = crate::win::to_wide(".");
-        let startup = STARTUPINFOW {
-            cb: size_of::<STARTUPINFOW>() as u32,
-            ..Default::default()
-        };
-        let mut process = PROCESS_INFORMATION::default();
-        if unsafe {
-            CreateProcessWithLogonW(
-                username.as_ptr(),
-                domain.as_ptr(),
-                credential.password_wide().as_ptr(),
-                0,
-                application.as_ptr(),
-                command_line.as_mut_ptr(),
-                CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
-                std::ptr::null(),
-                cwd.as_ptr(),
-                &startup,
-                &mut process,
-            )
-        } == 0
-        {
-            return Err(RunnerLaunchError::Logon {
-                account: credential.name().to_string(),
-                code: unsafe { GetLastError() },
-            });
-        }
-        if process.hProcess.is_null() || process.hThread.is_null() || process.dwProcessId == 0 {
-            if !process.hProcess.is_null() {
-                unsafe { windows_sys::Win32::Foundation::CloseHandle(process.hProcess) };
-            }
-            if !process.hThread.is_null() {
-                unsafe { windows_sys::Win32::Foundation::CloseHandle(process.hThread) };
-            }
-            return Err(RunnerLaunchError::InvalidProcessInformation);
-        }
-        Ok(Self {
-            process: unsafe { OwnedHandle::from_raw_handle(process.hProcess as RawHandle) },
-            thread: unsafe { OwnedHandle::from_raw_handle(process.hThread as RawHandle) },
-            process_id: process.dwProcessId,
+    fn from_bootstrap(bootstrap: BootstrapResult) -> Self {
+        Self {
+            process: bootstrap.process,
+            thread: bootstrap.thread,
+            process_id: bootstrap.process_id,
             released: false,
-        })
-    }
-
-    #[allow(unsafe_code)]
-    fn logon_sid(&self) -> Result<String, RunnerLaunchError> {
-        let mut token = std::ptr::null_mut();
-        if unsafe { OpenProcessToken(self.process.as_raw_handle() as _, TOKEN_QUERY, &mut token) }
-            == 0
-        {
-            return Err(RunnerLaunchError::RunnerTokenOpen {
-                code: unsafe { GetLastError() },
-            });
         }
-        let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
-        let buffer = token_groups(token.as_raw_handle() as _)?;
-        let groups = group_entries(&buffer)?;
-        let mut logon = groups
-            .into_iter()
-            .filter(|entry| entry.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID)
-            .map(|entry| sid_string(entry.Sid));
-        let Some(sid) = logon.next() else {
-            return Err(RunnerLaunchError::MissingLogonSid);
-        };
-        if logon.next().is_some() {
-            return Err(RunnerLaunchError::DuplicateLogonSid);
-        }
-        sid
     }
 
     #[allow(unsafe_code)]
@@ -562,63 +471,6 @@ pub(crate) fn decode_runner_bootstrap_status(exit_code: u32) -> Option<RunnerBoo
         stage,
         native_code: native_code.map(u32::from),
     })
-}
-
-#[allow(unsafe_code)]
-fn token_groups(token: *mut c_void) -> Result<TokenBuffer, RunnerLaunchError> {
-    let mut length = 0;
-    let first =
-        unsafe { GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut length) };
-    if first != 0 || unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER || length == 0 {
-        return Err(RunnerLaunchError::TokenGroupsRead {
-            code: unsafe { GetLastError() },
-        });
-    }
-    let mut buffer = vec![0u8; length as usize];
-    if unsafe {
-        GetTokenInformation(
-            token,
-            TokenGroups,
-            buffer.as_mut_ptr().cast(),
-            length,
-            &mut length,
-        )
-    } == 0
-    {
-        return Err(RunnerLaunchError::TokenGroupsRead {
-            code: unsafe { GetLastError() },
-        });
-    }
-    buffer.truncate(length as usize);
-    Ok(TokenBuffer(buffer))
-}
-
-#[allow(unsafe_code)]
-fn group_entries(buffer: &TokenBuffer) -> Result<Vec<SID_AND_ATTRIBUTES>, RunnerLaunchError> {
-    let offset = offset_of!(TOKEN_GROUPS, Groups);
-    if buffer.0.len() < offset {
-        return Err(RunnerLaunchError::TokenGroupsTruncated);
-    }
-    let count = unsafe { std::ptr::read_unaligned(buffer.0.as_ptr().cast::<u32>()) } as usize;
-    if count > (buffer.0.len() - offset) / size_of::<SID_AND_ATTRIBUTES>() {
-        return Err(RunnerLaunchError::TokenGroupsTruncated);
-    }
-    let entries = unsafe { buffer.0.as_ptr().add(offset).cast::<SID_AND_ATTRIBUTES>() };
-    Ok((0..count)
-        .map(|index| unsafe { std::ptr::read_unaligned(entries.add(index)) })
-        .collect())
-}
-
-#[allow(unsafe_code)]
-fn sid_string(sid: *mut c_void) -> Result<String, RunnerLaunchError> {
-    let mut value = std::ptr::null_mut();
-    if unsafe { ConvertSidToStringSidW(sid, &mut value) } == 0 {
-        return Err(RunnerLaunchError::LogonSidFormat {
-            code: unsafe { GetLastError() },
-        });
-    }
-    let value = LocalWideString(value);
-    Ok(wide_string(value.0))
 }
 
 #[allow(unsafe_code)]

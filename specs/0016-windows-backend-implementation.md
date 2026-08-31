@@ -316,19 +316,35 @@ prohibit cross-job and host-desktop interaction. The desktop, token, process,
 thread, pipe, and job handles use owned RAII wrappers and are never inherited
 unless explicitly present in the process handle list.
 
-The parent launches the command runner with `CreateProcessWithLogonW`, so an
-ordinary Cageforge application needs no per-launch Windows privilege or
-post-install account-right configuration. Setup denies remote-interactive
-logon, but does not deny local interactive logon: that Windows API requires an
-interactive logon session, and substituting a batch-token API would require a
-host `SeImpersonatePrivilege` or a privileged runtime service. This is an
-intentional usability boundary, not a bypass of process isolation. The runner
-receives a versioned authenticated request over one random private named-pipe
-pair. Both directions are identity-bound: the parent verifies that both pipe
-clients have the exact PID returned for the launched runner, while the runner
-verifies that both pipe servers have the same PID and that the server process
-`TokenUser` is the setup owner recorded in a protected runner manifest. After
-both connections complete, the parent duplicates a
+An ordinary Cageforge application needs no per-launch Windows privilege or
+post-install account-right configuration. A clean current-user bootstrap is
+created with `CreateProcessW` and `STARTUPINFOEXW`'s explicit inherited-HANDLE
+list. That list contains exactly two temporary duplicates: a
+`PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION` handle to the parent,
+and the already verified, no-write/no-delete-share credential-record handle.
+The bootstrap clears `HANDLE_FLAG_INHERIT` on both before it calls
+`CreateProcessWithLogonW`; therefore that API cannot carry an arbitrary
+inheritable application HANDLE into the dedicated-account runner. The
+bootstrap checks the pinned credential digest, decrypts its selected account
+password only in zeroizing memory, creates the real runner suspended, reads
+its unique logon SID, and duplicates only the suspended process and thread
+handles back into the authenticated parent process. It sends that result or a
+stage/code/native-error `failed` result through its launch-unique report pipe;
+the report pipe verifies the bootstrap client PID, while the bootstrap verifies
+the report server PID through its explicit parent-process handle. `stderr` is
+only a direct-invocation fallback after that typed channel cannot be opened.
+Setup denies remote-interactive logon, but does not deny local interactive
+logon: `CreateProcessWithLogonW` requires an interactive logon session, and
+substituting a batch-token API would require a host `SeImpersonatePrivilege` or
+a privileged runtime service. This is an intentional usability boundary, not a
+bypass of process isolation.
+
+The runner receives a versioned authenticated request over one random private
+named-pipe pair. Both directions are identity-bound: the parent verifies that
+both pipe clients have the exact PID returned by the clean bootstrap, while the
+runner verifies that both pipe servers have the same PID and that the server
+process `TokenUser` is the setup owner recorded in a protected runner manifest.
+After both connections complete, the parent duplicates a
 `PROCESS_QUERY_LIMITED_INFORMATION` handle for itself and a `TOKEN_QUERY`
 handle for its token into the runner, then writes both numeric values in one
 fixed pre-request bootstrap frame. The runner requires the process handle's
@@ -348,10 +364,11 @@ the real setup owner. Direct invocation therefore cannot acquire the backend's
 prepared state.
 
 The runner is initially created with `CREATE_SUSPENDED`. Before its first
-instruction executes, the parent reads the new token's unique logon SID, creates
-both named-pipe DACLs for exactly that logon SID rather than the shared account
-SID, and replaces the runner process and primary-thread DACLs with protected
-owner/Admin/SYSTEM descriptors. The parent creates each pipe with
+instruction executes, the clean bootstrap reads the new token's unique logon
+SID and transfers the suspended process/thread authority only to the parent.
+The parent then creates both named-pipe DACLs for exactly that logon SID rather
+than the shared account SID, and replaces the runner process and primary-thread
+DACLs with protected owner/Admin/SYSTEM descriptors. The parent creates each pipe with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, rejects remote clients, and grants the runner
 the file-generic read mask on the request pipe and the file-generic write mask
 plus `FILE_READ_ATTRIBUTES`, but minus `FILE_APPEND_DATA`, on the response
@@ -968,8 +985,10 @@ identity.
 `WindowsBackend` independently reopens and verifies the installed runner and
 manifest and retains both no-write/no-delete-share handles for its complete
 lifetime. Native runner launch accepts that pinned resource object rather than
-an unbound path, rechecks both descriptors immediately before process creation,
-and passes the still-pinned executable name to `CreateProcessWithLogonW`.
+an unbound path, rechecks both descriptors immediately before creating the
+clean bootstrap, and gives that bootstrap only the still-pinned executable
+name. The bootstrap resolves its own executable only after it has inherited
+that exact execution identity and passes the name to `CreateProcessWithLogonW`.
 Consequently setup reconciliation or another owner process cannot write,
 rename, or replace either launch identity while a backend can still spawn from
 it; a new backend is required after an explicit setup update.

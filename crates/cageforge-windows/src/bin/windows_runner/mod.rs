@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs::File;
 use std::process::ExitCode;
 
@@ -9,6 +10,7 @@ use crate::runner_protocol::{
     WindowsRunnerFailureStage, WindowsRunnerProtocolError, read_frame, write_frame,
 };
 
+mod bootstrap;
 mod desktop;
 mod identity;
 mod process;
@@ -26,12 +28,10 @@ struct AuthenticatedTransport {
 }
 
 impl RunnerArguments {
-    fn parse() -> Result<Self, identity::RunnerAuthenticationError> {
-        let mut arguments = std::env::args_os();
-        let _program = arguments.next();
-        let request_pipe = arguments
-            .next()
-            .ok_or(identity::RunnerAuthenticationError::MissingPipeArguments)?;
+    fn parse(
+        request_pipe: OsString,
+        mut arguments: impl Iterator<Item = OsString>,
+    ) -> Result<Self, identity::RunnerAuthenticationError> {
         let response_pipe = arguments
             .next()
             .ok_or(identity::RunnerAuthenticationError::MissingPipeArguments)?;
@@ -92,7 +92,17 @@ impl AuthenticatedTransport {
 }
 
 pub(super) fn run() -> ExitCode {
-    let arguments = match RunnerArguments::parse() {
+    let mut raw_arguments = std::env::args_os();
+    let _program = raw_arguments.next();
+    let Some(first) = raw_arguments.next() else {
+        let error = identity::RunnerAuthenticationError::MissingPipeArguments;
+        eprintln!("cageforge-windows-command-runner: {error}");
+        return ExitCode::from(RunnerBootstrapStage::Arguments as u8);
+    };
+    if first == "--cageforge-bootstrap" {
+        return bootstrap::run(raw_arguments);
+    }
+    let arguments = match RunnerArguments::parse(first, raw_arguments) {
         Ok(arguments) => arguments,
         Err(error) => {
             eprintln!("cageforge-windows-command-runner: {error}");

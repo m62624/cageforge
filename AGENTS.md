@@ -151,27 +151,14 @@ These rules are mandatory:
     and other supporting logic by responsibility in a private module or an
     equivalent dedicated section when that makes the structure clearer. This
     organization must not widen, remove, or otherwise alter the public API.
-18. Treat `crates/cageforge-bwrap/vendor/bubblewrap/` C sources and headers as
-    an immutable third-party zone. Do not refactor, reformat, patch, or
-    otherwise modify those C files as part of a Rust refactor. They are kept as
-    upstream sources solely to compile the original Bubblewrap binary; only
-    the surrounding Cageforge build integration may be changed, subject to the
-    separate provenance and licensing rules.
-19. Treat the elevated Windows sandbox as one indivisible native security
-    boundary. Do not add or silently select the weaker current-user restricted
-    token fallback. Restricted launches must use the provisioned offline or
-    online sandbox identity, a request-specific restricted token, atomic Job
-    Object assignment with kill-on-close and no breakaway, a private desktop,
-    and an explicit inherited-handle list. Offline networking requires verified
-    firewall and WFP state; WFP failure is fatal. Proxy-routed launches must add
-    one random route SID to `TokenRestrictedSids` without adding it to the
-    token's default DACL. Windows ingress must attribute the accepted reversed
-    TCP four-tuple to one PID, inspect that process token, and select exactly one
-    registered route SID before entering the authenticated Cageforge gateway.
-    Missing, duplicate, stale, or unattributable routes fail closed. Keep these
-    invariants, setup read-back, helper authentication, and cleanup tests in
-    sync with `specs/0016-windows-backend-implementation.md` whenever the
-    Windows backend changes.
+18. A helper, runner, elevated process, or other binary that participates in a
+    library security boundary must exchange operational results through a
+    bounded, versioned, typed transport. The parent must convert every expected
+    helper failure into a typed library error; it must never parse `stdout` or
+    `stderr` as a protocol. A binary may render a non-authoritative diagnostic
+    to `stderr` only after it has attempted its structured failure report, or
+    when it cannot establish that authenticated transport at all. Such text is
+    for a direct human invocation and is never evidence for the library.
 
 ## Specification ordering
 

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const SETUP_STATE_VERSION: u32 = 8;
+pub(crate) const SETUP_STATE_VERSION: u32 = 9;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SetupMarker {

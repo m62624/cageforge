@@ -168,6 +168,16 @@ impl RunnerPipeNames {
             response: format!("{base}-response"),
         })
     }
+
+    pub(crate) fn bootstrap_report() -> Result<String, ParentRunnerPipeError> {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).map_err(|source| ParentRunnerPipeError::Random { source })?;
+        let nonce = random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(format!(r"\\.\pipe\Cageforge-bootstrap-{nonce}-report"))
+    }
 }
 
 impl ParentRunnerPipe {

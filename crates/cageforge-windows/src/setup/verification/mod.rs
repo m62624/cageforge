@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -146,12 +146,19 @@ fn verify_capability_state(
         )
 }
 
-pub(crate) fn read_credentials(
+pub(crate) fn open_verified_credentials(
     details: &WindowsSetupDetails,
-) -> Result<credentials::SandboxCredentials, WindowsSetupVerificationError> {
+) -> Result<fs::File, WindowsSetupVerificationError> {
     let path = details.state_directory().join("credentials.json.dpapi");
     let mut file = paths::verify_protected_dacl(&path, details.owner_sid(), false)?;
-    credentials::read(details, &path, &mut file)
+    credentials::verify(details, &path, &mut file)?;
+    file.seek(SeekFrom::Start(0)).map_err(|source| {
+        WindowsSetupVerificationError::CredentialRead {
+            path: path.clone(),
+            source,
+        }
+    })?;
+    Ok(file)
 }
 
 fn verify_ports(ports: &[u16]) -> Result<(), WindowsSetupVerificationError> {

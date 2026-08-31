@@ -31,14 +31,12 @@ use crate::runner::launch::RunnerLaunch;
 use crate::runner::protocol::RunnerAccount;
 use crate::runner::session::{PendingRunnerSpawnRequest, RunnerSession};
 use crate::setup::verification::PinnedRunnerResources;
-use crate::setup::verification::credentials::{AccountCredential, SandboxCredentials};
 use crate::setup::{WindowsSetup, WindowsSetupDetails};
 
 /// A Windows-native Cageforge backend bound to one verified elevated setup.
 pub struct WindowsBackend {
     config: WindowsBackendConfig,
     setup: WindowsSetupDetails,
-    credentials: SandboxCredentials,
     capability_state: CapabilityStateStore,
     runner_resources: PinnedRunnerResources,
     identity: BackendIdentity,
@@ -76,8 +74,6 @@ impl WindowsBackend {
     /// Constructs a backend after verifying the complete elevated setup.
     pub fn new(config: WindowsBackendConfig) -> Result<Self, WindowsBackendError> {
         let setup = WindowsSetup::new(config.setup().clone()).verify()?;
-        let credentials = crate::setup::verification::read_credentials(&setup)
-            .map_err(crate::error::WindowsSetupError::from)?;
         let capability_state =
             CapabilityStateStore::new(setup.state_directory(), setup.owner_sid());
         capability_state
@@ -88,7 +84,6 @@ impl WindowsBackend {
         Ok(Self {
             config,
             setup,
-            credentials,
             capability_state,
             runner_resources,
             identity: BackendIdentity::new(),
@@ -147,7 +142,6 @@ impl WindowsBackend {
         }
         let timeout = timeout(&prepared, self)?;
         let stdio = prepared.stdio(self)?;
-        let credential = self.credential(plan.account);
         let route_sid = network_route.as_ref().map(|route| route.sid().to_string());
         let request = PendingRunnerSpawnRequest {
             command: encode_command(command.program(), command.args())?,
@@ -162,10 +156,9 @@ impl WindowsBackend {
         };
         let launch = RunnerLaunch::start(
             &self.runner_resources,
+            &self.setup,
             prepared.working_directory(self)?,
-            credential,
-            self.setup.owner_sid(),
-            self.setup.accounts().group_sid(),
+            plan.account,
         )
         .map_err(WindowsBackendError::runner_launch)?;
         let session = RunnerSession::start(launch, request, stdio, timeout)
@@ -195,13 +188,6 @@ impl WindowsBackend {
             account,
             mode,
         })
-    }
-
-    fn credential(&self, account: RunnerAccount) -> &AccountCredential {
-        match account {
-            RunnerAccount::Offline => self.credentials.offline(),
-            RunnerAccount::Online => self.credentials.online(),
-        }
     }
 
     fn network_route(

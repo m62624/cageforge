@@ -27,6 +27,22 @@ Do not describe the backend as complete until all of the following are true:
   common Cageforge backend contract;
 - native Windows black-box tests and every crate feature combination pass.
 
+## Non-negotiable Windows boundary
+
+Treat the elevated Windows sandbox as one indivisible native security boundary.
+Do not add or silently select a weaker current-user restricted-token fallback.
+Restricted launches use a provisioned offline or online sandbox identity, a
+request-specific restricted token, atomic Job Object assignment with
+kill-on-close and no breakaway, a private desktop, and an explicit inherited
+HANDLE list. Offline networking requires verified firewall and WFP state; WFP
+failure is fatal. Proxy-routed launches add one random route SID to
+`TokenRestrictedSids` without adding it to the token default DACL. Windows
+ingress attributes the accepted reversed TCP four-tuple to one PID, inspects
+that process token, and selects exactly one registered route SID before it
+enters the authenticated Cageforge gateway. Missing, duplicate, stale, or
+unattributable routes fail closed. Keep these invariants, setup read-back,
+helper authentication, and cleanup tests synchronized with Specification 0016.
+
 ## Current continuation point
 
 The crate already contains setup state and verification, sandbox-account
@@ -151,6 +167,16 @@ Keep `WindowsBackend`, the backend-bound prepared request handoff, and
 - Return typed library errors. Printing belongs only in binaries. Avoid
   `expect` and `unwrap` outside tests; a recoverable per-launch failure must not
   panic the host application.
+- Every trusted parent/bootstrap/runner exchange uses the bounded versioned
+  `RunnerMessage` pipe transport whenever its authenticated pipe can be
+  established, and maps to a precise `WindowsBackendError`. Do not use process
+  exit status, `stdout`, or `stderr` as the normal operational error channel.
+  A fixed reserved exit status is permitted only to distinguish a failure that
+  occurred before its authenticated pipe could be established; it is not a
+  substitute for an available typed frame.
+  A binary may write a non-secret `stderr` diagnostic only after it has sent a
+  structured failure frame, or if it cannot open its authenticated named pipe;
+  the library must never consume that text as evidence.
 
 This wiring must make the existing native modules genuinely reachable and
 eliminate their `dead_code` warnings without lint suppression.

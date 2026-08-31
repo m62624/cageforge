@@ -2,6 +2,7 @@
 
 //! Authenticated command-runner resources, transport, and lifecycle.
 
+pub(crate) mod bootstrap;
 pub(crate) mod launch;
 pub(crate) mod manifest;
 pub(crate) mod parent;

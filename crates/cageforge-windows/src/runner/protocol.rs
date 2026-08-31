@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 7;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 8;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -19,6 +19,12 @@ pub(crate) struct RunnerFrame {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RunnerMessage {
+    BootstrapRunner {
+        process_id: u32,
+        process_handle: u64,
+        thread_handle: u64,
+        logon_sid: String,
+    },
     ParentIdentity {
         process_handle: u64,
         token_handle: u64,
@@ -163,6 +169,20 @@ pub enum WindowsRunnerFailureCode {
     JobTerminate,
     /// A structured runner response could not be written.
     ResponseFrame,
+    /// The clean current-user bootstrap could not read the pinned credential record.
+    BootstrapCredentialRead,
+    /// The clean current-user bootstrap observed a credential digest mismatch.
+    BootstrapCredentialDigest,
+    /// The clean current-user bootstrap rejected the credential encoding or account binding.
+    BootstrapCredentialDecode,
+    /// Windows DPAPI could not decrypt the bootstrap credential record.
+    BootstrapCredentialDecrypt,
+    /// The clean bootstrap could not create the suspended dedicated-account runner.
+    BootstrapRunnerStart,
+    /// The clean bootstrap received invalid suspended-runner process metadata.
+    BootstrapRunnerMetadata,
+    /// The clean bootstrap could not transfer a suspended-runner handle to its parent.
+    BootstrapHandleTransfer,
 }
 
 /// Structured failure returned by the authenticated Windows command runner.
@@ -241,6 +261,7 @@ pub enum WindowsRunnerProtocolError {
 impl RunnerMessage {
     pub(crate) const fn kind(&self) -> &'static str {
         match self {
+            Self::BootstrapRunner { .. } => "bootstrap_runner",
             Self::ParentIdentity { .. } => "parent_identity",
             Self::Ready => "ready",
             Self::Spawn { .. } => "spawn",
@@ -335,6 +356,7 @@ mod tests {
     use super::{
         MAX_RUNNER_FRAME_BYTES, RUNNER_PROTOCOL_VERSION, RunnerAccount, RunnerBootstrapStage,
         RunnerFrame, RunnerMessage, RunnerSpawnRequest, RunnerStandardHandles,
+        WindowsRunnerFailure, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
         WindowsRunnerProtocolError, read_frame, write_frame,
     };
 
@@ -421,6 +443,54 @@ mod tests {
                 process_handle: 0x1234_5678,
                 token_handle: 0x8765_4321,
             }
+        ));
+    }
+
+    #[test]
+    fn bootstrap_runner_and_failure_frames_preserve_typed_metadata() {
+        let mut encoded = Vec::new();
+        write_frame(
+            &mut encoded,
+            RunnerMessage::BootstrapRunner {
+                process_id: 41,
+                process_handle: 0x1234,
+                thread_handle: 0x5678,
+                logon_sid: "S-1-5-5-1-2".to_string(),
+            },
+        )
+        .expect("write bootstrap runner frame");
+        let message = read_frame(&mut encoded.as_slice()).expect("read bootstrap runner frame");
+        assert!(matches!(
+            message,
+            RunnerMessage::BootstrapRunner {
+                process_id: 41,
+                process_handle: 0x1234,
+                thread_handle: 0x5678,
+                logon_sid,
+            } if logon_sid == "S-1-5-5-1-2"
+        ));
+
+        let mut encoded = Vec::new();
+        write_frame(
+            &mut encoded,
+            RunnerMessage::Failed {
+                failure: WindowsRunnerFailure {
+                    stage: WindowsRunnerFailureStage::Process,
+                    code: WindowsRunnerFailureCode::BootstrapRunnerStart,
+                    native_code: Some(5),
+                    detail: "runner creation was denied".to_string(),
+                },
+            },
+        )
+        .expect("write bootstrap failure frame");
+        let message = read_frame(&mut encoded.as_slice()).expect("read bootstrap failure frame");
+        assert!(matches!(
+            message,
+            RunnerMessage::Failed { failure }
+                if failure.stage() == WindowsRunnerFailureStage::Process
+                    && failure.code() == WindowsRunnerFailureCode::BootstrapRunnerStart
+                    && failure.native_code() == Some(5)
+                    && failure.detail() == "runner creation was denied"
         ));
     }
 
