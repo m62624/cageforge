@@ -185,7 +185,36 @@ fn filesystem_authority_diagnostic(capability_state: &Path, group_sid: &str) -> 
                 .join(",")
         })
         .unwrap_or_else(|| "<missing>".to_string());
-    format!("group={group_sid}; read_base={namespace_sid}-1; capabilities=[{entries}]")
+    let acl_objects = state
+        .get("acl_objects")
+        .and_then(serde_json::Value::as_array)
+        .map(|objects| {
+            objects
+                .iter()
+                .map(|object| {
+                    let path = object
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<missing>");
+                    let original = object
+                        .get("original")
+                        .and_then(|descriptor| descriptor.get("bytes"))
+                        .and_then(serde_json::Value::as_array)
+                        .map_or(0, Vec::len);
+                    let current = object
+                        .get("current")
+                        .and_then(|descriptor| descriptor.get("bytes"))
+                        .and_then(serde_json::Value::as_array)
+                        .map_or(0, Vec::len);
+                    format!("{path}:original_bytes={original},current_bytes={current}")
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_else(|| "<missing>".to_string());
+    format!(
+        "group={group_sid}; read_base={namespace_sid}-1; capabilities=[{entries}]; acl_objects=[{acl_objects}]"
+    )
 }
 
 #[allow(unsafe_code)]
