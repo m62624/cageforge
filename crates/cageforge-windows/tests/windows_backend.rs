@@ -976,6 +976,12 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         timeout_child.wait(),
         Err(WindowsBackendError::ProcessTimedOut)
     ));
+    drop(timeout_child);
+    drop(timeout_backend);
+    drop(child);
+    drop(descendant_child);
+    drop(access_child);
+    drop(backend);
 
     setup.uninstall().unwrap_or_else(|error| {
         panic!(

@@ -300,6 +300,12 @@ impl WindowsSetup {
 
     /// Explicitly removes only the owner-scoped Cageforge setup objects.
     ///
+    /// Call this after dropping every [`crate::WindowsBackend`] created from
+    /// this setup and waiting for or dropping every [`crate::WindowsChild`].
+    /// Backends pin the installed runner and manifest handles for their whole
+    /// lifetime, so Windows correctly refuses to remove those files while a
+    /// backend remains alive.
+    ///
     /// Cleanup refuses to recursively delete unknown state. Unexpected files
     /// therefore produce a typed helper failure instead of widening deletion.
     pub fn uninstall(&self) -> Result<(), WindowsSetupError> {
