@@ -44,7 +44,7 @@ use crate::capability_state::{
 };
 use crate::capability_state_runtime::{
     AclMutationRecovery, CapabilityStateTransitionError, MaterializationEvidence,
-    MaterializationRecovery,
+    MaterializationRecovery, dacl_fingerprint,
 };
 use crate::capability_store::{
     CapabilityStateSession, CapabilityStateStore, CapabilityStateStoreError,
@@ -1750,6 +1750,8 @@ fn restore_managed_acls(state: &mut CapabilityStateSession<'_>) -> Result<(), Fi
         if &actual != object.current() {
             return Err(CapabilityStateTransitionError::AclBeforeMismatch {
                 path: object.path().to_path_buf(),
+                expected: dacl_fingerprint(object.current()),
+                actual: dacl_fingerprint(&actual),
             }
             .into());
         }

@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use cageforge_path::NativePathKey;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::capability_state::{
@@ -65,8 +66,14 @@ pub(crate) enum CapabilityStateTransitionError {
     MissingAclMutation,
     #[error("managed ACL object identity changed at {path:?}")]
     AclObjectIdentityMismatch { path: PathBuf },
-    #[error("managed ACL state for {path:?} does not match the handle-read descriptor")]
-    AclBeforeMismatch { path: PathBuf },
+    #[error(
+        "managed ACL state for {path:?} does not match the handle-read descriptor: expected {expected}, observed {actual}"
+    )]
+    AclBeforeMismatch {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
     #[error("pending ACL mutation for {path:?} matches neither its before nor after descriptor")]
     AclMutationDrift { path: PathBuf },
     #[error("a filesystem materialization journal is already pending for {path:?}")]
@@ -190,7 +197,11 @@ impl CapabilityState {
                 return Err(CapabilityStateTransitionError::AclObjectIdentityMismatch { path });
             }
             if object.current != before {
-                return Err(CapabilityStateTransitionError::AclBeforeMismatch { path });
+                return Err(CapabilityStateTransitionError::AclBeforeMismatch {
+                    path,
+                    expected: dacl_fingerprint(&object.current),
+                    actual: dacl_fingerprint(&before),
+                });
             }
         }
         let original = prior
@@ -600,6 +611,23 @@ fn replace_managed_acl_object(
     }
 }
 
+pub(crate) fn dacl_fingerprint(dacl: &PersistedDacl) -> String {
+    let digest = Sha256::digest(dacl.bytes());
+    let sha256 = digest
+        .iter()
+        .flat_map(|byte| [hexadecimal_digit(byte >> 4), hexadecimal_digit(byte & 0x0f)])
+        .collect::<String>();
+    format!("protected={} sha256={sha256}", dacl.is_protected(),)
+}
+
+const fn hexadecimal_digit(value: u8) -> char {
+    if value < 10 {
+        (b'0' + value) as char
+    } else {
+        (b'a' + (value - 10)) as char
+    }
+}
+
 fn random_authority_sid(namespace: &str) -> Result<String, CapabilityStateError> {
     let mut random = [0u8; 8];
     getrandom::fill(&mut random).map_err(|source| CapabilityStateError::Random { source })?;
@@ -749,6 +777,38 @@ mod tests {
         assert_eq!(state.acl_objects[0].current, after);
         CapabilityState::decode(&state.encode().expect("encode committed state"))
             .expect("decode committed state");
+    }
+
+    #[test]
+    fn conflicting_acl_before_state_reports_non_secret_descriptor_fingerprints() {
+        let mut state = fresh_state();
+        let identity = PersistedFileIdentity::new(8, [9; 16]);
+        let before = empty_dacl(ACL_REVISION, false);
+        let current = empty_dacl(ACL_REVISION, true);
+        state
+            .begin_acl_mutation(
+                PathBuf::from(r"C:\Workspace"),
+                identity.clone(),
+                before.clone(),
+                current.clone(),
+            )
+            .expect("begin ACL journal");
+        state
+            .resolve_acl_mutation(&identity, &current)
+            .expect("commit current descriptor");
+
+        let error = state
+            .begin_acl_mutation(PathBuf::from(r"C:\Workspace"), identity, before, current)
+            .expect_err("reject an unexpected descriptor before mutation");
+        let CapabilityStateTransitionError::AclBeforeMismatch {
+            expected, actual, ..
+        } = error
+        else {
+            panic!("unexpected capability-state transition error");
+        };
+        assert!(expected.starts_with("protected=true sha256="));
+        assert!(actual.starts_with("protected=false sha256="));
+        assert_ne!(expected, actual);
     }
 
     #[test]
