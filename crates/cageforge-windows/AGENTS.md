@@ -43,33 +43,35 @@ route SID per routed launch, exact one-route selection, and the independent
 trusted parent, duplicated into the pinned runner process, and passed to the
 user process only through its explicit handle list; `WindowsChild` owns direct
 pipe endpoints and the lifecycle protocol carries no stream data. These paths
-cross-compile, but they are not native Windows evidence until the Windows
-Server 2025 black-box job passes.
+now have native Windows Server 2025 evidence: the black-box suite exercises
+setup recovery, filesystem enforcement and cleanup, restricted-token and Job
+lifecycle, direct and proxy-routed networking, HTTP and SOCKS ingress, and two
+simultaneous `WindowsBackend` instances with distinct route policies. The
+cross-target build remains a development check, not a replacement for that
+native boundary.
 
-Two boundaries remain active and unfinished:
+The remaining work is the completion audit, not a fallback implementation:
 
-1. Setup uninstall does not yet restore every journaled host ACL or remove
-   materialized paths by recorded handle identity. Add lifecycle coordination,
-   restore ACLs before deleting sandbox accounts, and remove only exact
-   marker/directory objects deepest-first. Interrupted cleanup must be safely
-   resumable and must never adopt or delete a replacement object.
-2. Native setup, filesystem, process-tree, stdio, timeout, direct-network, and
-   routed-network behavior still needs complete Windows Server 2025 black-box
-   coverage. Cross-target compilation is only a development check.
-
-Some native implementation modules remain unreachable from the public backend
-and therefore currently emit `dead_code` warnings. Remove those warnings by
-finishing and using the implementation. Never hide them with
-`allow(dead_code)`, a dummy type alias, or artificial calls. Do not commit new
-unused imports or placeholder types unless they are part of this explicitly
-recorded continuation checkpoint.
+1. Re-read every affected frozen Codex Windows boundary and map it to the
+   independent Cageforge implementation, Specification 0016, and native
+   evidence. Resolve any missing retained invariant with a test and, where
+   required, implementation before declaring the crate complete.
+2. Audit cleanup recovery, token/HANDLE ownership, Job termination, WFP and
+   firewall read-back, route attribution, and all `Eq`/`Hash`/`Clone` derives
+   as security boundaries. Expand native black-box coverage for any uncovered
+   case; do not mistake the current green smoke and end-to-end paths for a
+   complete proof.
+3. Once the audit is green, update `README.md` to the same library-focused
+   standard as `cageforge-linux`: explain setup, public integration sequence,
+   and every actually enforced protection. Do not describe unverified work as
+   available, and do not write the README before this audit is complete.
 
 ## Required implementation order
 
-### 1. Finish transactional ACL and materialization cleanup
+### 1. Transactional ACL and materialization cleanup (implemented; preserve and audit)
 
-Creation and recovery are connected to filesystem enforcement. Complete the
-remaining inverse lifecycle without weakening their identity contract.
+Creation and recovery are connected to filesystem enforcement. Retain and
+audit the inverse lifecycle without weakening its identity contract.
 
 1. Coordinate uninstall and runtime enforcement with the same protected
    cross-process lock and an explicit active-child lifecycle record. Uninstall
@@ -101,9 +103,9 @@ this phase complete. The state version, setup-created initial state, decoder,
 recovery, and cleanup must advance atomically; do not leave a version bump that
 the installed setup lifecycle cannot safely recover or remove.
 
-### 2. Finish the public backend and child lifecycle
+### 2. Public backend and child lifecycle (implemented; preserve and audit)
 
-Implement `WindowsBackend`, the backend-bound prepared request handoff, and
+Keep `WindowsBackend`, the backend-bound prepared request handoff, and
 `WindowsChild` in the same integration shape as `cageforge-linux`.
 
 - `prepare` must validate every capability and complete filesystem/network
@@ -162,7 +164,7 @@ CLI request schemas, permission profiles, telemetry, product environment
 variables, ConPTY integration, or other product-only coupling into the public
 Windows library.
 
-### 3. Finish exact network enforcement
+### 3. Exact network enforcement (implemented; preserve and audit)
 
 Codex parity requires per-process route ownership, not only a firewall port.
 
