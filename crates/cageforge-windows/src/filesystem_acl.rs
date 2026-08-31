@@ -2659,7 +2659,11 @@ fn verify_entry(
             });
         }
         let value = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
-        let sid = (&raw const value.SidStart).cast_mut().cast::<c_void>();
+        let sid = unsafe {
+            raw.cast::<u8>()
+                .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
+        }
+        .cast::<c_void>();
         if unsafe { IsValidSid(sid) } == 0 {
             return Err(FilesystemAclError::MalformedAce {
                 path: path.final_path().to_path_buf(),
