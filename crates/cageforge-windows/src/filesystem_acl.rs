@@ -860,8 +860,11 @@ impl PreparedAclOperation {
         let before = self.original.snapshot(&self.path)?;
         let identity = persisted_identity(&self.path);
         if self.matches_current_managed_acl(state, &identity, &before) {
-            self.verify_root(&before)?;
-            return Ok(());
+            match self.verify_root(&before) {
+                Ok(_) => return Ok(()),
+                Err(FilesystemAclError::AceMismatch { .. }) => {}
+                Err(error) => return Err(error),
+            }
         }
         let filtered;
         let base = if self.remove_sids.is_empty() {
