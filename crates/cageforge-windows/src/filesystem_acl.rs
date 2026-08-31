@@ -1020,7 +1020,7 @@ impl PreparedAclOperation {
         if !self.matches_current_managed_acl(state, identity, descriptor) {
             return Ok(false);
         }
-        match self.verify_required_root(descriptor) {
+        match self.verify_exact_current_root(descriptor) {
             Ok(_) => Ok(true),
             Err(FilesystemAclError::AceMismatch { .. }) => Ok(false),
             Err(error) => Err(error),
@@ -1103,7 +1103,7 @@ impl PreparedAclOperation {
         Ok(actual)
     }
 
-    fn verify_required_root(
+    fn verify_exact_current_root(
         &self,
         expected: &PersistedDacl,
     ) -> Result<PersistedDacl, FilesystemAclError> {
@@ -1115,7 +1115,7 @@ impl PreparedAclOperation {
             });
         }
         for entry in &self.entries {
-            verify_entry(&self.path, descriptor.dacl, entry, false)?;
+            verify_exact_explicit_entry(&self.path, descriptor.dacl, entry)?;
         }
         for sid in &self.remove_sids {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
@@ -2744,11 +2744,28 @@ fn verify_entry(
     }
 }
 
-#[allow(unsafe_code)]
+fn verify_exact_explicit_entry(
+    path: &ValidatedPath,
+    dacl: *mut ACL,
+    expected: &PreparedAclEntry,
+) -> Result<(), FilesystemAclError> {
+    verify_exact_entry(path, dacl, expected, false)
+}
+
 fn verify_exact_inherited_entry(
     path: &ValidatedPath,
     dacl: *mut ACL,
     expected: &PreparedAclEntry,
+) -> Result<(), FilesystemAclError> {
+    verify_exact_entry(path, dacl, expected, true)
+}
+
+#[allow(unsafe_code)]
+fn verify_exact_entry(
+    path: &ValidatedPath,
+    dacl: *mut ACL,
+    expected: &PreparedAclEntry,
+    inherited: bool,
 ) -> Result<(), FilesystemAclError> {
     let information = acl_information(path, dacl)?;
     let mut matched = false;
@@ -2784,7 +2801,7 @@ fn verify_exact_inherited_entry(
         if unsafe { EqualSid(sid, expected.sid.0) } == 0 {
             continue;
         }
-        if header.AceFlags & INHERITED_ACE as u8 == 0
+        if (header.AceFlags & INHERITED_ACE as u8 != 0) != inherited
             || header.AceType != expected.declaration.mode.ace_type()
             || u32::from(header.AceFlags & !(INHERITED_ACE as u8))
                 != expected.declaration.inheritance.native()
