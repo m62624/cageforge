@@ -147,11 +147,7 @@ fn raw_acl_diagnostic(path: &Path) -> String {
     }
 }
 
-fn filesystem_authority_diagnostic(
-    capability_state: &Path,
-    workspace: &Path,
-    group_sid: &str,
-) -> String {
+fn filesystem_authority_diagnostic(capability_state: &Path, group_sid: &str) -> String {
     let state = match fs::read(capability_state)
         .map_err(|error| error.to_string())
         .and_then(|bytes| {
@@ -164,20 +160,32 @@ fn filesystem_authority_diagnostic(
         .get("namespace_sid")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("<missing>");
-    let write_root_sid = state
+    let entries = state
         .get("entries")
         .and_then(serde_json::Value::as_array)
-        .and_then(|entries| {
-            entries.iter().find_map(|entry| {
-                let role = entry.get("role")?.as_str()?;
-                let path = entry.get("path")?.as_str()?;
-                (role == "write_root" && path.eq_ignore_ascii_case(&workspace.to_string_lossy()))
-                    .then(|| entry.get("sid")?.as_str())
-                    .flatten()
-            })
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| {
+                    let role = entry
+                        .get("role")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<missing>");
+                    let path = entry
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<missing>");
+                    let sid = entry
+                        .get("sid")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<missing>");
+                    format!("{role}:{path}:{sid}")
+                })
+                .collect::<Vec<_>>()
+                .join(",")
         })
-        .unwrap_or("<missing>");
-    format!("group={group_sid}; read_base={namespace_sid}-1; write_root={write_root_sid}")
+        .unwrap_or_else(|| "<missing>".to_string());
+    format!("group={group_sid}; read_base={namespace_sid}-1; capabilities=[{entries}]")
 }
 
 #[allow(unsafe_code)]
@@ -685,11 +693,8 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let workspace_acl_before_descendant = acl_diagnostic(workspace.path());
     let access_progress_acl_before_descendant = acl_diagnostic(&access_progress);
     let access_progress_raw_acl_before_descendant = raw_acl_diagnostic(&access_progress);
-    let filesystem_authorities_before_descendant = filesystem_authority_diagnostic(
-        &capability_state,
-        workspace.path(),
-        first.accounts().group_sid(),
-    );
+    let filesystem_authorities_before_descendant =
+        filesystem_authority_diagnostic(&capability_state, first.accounts().group_sid());
 
     let descendant_ready = workspace.path().join("descendant-ready.txt");
     let descendant_marker = workspace.path().join("descendant-escaped.txt");
