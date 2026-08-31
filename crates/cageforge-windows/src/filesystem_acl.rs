@@ -800,10 +800,12 @@ impl PendingAclOperation {
 }
 
 impl AclOperation {
-    fn prepare(self) -> Result<Option<PreparedAclOperation>, FilesystemAclError> {
-        let (path, retain_path, inherited_continuation) = match self.path {
-            AclOperationPath::Pinned(path) => (path, true, false),
-            AclOperationPath::Discovered(path) => match open_discovered_acl_path(&path)? {
+    fn prepare(&self) -> Result<Option<PreparedAclOperation>, FilesystemAclError> {
+        let (path, retain_path, inherited_continuation) = match &self.path {
+            AclOperationPath::Pinned(path) => {
+                (ValidatedPath::open_for_acl(path.final_path())?, true, false)
+            }
+            AclOperationPath::Discovered(path) => match open_discovered_acl_path(path)? {
                 Some(path) => (path, false, true),
                 None => return Ok(None),
             },
@@ -811,7 +813,8 @@ impl AclOperation {
         let original = SecurityDescriptor::read(&path)?;
         let entries = self
             .entries
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|declaration| {
                 let sid = LocalSid::parse("ACL entry", &declaration.sid)?;
                 Ok(PreparedAclEntry { declaration, sid })
@@ -819,8 +822,8 @@ impl AclOperation {
             .collect::<Result<Vec<_>, FilesystemAclError>>()?;
         let remove_sids = self
             .remove_sids
-            .into_iter()
-            .map(|sid| LocalSid::parse("protected-DACL removal", &sid))
+            .iter()
+            .map(|sid| LocalSid::parse("protected-DACL removal", sid))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Some(PreparedAclOperation {
             path,
@@ -839,6 +842,7 @@ impl PreparedAclPlan {
         self,
         state: &mut CapabilityStateSession<'_>,
     ) -> Result<Vec<ValidatedPath>, FilesystemAclError> {
+        let root_reuse = self.root_reuse_state(state)?;
         let mut applied = Vec::new();
         let mut retained_paths = Vec::new();
         for operation in self.operations {
@@ -851,7 +855,11 @@ impl PreparedAclPlan {
                 Ok(record) => record,
                 Err(error) => return Err(rollback(&applied, state, error)),
             };
-            if let Err(error) = operation.apply(state) {
+            let reuse = nearest_root_reuse(&operation, &root_reuse);
+            if operation.inherited_continuation && reuse == Some(true) {
+                continue;
+            }
+            if let Err(error) = operation.apply(state, reuse == Some(true)) {
                 return Err(rollback(&applied, state, error));
             }
             if let Some(path) = operation.into_retained_path() {
@@ -860,6 +868,27 @@ impl PreparedAclPlan {
             applied.push(rollback_record);
         }
         Ok(retained_paths)
+    }
+
+    fn root_reuse_state(
+        &self,
+        state: &CapabilityStateSession<'_>,
+    ) -> Result<Vec<(PathBuf, bool)>, FilesystemAclError> {
+        self.operations
+            .iter()
+            .filter(|operation| matches!(&operation.path, AclOperationPath::Pinned(_)))
+            .map(|operation| {
+                let prepared = operation.prepare()?;
+                let Some(prepared) = prepared else {
+                    return Ok(None);
+                };
+                Ok(Some((
+                    prepared.path.final_path().to_path_buf(),
+                    prepared.is_current_managed_acl(state)?,
+                )))
+            })
+            .collect::<Result<Vec<_>, FilesystemAclError>>()
+            .map(|roots| roots.into_iter().flatten().collect())
     }
 }
 
@@ -886,15 +915,20 @@ impl PreparedAclOperation {
         self.retain_path.then_some(self.path)
     }
 
-    fn apply(&self, state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
+    fn apply(
+        &self,
+        state: &mut CapabilityStateSession<'_>,
+        require_current_managed_acl: bool,
+    ) -> Result<(), FilesystemAclError> {
         let before = self.original.snapshot(&self.path)?;
         let identity = persisted_identity(&self.path);
-        if self.matches_current_managed_acl(state, &identity, &before) {
-            match self.verify_required_root(&before) {
-                Ok(_) => return Ok(()),
-                Err(FilesystemAclError::AceMismatch { .. }) => {}
-                Err(error) => return Err(error),
-            }
+        if self.is_current_managed_acl_snapshot(state, &identity, &before)? {
+            return Ok(());
+        }
+        if require_current_managed_acl {
+            return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+                path: self.path.final_path().to_path_buf(),
+            });
         }
         if self.inherited_continuation && self.inherits_verified_managed_boundary(state, &before)? {
             return Ok(());
@@ -967,6 +1001,31 @@ impl PreparedAclOperation {
                     && object.identity() == identity
                     && object.current() == descriptor
             })
+    }
+
+    fn is_current_managed_acl(
+        &self,
+        state: &CapabilityStateSession<'_>,
+    ) -> Result<bool, FilesystemAclError> {
+        let descriptor = self.original.snapshot(&self.path)?;
+        let identity = persisted_identity(&self.path);
+        self.is_current_managed_acl_snapshot(state, &identity, &descriptor)
+    }
+
+    fn is_current_managed_acl_snapshot(
+        &self,
+        state: &CapabilityStateSession<'_>,
+        identity: &PersistedFileIdentity,
+        descriptor: &PersistedDacl,
+    ) -> Result<bool, FilesystemAclError> {
+        if !self.matches_current_managed_acl(state, identity, descriptor) {
+            return Ok(false);
+        }
+        match self.verify_required_root(descriptor) {
+            Ok(_) => Ok(true),
+            Err(FilesystemAclError::AceMismatch { .. }) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     fn inherits_verified_managed_boundary(
@@ -2365,6 +2424,14 @@ fn sort_operations(
             })
     });
     Ok(operations)
+}
+
+fn nearest_root_reuse(operation: &PreparedAclOperation, roots: &[(PathBuf, bool)]) -> Option<bool> {
+    roots
+        .iter()
+        .filter(|(root, _)| is_within(operation.path.final_path(), root))
+        .max_by_key(|(root, _)| root.components().count())
+        .map(|(_, reusable)| *reusable)
 }
 
 fn subtree_paths(

@@ -526,10 +526,12 @@ is unprotected, has no explicit ACE for a required managed SID, inherits every
 exact required ACE, and its nearest managed ancestor has the exact recorded
 identity and descriptor when reopened by handle. Any other descendant is pinned,
 protected, journaled, and read back. A subsequent equivalent plan first proves
-that the current handle descriptor exactly matches its persisted managed
-descriptor and required entries; it then performs no `SetSecurityInfo` write.
-Thus an idempotent launch cannot cause duplicate inherited ACEs in existing
-descendants. New descendants inherit from the protected root while new siblings
+that every pinned root's current handle descriptor exactly matches its persisted
+managed descriptor and required entries before it scans that root's descendants.
+The verified root is then reused without descendant mutation; a later
+disagreement before its no-write read-back is typed descriptor drift and blocks
+launch. Thus an idempotent launch cannot cause duplicate inherited ACEs in
+existing descendants. New descendants inherit from the protected root while new siblings
 outside it continue to inherit the deny.
 The scan retains each object's directory-or-file kind: direct ACEs on existing
 files are exact, while ACEs on existing directories retain their required
