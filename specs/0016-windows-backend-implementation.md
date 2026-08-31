@@ -229,28 +229,30 @@ never written to this diagnostic channel.
 Restricted launches use a primary token derived from the selected dedicated
 sandbox account. The token:
 
-- disables maximum privileges and applies the LUA restriction;
-- applies restricting-SID access checks to reads and writes rather than using
-  the upstream `WRITE_RESTRICTED` optimization;
+- disables maximum privileges, applies the LUA restriction, and enables
+  `WRITE_RESTRICTED`;
 - retains only `SeChangeNotifyPrivilege` when Windows requires traversal;
-- includes only the capability SIDs required by this request and the
-  launch-unique logon SID needed by the private desktop;
+- includes the capability SIDs required by this request, the dedicated token
+  user SID, `Everyone`, and the launch-unique logon SID needed by the private
+  desktop;
 - includes one random network-route restricting SID when proxy routing is
   active;
-- keeps the logon SID and request capability SIDs as the complete default
-  object DACL, excluding both the route SID and `Everyone`; and
+- keeps the user, `Everyone`, logon, and request capability SIDs as the
+  complete default object DACL, excluding the route SID; and
 - cannot inherit an administrator token or the real user's identity.
 
 The runner reads the completed token back before process creation. Token user,
 canonical restricting-SID set, default-DACL ACE set and masks, and enabled
-privileges must exactly match the requested boundary. Neither the token-user
-SID nor `Everyone` is a restricting SID: without upstream `WRITE_RESTRICTED`,
-either identity would let pre-existing host ACEs satisfy the restricting pass
-for reads and defeat the policy's default deny outside its native roots. The
-launch-unique logon SID remains only for objects explicitly created for that
-logon, including the private desktop. Any extra enabled privilege, duplicate
-canonical SID, route/default-DACL overlap, or Windows-canonicalized ACL
-difference fails before the child starts.
+privileges must exactly match the requested boundary. `WRITE_RESTRICTED` keeps
+Windows session, loader, and IPC reads such as CSRSS `ApiPort` usable through
+the dedicated account's normal token while the capability restricting set still
+authorizes writes. Explicit deny ACEs for a capability SID remain mandatory and
+native tests prove their read and write effect; a policy requiring a global
+default-deny read namespace remains unsupported. The launch-unique logon SID
+remains only for objects explicitly created for that logon, including the
+private desktop. Any extra enabled privilege, duplicate canonical SID,
+route/default-DACL overlap, or Windows-canonicalized ACL difference fails
+before the child starts.
 
 Every restricted process is assigned atomically at creation to a fresh Job
 Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and every
@@ -872,18 +874,17 @@ launch-logon restricting SIDs, route SIDs excluded from the default object DACL,
 Object assignment through `PROC_THREAD_ATTRIBUTE_JOB_LIST`, and complete tree
 termination on startup failure, timeout, explicit kill, or owner drop.
 
-Cageforge intentionally adds runner-side owner-PID and token verification,
-uses a protected owner manifest, forbids Job Object breakaway and descendant
-preservation, enables and verifies all Job Object UI restrictions, keeps private
-desktop mandatory, and returns stage-specific typed
-protocol, token, desktop, job, process, wait, and termination failures. It does
-not set `WRITE_RESTRICTED`: the full restricting set participates in read and
-write checks, which permits profile-scoped deny-read ACLs instead of the frozen
-implementation's shared sandbox-group deny-read state. Unlike the frozen
-elevated token, Cageforge excludes both the dedicated token-user SID and
-`Everyone` from that set; retaining either without `WRITE_RESTRICTED` would
-turn ordinary host read ACEs into authorization outside the prepared roots. It
-also does not retain
+Write-restricted token behavior was rechecked against the frozen command runner
+after native evidence showed that a full restricted read check blocks the child
+before `main` while it connects to the session `ApiPort`. Cageforge retains
+`WRITE_RESTRICTED`, the dedicated token-user SID, `Everyone`, capability SIDs,
+and logon SID in the token contract; the per-launch route SID remains outside
+the default DACL. Cageforge intentionally adds runner-side owner-PID and token
+verification, uses a protected owner manifest, forbids Job Object breakaway and
+descendant preservation, enables and verifies all Job Object UI restrictions,
+keeps private desktop mandatory, and returns stage-specific typed protocol,
+token, desktop, job, process, wait, and termination failures. It also does not
+retain
 Codex permission profiles, command schemas, logging, credential
 refresh fallback, ConPTY, filesystem-helper aliases, or cloned secret-bearing
 protocol requests.
