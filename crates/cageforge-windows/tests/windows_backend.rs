@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::mem::offset_of;
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener};
+use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -213,11 +213,11 @@ fn network_probe_result(child: &mut WindowsChild, mode: &str) -> Result<(), Stri
 }
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
-    start_http_server_on(Ipv4Addr::LOCALHOST)
+    start_http_server_at(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
 }
 
-fn start_http_server_on(address: Ipv4Addr) -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
-    let listener = TcpListener::bind((address, 0)).expect("HTTP listener");
+fn start_http_server_at(address: SocketAddr) -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
+    let listener = TcpListener::bind(address).expect("HTTP listener");
     let address = listener.local_addr().expect("HTTP server address");
     let server = thread::spawn(move || {
         listener.set_nonblocking(true)?;
@@ -1152,9 +1152,10 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
             .expect("bounded parallel probe timeout"),
     )
     .expect("second backend from the same verified setup");
-    let (first_parallel_target, first_parallel_server) = start_http_server_on(Ipv4Addr::LOCALHOST);
+    let (first_parallel_target, first_parallel_server) =
+        start_http_server_at(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
     let (second_parallel_target, second_parallel_server) =
-        start_http_server_on(Ipv4Addr::new(127, 0, 0, 2));
+        start_http_server_at(SocketAddr::from((Ipv6Addr::LOCALHOST, 0)));
     let first_parallel_policy = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
         .with_unix_socket_mode(UnixSocketMode::Enabled)
@@ -1163,7 +1164,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let second_parallel_policy = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
         .with_unix_socket_mode(UnixSocketMode::Enabled)
-        .with_domain("127.0.0.2", DomainAccess::Allow)
+        .with_domain("::1", DomainAccess::Allow)
         .expect("second parallel loopback policy");
     let mut first_parallel_child = spawn_network_probe(
         &backend,
