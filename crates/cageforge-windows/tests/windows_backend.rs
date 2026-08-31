@@ -4,6 +4,7 @@
 
 use std::ffi::c_void;
 use std::fs;
+use std::mem::offset_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,7 +24,12 @@ use cageforge_windows::{
 };
 use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
-use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE, STILL_ACTIVE};
+use windows_sys::Win32::Foundation::{
+    ERROR_INSUFFICIENT_BUFFER, GetLastError, INVALID_HANDLE_VALUE, STILL_ACTIVE,
+};
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TOKEN_GROUPS, TOKEN_QUERY, TokenRestrictedSids,
+};
 use windows_sys::Win32::System::Diagnostics::Debug::{
     CloseThreadWaitChainSession, GetThreadWaitChain, OpenThreadWaitChainSession,
     WAITCHAIN_NODE_INFO, WCT_MAX_NODE_COUNT, WCT_OUT_OF_PROC_COM_FLAG, WCT_OUT_OF_PROC_CS_FLAG,
@@ -33,7 +39,8 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 const SANDBOX_FIXTURE_MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
@@ -125,6 +132,50 @@ fn current_token_diagnostic() -> String {
         ),
         Err(error) => format!("could not run whoami /all: {error}"),
     }
+}
+
+#[allow(unsafe_code)]
+fn current_restricted_sid_count() -> Result<u32, String> {
+    let mut token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(format!("open process token: Windows error {}", unsafe {
+            GetLastError()
+        }));
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
+    let mut length = 0u32;
+    let initial = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle() as _,
+            TokenRestrictedSids,
+            std::ptr::null_mut(),
+            0,
+            &mut length,
+        )
+    };
+    if initial != 0 || unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER || length == 0 {
+        return Err("size restricted SID token information".to_string());
+    }
+    let mut buffer = vec![0u8; length as usize];
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle() as _,
+            TokenRestrictedSids,
+            buffer.as_mut_ptr().cast(),
+            length,
+            &mut length,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "read restricted SID token information: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    if buffer.len() < offset_of!(TOKEN_GROUPS, Groups) {
+        return Err("truncated restricted SID token information".to_string());
+    }
+    Ok(unsafe { std::ptr::read_unaligned(buffer.as_ptr().cast::<u32>()) })
 }
 
 fn acl_diagnostic(path: &Path) -> String {
@@ -429,6 +480,10 @@ fn sandbox_process_fixture() {
             fs::write(progress, b"after-denied-read").expect("record denied-read completion");
         }
         "descendant-root" => {
+            println!(
+                "descendant-root restricted SID count: {:?}",
+                current_restricted_sid_count()
+            );
             let executable = std::env::current_exe().expect("fixture executable");
             let ready = PathBuf::from(
                 std::env::var_os(SANDBOX_FIXTURE_READY).expect("descendant readiness path"),
@@ -451,6 +506,10 @@ fn sandbox_process_fixture() {
             std::mem::forget(descendant);
         }
         "descendant" => {
+            println!(
+                "descendant restricted SID count: {:?}",
+                current_restricted_sid_count()
+            );
             let ready = PathBuf::from(
                 std::env::var_os(SANDBOX_FIXTURE_READY).expect("descendant readiness path"),
             );
