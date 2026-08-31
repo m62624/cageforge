@@ -7,6 +7,18 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::StationsAndDesktops::{
+    CloseDesktop, CreateDesktopW, DESKTOP_CREATEWINDOW, GetThreadDesktop,
+    GetUserObjectInformationW, UOI_NAME,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Threading::{
+    EVENT_MODIFY_STATE, GetCurrentThreadId, OpenEventW, SetEvent,
+};
+
 const MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
 const DENIED_READ_ADS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_ADS";
@@ -14,6 +26,8 @@ const DENIED_READ_DEVICE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_
 const DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
+const UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HANDLE";
+const UNRELATED_NAMED_OBJECT: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT";
 
 fn main() -> ExitCode {
     match run() {
@@ -35,8 +49,133 @@ fn run() -> Result<(), String> {
         "http-proxy-denied" => http_proxy(true),
         "socks5" => socks5(false),
         "socks5-denied" => socks5(true),
+        "private-desktop" => private_desktop(),
+        "unrelated-handle" => signal_unrelated_handle(),
+        "unrelated-named-object" => signal_unrelated_named_object(),
         _ => Err(format!("unsupported fixture mode {mode:?}")),
     }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn private_desktop() -> Result<(), String> {
+    let thread_id = unsafe { GetCurrentThreadId() };
+    let desktop = unsafe { GetThreadDesktop(thread_id) };
+    if desktop.is_null() {
+        return Err(format!(
+            "get sandboxed thread desktop: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let mut byte_length = 0u32;
+    let initial = unsafe {
+        GetUserObjectInformationW(desktop, UOI_NAME, std::ptr::null_mut(), 0, &mut byte_length)
+    };
+    if initial != 0
+        || unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER
+        || byte_length == 0
+        || !byte_length.is_multiple_of(2)
+    {
+        return Err(format!(
+            "size sandboxed thread desktop name: result={initial}, bytes={byte_length}, Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let mut name = vec![0u16; (byte_length / 2) as usize];
+    if unsafe {
+        GetUserObjectInformationW(
+            desktop,
+            UOI_NAME,
+            name.as_mut_ptr().cast(),
+            byte_length,
+            &mut byte_length,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "read sandboxed thread desktop name: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let terminator = name
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(name.len());
+    let name = String::from_utf16(&name[..terminator])
+        .map_err(|error| format!("decode sandboxed thread desktop name: {error}"))?;
+    if name.starts_with("Cageforge-") {
+        let escape_name = format!("Cageforge-escape-{}", std::process::id());
+        let escape_name = escape_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let escape = unsafe {
+            CreateDesktopW(
+                escape_name.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                DESKTOP_CREATEWINDOW,
+                std::ptr::null(),
+            )
+        };
+        if escape.is_null() {
+            Ok(())
+        } else {
+            unsafe { CloseDesktop(escape) };
+            Err("sandboxed process created a second desktop despite Job UI isolation".to_string())
+        }
+    } else {
+        Err(format!(
+            "sandboxed thread started on host or default desktop {name:?}"
+        ))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn private_desktop() -> Result<(), String> {
+    Err("private desktop probe requires Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn signal_unrelated_handle() -> Result<(), String> {
+    let raw_handle = environment(UNRELATED_HANDLE)?
+        .to_string_lossy()
+        .parse::<isize>()
+        .map_err(|error| format!("parse unrelated parent handle: {error}"))?;
+    if raw_handle == 0 {
+        return Err("unrelated parent handle was null".to_string());
+    }
+    let _ = unsafe { SetEvent(raw_handle as *mut _) };
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn signal_unrelated_handle() -> Result<(), String> {
+    Err("unrelated-handle probe requires Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn signal_unrelated_named_object() -> Result<(), String> {
+    let name = environment(UNRELATED_NAMED_OBJECT)?;
+    let name = name.to_string_lossy();
+    let wide = name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, wide.as_ptr()) };
+    if !event.is_null() {
+        let _ = unsafe { SetEvent(event) };
+        unsafe { CloseHandle(event) };
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn signal_unrelated_named_object() -> Result<(), String> {
+    Err("unrelated-named-object probe requires Windows".to_string())
 }
 
 fn denied_read() -> Result<(), String> {

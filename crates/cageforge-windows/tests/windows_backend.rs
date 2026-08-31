@@ -30,10 +30,10 @@ use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
     ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, GetLastError, INVALID_HANDLE_VALUE,
-    STILL_ACTIVE,
+    STILL_ACTIVE, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TOKEN_GROUPS, TOKEN_QUERY, TokenRestrictedSids,
+    GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenRestrictedSids,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::{
     CloseThreadWaitChainSession, GetThreadWaitChain, OpenThreadWaitChainSession,
@@ -44,8 +44,8 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
 };
 
 const SANDBOX_FIXTURE_MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
@@ -58,6 +58,9 @@ const SANDBOX_FIXTURE_DENIED_READ_DEVICE: &str =
 const SANDBOX_FIXTURE_DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const SANDBOX_FIXTURE_PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const SANDBOX_FIXTURE_NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
+const SANDBOX_FIXTURE_UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HANDLE";
+const SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT: &str =
+    "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -183,12 +186,12 @@ fn spawn_network_probe(
 }
 
 fn wait_for_network_probe(child: &mut WindowsChild, mode: &str) {
-    if let Err(error) = network_probe_result(child, mode) {
+    if let Err(error) = probe_result(child, mode) {
         panic!("{error}");
     }
 }
 
-fn network_probe_result(child: &mut WindowsChild, mode: &str) -> Result<(), String> {
+fn probe_result(child: &mut WindowsChild, mode: &str) -> Result<(), String> {
     let status = child
         .wait()
         .map_err(|error| format!("network probe {mode:?} did not complete: {error}"))?;
@@ -211,6 +214,72 @@ fn network_probe_result(child: &mut WindowsChild, mode: &str) -> Result<(), Stri
             "network probe {mode:?} failed with {status}; stdout: {stdout}; stderr: {stderr}"
         ))
     }
+}
+
+fn run_access_probe(
+    backend: &WindowsBackend,
+    workspace: &Path,
+    fixture: &Path,
+    mode: &str,
+    environment: EnvironmentSpec,
+) {
+    let (command, effective, context) = restricted_request_with_environment(
+        workspace,
+        access_fixture_command(fixture),
+        environment,
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .unwrap_or_else(|error| panic!("prepare {mode} probe: {error}"));
+    let mut child = backend
+        .spawn(prepared)
+        .unwrap_or_else(|error| panic!("spawn {mode} probe: {error}"));
+    if let Err(error) = probe_result(&mut child, mode) {
+        panic!("{error}");
+    }
+}
+
+#[allow(unsafe_code)]
+fn unrelated_inheritable_event() -> OwnedHandle {
+    let inheritable = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: 1,
+    };
+    let event = unsafe { CreateEventW(&inheritable, 1, 0, std::ptr::null()) };
+    assert!(
+        !event.is_null(),
+        "create unrelated inheritable parent Event: Windows error {}",
+        unsafe { GetLastError() }
+    );
+    unsafe { OwnedHandle::from_raw_handle(event as RawHandle) }
+}
+
+#[allow(unsafe_code)]
+fn assert_unrelated_event_was_not_inherited(event: &OwnedHandle) {
+    assert_eq!(
+        unsafe { WaitForSingleObject(event.as_raw_handle() as _, 0) },
+        WAIT_TIMEOUT,
+        "an unrelated inheritable parent Event crossed the explicit sandbox handle list"
+    );
+}
+
+#[allow(unsafe_code)]
+fn unrelated_named_event(unique_name: &str) -> (String, OwnedHandle) {
+    let name = format!("Local\\Cageforge-unrelated-{unique_name}");
+    let wide_name = name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide_name.as_ptr()) };
+    assert!(
+        !event.is_null(),
+        "create unrelated named parent Event: Windows error {}",
+        unsafe { GetLastError() }
+    );
+    (name, unsafe {
+        OwnedHandle::from_raw_handle(event as RawHandle)
+    })
 }
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
@@ -1083,6 +1152,52 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         "denied-read fixture did not report its typed access result: {access_stdout}"
     );
 
+    run_access_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        "private-desktop",
+        EnvironmentSpec::inherit_core()
+            .with_var(SANDBOX_FIXTURE_MODE, "private-desktop")
+            .expect("private desktop fixture mode"),
+    );
+
+    let parent_event = unrelated_inheritable_event();
+    run_access_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        "unrelated-handle",
+        EnvironmentSpec::inherit_core()
+            .with_var(SANDBOX_FIXTURE_MODE, "unrelated-handle")
+            .expect("unrelated-handle fixture mode")
+            .with_var(
+                SANDBOX_FIXTURE_UNRELATED_HANDLE,
+                (parent_event.as_raw_handle() as isize).to_string(),
+            )
+            .expect("unrelated parent Event fixture handle"),
+    );
+    assert_unrelated_event_was_not_inherited(&parent_event);
+
+    let named_event_seed = workspace
+        .path()
+        .file_name()
+        .expect("sandbox workspace name")
+        .to_string_lossy();
+    let (named_event_name, named_event) = unrelated_named_event(&named_event_seed);
+    run_access_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        "unrelated-named-object",
+        EnvironmentSpec::inherit_core()
+            .with_var(SANDBOX_FIXTURE_MODE, "unrelated-named-object")
+            .expect("unrelated named object fixture mode")
+            .with_var(SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT, named_event_name)
+            .expect("unrelated parent named Event fixture name"),
+    );
+    assert_unrelated_event_was_not_inherited(&named_event);
+
     let disabled_target =
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("disabled-network target listener");
     let disabled_address = disabled_target
@@ -1251,9 +1366,9 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         "parallel backends must own distinct Windows command processes"
     );
     let first_parallel_result =
-        network_probe_result(&mut first_parallel_child, "parallel first HTTP proxy");
+        probe_result(&mut first_parallel_child, "parallel first HTTP proxy");
     let second_parallel_result =
-        network_probe_result(&mut second_parallel_child, "parallel second HTTP proxy");
+        probe_result(&mut second_parallel_child, "parallel second HTTP proxy");
     drop(parallel_fixture_complete);
     let first_parallel_server_result = first_parallel_server
         .join()
