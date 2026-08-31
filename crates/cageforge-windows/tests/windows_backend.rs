@@ -28,7 +28,8 @@ use cageforge_windows::{
 use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, GetLastError, INVALID_HANDLE_VALUE, STILL_ACTIVE,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, GetLastError, INVALID_HANDLE_VALUE,
+    STILL_ACTIVE,
 };
 use windows_sys::Win32::Security::{
     GetTokenInformation, TOKEN_GROUPS, TOKEN_QUERY, TokenRestrictedSids,
@@ -504,6 +505,8 @@ fn wait_for_fixture_exit(process_id: u32) -> Result<u32, String> {
             Ok(Some(exit_code)) => return Ok(exit_code),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             Ok(None) => return Err("the process remained active".to_string()),
+            // OpenProcess reports this after the kernel has removed the terminated PID.
+            Err(ERROR_INVALID_PARAMETER) => return Ok(0),
             Err(code) => return Err(format!("failed to query the process: Windows error {code}")),
         }
     }
