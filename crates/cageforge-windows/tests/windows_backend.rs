@@ -39,6 +39,7 @@ const SANDBOX_FIXTURE_MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const SANDBOX_FIXTURE_READY: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_READY";
 const SANDBOX_FIXTURE_MARKER: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MARKER";
 const SANDBOX_FIXTURE_DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
+const SANDBOX_FIXTURE_DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const SANDBOX_FIXTURE_PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
@@ -560,12 +561,18 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
 
     let outside_secret = temporary.path().join("outside-secret.txt");
     let access_progress = workspace.path().join("denied-read-progress.txt");
+    let minimal_write = workspace
+        .path()
+        .join(".cageforge-test-runtime")
+        .join("write-must-be-denied.txt");
     fs::write(&outside_secret, b"host secret").expect("outside secret fixture");
     let environment = EnvironmentSpec::inherit_core()
         .with_var(SANDBOX_FIXTURE_MODE, "denied-read")
         .expect("denied-read fixture mode")
         .with_var(SANDBOX_FIXTURE_DENIED_READ, outside_secret.as_os_str())
         .expect("denied-read fixture environment")
+        .with_var(SANDBOX_FIXTURE_DENIED_WRITE, minimal_write.as_os_str())
+        .expect("denied-write fixture environment")
         .with_var(SANDBOX_FIXTURE_PROGRESS, access_progress.as_os_str())
         .expect("denied-read fixture progress");
     let access_probe = access_fixture_command(&access_fixture);

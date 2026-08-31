@@ -495,21 +495,31 @@ non-inheriting on ancestors is also insufficient: another concurrent sandbox
 could create a sibling after enumeration and before launch.
 
 The backend therefore keeps each deny and read-only ACE inheritable across its
-complete subtree and turns every nested writable root into a protected-DACL
-inheritance boundary. The protected DACL is built from the handle-read effective
-DACL, removes only the current profile-guard SID, converts retained inherited
-ACEs to explicit ACEs without changing their masks, and installs the writable
-group and write-root capability ACEs. Windows does not retroactively propagate
-a changed parent DACL to existing descendants. Cageforge consequently enumerates
-each existing non-reparse descendant once, applies the required ACEs through
-that object's validated ACL handle, journals the mutation, and reads back that
-same handle before launch. This direct pass covers ordinary and protected DACLs
-alike; it is not replaced by an assumption that a parent mutation reached an
-already-existing file. New descendants then inherit from the protected writable
-root while new siblings outside it continue to inherit the deny. The scan retains
-each object's directory-or-file kind: direct ACEs on existing files are exact,
-while ACEs on existing directories retain their required inheritance flags for
-future children. Windows correctly strips inheritance flags from a file ACE, so
+complete subtree and turns every resolved root into a protected-DACL inheritance
+boundary. A more-specific root removes every Cageforge write-root capability SID
+inherited from its less-specific writable ancestors before it installs its own
+allow set; a read root therefore cannot retain write authority merely because it
+is nested below the workspace root. Ancestor continuation scans exclude all
+more-specific roots, which prevents a broader grant from being reapplied after
+that boundary is established. The protected DACL is built from the handle-read
+effective DACL, removes only the current profile-guard SID and the superseded
+ancestor write capabilities, converts retained inherited ACEs to explicit ACEs
+without changing their masks, and installs the root's required group and
+capability ACEs. A subsequent equivalent plan first proves that the current
+handle descriptor exactly matches its persisted managed descriptor and required
+entries; it then performs no `SetSecurityInfo` write. Thus an idempotent launch
+cannot cause Windows to propagate duplicate inherited ACEs into existing
+descendants. Windows does not retroactively propagate a changed parent DACL to
+existing descendants. Cageforge consequently enumerates each existing
+non-reparse descendant once, applies the required ACEs through that object's
+validated ACL handle, journals the mutation, and reads back that same handle
+before launch. This direct pass covers ordinary and protected DACLs alike; it is
+not replaced by an assumption that a parent mutation reached an already-existing
+file. New descendants then inherit from the protected root while new siblings
+outside it continue to inherit the deny. The scan retains each object's
+directory-or-file kind: direct ACEs on existing files are exact, while ACEs on
+existing directories retain their required inheritance flags for future
+children. Windows correctly strips inheritance flags from a file ACE, so
 Cageforge never treats that canonicalization as either evidence of enforcement
 or a reason to weaken a directory ACE check. Unknown or malformed ACE forms, a
 failed handle read-back, or a descendant on which the effective deny did not

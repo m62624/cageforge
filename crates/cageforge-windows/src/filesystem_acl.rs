@@ -537,7 +537,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                         AclEntry::allow(self.group_sid, READ_ALLOW_MASK),
                         AclEntry::allow(&self.authorities.read_base_sid, READ_ALLOW_MASK),
                     ];
-                    self.insert_foundation(path, entries, false, Vec::new());
+                    self.insert_foundation(path, entries, true, self.inherited_write_sids(path));
                 }
                 FilesystemPlanAccess::WriteRoot => {
                     let write_sid = self.authorities.write_sid(path).ok_or_else(|| {
@@ -671,7 +671,8 @@ impl<'plan> AclPlanBuilder<'plan> {
             })
             .collect::<Vec<_>>();
         for (root, entries) in allow_roots {
-            for descendant in subtree_paths(&root, &[])? {
+            let exclusions = nested_foundation_roots(&root, &self.foundation);
+            for descendant in subtree_paths(&root, &exclusions)? {
                 merge_pending(
                     &mut self.continuation,
                     &descendant.path,
@@ -710,6 +711,15 @@ impl<'plan> AclPlanBuilder<'plan> {
             }
         }
         Ok(())
+    }
+
+    fn inherited_write_sids(&self, path: &Path) -> Vec<String> {
+        self.write_roots
+            .iter()
+            .filter(|root| !paths_equal(path, root) && is_within(path, root))
+            .filter_map(|root| self.authorities.write_sid(root))
+            .map(ToOwned::to_owned)
+            .collect()
     }
 
     fn finish(self) -> Result<FilesystemAclPlan, FilesystemAclError> {
@@ -847,6 +857,12 @@ impl PreparedAclOperation {
     }
 
     fn apply(&self, state: &mut CapabilityStateSession<'_>) -> Result<(), FilesystemAclError> {
+        let before = self.original.snapshot(&self.path)?;
+        let identity = persisted_identity(&self.path);
+        if self.matches_current_managed_acl(state, &identity, &before) {
+            self.verify_root(&before)?;
+            return Ok(());
+        }
         let filtered;
         let base = if self.remove_sids.is_empty() {
             self.original.dacl
@@ -855,14 +871,12 @@ impl PreparedAclOperation {
             filtered.as_ptr()
         };
         let acl = canonical_acl(&self.path, base, &self.entries)?;
-        let before = self.original.snapshot(&self.path)?;
         let protected = self.protect_dacl || before.is_protected();
         let after = acl.snapshot(protected)?;
         if before == after {
             self.verify_root(&after)?;
             return Ok(());
         }
-        let identity = persisted_identity(&self.path);
         state.begin_acl_mutation(
             self.path.final_path().to_path_buf(),
             identity.clone(),
@@ -903,6 +917,20 @@ impl PreparedAclOperation {
             });
         }
         Ok(())
+    }
+
+    fn matches_current_managed_acl(
+        &self,
+        state: &CapabilityStateSession<'_>,
+        identity: &PersistedFileIdentity,
+        descriptor: &PersistedDacl,
+    ) -> bool {
+        (!self.protect_dacl || descriptor.is_protected())
+            && state.managed_acl_objects().iter().any(|object| {
+                paths_equal(object.path(), self.path.final_path())
+                    && object.identity() == identity
+                    && object.current() == descriptor
+            })
     }
 
     fn verify_root(&self, expected: &PersistedDacl) -> Result<PersistedDacl, FilesystemAclError> {
@@ -1065,6 +1093,18 @@ fn entries_for_existing_path(entries: &[AclEntry], is_directory: bool) -> Vec<Ac
                 AclInheritance::Exact
             },
         })
+        .collect()
+}
+
+fn nested_foundation_roots(
+    root: &Path,
+    foundations: &BTreeMap<NativePathKey, PendingAclOperation>,
+) -> Vec<PathBuf> {
+    foundations
+        .values()
+        .map(|operation| operation.path.as_path())
+        .filter(|candidate| !paths_equal(candidate, root) && is_within(candidate, root))
+        .map(Path::to_path_buf)
         .collect()
 }
 
@@ -2535,15 +2575,17 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
+    use cageforge_path::NativePathKey;
     use pretty_assertions::assert_eq;
     use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 
     use super::{
         AclAccessMode, AclEntry, AclInheritance, PendingAclOperation, READ_ALLOW_MASK,
         WRITE_ALLOW_MASK, entries_for_existing_path, materialization_components,
-        open_discovered_acl_path, subtree_paths,
+        nested_foundation_roots, open_discovered_acl_path, subtree_paths,
     };
 
     #[test]
@@ -2618,6 +2660,24 @@ mod tests {
         assert!(paths.iter().any(|entry| entry.path == sibling));
         assert!(!paths.iter().any(|entry| entry.path == writable));
         assert!(!paths.iter().any(|entry| entry.path == writable_child));
+    }
+
+    #[test]
+    fn broader_allow_scan_excludes_more_specific_foundation_root() {
+        let workspace = PathBuf::from(r"C:\workspace");
+        let minimal = workspace.join("runtime");
+        let unrelated = PathBuf::from(r"C:\other");
+        let mut foundations = BTreeMap::new();
+        for path in [&workspace, &minimal, &unrelated] {
+            foundations.insert(
+                NativePathKey::new(path),
+                PendingAclOperation::new(path.clone()),
+            );
+        }
+
+        let exclusions = nested_foundation_roots(&workspace, &foundations);
+
+        assert_eq!(exclusions, vec![minimal]);
     }
 
     #[test]

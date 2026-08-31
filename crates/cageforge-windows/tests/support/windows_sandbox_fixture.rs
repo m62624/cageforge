@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 const MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
+const DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 
 fn main() -> ExitCode {
@@ -25,12 +26,26 @@ fn run() -> Result<(), String> {
         return Err(format!("unsupported fixture mode {mode:?}"));
     }
     let denied_read = PathBuf::from(environment(DENIED_READ)?);
+    let denied_write = PathBuf::from(environment(DENIED_WRITE)?);
     let progress = PathBuf::from(environment(PROGRESS)?);
     std::fs::write(&progress, b"before-denied-read")
         .map_err(|error| format!("record denied-read start: {error}"))?;
     match std::fs::read(&denied_read) {
         Ok(_) => Err(format!("read denied host file {denied_read:?}")),
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&denied_write)
+            {
+                Ok(_) => return Err(format!("wrote read-only sandbox path {denied_write:?}")),
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+                Err(error) => {
+                    return Err(format!(
+                        "write read-only sandbox path {denied_write:?}: {error}"
+                    ));
+                }
+            }
             std::fs::write(&progress, b"after-denied-read")
                 .map_err(|error| format!("record denied-read completion: {error}"))?;
             std::io::stdout()
