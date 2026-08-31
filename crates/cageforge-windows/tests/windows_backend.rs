@@ -178,23 +178,34 @@ fn spawn_network_probe(
 }
 
 fn wait_for_network_probe(child: &mut WindowsChild, mode: &str) {
-    let status = child.wait().expect("wait for network probe");
+    if let Err(error) = network_probe_result(child, mode) {
+        panic!("{error}");
+    }
+}
+
+fn network_probe_result(child: &mut WindowsChild, mode: &str) -> Result<(), String> {
+    let status = child
+        .wait()
+        .map_err(|error| format!("network probe {mode:?} did not complete: {error}"))?;
     let mut stdout = String::new();
     child
         .stdout()
-        .expect("captured network probe stdout")
+        .ok_or_else(|| format!("network probe {mode:?} did not capture stdout"))?
         .read_to_string(&mut stdout)
-        .expect("read network probe stdout");
+        .map_err(|error| format!("read network probe {mode:?} stdout: {error}"))?;
     let mut stderr = String::new();
     child
         .stderr()
-        .expect("captured network probe stderr")
+        .ok_or_else(|| format!("network probe {mode:?} did not capture stderr"))?
         .read_to_string(&mut stderr)
-        .expect("read network probe stderr");
-    assert!(
-        status.success(),
-        "network probe {mode:?} failed with {status}; stdout: {stdout}; stderr: {stderr}"
-    );
+        .map_err(|error| format!("read network probe {mode:?} stderr: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "network probe {mode:?} failed with {status}; stdout: {stdout}; stderr: {stderr}"
+        ))
+    }
 }
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
@@ -1155,16 +1166,25 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         second_parallel_child.id(),
         "parallel backends must own distinct Windows command processes"
     );
-    wait_for_network_probe(&mut first_parallel_child, "parallel first HTTP proxy");
-    wait_for_network_probe(&mut second_parallel_child, "parallel second HTTP proxy");
-    first_parallel_server
+    let first_parallel_result =
+        network_probe_result(&mut first_parallel_child, "parallel first HTTP proxy");
+    let second_parallel_result =
+        network_probe_result(&mut second_parallel_child, "parallel second HTTP proxy");
+    let first_parallel_server_result = first_parallel_server
         .join()
-        .expect("first parallel HTTP fixture thread")
-        .expect("first parallel route stayed isolated");
-    second_parallel_server
+        .map_err(|_| "first parallel HTTP fixture thread panicked".to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    let second_parallel_server_result = second_parallel_server
         .join()
-        .expect("second parallel HTTP fixture thread")
-        .expect("second parallel route stayed isolated");
+        .map_err(|_| "second parallel HTTP fixture thread panicked".to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    assert!(
+        first_parallel_result.is_ok()
+            && second_parallel_result.is_ok()
+            && first_parallel_server_result.is_ok()
+            && second_parallel_server_result.is_ok(),
+        "parallel proxy route results: first child={first_parallel_result:?}; second child={second_parallel_result:?}; first target {first_parallel_target}={first_parallel_server_result:?}; second target {second_parallel_target}={second_parallel_server_result:?}"
+    );
     drop(first_parallel_child);
     drop(second_parallel_child);
     drop(parallel_backend);
