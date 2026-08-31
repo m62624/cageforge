@@ -495,7 +495,9 @@ different spelling back into the lexical policy evaluator, because a valid 8.3
 alias would otherwise become an unmatched deny after it was safely opened.
 When several policy spellings resolve to the same stable object, their local
 decisions are merged explicitly as deny over read over write. The final native
-path remains the sole ACL, containment, profile-digest, and object-identity key.
+path remains the ACL, containment, and profile-digest key; durable ACL recovery
+binds the same object by its volume serial number and complete file ID rather
+than rejecting an equivalent short-name or hard-link spelling.
 
 A deny ACE for the profile-guard SID must not remain effective inside a
 more-specific writable carve-out. Windows evaluates a matching deny before an

@@ -996,11 +996,10 @@ impl PreparedAclOperation {
         descriptor: &PersistedDacl,
     ) -> bool {
         (!self.protect_dacl || descriptor.is_protected())
-            && state.managed_acl_objects().iter().any(|object| {
-                paths_equal(object.path(), self.path.final_path())
-                    && object.identity() == identity
-                    && object.current() == descriptor
-            })
+            && state
+                .managed_acl_objects()
+                .iter()
+                .any(|object| object.identity() == identity && object.current() == descriptor)
     }
 
     fn is_current_managed_acl(
