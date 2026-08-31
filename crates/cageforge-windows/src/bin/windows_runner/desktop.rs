@@ -131,7 +131,7 @@ impl PrivateDesktop {
         }
         let desktop = Self {
             handle,
-            startup_name: format!("Winsta0\\{name}").encode_utf16().collect(),
+            startup_name: startup_desktop_name(&name),
         };
         desktop.verify_descriptor(&descriptor)?;
         Ok(desktop)
@@ -237,4 +237,26 @@ fn wide_string(value: *const u16) -> String {
 
 fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn startup_desktop_name(name: &str) -> Vec<u16> {
+    to_wide(&format!("Winsta0\\{name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::startup_desktop_name;
+
+    #[test]
+    fn startup_desktop_name_is_a_nul_terminated_windows_string() {
+        let name = startup_desktop_name("Cageforge-test");
+
+        assert_eq!(
+            name,
+            "Winsta0\\Cageforge-test"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>()
+        );
+    }
 }

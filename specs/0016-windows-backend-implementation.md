@@ -283,6 +283,9 @@ own sandbox-account logon session after constructing the restricted token. It
 uses a cryptographically random name and a protected descriptor that grants
 full desktop access only to SYSTEM, Administrators, the runner account, and
 that launch logon SID; it reads the descriptor back before process creation.
+The retained `STARTUPINFOEXW::lpDesktop` value is the NUL-terminated
+`Winsta0\\<random-name>` Windows string for that exact desktop; it remains
+allocated through `CreateProcessAsUserW`.
 The runner retains the desktop handle while it supervises the child, and the
 parent retains the runner boundary for the complete `WindowsChild` lifetime.
 This follows the Windows session ownership model used by the frozen Codex
