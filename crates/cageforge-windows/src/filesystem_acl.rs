@@ -1020,7 +1020,11 @@ impl PreparedAclOperation {
         if !self.matches_current_managed_acl(state, identity, descriptor) {
             return Ok(false);
         }
-        Ok(true)
+        match self.verify_exact_current_root(descriptor) {
+            Ok(_) => Ok(true),
+            Err(FilesystemAclError::AceMismatch { .. }) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     fn inherits_verified_managed_boundary(
@@ -1086,7 +1090,7 @@ impl PreparedAclOperation {
             });
         }
         for entry in &self.entries {
-            verify_exact_explicit_entry(&self.path, descriptor.dacl, entry)?;
+            verify_entry(&self.path, descriptor.dacl, entry, true)?;
         }
         for sid in &self.remove_sids {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
@@ -1095,6 +1099,26 @@ impl PreparedAclOperation {
             return Err(FilesystemAclError::DescriptorSnapshotMismatch {
                 path: self.path.final_path().to_path_buf(),
             });
+        }
+        Ok(actual)
+    }
+
+    fn verify_exact_current_root(
+        &self,
+        expected: &PersistedDacl,
+    ) -> Result<PersistedDacl, FilesystemAclError> {
+        let descriptor = SecurityDescriptor::read(&self.path)?;
+        let actual = descriptor.snapshot(&self.path)?;
+        if &actual != expected || (self.protect_dacl && !actual.is_protected()) {
+            return Err(FilesystemAclError::DescriptorSnapshotMismatch {
+                path: self.path.final_path().to_path_buf(),
+            });
+        }
+        for entry in &self.entries {
+            verify_exact_explicit_entry(&self.path, descriptor.dacl, entry)?;
+        }
+        for sid in &self.remove_sids {
+            verify_sid_absent(&self.path, descriptor.dacl, sid)?;
         }
         Ok(actual)
     }
@@ -2649,10 +2673,11 @@ fn explicit_entry(
 }
 
 #[allow(unsafe_code)]
-fn verify_exact_explicit_entry(
+fn verify_entry(
     path: &ValidatedPath,
     dacl: *mut ACL,
     expected: &PreparedAclEntry,
+    exact_mask: bool,
 ) -> Result<(), FilesystemAclError> {
     let information = acl_information(path, dacl)?;
     let mut expected_mask = 0u32;
@@ -2703,7 +2728,11 @@ fn verify_exact_explicit_entry(
             opposite = true;
         }
     }
-    if !opposite && expected_mask == expected.declaration.mask {
+    if !opposite
+        && (expected_mask == expected.declaration.mask
+            || (!exact_mask
+                && expected_mask & expected.declaration.mask == expected.declaration.mask))
+    {
         Ok(())
     } else {
         Err(FilesystemAclError::AceMismatch {
@@ -2715,11 +2744,28 @@ fn verify_exact_explicit_entry(
     }
 }
 
-#[allow(unsafe_code)]
+fn verify_exact_explicit_entry(
+    path: &ValidatedPath,
+    dacl: *mut ACL,
+    expected: &PreparedAclEntry,
+) -> Result<(), FilesystemAclError> {
+    verify_exact_entry(path, dacl, expected, false)
+}
+
 fn verify_exact_inherited_entry(
     path: &ValidatedPath,
     dacl: *mut ACL,
     expected: &PreparedAclEntry,
+) -> Result<(), FilesystemAclError> {
+    verify_exact_entry(path, dacl, expected, true)
+}
+
+#[allow(unsafe_code)]
+fn verify_exact_entry(
+    path: &ValidatedPath,
+    dacl: *mut ACL,
+    expected: &PreparedAclEntry,
+    inherited: bool,
 ) -> Result<(), FilesystemAclError> {
     let information = acl_information(path, dacl)?;
     let mut matched = false;
@@ -2755,7 +2801,7 @@ fn verify_exact_inherited_entry(
         if unsafe { EqualSid(sid, expected.sid.0) } == 0 {
             continue;
         }
-        if header.AceFlags & INHERITED_ACE as u8 == 0
+        if (header.AceFlags & INHERITED_ACE as u8 != 0) != inherited
             || header.AceType != expected.declaration.mode.ace_type()
             || u32::from(header.AceFlags & !(INHERITED_ACE as u8))
                 != expected.declaration.inheritance.native()
