@@ -51,6 +51,9 @@ const SANDBOX_FIXTURE_MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const SANDBOX_FIXTURE_READY: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_READY";
 const SANDBOX_FIXTURE_MARKER: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MARKER";
 const SANDBOX_FIXTURE_DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
+const SANDBOX_FIXTURE_DENIED_READ_ADS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_ADS";
+const SANDBOX_FIXTURE_DENIED_READ_DEVICE: &str =
+    "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_DEVICE";
 const SANDBOX_FIXTURE_DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const SANDBOX_FIXTURE_PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const SANDBOX_FIXTURE_NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
@@ -947,17 +950,31 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     .expect("copy denied-read fixture into the writable workspace");
 
     let outside_secret = temporary.path().join("outside-secret.txt");
+    let outside_secret_ads = PathBuf::from(format!("{}:cageforge", outside_secret.display()));
+    let outside_secret_device = PathBuf::from(format!(r"\\?\{}", outside_secret.display()));
     let access_progress = workspace.path().join("denied-read-progress.txt");
     let minimal_write = workspace
         .path()
         .join(".cageforge-test-runtime")
         .join("write-must-be-denied.txt");
     fs::write(&outside_secret, b"host secret").expect("outside secret fixture");
+    fs::write(&outside_secret_ads, b"host alternate data stream")
+        .expect("outside secret alternate data stream fixture");
     let environment = EnvironmentSpec::inherit_core()
         .with_var(SANDBOX_FIXTURE_MODE, "denied-read")
         .expect("denied-read fixture mode")
         .with_var(SANDBOX_FIXTURE_DENIED_READ, outside_secret.as_os_str())
         .expect("denied-read fixture environment")
+        .with_var(
+            SANDBOX_FIXTURE_DENIED_READ_ADS,
+            outside_secret_ads.as_os_str(),
+        )
+        .expect("denied alternate data stream fixture environment")
+        .with_var(
+            SANDBOX_FIXTURE_DENIED_READ_DEVICE,
+            outside_secret_device.as_os_str(),
+        )
+        .expect("denied device path fixture environment")
         .with_var(SANDBOX_FIXTURE_DENIED_WRITE, minimal_write.as_os_str())
         .expect("denied-write fixture environment")
         .with_var(SANDBOX_FIXTURE_PROGRESS, access_progress.as_os_str())

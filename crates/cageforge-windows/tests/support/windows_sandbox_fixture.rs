@@ -9,6 +9,8 @@ use std::time::Duration;
 
 const MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
+const DENIED_READ_ADS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_ADS";
+const DENIED_READ_DEVICE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_DEVICE";
 const DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
@@ -39,6 +41,8 @@ fn run() -> Result<(), String> {
 
 fn denied_read() -> Result<(), String> {
     let denied_read = PathBuf::from(environment(DENIED_READ)?);
+    let denied_read_ads = PathBuf::from(environment(DENIED_READ_ADS)?);
+    let denied_read_device = PathBuf::from(environment(DENIED_READ_DEVICE)?);
     let denied_write = PathBuf::from(environment(DENIED_WRITE)?);
     let progress = PathBuf::from(environment(PROGRESS)?);
     std::fs::write(&progress, b"before-denied-read")
@@ -66,6 +70,28 @@ fn denied_read() -> Result<(), String> {
                 .map_err(|error| format!("write denied-read result: {error}"))
         }
         Err(error) => Err(format!("read denied host file: {error}")),
+    }?;
+    match std::fs::read(&denied_read_ads) {
+        Ok(_) => {
+            return Err(format!(
+                "read denied host alternate data stream {denied_read_ads:?}"
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+        Err(error) => {
+            return Err(format!(
+                "read denied host alternate data stream {denied_read_ads:?}: {error}"
+            ));
+        }
+    };
+    match std::fs::read(&denied_read_device) {
+        Ok(_) => Err(format!(
+            "read denied host device path {denied_read_device:?}"
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok(()),
+        Err(error) => Err(format!(
+            "read denied host device path {denied_read_device:?}: {error}"
+        )),
     }
 }
 
