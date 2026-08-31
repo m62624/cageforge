@@ -12,7 +12,7 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_EMPTY, FWP_MATCH_EQUAL,
     FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_VALUE0, FWP_VALUE0_0,
     FWPM_ACTION0, FWPM_ACTION0_0, FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_IP_PROTOCOL,
-    FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
+    FWPM_CONDITION_IP_REMOTE_ADDRESS_V4, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
     FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0, FWPM_FILTER0_0,
     FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
@@ -499,7 +499,7 @@ fn build_conditions(specs: &[ConditionSpec], user: &UserCondition) -> Vec<FWPM_F
                 },
             },
             ConditionSpec::RemoteAddressV4(address) => FWPM_FILTER_CONDITION0 {
-                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS_V4,
                 matchType: FWP_MATCH_EQUAL,
                 conditionValue: FWP_CONDITION_VALUE0 {
                     r#type: FWP_UINT32,
@@ -537,7 +537,7 @@ fn condition_matches(
                 && unsafe { actual.conditionValue.Anonymous.uint8 } == *protocol
         }
         ConditionSpec::RemoteAddressV4(address) => {
-            guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_ADDRESS)
+            guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_ADDRESS_V4)
                 && actual.conditionValue.r#type == FWP_UINT32
                 && unsafe { actual.conditionValue.Anonymous.uint32 } == *address
         }
