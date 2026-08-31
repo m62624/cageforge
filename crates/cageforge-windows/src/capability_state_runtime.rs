@@ -617,7 +617,11 @@ pub(crate) fn dacl_fingerprint(dacl: &PersistedDacl) -> String {
         .iter()
         .flat_map(|byte| [hexadecimal_digit(byte >> 4), hexadecimal_digit(byte & 0x0f)])
         .collect::<String>();
-    format!("protected={} sha256={sha256}", dacl.is_protected(),)
+    format!(
+        "protected={} bytes={} sha256={sha256}",
+        dacl.is_protected(),
+        dacl.bytes().len(),
+    )
 }
 
 const fn hexadecimal_digit(value: u8) -> char {
@@ -806,8 +810,8 @@ mod tests {
         else {
             panic!("unexpected capability-state transition error");
         };
-        assert!(expected.starts_with("protected=true sha256="));
-        assert!(actual.starts_with("protected=false sha256="));
+        assert!(expected.starts_with("protected=true bytes="));
+        assert!(actual.starts_with("protected=false bytes="));
         assert_ne!(expected, actual);
     }
 
