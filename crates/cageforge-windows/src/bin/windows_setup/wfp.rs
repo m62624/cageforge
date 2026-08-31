@@ -8,10 +8,11 @@ use windows_sys::Win32::Foundation::{
     FWP_E_ALREADY_EXISTS, FWP_E_FILTER_NOT_FOUND, FWP_E_NOT_FOUND, HANDLE, HLOCAL, LocalFree,
 };
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWP_ACTION_BLOCK, FWP_ACTRL_MATCH_FILTER, FWP_BYTE_BLOB, FWP_CONDITION_VALUE0,
-    FWP_CONDITION_VALUE0_0, FWP_EMPTY, FWP_MATCH_EQUAL, FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT8,
-    FWP_UINT16, FWP_VALUE0, FWPM_ACTION0, FWPM_ACTION0_0, FWPM_CONDITION_ALE_USER_ID,
-    FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
+    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTRL_MATCH_FILTER, FWP_BYTE_BLOB,
+    FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_EMPTY, FWP_MATCH_EQUAL,
+    FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_VALUE0, FWP_VALUE0_0,
+    FWPM_ACTION0, FWPM_ACTION0_0, FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_IP_PROTOCOL,
+    FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
     FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0, FWPM_FILTER0_0,
     FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
@@ -21,7 +22,7 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FwpmSubLayerAdd0, FwpmSubLayerGetByKey0, FwpmTransactionAbort0, FwpmTransactionBegin0,
     FwpmTransactionCommit0,
 };
-use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6};
+use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP};
 use windows_sys::Win32::Security::Authorization::{
     BuildExplicitAccessWithNameW, BuildSecurityDescriptorW, ConvertStringSidToSidW,
     EXPLICIT_ACCESS_W, GRANT_ACCESS,
@@ -47,12 +48,15 @@ struct FilterSpec {
     name: String,
     description: String,
     layer_key: GUID,
+    action: u32,
+    weight: u8,
     conditions: Vec<ConditionSpec>,
 }
 
 enum ConditionSpec {
     User,
     Protocol(u8),
+    RemoteAddressV4(u32),
     RemotePort(u16),
 }
 
@@ -245,6 +249,7 @@ pub(super) fn install_and_verify(
     owner_sid: &str,
     offline_account: &str,
     offline_sid: &str,
+    proxy_ports: &[u16],
     progress: &mut dyn FnMut(SetupStage, &str),
 ) -> NativeSetupResult<String> {
     progress(SetupStage::Wfp, "opening WFP engine");
@@ -257,7 +262,7 @@ pub(super) fn install_and_verify(
     ensure_sublayer(&engine)?;
     progress(SetupStage::Wfp, "building WFP user condition");
     let user = UserCondition::new(offline_account)?;
-    let specs = filter_specs(owner_sid);
+    let specs = filter_specs(owner_sid, proxy_ports);
     for spec in &specs {
         progress(SetupStage::Wfp, &format!("installing filter {}", spec.name));
         replace_filter(&engine, spec, &user)?;
@@ -277,10 +282,10 @@ pub(super) fn install_and_verify(
 }
 
 #[allow(unsafe_code)]
-pub(super) fn remove(owner_sid: &str) -> NativeSetupResult<()> {
+pub(super) fn remove(owner_sid: &str, proxy_ports: &[u16]) -> NativeSetupResult<()> {
     let engine = Engine::open()?;
     let mut transaction = engine.begin_transaction()?;
-    for spec in filter_specs(owner_sid) {
+    for spec in filter_specs(owner_sid, proxy_ports) {
         let status = unsafe { FwpmFilterDeleteByKey0(engine.handle, &spec.key) };
         wfp_status_or(
             status,
@@ -369,11 +374,11 @@ fn replace_filter(
         providerData: empty_blob(),
         layerKey: spec.layer_key,
         subLayerKey: SUBLAYER_KEY,
-        weight: empty_value(),
+        weight: weight_value(spec.weight),
         numFilterConditions: conditions.len() as u32,
         filterCondition: conditions.as_mut_ptr(),
         action: FWPM_ACTION0 {
-            r#type: FWP_ACTION_BLOCK,
+            r#type: spec.action,
             Anonymous: FWPM_ACTION0_0 {
                 filterType: GUID::from_u128(0),
             },
@@ -449,7 +454,9 @@ fn verify_filter(engine: &Engine, spec: &FilterSpec, offline_sid: &str) -> Nativ
         || !guid_eq(filter.subLayerKey, SUBLAYER_KEY)
         || filter.providerKey.is_null()
         || !guid_eq(unsafe { *filter.providerKey }, PROVIDER_KEY)
-        || filter.action.r#type != FWP_ACTION_BLOCK
+        || filter.action.r#type != spec.action
+        || filter.weight.r#type != FWP_UINT8
+        || unsafe { filter.weight.Anonymous.uint8 } != spec.weight
         || filter.numFilterConditions != spec.conditions.len() as u32
         || filter.filterCondition.is_null()
     {
@@ -470,9 +477,9 @@ fn verify_filter(engine: &Engine, spec: &FilterSpec, offline_sid: &str) -> Nativ
 }
 
 fn build_conditions(specs: &[ConditionSpec], user: &UserCondition) -> Vec<FWPM_FILTER_CONDITION0> {
-    specs
-        .iter()
-        .map(|spec| match spec {
+    let mut filters = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let filter = match spec {
             ConditionSpec::User => FWPM_FILTER_CONDITION0 {
                 fieldKey: FWPM_CONDITION_ALE_USER_ID,
                 matchType: FWP_MATCH_EQUAL,
@@ -491,6 +498,14 @@ fn build_conditions(specs: &[ConditionSpec], user: &UserCondition) -> Vec<FWPM_F
                     Anonymous: FWP_CONDITION_VALUE0_0 { uint8: *protocol },
                 },
             },
+            ConditionSpec::RemoteAddressV4(address) => FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT32,
+                    Anonymous: FWP_CONDITION_VALUE0_0 { uint32: *address },
+                },
+            },
             ConditionSpec::RemotePort(port) => FWPM_FILTER_CONDITION0 {
                 fieldKey: FWPM_CONDITION_IP_REMOTE_PORT,
                 matchType: FWP_MATCH_EQUAL,
@@ -499,8 +514,10 @@ fn build_conditions(specs: &[ConditionSpec], user: &UserCondition) -> Vec<FWPM_F
                     Anonymous: FWP_CONDITION_VALUE0_0 { uint16: *port },
                 },
             },
-        })
-        .collect()
+        };
+        filters.push(filter);
+    }
+    filters
 }
 
 #[allow(unsafe_code)]
@@ -518,6 +535,11 @@ fn condition_matches(
             guid_eq(actual.fieldKey, FWPM_CONDITION_IP_PROTOCOL)
                 && actual.conditionValue.r#type == FWP_UINT8
                 && unsafe { actual.conditionValue.Anonymous.uint8 } == *protocol
+        }
+        ConditionSpec::RemoteAddressV4(address) => {
+            guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_ADDRESS)
+                && actual.conditionValue.r#type == FWP_UINT32
+                && unsafe { actual.conditionValue.Anonymous.uint32 } == *address
         }
         ConditionSpec::RemotePort(port) => {
             guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_PORT)
@@ -579,7 +601,7 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
     unsafe { IsValidSid(actual_sid) != 0 && EqualSid(actual_sid, expected_sid.0) != 0 }
 }
 
-fn filter_specs(owner_sid: &str) -> Vec<FilterSpec> {
+fn filter_specs(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterSpec> {
     let specs: [(&str, &str, GUID, Vec<ConditionSpec>); 12] = [
         (
             "icmp-connect-v4",
@@ -666,16 +688,55 @@ fn filter_specs(owner_sid: &str) -> Vec<FilterSpec> {
             vec![ConditionSpec::User, ConditionSpec::RemotePort(139)],
         ),
     ];
-    specs
+    let mut filters: Vec<_> = specs
         .into_iter()
         .map(|(label, description, layer_key, conditions)| FilterSpec {
             key: derived_guid(owner_sid, label),
             name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
             description: format!("Cageforge offline identity - {description}"),
             layer_key,
+            action: FWP_ACTION_BLOCK,
+            weight: 1,
             conditions,
         })
-        .collect()
+        .collect();
+    for port in proxy_ports {
+        let label = format!("proxy-v4-{port}");
+        filters.push(FilterSpec {
+            key: derived_guid(owner_sid, &label),
+            name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
+            description: format!(
+                "Cageforge offline identity - permit exact IPv4 loopback proxy port {port}"
+            ),
+            layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            action: FWP_ACTION_PERMIT,
+            weight: 2,
+            conditions: vec![
+                ConditionSpec::User,
+                ConditionSpec::Protocol(IPPROTO_TCP as u8),
+                ConditionSpec::RemoteAddressV4(u32::from_ne_bytes([127, 0, 0, 1])),
+                ConditionSpec::RemotePort(*port),
+            ],
+        });
+    }
+    for (family, layer_key) in [
+        ("v4", FWPM_LAYER_ALE_AUTH_CONNECT_V4),
+        ("v6", FWPM_LAYER_ALE_AUTH_CONNECT_V6),
+    ] {
+        let label = format!("default-deny-{family}");
+        filters.push(FilterSpec {
+            key: derived_guid(owner_sid, &label),
+            name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
+            description: format!(
+                "Cageforge offline identity - block all outbound {family} connects"
+            ),
+            layer_key,
+            action: FWP_ACTION_BLOCK,
+            weight: 1,
+            conditions: vec![ConditionSpec::User],
+        });
+    }
+    filters
 }
 
 fn derived_guid(owner_sid: &str, label: &str) -> GUID {
@@ -778,6 +839,13 @@ fn empty_value() -> FWP_VALUE0 {
     }
 }
 
+fn weight_value(weight: u8) -> FWP_VALUE0 {
+    FWP_VALUE0 {
+        r#type: FWP_UINT8,
+        Anonymous: FWP_VALUE0_0 { uint8: weight },
+    }
+}
+
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -786,11 +854,16 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{filter_specs, guid_string};
+    use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
+        FWP_ACTION_BLOCK, FWP_ACTION_PERMIT,
+    };
+    use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
+
+    use super::{ConditionSpec, filter_specs, guid_string};
 
     #[test]
     fn owner_scoped_filter_keys_and_names_are_unique() {
-        let specs = filter_specs("S-1-5-21-1-2-3-1001");
+        let specs = filter_specs("S-1-5-21-1-2-3-1001", &[40_000, 40_002]);
         let keys = specs
             .iter()
             .map(|spec| guid_string(spec.key))
@@ -801,5 +874,42 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(keys.len(), specs.len());
         assert_eq!(names.len(), specs.len());
+    }
+
+    #[test]
+    fn offline_wfp_default_deny_permits_only_the_exact_loopback_ingress() {
+        let specs = filter_specs("S-1-5-21-1-2-3-1001", &[40_000, 40_002]);
+        let default_v4 = specs
+            .iter()
+            .find(|spec| spec.name.contains("default-deny-v4"))
+            .expect("IPv4 default-deny filter");
+        assert_eq!(default_v4.action, FWP_ACTION_BLOCK);
+        assert_eq!(default_v4.weight, 1);
+        assert!(matches!(
+            default_v4.conditions.as_slice(),
+            [ConditionSpec::User]
+        ));
+
+        let proxy_v4 = specs
+            .iter()
+            .find(|spec| spec.name.contains("proxy-v4-40000"))
+            .expect("IPv4 loopback proxy permit");
+        assert_eq!(proxy_v4.action, FWP_ACTION_PERMIT);
+        assert_eq!(proxy_v4.weight, 2);
+        assert!(matches!(
+            proxy_v4.conditions.as_slice(),
+            [
+                ConditionSpec::User,
+                ConditionSpec::Protocol(protocol),
+                ConditionSpec::RemoteAddressV4(address),
+                ConditionSpec::RemotePort(40_000),
+            ] if *protocol == IPPROTO_TCP as u8
+                && *address == u32::from_ne_bytes([127, 0, 0, 1])
+        ));
+
+        assert!(
+            specs.iter().all(|spec| !spec.name.contains("proxy-v6-")),
+            "IPv6 ingress is not attributable and must remain default-deny"
+        );
     }
 }

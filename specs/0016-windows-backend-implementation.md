@@ -661,8 +661,15 @@ Offline setup must prove all of the following:
 - non-loopback outbound traffic is blocked for every active firewall profile;
 - UDP loopback is blocked;
 - TCP loopback is blocked except for the configured Cageforge ingress ports;
-- ICMP, DNS ports 53 and 853, and SMB ports 139 and 445 are blocked by the
-  Cageforge WFP provider for IPv4 and IPv6; and
+- the Cageforge WFP provider adds a user-scoped default-deny filter at each
+  IPv4 and IPv6 `ALE_AUTH_CONNECT` layer. A higher-weight soft permit exists
+  only for TCP connections to `127.0.0.1` on the two read-back verified
+  Cageforge ingress ports. IPv6 has no permit because ingress attribution is
+  IPv4-only. Thus an offline process cannot use another loopback service or an
+  external service that happens to use an ingress port;
+- ICMP resource assignment, DNS ports 53 and 853, and SMB ports 139 and 445
+  remain independently blocked by the Cageforge WFP provider for IPv4 and
+  IPv6; and
 - local policy is effective rather than overridden or partially applied by
   Group Policy.
 
@@ -827,7 +834,7 @@ review includes:
 | `windows-sandbox-rs/src/desktop.rs` | Private desktop for each launch | Private desktop is mandatory initially |
 | `windows-sandbox-rs/src/identity.rs`, `setup.rs`, and setup helper | Versioned users, protected credentials, ACL/firewall reconciliation | Upstream fixed account names become user-SID-scoped Cageforge identities; library does not silently launch weaker fallback |
 | `windows-sandbox-rs/src/acl.rs`, `deny_read_*`, `allow.rs`, and `audit.rs` | Capability ACEs, deny-read/write and persistent reconciliation | Handle-based reparse/TOCTOU validation; profile-scoped identities; protected-DACL writable boundaries preserve inheritable denies without deny/allow ordering or finite branch snapshots; no time-bounded best-effort security scan |
-| `windows-sandbox-rs/src/wfp.rs` and setup firewall module | Offline-account firewall and WFP filters | WFP failure is fatal, all configured policy is read back, and every active firewall profile must itself be enabled |
+| `windows-sandbox-rs/src/wfp.rs` and setup firewall module | Offline-account firewall and WFP filters | WFP failure is fatal, all configured policy is read back, and every active firewall profile must itself be enabled. Cageforge additionally uses WFP default-deny plus exact loopback ingress permits because the frozen firewall-only loopback-port complement did not block a real offline-user loopback connection on Windows Server 2025. |
 | `network-proxy/src/windows_tcp_attribution.rs` and `windows_proxy_ingress.rs` | IPv4 four-tuple PID attribution and random restricting-SID routing | IPv4-only ingress is explicit and the route feeds the independent Cageforge gateway authentication contract |
 | `windows-sandbox-rs/src/elevated/*` and command runner | Dedicated-user helper transport and lifecycle | Versioned minimal protocol with no Codex command/profile types |
 
@@ -884,6 +891,9 @@ The Cageforge setup protocol retains the following boundaries:
   dependent COM interface can still execute `Release`;
 - WFP provider, sublayer, and every account-scoped filter are persistent,
   stable Cageforge objects and are read back before marker commit; and
+- the marker version is advanced whenever the persistent WFP filter contract
+  changes, so an earlier firewall-only installation is stale rather than being
+  silently treated as an equivalent boundary; and
 - setup is committed only after all native state is effective.
 
 Intentional differences are exact typed errors instead of product error codes,

@@ -145,6 +145,7 @@ fn install(
         &request.owner_sid,
         &accounts.offline_name,
         &accounts.offline_sid,
+        &request.proxy_ports,
         progress,
     )?;
     progress(SetupStage::Marker, "committing verified setup marker");
@@ -532,7 +533,7 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
     };
     require_completed_filesystem_cleanup(request)?;
     firewall::remove(&request.owner_sid)?;
-    wfp::remove(&request.owner_sid)?;
+    wfp::remove(&request.owner_sid, &request.proxy_ports)?;
     accounts::remove(request)?;
     for path in [
         request.state_directory.join("setup.json"),
