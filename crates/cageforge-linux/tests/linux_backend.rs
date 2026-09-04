@@ -2225,12 +2225,12 @@ fn restricted_network_capabilities_are_advertised_for_exact_gateway_enforcement(
     assert!(
         backend
             .capabilities()
-            .supports(BackendCapability::NetworkUnixSocketIsolation)
+            .supports(BackendCapability::NetworkLocalIpcIsolation)
     );
     assert!(
         !backend
             .capabilities()
-            .supports(BackendCapability::NetworkUnixSocketRules)
+            .supports(BackendCapability::NetworkLocalIpcRules)
     );
 }
 
@@ -2412,7 +2412,7 @@ fn explicit_unix_socket_policy_remains_a_typed_unsupported_requirement() {
     assert!(matches!(
         error,
         LinuxBackendError::Contract(BackendContractError::UnsupportedCapability {
-            capability: BackendCapability::NetworkUnixSocketRules,
+            capability: BackendCapability::NetworkLocalIpcRules,
         })
     ));
 }

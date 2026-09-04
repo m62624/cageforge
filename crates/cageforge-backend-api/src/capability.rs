@@ -24,7 +24,9 @@ impl fmt::Display for BackendCapability {
             Self::FilesystemRootScopes => "system-root filesystem scope resolution",
             Self::FilesystemMinimalScopes => "platform-minimal filesystem scope resolution",
             Self::FilesystemTmpdirScopes => "temporary-directory filesystem scope resolution",
-            Self::FilesystemSlashTmpScopes => "slash-tmp filesystem scope resolution",
+            Self::FilesystemConventionalTemporaryScopes => {
+                "conventional temporary filesystem scope resolution"
+            }
             Self::FilesystemGlobs => "filesystem deny-glob matching",
             Self::FilesystemGlobScanDepth => {
                 "filesystem glob scan-depth semantics, including unbounded scans"
@@ -42,8 +44,8 @@ impl fmt::Display for BackendCapability {
                 "network non-public and special-purpose address restrictions"
             }
             Self::NetworkResolvedTargets => "exact resolved network targets",
-            Self::NetworkUnixSocketIsolation => "pathname Unix socket isolation",
-            Self::NetworkUnixSocketRules => "per-path Unix socket rules",
+            Self::NetworkLocalIpcIsolation => "pathname local-IPC isolation",
+            Self::NetworkLocalIpcRules => "per-path local-IPC rules",
             Self::EnvironmentAll => "all inherited environment variables",
             Self::EnvironmentCore => "backend-selected core environment variables",
             Self::EnvironmentNone => "an empty inherited environment",

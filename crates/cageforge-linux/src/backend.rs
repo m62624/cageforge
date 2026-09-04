@@ -449,7 +449,7 @@ impl SandboxBackend for LinuxBackend {
             BackendCapability::FilesystemRootScopes,
             BackendCapability::FilesystemMinimalScopes,
             BackendCapability::FilesystemTmpdirScopes,
-            BackendCapability::FilesystemSlashTmpScopes,
+            BackendCapability::FilesystemConventionalTemporaryScopes,
             BackendCapability::FilesystemReadOnlySubpaths,
             BackendCapability::FilesystemGlobs,
             BackendCapability::FilesystemGlobScanDepth,
@@ -460,7 +460,7 @@ impl SandboxBackend for LinuxBackend {
             BackendCapability::NetworkDomainRules,
             BackendCapability::NetworkLocalAddressRestrictions,
             BackendCapability::NetworkResolvedTargets,
-            BackendCapability::NetworkUnixSocketIsolation,
+            BackendCapability::NetworkLocalIpcIsolation,
             BackendCapability::EnvironmentAll,
             BackendCapability::EnvironmentCore,
             BackendCapability::EnvironmentNone,
@@ -524,13 +524,13 @@ fn validate_network_lowering<'a>(
             capability: BackendCapability::NetworkExternal,
         });
     }
-    if requirements.unix_socket_rules() {
+    if requirements.local_ipc_rules() {
         return Err(LinuxBackendError::UnsupportedCapability {
-            capability: BackendCapability::NetworkUnixSocketRules,
+            capability: BackendCapability::NetworkLocalIpcRules,
         });
     }
     if network_mode(sandbox)? == LinuxNetworkMode::ProxyRouted
-        && !requirements.unix_socket_isolation()
+        && !requirements.local_ipc_isolation()
     {
         return Err(NetworkCombinationError::ProxyRequiresUnixSocketIsolation.into());
     }
@@ -551,7 +551,7 @@ fn network_mode(sandbox: &EffectiveSandbox) -> Result<LinuxNetworkMode, LinuxBac
         {
             Ok(LinuxNetworkMode::ProxyRouted)
         }
-        NetworkMode::Enabled if requirements.unix_socket_isolation() => {
+        NetworkMode::Enabled if requirements.local_ipc_isolation() => {
             Ok(LinuxNetworkMode::DirectWithoutUnixSockets)
         }
         NetworkMode::Enabled => Ok(LinuxNetworkMode::Direct),

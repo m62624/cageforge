@@ -86,8 +86,8 @@ needs `FilesystemScopes` so it is evaluated against the narrowed workspace
 context, and every deny glob needs `FilesystemGlobScanDepth` because an absent
 explicit depth means unbounded scanning. Concrete scopes also require the
 matching selector capability: absolute, workspace, system-root, minimal,
-temporary-directory, or slash-tmp. A backend that cannot enforce any required
-behavior is rejected before lowering.
+temporary-directory, or the platform's conventional temporary scope. A
+backend that cannot enforce any required behavior is rejected before lowering.
 
 ```rust
 use cageforge_backend_api::{

@@ -59,6 +59,6 @@ pub struct EffectiveNetworkRequirements {
     pub(super) domain_rules: bool,
     pub(super) local_address_restrictions: bool,
     pub(super) resolved_targets: bool,
-    pub(super) unix_socket_isolation: bool,
-    pub(super) unix_socket_rules: bool,
+    pub(super) local_ipc_isolation: bool,
+    pub(super) local_ipc_rules: bool,
 }

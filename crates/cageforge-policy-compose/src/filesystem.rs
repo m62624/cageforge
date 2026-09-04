@@ -44,7 +44,7 @@ pub struct EffectiveFilesystemRequirements {
     root_scopes: bool,
     minimal_scopes: bool,
     tmpdir_scopes: bool,
-    slash_tmp_scopes: bool,
+    conventional_temporary_scopes: bool,
     globs: bool,
     glob_scan_depth: bool,
     read_only_subpaths: bool,
@@ -88,9 +88,10 @@ impl EffectiveFilesystemRequirements {
         self.tmpdir_scopes
     }
 
-    /// Returns whether conventional `/tmp` scopes are present.
-    pub const fn slash_tmp_scopes(self) -> bool {
-        self.slash_tmp_scopes
+    /// Returns whether the platform's conventional temporary scopes are
+    /// present.
+    pub const fn conventional_temporary_scopes(self) -> bool {
+        self.conventional_temporary_scopes
     }
 
     /// Returns whether deny globs are present.
@@ -150,7 +151,7 @@ impl EffectiveFilesystemPolicy {
             root_scopes: false,
             minimal_scopes: false,
             tmpdir_scopes: false,
-            slash_tmp_scopes: false,
+            conventional_temporary_scopes: false,
             globs: false,
             glob_scan_depth: false,
             read_only_subpaths: false,
@@ -251,7 +252,7 @@ fn add_selector_requirements(
     } else if selector.is_tmpdir_scope() {
         requirements.tmpdir_scopes = true;
     } else if selector.is_slash_tmp_scope() {
-        requirements.slash_tmp_scopes = true;
+        requirements.conventional_temporary_scopes = true;
     }
 }
 

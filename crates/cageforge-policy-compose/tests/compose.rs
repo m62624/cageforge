@@ -889,8 +889,8 @@ fn composes_unix_socket_allowlists_without_exposing_component_policies() {
         effective.network().requirements().mode(),
         cageforge_policy::NetworkMode::Enabled
     );
-    assert!(effective.network().requirements().unix_socket_rules());
-    assert!(!effective.network().requirements().unix_socket_isolation());
+    assert!(effective.network().requirements().local_ipc_rules());
+    assert!(!effective.network().requirements().local_ipc_isolation());
     assert_eq!(
         effective
             .network()

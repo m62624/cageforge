@@ -151,8 +151,9 @@ pub enum BackendCapability {
     FilesystemMinimalScopes,
     /// Resolve filesystem scopes against the platform temporary directory.
     FilesystemTmpdirScopes,
-    /// Resolve filesystem scopes against the conventional `/tmp` path.
-    FilesystemSlashTmpScopes,
+    /// Resolve filesystem scopes against the platform's conventional
+    /// temporary path supplied by the runtime context.
+    FilesystemConventionalTemporaryScopes,
     /// Enforce filesystem deny globs.
     FilesystemGlobs,
     /// Expand filesystem globs with the requested scan-depth semantics.
@@ -176,10 +177,11 @@ pub enum BackendCapability {
     NetworkLocalAddressRestrictions,
     /// Resolve once and authorize the exact address used for a connection.
     NetworkResolvedTargets,
-    /// Prevent pathname Unix socket access while retaining process-local IPC.
-    NetworkUnixSocketIsolation,
-    /// Enforce per-path Unix socket allow and deny rules.
-    NetworkUnixSocketRules,
+    /// Prevent pathname local-IPC endpoint access while retaining
+    /// process-local IPC.
+    NetworkLocalIpcIsolation,
+    /// Enforce per-path local-IPC endpoint allow and deny rules.
+    NetworkLocalIpcRules,
     /// Start from all inherited environment variables.
     EnvironmentAll,
     /// Start from a backend-selected core environment.

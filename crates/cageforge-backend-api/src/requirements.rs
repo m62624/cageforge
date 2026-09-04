@@ -99,10 +99,10 @@ pub(super) fn add_filesystem_capabilities(
             .capabilities
             .insert(BackendCapability::FilesystemTmpdirScopes);
     }
-    if requirements.slash_tmp_scopes() {
+    if requirements.conventional_temporary_scopes() {
         required
             .capabilities
-            .insert(BackendCapability::FilesystemSlashTmpScopes);
+            .insert(BackendCapability::FilesystemConventionalTemporaryScopes);
     }
     if requirements.globs() {
         required
@@ -150,15 +150,15 @@ pub(super) fn add_network_capabilities(
             .capabilities
             .insert(BackendCapability::NetworkLocalAddressRestrictions);
     }
-    if requirements.unix_socket_isolation() {
+    if requirements.local_ipc_isolation() {
         required
             .capabilities
-            .insert(BackendCapability::NetworkUnixSocketIsolation);
+            .insert(BackendCapability::NetworkLocalIpcIsolation);
     }
-    if requirements.unix_socket_rules() {
+    if requirements.local_ipc_rules() {
         required
             .capabilities
-            .insert(BackendCapability::NetworkUnixSocketRules);
+            .insert(BackendCapability::NetworkLocalIpcRules);
     }
 }
 

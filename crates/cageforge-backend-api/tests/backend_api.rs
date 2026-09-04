@@ -159,7 +159,7 @@ fn all_capabilities() -> BackendCapabilities {
         BackendCapability::FilesystemRootScopes,
         BackendCapability::FilesystemMinimalScopes,
         BackendCapability::FilesystemTmpdirScopes,
-        BackendCapability::FilesystemSlashTmpScopes,
+        BackendCapability::FilesystemConventionalTemporaryScopes,
         BackendCapability::FilesystemGlobs,
         BackendCapability::FilesystemGlobScanDepth,
         BackendCapability::FilesystemReadOnlySubpaths,
@@ -169,8 +169,8 @@ fn all_capabilities() -> BackendCapabilities {
         BackendCapability::NetworkLocalAddressRestrictions,
         BackendCapability::NetworkResolvedTargets,
         BackendCapability::NetworkDomainRules,
-        BackendCapability::NetworkUnixSocketIsolation,
-        BackendCapability::NetworkUnixSocketRules,
+        BackendCapability::NetworkLocalIpcIsolation,
+        BackendCapability::NetworkLocalIpcRules,
         BackendCapability::EnvironmentCore,
         BackendCapability::EnvironmentFilters,
         BackendCapability::EnvironmentOverrides,
@@ -367,7 +367,7 @@ fn every_capability_has_a_human_readable_description() {
         BackendCapability::FilesystemRootScopes,
         BackendCapability::FilesystemMinimalScopes,
         BackendCapability::FilesystemTmpdirScopes,
-        BackendCapability::FilesystemSlashTmpScopes,
+        BackendCapability::FilesystemConventionalTemporaryScopes,
         BackendCapability::FilesystemGlobs,
         BackendCapability::FilesystemGlobScanDepth,
         BackendCapability::FilesystemReadOnlySubpaths,
@@ -379,8 +379,8 @@ fn every_capability_has_a_human_readable_description() {
         BackendCapability::NetworkDomainRules,
         BackendCapability::NetworkLocalAddressRestrictions,
         BackendCapability::NetworkResolvedTargets,
-        BackendCapability::NetworkUnixSocketIsolation,
-        BackendCapability::NetworkUnixSocketRules,
+        BackendCapability::NetworkLocalIpcIsolation,
+        BackendCapability::NetworkLocalIpcRules,
         BackendCapability::EnvironmentAll,
         BackendCapability::EnvironmentCore,
         BackendCapability::EnvironmentNone,
@@ -417,7 +417,7 @@ fn required_capabilities_are_stable_and_complete_for_the_fixture() {
             BackendCapability::NetworkDomainRules,
             BackendCapability::NetworkLocalAddressRestrictions,
             BackendCapability::NetworkResolvedTargets,
-            BackendCapability::NetworkUnixSocketRules,
+            BackendCapability::NetworkLocalIpcRules,
             BackendCapability::EnvironmentCore,
             BackendCapability::EnvironmentFilters,
             BackendCapability::EnvironmentOverrides,
@@ -459,8 +459,8 @@ fn required_capabilities_cover_unrestricted_default_modes() {
     assert!(required.supports(BackendCapability::NetworkEnabled));
     assert!(!required.supports(BackendCapability::NetworkLocalAddressRestrictions));
     assert!(!required.supports(BackendCapability::NetworkResolvedTargets));
-    assert!(!required.supports(BackendCapability::NetworkUnixSocketIsolation));
-    assert!(!required.supports(BackendCapability::NetworkUnixSocketRules));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcIsolation));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
     assert!(required.supports(BackendCapability::EnvironmentAll));
 
     let collected: BackendCapabilities = required.iter().copied().collect();
@@ -483,8 +483,8 @@ fn enabled_network_socket_restrictions_require_socket_capability() {
         CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
     let required = BackendRequest::new(&command, &sandbox).required_capabilities();
 
-    assert!(required.supports(BackendCapability::NetworkUnixSocketIsolation));
-    assert!(!required.supports(BackendCapability::NetworkUnixSocketRules));
+    assert!(required.supports(BackendCapability::NetworkLocalIpcIsolation));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
 }
 
 #[test]
@@ -506,8 +506,8 @@ fn empty_unix_socket_allowlist_requires_isolation_not_per_path_rules() {
         CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
     let required = BackendRequest::new(&command, &sandbox).required_capabilities();
 
-    assert!(required.supports(BackendCapability::NetworkUnixSocketIsolation));
-    assert!(!required.supports(BackendCapability::NetworkUnixSocketRules));
+    assert!(required.supports(BackendCapability::NetworkLocalIpcIsolation));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
 }
 
 #[test]
@@ -635,7 +635,7 @@ fn every_filesystem_scope_kind_requires_its_own_capability() {
         BackendCapability::FilesystemRootScopes,
         BackendCapability::FilesystemMinimalScopes,
         BackendCapability::FilesystemTmpdirScopes,
-        BackendCapability::FilesystemSlashTmpScopes,
+        BackendCapability::FilesystemConventionalTemporaryScopes,
     ] {
         let capabilities = required
             .iter()
@@ -761,7 +761,7 @@ fn all_filesystem_and_network_ownership_modes_have_exact_capabilities() {
                 expected = expected
                     .with(BackendCapability::NetworkLocalAddressRestrictions)
                     .with(BackendCapability::NetworkResolvedTargets)
-                    .with(BackendCapability::NetworkUnixSocketIsolation);
+                    .with(BackendCapability::NetworkLocalIpcIsolation);
             }
 
             assert_eq!(

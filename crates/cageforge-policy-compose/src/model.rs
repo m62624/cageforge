@@ -246,12 +246,12 @@ impl EffectiveNetworkPolicy {
                 .iter()
                 .any(|policy| policy.local_network_access() == LocalNetworkAccess::Deny);
         let policies = [&self.requested, &self.ceiling];
-        let unix_socket_isolation = enabled
+        let local_ipc_isolation = enabled
             && policies
                 .iter()
                 .any(|policy| denies_all_unix_sockets(policy));
-        let unix_socket_rules = enabled
-            && !unix_socket_isolation
+        let local_ipc_rules = enabled
+            && !local_ipc_isolation
             && policies.iter().any(|policy| {
                 !policy.unix_sockets().is_empty()
                     || policy.unix_socket_mode() == UnixSocketMode::Restricted
@@ -261,8 +261,8 @@ impl EffectiveNetworkPolicy {
             domain_rules,
             local_address_restrictions,
             resolved_targets: domain_rules || local_address_restrictions,
-            unix_socket_isolation,
-            unix_socket_rules,
+            local_ipc_isolation,
+            local_ipc_rules,
         }
     }
 
@@ -298,14 +298,15 @@ impl EffectiveNetworkRequirements {
         self.resolved_targets
     }
 
-    /// Returns whether pathname Unix sockets must be fully unavailable.
-    pub const fn unix_socket_isolation(self) -> bool {
-        self.unix_socket_isolation
+    /// Returns whether pathname local-IPC endpoints must be fully
+    /// unavailable.
+    pub const fn local_ipc_isolation(self) -> bool {
+        self.local_ipc_isolation
     }
 
-    /// Returns whether per-path Unix socket rules must be enforced.
-    pub const fn unix_socket_rules(self) -> bool {
-        self.unix_socket_rules
+    /// Returns whether per-path local-IPC endpoint rules must be enforced.
+    pub const fn local_ipc_rules(self) -> bool {
+        self.local_ipc_rules
     }
 }
 
