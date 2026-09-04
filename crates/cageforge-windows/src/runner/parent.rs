@@ -251,7 +251,7 @@ impl BoundaryTerminator {
     }
 
     pub(crate) fn terminate_job(&self, exit_code: u32) -> Result<(), ParentBoundaryError> {
-        let mut job = self
+        let job = self
             .job
             .lock()
             .map_err(|_| ParentBoundaryError::StatePoisoned)?;
@@ -259,7 +259,10 @@ impl BoundaryTerminator {
             return Ok(());
         };
         if let Err(error) = current.terminate(exit_code) {
-            job.take();
+            // The runner owns an assign-only duplicate of this Job handle.
+            // Dropping the parent copy here would therefore not trigger
+            // kill-on-close and would also prevent Drop from retrying a
+            // termination whose completion was not confirmed.
             return Err(error.into());
         }
         Ok(())
