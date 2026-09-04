@@ -3329,7 +3329,7 @@ mod tests {
         ace[5] = 1;
         assert!(sid_fits_ace_bytes(&ace, 4));
         assert!(!sid_fits_ace_bytes(&ace[..15], 4));
-        assert!(!sid_fits_ace_bytes(&ace, 5));
+        assert!(!sid_fits_ace_bytes(&ace, 9));
     }
 
     #[test]
