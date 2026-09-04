@@ -2,11 +2,10 @@
 
 //! Windows-native Cageforge execution backend.
 //!
-//! This first layer exposes versioned provisioning configuration and strict
-//! read-back of dedicated Windows identities. The backend execution type is
-//! exposed only together with its complete native token, process, filesystem,
-//! and network enforcement path, so a partial implementation cannot advertise
-//! capabilities it does not yet enforce.
+//! The backend exposes versioned provisioning configuration and strict
+//! read-back of dedicated Windows identities together with the native token,
+//! process, filesystem, and network enforcement path. It advertises only
+//! capabilities that the complete Windows boundary can enforce.
 
 #![cfg(target_os = "windows")]
 #![doc = include_str!("../README.md")]
