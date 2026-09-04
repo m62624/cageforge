@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -53,6 +53,7 @@ fn run() -> Result<(), String> {
     match mode.as_str() {
         "denied-read" => denied_read(),
         "direct-denied" => direct_denied(),
+        "direct-udp-denied" => direct_udp_denied(),
         "direct-http" => direct_http(),
         "http-proxy" => http_proxy(false),
         "http-proxy-denied" => http_proxy(true),
@@ -262,6 +263,13 @@ fn direct_denied() -> Result<(), String> {
         Ok(_) => Err("direct network connection unexpectedly succeeded".to_string()),
         Err(_) => Ok(()),
     }
+}
+
+fn direct_udp_denied() -> Result<(), String> {
+    let socket = UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .map_err(|error| format!("bind direct UDP probe: {error}"))?;
+    let _ = socket.send_to(b"cageforge-direct-udp-probe", network_target()?);
+    Ok(())
 }
 
 fn direct_http() -> Result<(), String> {

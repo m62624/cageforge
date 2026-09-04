@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::mem::offset_of;
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -348,6 +348,30 @@ fn unrelated_named_event(unique_name: &str) -> (String, OwnedHandle) {
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
     start_http_server_at(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+}
+
+fn start_udp_server() -> (SocketAddr, thread::JoinHandle<io::Result<bool>>) {
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("UDP listener");
+    socket
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("UDP listener timeout");
+    let address = socket.local_addr().expect("UDP server address");
+    let server = thread::spawn(move || {
+        let mut packet = [0u8; 256];
+        match socket.recv_from(&mut packet) {
+            Ok(_) => Ok(true),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    });
+    (address, server)
 }
 
 fn start_http_server_at(address: SocketAddr) -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
@@ -1393,6 +1417,23 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         disabled_address,
     );
     assert_no_connection(&disabled_target, "disabled Windows sandbox network");
+
+    let (disabled_udp_target, disabled_udp_server) = start_udp_server();
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::disabled(),
+        "direct-udp-denied",
+        disabled_udp_target,
+    );
+    assert!(
+        !disabled_udp_server
+            .join()
+            .expect("disabled UDP fixture thread")
+            .expect("disabled Windows UDP network probe"),
+        "disabled Windows sandbox delivered a direct UDP loopback datagram"
+    );
 
     let (direct_target, direct_server) = start_http_server();
     run_network_probe(
