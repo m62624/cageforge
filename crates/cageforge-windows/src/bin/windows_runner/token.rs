@@ -171,7 +171,6 @@ impl RestrictedPrimaryToken {
         let default_dacl_sids = capabilities
             .iter()
             .map(|sid| sid.0)
-            .chain(std::iter::once(user.0))
             .chain(std::iter::once(logon.0))
             .chain(std::iter::once(everyone.0))
             .collect::<Vec<_>>();
