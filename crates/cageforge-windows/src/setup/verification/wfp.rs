@@ -28,11 +28,11 @@ use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::core::GUID;
 
 use crate::error::WindowsSetupVerificationError;
+use crate::firewall_contract::{
+    WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER, WFP_PROVIDER_KEY as PROVIDER_KEY,
+    WFP_SUBLAYER_KEY as SUBLAYER_KEY,
+};
 use crate::setup::WindowsSetupDetails;
-
-const PROVIDER_KEY: GUID = GUID::from_u128(0x6d27a6ef_979d_42bf_97e7_6c7a61c86281);
-const SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8213_6db9db995224);
-const IPV4_LOOPBACK_HOST_ORDER: u32 = u32::from_be_bytes([127, 0, 0, 1]);
 
 struct FilterExpectation {
     key: GUID,

@@ -2,6 +2,17 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use windows_sys::core::GUID;
+
+/// Stable WFP provider identity shared by setup and read-back verification.
+pub(crate) const WFP_PROVIDER_KEY: GUID = GUID::from_u128(0x6d27a6ef_979d_42bf_97e7_6c7a61c86281);
+
+/// Stable WFP sublayer identity shared by setup and read-back verification.
+pub(crate) const WFP_SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8213_6db9db995224);
+
+/// IPv4 loopback in the byte order required by WFP address conditions.
+pub(crate) const WFP_IPV4_LOOPBACK_HOST_ORDER: u32 = u32::from_be_bytes([127, 0, 0, 1]);
+
 #[derive(Eq, PartialEq)]
 struct AddressSet {
     ipv4: Vec<(u32, u32)>,
