@@ -164,6 +164,12 @@ Keep `WindowsBackend`, the backend-bound prepared request handoff, and
   handles, runner session, desktop, proxy route, and every other enforcement
   resource. `kill`, timeout, wait, and `Drop` must terminate the complete Job
   Object tree and reconcile persistent state deterministically.
+- A runner, wait, or network-runtime error does not prove that the Job Object
+  has terminated. Keep the active-child lease and pinned enforcement resources
+  on that path so uninstall remains blocked; release them only after a
+  confirmed terminal boundary, or after the caller drops the child and its
+  bounded cleanup path has run. Never trade an unconfirmed error for an early
+  cleanup race.
 - Return typed library errors. Printing belongs only in binaries. Avoid
   `expect` and `unwrap` outside tests; a recoverable per-launch failure must not
   panic the host application.

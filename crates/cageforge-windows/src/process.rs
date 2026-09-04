@@ -70,7 +70,9 @@ impl WindowsChild {
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, WindowsBackendError> {
         if let Err(error) = self.check_network_health() {
             let _ = self.session.kill();
-            self.release_completed_boundaries();
+            // A failed health check does not prove that the Job Object was
+            // terminated. Keep the lease and enforcement handles until Drop
+            // can make another boundary-termination attempt.
             return Err(error);
         }
         match self.session.try_wait() {
@@ -81,7 +83,8 @@ impl WindowsChild {
             Ok(None) => Ok(None),
             Err(error) => {
                 let _ = self.session.kill();
-                self.release_completed_boundaries();
+                // Do not release the active-child lease on an unconfirmed
+                // termination. An error path must remain uninstall-blocking.
                 Err(WindowsBackendError::runner_session(error))
             }
         }
@@ -104,9 +107,9 @@ impl WindowsChild {
             }
             Err(error) => Err(WindowsBackendError::runner_session(error)),
         };
-        if result.is_err() {
-            self.release_completed_boundaries();
-        }
+        // On error the session may still own a live runner or Job Object.
+        // Keeping the lease is fail-closed; the caller can retry/Drop the
+        // child, which performs the bounded termination attempt.
         result
     }
 

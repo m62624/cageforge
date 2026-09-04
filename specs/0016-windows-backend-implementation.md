@@ -493,11 +493,16 @@ the lifecycle pipe without a final frame. If the watchdog already committed a
 timeout, timeout remains authoritative and must not be relabelled as an
 explicit kill.
 
-Every terminal `wait` or `try_wait` result, including timeout, runner failure,
-and network-runtime failure, releases the route, pinned filesystem objects, and
-active-child lease after the complete process boundary has been terminated.
-Returning a typed error must not leave uninstall blocked until the caller drops
-an otherwise finished `WindowsChild`.
+Every successful terminal `wait` or `try_wait` result, including timeout and
+explicit termination, releases the route, pinned filesystem objects, and
+active-child lease only after the complete process boundary has been
+terminated. A runner, wait, or network-runtime error is not proof of
+termination: that error path must retain the active-child lease and pinned
+enforcement resources, keep uninstall blocked, and let the caller retry or
+drop the child. Releasing those resources after an unconfirmed error could
+allow setup cleanup to race a still-live process. Once termination is
+confirmed, the same ordered release is used for both success and failure
+completion.
 
 The trusted parent queries `JobObjectBasicAccountingInformation` after every
 normal, explicit-kill, timeout, failure, and drop termination path and does not
