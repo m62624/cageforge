@@ -229,9 +229,13 @@ impl CapabilityStateStore {
             });
         }
         let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-        crate::setup::verification::paths::verify_protected_dacl(path, &self.owner_sid, false)
-            .map_err(CapabilityStateStoreError::Security)?;
-        Ok(file)
+        crate::setup::verification::paths::verify_open_protected_dacl(
+            file,
+            path,
+            &self.owner_sid,
+            false,
+        )
+        .map_err(CapabilityStateStoreError::Security)
     }
 
     fn open_protected_file(&self, path: &Path) -> Result<std::fs::File, CapabilityStateStoreError> {

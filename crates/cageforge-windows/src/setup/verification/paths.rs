@@ -80,7 +80,7 @@ pub(crate) fn verify_protected_dacl(
     )
 }
 
-pub(super) fn verify_open_protected_dacl(
+pub(crate) fn verify_open_protected_dacl(
     file: File,
     path: &Path,
     owner_sid: &str,
