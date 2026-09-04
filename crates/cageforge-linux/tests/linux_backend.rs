@@ -2574,6 +2574,14 @@ fn sandboxed_commands_drop_capabilities_for_namespace_root() {
             ])
             .expect("arguments");
         let (command, effective, runtime) = request(workspace.path(), policy, command);
+        // This fixture runs inside a separate user namespace. Give its
+        // symbolic temporary scopes the unique workspace root so it cannot
+        // observe or race a synthetic `/tmp/.git` owned by a host-uid test.
+        let runtime = runtime
+            .with_tmpdir(workspace.path())
+            .expect("fixture temporary directory")
+            .with_slash_tmp(workspace.path())
+            .expect("fixture conventional temporary directory");
         let command = command.with_stdio(StdioSpec::captured());
         let backend = backend();
         let prepared = backend

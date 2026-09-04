@@ -72,6 +72,13 @@ capability snapshot captured during preflight and return
 capabilities afterwards. The backend remains responsible for advertising only
 capabilities it can actually enforce.
 
+Capability names describe portable enforcement requirements, not a shared
+operating-system mechanism. A Linux backend may advertise conventional
+temporary-scope or pathname local-IPC enforcement while a Windows backend may
+omit those capabilities and return the same typed unsupported-capability error
+before lowering. Native path, object, and process mechanisms stay in each
+backend.
+
 Create `BackendIdentity` explicitly with `BackendIdentity::new()`. It has no
 `Default` implementation because each new identity represents a distinct
 backend boundary; cloning preserves an existing identity.

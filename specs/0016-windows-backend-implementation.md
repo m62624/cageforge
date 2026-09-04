@@ -680,10 +680,13 @@ with `UnsupportedFilesystemShape`; the backend must not advertise enforcement
 for that request. This is an operating-system contract difference from the
 Linux mount namespace, not a silent widening.
 
-Unrestricted filesystem execution is allowed only when network policy is also
-unrestricted and the backend can launch the current identity directly without
-claiming a restricted boundary. Mixed unrestricted-filesystem and restricted-
-network requests fail as an unsupported combination.
+Unrestricted filesystem execution is not advertised by the first Windows
+backend. Common preflight rejects `FilesystemUnrestricted` before native
+lowering, and the backend never falls back to launching the caller's current
+identity to satisfy it. This keeps every Windows launch on a verified managed
+account and an explicit filesystem boundary. Linux may advertise the same
+portable capability because its mount namespace provides a different native
+lowering.
 
 ## 7. Network lowering
 
@@ -750,9 +753,9 @@ The gateway still performs one DNS snapshot and exact `SocketAddr`
 authorization immediately before connect. Firewall and route attribution are
 native ingress boundaries, not replacements for portable policy checks.
 
-Windows pathname Unix-socket capabilities are not advertised in the first
+Windows pathname local-IPC capabilities are not advertised in the first
 backend. Named pipes are separate Windows objects and must be isolated by token,
-desktop, object DACL, and handle inheritance. A Unix-socket request receives the
+desktop, object DACL, and handle inheritance. A local-IPC request receives the
 typed unsupported capability error from common preflight.
 
 ## 8. Environment and standard streams
@@ -798,8 +801,10 @@ modes and transformations.
 
 It does not advertise:
 
+- unrestricted filesystem execution;
 - external filesystem or network ownership;
-- pathname Unix-socket isolation or per-path Unix-socket rules; or
+- the platform-specific conventional Unix temporary scope;
+- pathname local-IPC isolation or per-path local-IPC rules; or
 - a capability whose setup read-back or runtime mechanism is unavailable.
 
 Capability preflight is followed by native combination validation. In

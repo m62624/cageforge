@@ -191,10 +191,13 @@ launch.
 | Concurrent-instance isolation | Multiple backend instances or children | Keeps account state, profile authorities, lifecycle leases, routes, gateway policies, and process trees separate. |
 | Typed fail-closed errors | Setup, prepare, spawn, wait, and cleanup | Identifies the failing native stage and code. |
 
-`External` filesystem or network ownership and pathname Unix-socket policy are
-not advertised as Windows-native capabilities. Windows named pipes are handled
-as Windows objects through token, desktop, DACL, and explicit-handle controls;
-they are not silently treated as Unix sockets.
+`External` filesystem or network ownership and pathname local-IPC policy are
+not advertised as Windows-native capabilities. Unrestricted filesystem
+execution and the platform-specific conventional Unix temporary scope are also
+rejected before lowering because this backend has no verified native boundary
+for them. Windows named pipes are handled as Windows objects through token,
+desktop, DACL, and explicit-handle controls; they are not silently treated as
+Unix sockets.
 
 ## Filesystem behavior
 
@@ -222,9 +225,9 @@ an unrelated host object.
 Disabled and proxy-routed modes use the verified offline account and its
 firewall/WFP deny boundary. Direct mode uses the separately verified online
 account. Restricted filesystem plus unrestricted direct networking remains a
-native restricted launch; unrestricted filesystem combined with restricted
-networking is rejected when Windows cannot enforce that combination without
-widening ownership.
+native restricted launch. An unrestricted filesystem request is rejected by
+common capability preflight; Windows never widens ownership by launching it as
+the caller's current identity.
 
 For domain, local-address, or resolved-target restrictions, the backend creates
 one random route SID and registers one gateway policy for that launch. The
