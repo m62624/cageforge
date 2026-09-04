@@ -6,13 +6,19 @@
 
 # cageforge-linux
 
-`cageforge-linux` provides an OS-enforced Linux sandbox for applications that
-run potentially untrusted commands, agents, plugins, build scripts, and mods.
-It validates a composed request against one configured backend instance and
-lowers the complete effective policy into Bubblewrap mounts, namespaces,
-seccomp rules, environment state, and process-lifecycle controls.
+`cageforge-linux` is the Linux-native backend for Cageforge's library API. It
+provides an OS-enforced sandbox for applications that need to run potentially
+untrusted commands, agents, plugins, build scripts, and mods. A caller gives it
+a validated command, a composed effective policy, and the runtime paths needed
+to resolve that policy; the backend returns a backend-bound prepared request or
+a typed error before the command starts. The backend lowers the complete
+effective policy into Bubblewrap mounts, namespaces, seccomp rules,
+environment state, and process-lifecycle controls.
 
-The sandbox:
+## Sandbox model
+
+Each `spawn` creates one sandbox boundary around one command and its complete
+descendant process tree. The boundary:
 
 - limits access to files and the working directory;
 - limits network access and routing;
@@ -21,9 +27,8 @@ The sandbox:
 - passes only explicitly authorized file descriptors or handles; and
 - supports multiple independent instances at the same time.
 
-One `spawn` creates one Linux sandbox boundary for a command and all of its
-descendants. The `LinuxBackend` and policy can be reused for several commands,
-while each spawn receives its own process, lifecycle, and native enforcement
+`LinuxBackend` and the policy can be reused for several commands, while every
+spawn receives its own process boundary, lifecycle, and native enforcement
 state. A future `cageforge-core` facade will select this backend on Linux;
 applications may also use `LinuxBackend` directly.
 
@@ -402,7 +407,7 @@ only when callers deliberately give multiple instances the same writable host
 path; coordination for the same protected missing path is UID-scoped so one
 instance cannot remove another instance's active protection.
 
-## Process lifecycle
+## Process lifecycle and errors
 
 `LinuxChild` exposes the child identifier, configured pipe handles, `try_wait`,
 `wait`, and `kill`. Backend-default and explicit timeout policies are enforced

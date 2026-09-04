@@ -6,13 +6,20 @@
 
 # cageforge-windows
 
-`cageforge-windows` provides an OS-enforced Windows sandbox for applications
-that run potentially untrusted commands, agents, plugins, build scripts, and
-mods. It turns one backend-bound `PreparedBackendRequest` into a restricted
-Windows process tree with account, token, ACL, desktop, Job Object,
-handle-inheritance, firewall/WFP, and per-process network-route enforcement.
+`cageforge-windows` is the Windows-native backend for Cageforge's library API.
+It provides an OS-enforced sandbox for applications that need to run
+potentially untrusted commands, agents, plugins, build scripts, and mods. A
+caller gives it a validated command, a composed effective policy, and the
+runtime paths needed to resolve that policy; the backend returns a
+backend-bound prepared request or a typed error before the command starts. The
+backend turns one backend-bound `PreparedBackendRequest` into a restricted Windows
+process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
+firewall/WFP, and per-process network-route enforcement.
 
-The sandbox:
+## Sandbox model
+
+Each `spawn` creates one sandbox boundary around one command and its complete
+descendant process tree. The boundary:
 
 - limits access to files and the working directory;
 - limits network access and routing;
@@ -21,12 +28,11 @@ The sandbox:
 - passes only explicitly authorized file descriptors or handles; and
 - supports multiple independent instances at the same time.
 
-One `spawn` creates one Windows sandbox boundary for a command and all of its
-descendants. The `WindowsBackend` and policy can be reused for several
-commands, while each spawn receives its own process, lifecycle, and native
-enforcement state. Multiple backend instances and launches can run
-simultaneously with different filesystem and network policies without sharing
-their route or capability authority.
+`WindowsBackend` and the policy can be reused for several commands, while every
+spawn receives its own process boundary, lifecycle, and native enforcement
+state. Multiple backend instances and launches can run simultaneously with
+different filesystem and network policies without sharing their route or
+capability authority.
 
 ## Workspace role
 
@@ -39,6 +45,7 @@ their route or capability authority.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces exact resolved-target HTTP and SOCKS5 gateway policy. |
 | `cageforge-windows` | Applies the Windows-native setup, ACL, token, process, Job Object, desktop, firewall/WFP, and route boundary. |
+| `cageforge-core` | Will provide the final target-selecting facade over native backends. |
 
 The integration sequence is:
 
@@ -263,6 +270,27 @@ launch a shell command, but then the shell and all steps form one process tree.
 Cageforge itself is a library and does not provide a `cageforge run` command;
 an application can expose its own CLI around this API.
 
+## Filesystem behavior
+
+The effective filesystem policy is lowered into a Windows ACL plan before any
+launch. Absolute, workspace, root, minimal-runtime, temporary, read-only,
+protected, missing-path, and bounded glob forms are validated against native
+path identity. Existing objects are inspected through handles that do not
+follow reparse points. A path replacement, junction, symlink, alternate data
+stream, device path, drive alias, or changed final identity fails closed.
+
+Writable workspace scopes protect `.git` by default. Applications may
+explicitly opt out through `FilesystemPolicy::dangerously_allow_git_write()` or
+the matching `cageforge-config` setting; additional protected paths remain
+protected and an outer `PolicyCeiling` can retain the protection.
+
+Missing protected and read-only paths are materialized only after the existing
+ancestor chain has been pinned. The journal and marker make recovery
+resumable, while cleanup removes only the exact object that Cageforge created.
+An active child, non-empty directory, reparse substitution, descriptor drift,
+or unexpected descendant returns a typed cleanup failure rather than deleting
+an unrelated host object.
+
 ## Protection matrix
 
 The backend combines the following protections according to the effective
@@ -307,27 +335,6 @@ rejected before lowering because this backend has no verified native boundary
 for them. Windows named pipes are handled as Windows objects through token,
 desktop, DACL, and explicit-handle controls; they are not silently treated as
 Unix sockets.
-
-## Filesystem behavior
-
-The effective filesystem policy is lowered into a Windows ACL plan before any
-launch. Absolute, workspace, root, minimal-runtime, temporary, read-only,
-protected, missing-path, and bounded glob forms are validated against native
-path identity. Existing objects are inspected through handles that do not
-follow reparse points. A path replacement, junction, symlink, alternate data
-stream, device path, drive alias, or changed final identity fails closed.
-
-Writable workspace scopes protect `.git` by default. Applications may
-explicitly opt out through `FilesystemPolicy::dangerously_allow_git_write()` or
-the matching `cageforge-config` setting; additional protected paths remain
-protected and an outer `PolicyCeiling` can retain the protection.
-
-Missing protected and read-only paths are materialized only after the existing
-ancestor chain has been pinned. The journal and marker make recovery
-resumable, while cleanup removes only the exact object that Cageforge created.
-An active child, non-empty directory, reparse substitution, descriptor drift,
-or unexpected descendant returns a typed cleanup failure rather than deleting
-an unrelated host object.
 
 ## Network behavior
 
