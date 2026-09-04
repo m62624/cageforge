@@ -9,8 +9,7 @@ use std::time::Duration;
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
-    ERROR_INVALID_HANDLE, GetLastError,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, GetLastError,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::StationsAndDesktops::{
@@ -157,15 +156,12 @@ fn signal_unrelated_handle() -> Result<(), String> {
     if raw_handle == 0 {
         return Err("unrelated parent handle was null".to_string());
     }
-    if unsafe { SetEvent(raw_handle as *mut _) } != 0 {
-        return Err("sandboxed process received an unrelated parent Event handle".to_string());
-    }
-    let error = unsafe { GetLastError() };
-    if error != ERROR_INVALID_HANDLE {
-        return Err(format!(
-            "reject unrelated parent handle: Windows error {error}"
-        ));
-    }
+    // HANDLE values are process-local. A numeric value that is invalid in the
+    // sandbox can coincidentally identify one of its own handles, so the
+    // child-side result is not evidence that the parent's Event crossed the
+    // boundary. The parent verifies the only authoritative property: its
+    // original Event remains unsignaled before, during, and after this probe.
+    let _ = unsafe { SetEvent(raw_handle as *mut _) };
     Ok(())
 }
 
