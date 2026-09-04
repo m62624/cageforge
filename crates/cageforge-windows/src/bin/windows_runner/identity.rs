@@ -26,6 +26,8 @@ use crate::runner_resource_security::{
     RunnerResourceKind, RunnerResourceSecurityError, verify_open_runner_resource,
 };
 
+use crate::native_strings::local_sid_string;
+
 pub(super) struct InstalledRunnerIdentity {
     manifest: RunnerManifest,
 }
@@ -525,11 +527,9 @@ fn token_user_sid(token: *mut c_void) -> Result<String, RunnerAuthenticationErro
             code: unsafe { GetLastError() },
         });
     }
-    let sid = wide_pointer_to_string(value);
-    unsafe {
-        windows_sys::Win32::Foundation::LocalFree(value as _);
-    }
-    Ok(sid)
+    local_sid_string(value).ok_or(RunnerAuthenticationError::TokenUserFormat {
+        code: windows_sys::Win32::Foundation::ERROR_INVALID_DATA,
+    })
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
@@ -547,16 +547,6 @@ const fn client_pipe_access(direction: PipeDirection) -> u32 {
 }
 
 #[allow(unsafe_code)]
-fn wide_pointer_to_string(value: *const u16) -> String {
-    unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};

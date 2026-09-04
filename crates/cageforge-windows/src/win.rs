@@ -8,7 +8,7 @@ use std::mem::{offset_of, size_of};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_DATA, GetLastError};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
     LG_INCLUDE_INDIRECT, LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH, NERR_Success,
     NetApiBufferFree, NetUserGetInfo, NetUserGetLocalGroups, UF_ACCOUNTDISABLE, UF_LOCKOUT,
@@ -24,6 +24,7 @@ use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, 
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
+use crate::native_strings::local_sid_string;
 
 struct NetApiBuffer(*mut u8);
 
@@ -358,17 +359,7 @@ fn sid_to_string(sid: *mut c_void) -> Result<String, u32> {
     if unsafe { ConvertSidToStringSidW(sid, &mut value) } == 0 {
         return Err(unsafe { GetLastError() });
     }
-    let string = unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
-    };
-    unsafe {
-        LocalFree(value as HLOCAL);
-    }
-    Ok(string)
+    local_sid_string(value).ok_or(ERROR_INVALID_DATA)
 }
 
 fn aligned_buffer(byte_length: usize) -> io::Result<Vec<usize>> {

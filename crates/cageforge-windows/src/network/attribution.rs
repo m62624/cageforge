@@ -9,7 +9,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, FILETIME, GetLastError, HLOCAL, LocalFree, NO_ERROR,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_DATA, FILETIME, GetLastError, NO_ERROR,
 };
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetExtendedTcpTable, MIB_TCPROW_OWNER_MODULE, MIB_TCPTABLE_OWNER_MODULE,
@@ -24,6 +24,8 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+
+use crate::native_strings::local_sid_string;
 
 const MAX_TCP_TABLE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TCP_TABLE_READ_ATTEMPTS: usize = 8;
@@ -156,17 +158,6 @@ pub enum WindowsNetworkAttributionError {
 struct ConnectionOwner {
     process_id: u32,
     connection_created: i64,
-}
-
-struct LocalWideString(*mut u16);
-
-#[allow(unsafe_code)]
-impl Drop for LocalWideString {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { LocalFree(self.0 as HLOCAL) };
-        }
-    }
 }
 
 pub(crate) fn restricting_sids_for_tcp_connection(
@@ -508,8 +499,9 @@ fn sid_string(
             code: unsafe { GetLastError() },
         });
     }
-    let value = LocalWideString(value);
-    Ok(wide_string(value.0))
+    local_sid_string(value).ok_or(WindowsNetworkAttributionError::RestrictedSidFormat {
+        code: ERROR_INVALID_DATA,
+    })
 }
 
 fn checked_allocation(byte_length: u32, maximum: usize) -> Result<usize, usize> {
@@ -518,17 +510,6 @@ fn checked_allocation(byte_length: u32, maximum: usize) -> Result<usize, usize> 
         Err(byte_length)
     } else {
         Ok(byte_length)
-    }
-}
-
-#[allow(unsafe_code)]
-fn wide_string(value: *const u16) -> String {
-    unsafe {
-        let mut length = 0;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
     }
 }
 

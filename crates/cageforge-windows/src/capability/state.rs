@@ -10,9 +10,10 @@ use cageforge_path::{NativePathKey, contains_parent_traversal, is_within, paths_
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
-use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{ACL, IsValidAcl, IsValidSid};
 
+use crate::native_strings::local_sid_string;
 pub(crate) const CAPABILITY_STATE_NAME: &str = "capabilities.json";
 pub(crate) const CAPABILITY_LOCK_NAME: &str = "capabilities.lock";
 pub(crate) const CAPABILITY_STATE_VERSION: u32 = 1;
@@ -124,8 +125,6 @@ pub(crate) enum MaterializationRemovalPhase {
 }
 
 struct LocalSid(*mut c_void);
-
-struct LocalWideString(*mut u16);
 
 #[derive(Debug, Error)]
 pub(crate) enum CapabilityStateError {
@@ -454,15 +453,6 @@ impl Drop for LocalSid {
     }
 }
 
-#[allow(unsafe_code)]
-impl Drop for LocalWideString {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { LocalFree(self.0 as HLOCAL) };
-        }
-    }
-}
-
 pub(crate) fn validate_profile_identity(value: &str) -> Result<(), CapabilityStateError> {
     if value.len() == 64
         && value
@@ -578,22 +568,13 @@ pub(crate) fn canonical_sid(value: &str) -> Result<String, CapabilityStateError>
         return Err(CapabilityStateError::InvalidSid { code: 0 });
     }
     let mut canonical = std::ptr::null_mut();
-    if unsafe { ConvertSidToStringSidW(sid.0, &mut canonical) } == 0 {
+    if unsafe {
+        windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW(sid.0, &mut canonical)
+    } == 0
+    {
         return Err(CapabilityStateError::InvalidSid {
             code: unsafe { GetLastError() },
         });
     }
-    let canonical = LocalWideString(canonical);
-    Ok(wide_string(canonical.0))
-}
-
-#[allow(unsafe_code)]
-fn wide_string(value: *const u16) -> String {
-    unsafe {
-        let mut length = 0;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
-    }
+    local_sid_string(canonical).ok_or(CapabilityStateError::InvalidSid { code: 0 })
 }

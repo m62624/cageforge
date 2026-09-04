@@ -19,6 +19,7 @@ mod config;
 mod error;
 mod filesystem;
 mod firewall_contract;
+mod native_strings;
 mod network;
 mod owner_identity;
 mod process;

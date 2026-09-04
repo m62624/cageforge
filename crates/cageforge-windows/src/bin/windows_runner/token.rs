@@ -26,6 +26,8 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 
 use crate::runner_protocol::{WindowsRunnerFailureCode, WindowsRunnerFailureStage};
 
+use crate::native_strings::local_sid_string;
+
 const GENERIC_ALL: u32 = 0x1000_0000;
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 const WRITE_RESTRICTED: u32 = 0x0000_0008;
@@ -512,11 +514,10 @@ fn sid_to_string(component: &'static str, sid: *mut c_void) -> Result<String, To
             code: unsafe { GetLastError() },
         });
     }
-    let result = wide_pointer_to_string(value);
-    unsafe {
-        LocalFree(value as HLOCAL);
-    }
-    Ok(result)
+    local_sid_string(value).ok_or(TokenHardeningError::TokenSidFormat {
+        component,
+        code: windows_sys::Win32::Foundation::ERROR_INVALID_DATA,
+    })
 }
 
 #[allow(unsafe_code)]
@@ -639,16 +640,5 @@ fn verify_enabled_privileges(token: *mut c_void) -> Result<(), TokenHardeningErr
         Ok(())
     } else {
         Err(TokenHardeningError::PrivilegeMismatch)
-    }
-}
-
-#[allow(unsafe_code)]
-fn wide_pointer_to_string(value: *const u16) -> String {
-    unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
     }
 }

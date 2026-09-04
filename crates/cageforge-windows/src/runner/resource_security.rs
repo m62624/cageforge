@@ -23,6 +23,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
+use crate::native_strings::local_sid_string;
+
 pub(crate) enum RunnerResourceKind {
     Executable,
     Manifest,
@@ -258,22 +260,7 @@ fn sid_string(sid: *mut c_void) -> Option<String> {
     if unsafe { ConvertSidToStringSidW(sid, &mut value) } == 0 {
         return None;
     }
-    let value = LocalWideString(value);
-    Some(wide_pointer_to_string(value.0))
-}
-
-#[allow(unsafe_code)]
-fn wide_pointer_to_string(value: *const u16) -> String {
-    if value.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
-    }
+    local_sid_string(value)
 }
 
 #[allow(unsafe_code)]

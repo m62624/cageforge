@@ -22,6 +22,8 @@ use zeroize::Zeroizing;
 
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
+use crate::native_strings::local_sid_string;
+
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts};
 
 const MANAGED_GROUP_COMMENT: &str = "Cageforge Windows sandbox identities (managed)";
@@ -513,17 +515,14 @@ fn sid_to_string(sid: *mut c_void, stage: SetupStage) -> NativeSetupResult<Strin
             "failed to format provisioned account SID",
         ));
     }
-    let string = unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
-    };
-    unsafe {
-        LocalFree(value as HLOCAL);
-    }
-    Ok(string)
+    local_sid_string(value).ok_or_else(|| {
+        NativeSetupFailure::new(
+            stage,
+            SetupFailureCode::UserUpdate,
+            None,
+            "Windows returned an invalid provisioned account SID string",
+        )
+    })
 }
 
 fn owner_key(owner_sid: &str) -> String {

@@ -29,6 +29,9 @@ mod capability_state_setup;
 #[path = "../firewall_contract.rs"]
 mod firewall_contract;
 #[cfg(target_os = "windows")]
+#[path = "../native_strings.rs"]
+mod native_strings;
+#[cfg(target_os = "windows")]
 #[path = "../owner_identity.rs"]
 mod owner_identity;
 #[cfg(target_os = "windows")]

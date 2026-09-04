@@ -35,6 +35,8 @@ use crate::runner_protocol::{
     write_frame,
 };
 
+use crate::native_strings::local_sid_string;
+
 const CREDENTIALS_VERSION: u32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 
@@ -55,8 +57,6 @@ struct SuspendedRunner {
     process_id: u32,
     released: bool,
 }
-
-struct LocalData(*mut u16);
 
 struct TokenBuffer(Vec<u8>);
 
@@ -562,13 +562,7 @@ fn sid_string(sid: *mut c_void) -> Result<String, BootstrapFailure> {
     {
         return Err(BootstrapFailure::RunnerToken(unsafe { GetLastError() }));
     }
-    let value = LocalData(value);
-    let mut length = 0usize;
-    while unsafe { *value.0.add(length) } != 0 {
-        length += 1;
-    }
-    String::from_utf16(unsafe { std::slice::from_raw_parts(value.0, length) })
-        .map_err(|_| BootstrapFailure::RunnerLogonSid)
+    local_sid_string(value).ok_or(BootstrapFailure::RunnerLogonSid)
 }
 
 #[allow(unsafe_code)]
@@ -608,15 +602,6 @@ fn duplicate_into_parent(
         return Err(BootstrapFailure::RunnerInformation);
     }
     Ok(duplicate as usize as u64)
-}
-
-#[allow(unsafe_code)]
-impl Drop for LocalData {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { LocalFree(self.0 as HLOCAL) };
-        }
-    }
 }
 
 fn wide(value: &str) -> Vec<u16> {
