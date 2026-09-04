@@ -34,12 +34,14 @@ directory. Additional directory paths can still be listed explicitly when a
 broader review boundary is intentional.
 
 The current configuration records the frozen baseline documented in
-[UPSTREAM.md](../UPSTREAM.md) for the current portable policy, command, and
-config crates. The policy scope also tracks Codex's
+[UPSTREAM.md](../UPSTREAM.md) for the portable policy, command, config, and
+native backend crates. The policy scope also tracks Codex's
 `network-proxy/src/policy.rs` because host normalization is part of the
-portable network boundary. This baseline is frozen: the tool never pulls
-Codex, changes the commit, or imports source. Advancing it requires a manual
-review and an explicit configuration change.
+portable network boundary. The `cageforge-windows` scope tracks the frozen
+Windows sandbox and Windows proxy-attribution paths that define its native
+security boundary. This baseline is frozen: the tool never pulls Codex,
+changes the commit, or imports source. Advancing it requires a manual review
+and an explicit configuration change.
 
 ## Commands
 

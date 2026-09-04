@@ -73,9 +73,9 @@ from the Codex repository:
 The current Cageforge crates are candidates for future upstream review, not
 source imports. Their APIs and implementations were written independently in
 Cageforge. The configured paths identify the Codex behavior that should be
-rechecked when the frozen baseline is manually advanced. Native backend paths
-are deliberately listed separately as planned work and are not part of the
-current crate tracking scope.
+rechecked when the frozen baseline is manually advanced. Native Linux and
+Windows backend paths are tracked in their own scopes because their security
+contracts are platform-specific; they are not portable source dependencies.
 
 This mapping must be updated with the exact upstream commit, reviewed date,
 and material changes whenever source-derived code is added or updated.
