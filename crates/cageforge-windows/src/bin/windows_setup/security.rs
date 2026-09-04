@@ -3,7 +3,7 @@
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::Write;
-use std::mem::size_of;
+use std::mem::{align_of, offset_of, size_of};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::path::{Component, Path, PathBuf};
@@ -20,7 +20,8 @@ use windows_sys::Win32::Security::Authorization::{
     SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation,
     GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
     IsValidSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY,
@@ -52,6 +53,8 @@ struct PendingProtectedFile {
     path: PathBuf,
     delete_on_drop: bool,
 }
+
+const SID_HEADER_BYTES: usize = 8;
 
 pub(super) struct ProtectedFileWriteContext {
     stage: SetupStage,
@@ -890,16 +893,57 @@ fn protected_descriptor_matches(
     if unsafe { (*dacl).AceCount } as usize != expected_aces.len() {
         return false;
     }
+    let mut acl_size = ACL_SIZE_INFORMATION {
+        AceCount: 0,
+        AclBytesInUse: 0,
+        AclBytesFree: 0,
+    };
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut acl_size).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return false;
+    }
+    let acl_start = dacl.cast::<u8>() as usize;
+    let Some(acl_end) = acl_start.checked_add(acl_size.AclBytesInUse as usize) else {
+        return false;
+    };
+    let Some(acl_header_end) = acl_start.checked_add(size_of::<ACL>()) else {
+        return false;
+    };
+    if acl_header_end > acl_end {
+        return false;
+    }
     let mut actual_aces = Vec::with_capacity(expected_aces.len());
     for index in 0..expected_aces.len() {
         let mut raw_ace = std::ptr::null_mut();
         if unsafe { GetAce(dacl, index as u32, &mut raw_ace) } == 0 || raw_ace.is_null() {
             return false;
         }
+        let raw_start = raw_ace as usize;
+        if !raw_start.is_multiple_of(align_of::<ACE_HEADER>()) {
+            return false;
+        }
+        let Some(header_end) = raw_start.checked_add(size_of::<ACE_HEADER>()) else {
+            return false;
+        };
+        if raw_start < acl_start || header_end > acl_end {
+            return false;
+        }
         let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
+        let ace_size = unsafe { (*ace).Header.AceSize } as usize;
+        let Some(ace_end) = raw_start.checked_add(ace_size) else {
+            return false;
+        };
         if unsafe { (*ace).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
-            || (unsafe { (*ace).Header.AceSize } as usize)
-                < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            || ace_size < size_of::<ACCESS_ALLOWED_ACE>()
+            || ace_end > acl_end
+            || !sid_fits_ace(raw_ace.cast(), ace_size)
         {
             return false;
         }
@@ -917,6 +961,28 @@ fn protected_descriptor_matches(
     actual_aces.sort_unstable();
     expected_aces.sort_unstable();
     actual_aces == expected_aces
+}
+
+#[allow(unsafe_code)]
+fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
+    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
+        return false;
+    };
+    if sid_header_end > ace_size {
+        return false;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
+    let Some(subauthority_bytes) = usize::from(bytes[sid_offset + 1]).checked_mul(size_of::<u32>())
+    else {
+        return false;
+    };
+    let Some(sid_length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
+        return false;
+    };
+    sid_offset
+        .checked_add(sid_length)
+        .is_some_and(|end| end <= bytes.len())
 }
 
 #[allow(unsafe_code)]
@@ -1003,5 +1069,14 @@ mod tests {
             "S-1-5-19",
             &ProtectedDescriptor::OwnerOnly { inherit: true },
         ));
+    }
+
+    #[test]
+    fn sid_must_fit_inside_the_ace_before_native_validation() {
+        let mut ace = vec![0u8; size_of::<ACCESS_ALLOWED_ACE>()];
+        let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+        ace[sid_offset] = 1;
+        ace[sid_offset + 1] = 1;
+        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
     }
 }

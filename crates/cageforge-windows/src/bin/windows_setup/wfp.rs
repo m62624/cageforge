@@ -26,8 +26,8 @@ use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, EqualSid, GetAce, GetSecurityDescriptorDacl, IsValidSecurityDescriptor,
-    IsValidSid, PSECURITY_DESCRIPTOR, PSID,
+    ACCESS_ALLOWED_ACE, EqualSid, GetAce, GetSecurityDescriptorDacl, GetSecurityDescriptorLength,
+    IsValidSecurityDescriptor, IsValidSid, PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_DEFAULT;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
@@ -563,6 +563,10 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
     }
     let descriptor = blob.data.cast::<c_void>();
     if unsafe { IsValidSecurityDescriptor(descriptor) } == 0 {
+        return false;
+    }
+    let descriptor_length = unsafe { GetSecurityDescriptorLength(descriptor) } as usize;
+    if descriptor_length == 0 || descriptor_length > blob.size as usize {
         return false;
     }
     let Some(expected_sid) = LocalSid::parse(offline_sid) else {
