@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::c_void;
-use std::mem::zeroed;
+use std::mem::{align_of, offset_of, size_of, zeroed};
 
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
@@ -26,7 +26,8 @@ use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, EqualSid, GetAce, GetSecurityDescriptorDacl, GetSecurityDescriptorLength,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid,
+    GetAce, GetAclInformation, GetSecurityDescriptorDacl, GetSecurityDescriptorLength,
     IsValidSecurityDescriptor, IsValidSid, PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_DEFAULT;
@@ -76,6 +77,14 @@ struct UserCondition {
 struct LocalSid(PSID);
 
 struct WfpAllocation<T>(*mut T);
+
+#[derive(Clone, Copy)]
+struct AclBounds {
+    start: usize,
+    end: usize,
+}
+
+const SID_HEADER_BYTES: usize = 8;
 
 #[allow(unsafe_code)]
 impl Drop for Engine {
@@ -585,12 +594,23 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
     } == 0
         || dacl_present == 0
         || dacl.is_null()
-        || unsafe { (*dacl).AceCount } != 1
     {
+        return false;
+    }
+    let Some(bounds) = acl_bounds(dacl) else {
+        return false;
+    };
+    if unsafe { (*dacl).AceCount } != 1 {
         return false;
     }
     let mut raw_ace = std::ptr::null_mut();
     if unsafe { GetAce(dacl, 0, &mut raw_ace) } == 0 || raw_ace.is_null() {
+        return false;
+    }
+    let Some(ace_size) = ace_size(raw_ace, bounds) else {
+        return false;
+    };
+    if ace_size < size_of::<ACCESS_ALLOWED_ACE>() || !sid_fits_ace(raw_ace, ace_size) {
         return false;
     }
     let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
@@ -602,6 +622,67 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
     }
     let actual_sid = unsafe { (&raw mut (*ace).SidStart).cast::<c_void>() };
     unsafe { IsValidSid(actual_sid) != 0 && EqualSid(actual_sid, expected_sid.0) != 0 }
+}
+
+#[allow(unsafe_code)]
+fn acl_bounds(dacl: *mut ACL) -> Option<AclBounds> {
+    let mut information = ACL_SIZE_INFORMATION::default();
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut information).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+        || information.AclBytesInUse < size_of::<ACL>() as u32
+    {
+        return None;
+    }
+    let start = dacl as usize;
+    let end = start.checked_add(information.AclBytesInUse as usize)?;
+    Some(AclBounds { start, end })
+}
+
+#[allow(unsafe_code)]
+fn ace_size(raw: *mut c_void, bounds: AclBounds) -> Option<usize> {
+    let start = raw as usize;
+    let header_end = start.checked_add(size_of::<ACE_HEADER>())?;
+    if !start.is_multiple_of(align_of::<ACE_HEADER>())
+        || start < bounds.start
+        || header_end > bounds.end
+    {
+        return None;
+    }
+    let header = unsafe { &*raw.cast::<ACE_HEADER>() };
+    let size = usize::from(header.AceSize);
+    let end = start.checked_add(size)?;
+    if !start.is_multiple_of(align_of::<ACCESS_ALLOWED_ACE>()) || end > bounds.end {
+        return None;
+    }
+    Some(size)
+}
+
+#[allow(unsafe_code)]
+fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
+    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
+        return false;
+    };
+    if sid_header_end > ace_size {
+        return false;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
+    let count = usize::from(bytes[sid_offset + 1]);
+    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
+        return false;
+    };
+    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
+        return false;
+    };
+    sid_offset
+        .checked_add(length)
+        .is_some_and(|end| end <= bytes.len())
 }
 
 fn filter_specs(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterSpec> {
@@ -803,7 +884,14 @@ mod tests {
     };
     use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
 
-    use super::{ConditionSpec, IPV4_LOOPBACK_HOST_ORDER, filter_specs, guid_string};
+    use super::{ConditionSpec, IPV4_LOOPBACK_HOST_ORDER, filter_specs, guid_string, sid_fits_ace};
+
+    #[test]
+    fn malformed_wfp_user_ace_sid_is_rejected_before_native_validation() {
+        let mut ace = [0u8; 20];
+        ace[1] = 3;
+        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+    }
 
     #[test]
     fn owner_scoped_filter_keys_and_names_are_unique() {
