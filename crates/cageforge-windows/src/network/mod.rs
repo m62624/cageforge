@@ -462,17 +462,27 @@ impl WindowsProxyRoute {
 
 impl Drop for WindowsProxyRoute {
     fn drop(&mut self) {
-        let mut routes = self
-            .ingress
-            .routes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if routes
-            .get(&self.sid)
-            .is_some_and(|services| Arc::ptr_eq(services, &self.services))
-        {
-            routes.remove(&self.sid);
-        }
+        remove_route_if_owned(&self.ingress.routes, &self.sid, &self.services);
+    }
+}
+
+fn remove_route_if_owned(
+    routes: &Mutex<HashMap<String, Arc<RouteServices>>>,
+    sid: &str,
+    services: &Arc<RouteServices>,
+) {
+    // A poisoned registry may contain an incomplete mutation from the
+    // panicking holder. Keep this route registered in that case: leaving a
+    // stale route is fail-closed, while removing an entry from an uncertain
+    // map could detach another launch's policy.
+    let Ok(mut routes) = routes.lock() else {
+        return;
+    };
+    if routes
+        .get(sid)
+        .is_some_and(|registered| Arc::ptr_eq(registered, services))
+    {
+        routes.remove(sid);
     }
 }
 
@@ -922,7 +932,7 @@ mod tests {
     use super::{
         ProxyAddresses, ProxyProtocol, RouteServices, WindowsNetworkGatewayError,
         WindowsNetworkIngressError, random_route_sid, registered_route_for_sids,
-        verify_protocol_while_admitted,
+        remove_route_if_owned, verify_protocol_while_admitted,
     };
 
     #[test]
@@ -964,6 +974,30 @@ mod tests {
             ),
             Err(WindowsNetworkIngressError::RouteDuplicate)
         ));
+    }
+
+    #[test]
+    fn poisoned_route_registry_is_not_recovered_during_cleanup() {
+        let route = route_services();
+        let sid = "S-1-5-21-1-2-3-4";
+        let routes = Arc::new(Mutex::new(HashMap::from([(
+            sid.to_string(),
+            Arc::clone(&route),
+        )])));
+        let poisoned = Arc::clone(&routes);
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poisoned.lock().expect("unpoisoned route registry");
+            panic!("simulate route registry mutation panic");
+        }));
+        assert!(panic_result.is_err());
+        assert!(routes.is_poisoned());
+
+        remove_route_if_owned(&routes, sid, &route);
+
+        let routes = routes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(routes.contains_key(sid));
     }
 
     #[test]
