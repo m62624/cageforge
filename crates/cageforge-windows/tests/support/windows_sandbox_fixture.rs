@@ -8,7 +8,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_HANDLE, GetLastError,
+};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, CreateDesktopW, DESKTOP_CREATEWINDOW, GetThreadDesktop,
@@ -149,10 +151,13 @@ fn signal_unrelated_handle() -> Result<(), String> {
     if raw_handle == 0 {
         return Err("unrelated parent handle was null".to_string());
     }
-    if unsafe { SetEvent(raw_handle as *mut _) } == 0 {
+    if unsafe { SetEvent(raw_handle as *mut _) } != 0 {
+        return Err("sandboxed process received an unrelated parent Event handle".to_string());
+    }
+    let error = unsafe { GetLastError() };
+    if error != ERROR_INVALID_HANDLE {
         return Err(format!(
-            "signal unrelated parent handle: Windows error {}",
-            unsafe { GetLastError() }
+            "reject unrelated parent handle: Windows error {error}"
         ));
     }
     Ok(())
