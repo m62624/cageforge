@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 8;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 1;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]

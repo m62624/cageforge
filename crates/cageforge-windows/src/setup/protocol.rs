@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const SETUP_PROTOCOL_VERSION: u32 = 3;
+pub(crate) const SETUP_PROTOCOL_VERSION: u32 = 1;
 pub(crate) const MAX_SETUP_MESSAGE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

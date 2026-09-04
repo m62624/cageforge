@@ -15,7 +15,7 @@ use windows_sys::Win32::Security::{ACL, IsValidAcl, IsValidSid};
 
 pub(crate) const CAPABILITY_STATE_NAME: &str = "capabilities.json";
 pub(crate) const CAPABILITY_LOCK_NAME: &str = "capabilities.lock";
-pub(crate) const CAPABILITY_STATE_VERSION: u32 = 4;
+pub(crate) const CAPABILITY_STATE_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct CapabilityState {

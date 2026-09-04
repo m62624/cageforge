@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const RUNNER_MANIFEST_VERSION: u32 = 2;
+pub(crate) const RUNNER_MANIFEST_VERSION: u32 = 1;
 pub(crate) const RUNNER_MANIFEST_NAME: &str = "runner-manifest.json";
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
