@@ -345,7 +345,10 @@ fn start_http_server_at(address: SocketAddr) -> (SocketAddr, thread::JoinHandle<
         let deadline = Instant::now() + FIXTURE_START_DEADLINE;
         let mut stream = loop {
             match listener.accept() {
-                Ok((stream, _)) => break stream,
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false)?;
+                    break stream;
+                }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
                         return Err(io::Error::new(
@@ -376,6 +379,7 @@ fn start_counting_http_server(
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false)?;
                     serve_http_connection(&mut stream)?;
                     connections += 1;
                 }
@@ -384,6 +388,7 @@ fn start_counting_http_server(
                         Err(mpsc::TryRecvError::Disconnected) if connections > 0 => loop {
                             match listener.accept() {
                                 Ok((mut stream, _)) => {
+                                    stream.set_nonblocking(false)?;
                                     serve_http_connection(&mut stream)?;
                                     connections += 1;
                                 }
