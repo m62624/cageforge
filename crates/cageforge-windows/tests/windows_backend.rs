@@ -64,6 +64,9 @@ const SANDBOX_FIXTURE_NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_
 const SANDBOX_FIXTURE_UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HANDLE";
 const SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT: &str =
     "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT";
+const PARENT_DEATH_MODE: &str = "CAGEFORGE_WINDOWS_PARENT_DEATH_MODE";
+const PARENT_DEATH_STATE: &str = "CAGEFORGE_WINDOWS_PARENT_DEATH_STATE";
+const PARENT_DEATH_CHILD: &str = "CAGEFORGE_WINDOWS_PARENT_DEATH_CHILD";
 const POWERSHELL_COMMAND: &str = "powershell";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
@@ -877,6 +880,92 @@ fn sandbox_process_fixture() {
         "sleep" => std::thread::sleep(Duration::from_secs(30)),
         other => panic!("unknown Windows sandbox fixture mode: {other}"),
     }
+}
+
+#[test]
+fn parent_death_child_harness() {
+    if std::env::var_os(PARENT_DEATH_MODE).is_none() {
+        return;
+    }
+    let state_directory =
+        PathBuf::from(std::env::var_os(PARENT_DEATH_STATE).expect("parent-death state directory"));
+    let child_marker =
+        PathBuf::from(std::env::var_os(PARENT_DEATH_CHILD).expect("parent-death child marker"));
+    let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
+    let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
+    let setup_config = WindowsSetupConfig::new()
+        .with_state_directory(&state_directory)
+        .expect("parent-death state directory")
+        .with_setup_helper_path(helper)
+        .expect("parent-death setup helper")
+        .with_command_runner_path(runner)
+        .expect("parent-death command runner");
+    let setup = WindowsSetup::new(setup_config.clone());
+    setup.install().expect("parent-death elevated setup");
+    let backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup_config)
+            .with_default_timeout(Duration::from_secs(30))
+            .expect("parent-death timeout"),
+    )
+    .expect("parent-death backend");
+    let workspace = state_directory
+        .parent()
+        .expect("parent-death workspace parent")
+        .join("parent-death-workspace");
+    fs::create_dir_all(&workspace).expect("parent-death workspace");
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"));
+    let environment = EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, "sleep")
+        .expect("parent-death fixture mode");
+    let (command, effective, context) =
+        restricted_request_with_environment(&workspace, fixture_command(&fixture), environment);
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare parent-death child");
+    let child = backend.spawn(prepared).expect("spawn parent-death child");
+    fs::write(&child_marker, child.id().to_string()).expect("publish parent-death child PID");
+
+    // The test process is the last owner of the parent Job handle. Exiting here
+    // deliberately skips Rust destructors; KILL_ON_JOB_CLOSE must terminate the
+    // complete sandbox boundary and release its kernel ownership.
+    std::process::exit(0);
+}
+
+#[test]
+fn parent_process_death_terminates_the_complete_sandbox_boundary() {
+    let temporary = tempfile::tempdir().expect("parent-death temporary directory");
+    let state_directory = temporary.path().join("state");
+    let child_marker = temporary.path().join("child.pid");
+    let mut parent = Command::new(std::env::current_exe().expect("integration test executable"))
+        .args(["--exact", "parent_death_child_harness", "--nocapture"])
+        .env(PARENT_DEATH_MODE, "1")
+        .env(PARENT_DEATH_STATE, &state_directory)
+        .env(PARENT_DEATH_CHILD, &child_marker)
+        .spawn()
+        .expect("spawn parent-death harness");
+    let status = parent.wait().expect("wait for parent-death harness");
+    assert!(status.success(), "parent-death harness failed: {status}");
+    let child_id = fs::read_to_string(&child_marker)
+        .expect("read parent-death child PID")
+        .trim()
+        .parse::<u32>()
+        .expect("parse parent-death child PID");
+    wait_for_fixture_exit(child_id)
+        .unwrap_or_else(|detail| panic!("parent death left the sandbox boundary active: {detail}"));
+
+    let setup_config = WindowsSetupConfig::new()
+        .with_state_directory(&state_directory)
+        .expect("parent-death cleanup state directory")
+        .with_setup_helper_path(PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup")))
+        .expect("parent-death cleanup setup helper")
+        .with_command_runner_path(PathBuf::from(env!(
+            "CARGO_BIN_EXE_cageforge-windows-command-runner"
+        )))
+        .expect("parent-death cleanup command runner");
+    WindowsSetup::new(setup_config)
+        .uninstall()
+        .expect("parent-death cleanup after Job termination");
 }
 
 #[test]
