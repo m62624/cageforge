@@ -15,6 +15,24 @@ harnesses, build tools, developer tools, and other applications that need an
 explicit boundary around commands, files, environment variables, and network
 destinations.
 
+## Sandbox model
+
+The sandbox is created to run potentially untrusted commands, agents, plugins,
+build scripts, and mods inside an OS-enforced boundary. It:
+
+- limits access to files and the working directory;
+- limits network access and routing;
+- isolates child processes;
+- applies timeouts and terminates the complete process tree;
+- passes only explicitly authorized file descriptors or handles; and
+- supports multiple independent instances at the same time.
+
+One `spawn` creates one sandbox boundary for a command and all of its
+descendants. The backend and policy can be reused for several commands, while
+each spawn receives its own process, lifecycle, and native enforcement state.
+Linux, Windows, and the future macOS backend implement this same portable
+model with their respective operating-system mechanisms.
+
 The workspace is split into small libraries so an application can use only the
 layer it needs. The portable crates do not choose an operating-system sandbox
 for the caller and do not contain a process runner. A native backend consumes

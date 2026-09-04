@@ -11,6 +11,20 @@ turns one backend-bound `PreparedBackendRequest` into a restricted Windows
 process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
 firewall/WFP, and per-process network-route enforcement.
 
+The sandbox is created to run potentially untrusted commands, agents, plugins,
+build scripts, and mods inside an OS-enforced boundary. It:
+
+- limits access to files and the working directory;
+- limits network access and routing;
+- isolates child processes;
+- applies timeouts and terminates the complete process tree;
+- passes only explicitly authorized file descriptors or handles; and
+- supports multiple independent instances at the same time.
+
+One `spawn` creates one sandbox boundary for a command and all of its
+descendants. The backend and policy can be reused for several commands, while
+each spawn receives its own process, lifecycle, and native enforcement state.
+
 The crate is intended for applications that need to run agents, build steps,
 plugins, or other untrusted commands behind the portable Cageforge policy API.
 It supports multiple simultaneous backend instances and launches with different

@@ -12,6 +12,20 @@ lowers the complete effective policy into Bubblewrap mounts, namespaces,
 seccomp rules, environment state, and process-lifecycle controls, and starts
 the command inside that boundary.
 
+The sandbox is created to run potentially untrusted commands, agents, plugins,
+build scripts, and mods inside an OS-enforced boundary. It:
+
+- limits access to files and the working directory;
+- limits network access and routing;
+- isolates child processes;
+- applies timeouts and terminates the complete process tree;
+- passes only explicitly authorized file descriptors or handles; and
+- supports multiple independent instances at the same time.
+
+One `spawn` creates one sandbox boundary for a command and all of its
+descendants. The backend and policy can be reused for several commands, while
+each spawn receives its own process, lifecycle, and native enforcement state.
+
 The crate is intended for applications that need a native Linux sandbox behind
 the portable Cageforge policy API. A future `cageforge-core` facade will select
 this backend on Linux; applications may also use `LinuxBackend` directly.
