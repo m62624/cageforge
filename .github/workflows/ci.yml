@@ -320,7 +320,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-          targets: aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Run native macOS backend when available
         shell: bash
@@ -349,6 +348,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-pc-windows-msvc
+      - name: Install Windows ARM64 target
+        run: rustup target add aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Lint Windows backend in every feature mode
         run: |
