@@ -69,10 +69,12 @@ impl WindowsChild {
     /// Checks whether the command has exited without blocking.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, WindowsBackendError> {
         if let Err(error) = self.check_network_health() {
-            let _ = self.session.kill();
-            // A failed health check does not prove that the Job Object was
-            // terminated. Keep the lease and enforcement handles until Drop
-            // can make another boundary-termination attempt.
+            if self.session.kill().is_ok() {
+                // A successful kill proves that the complete Job Object and
+                // runner boundary terminated. A failed kill leaves every
+                // enforcement resource owned until Drop can retry it.
+                self.release_completed_boundaries();
+            }
             return Err(error);
         }
         match self.session.try_wait() {
@@ -87,11 +89,11 @@ impl WindowsChild {
                     // command result, but a successful watchdog termination
                     // already proved that the complete boundary is gone.
                     self.release_completed_boundaries();
-                } else {
-                    let _ = self.session.kill();
-                    // Do not release the active-child lease on an
-                    // unconfirmed termination. An error path must remain
-                    // uninstall-blocking.
+                } else if self.session.kill().is_ok() {
+                    // The recovery kill is also a proof when it succeeds.
+                    // If it fails, keep the lease and enforcement handles
+                    // until Drop can make another bounded attempt.
+                    self.release_completed_boundaries();
                 }
                 Err(WindowsBackendError::runner_session(error))
             }
@@ -135,10 +137,10 @@ impl WindowsChild {
             .kill()
             .map_err(WindowsBackendError::runner_session);
         if result.is_ok() {
-            // RunnerSession marks itself terminal only after the complete
-            // Job Object and runner boundary have terminated successfully.
-            // Release all enforcement resources at that point; an error path
-            // leaves them owned until Drop can retry the boundary.
+            // RunnerSession returns Ok only after the complete Job Object and
+            // runner boundary have terminated successfully. Release all
+            // enforcement resources at that point; an error path leaves them
+            // owned until Drop can retry the boundary.
             self.release_completed_boundaries();
         }
         result
