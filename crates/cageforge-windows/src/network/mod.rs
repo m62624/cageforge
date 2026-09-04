@@ -9,9 +9,9 @@ use std::io;
 use std::mem::size_of;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener};
 use std::os::windows::io::{FromRawSocket, RawSocket};
-use std::sync::{Arc, Condvar, LazyLock, Mutex, Weak, mpsc};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak, mpsc};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cageforge_network_proxy::{
     GatewayConfig, GatewayError, GatewayIngressKey, NetworkGateway, SystemResolver,
@@ -38,6 +38,7 @@ const MAX_PRE_ATTRIBUTION_CONNECTIONS: usize = 256;
 const MAX_ROUTE_SID_ATTEMPTS: usize = 64;
 const WINSOCK_VERSION_2_2: u16 = 0x0202;
 const PROXY_INGRESS_THREAD_NAME: &str = "cageforge-windows-proxy-ingress";
+const INGRESS_STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) struct WindowsProxyIngress {
     identity: IngressIdentity,
@@ -187,6 +188,9 @@ pub enum WindowsNetworkGatewayError {
     /// The startup channel closed without a typed readiness result.
     #[error("Windows proxy ingress startup channel closed unexpectedly")]
     StartupChannelClosed,
+    /// Another caller's ingress startup did not publish a result in time.
+    #[error("Windows proxy ingress startup did not complete within the safety deadline")]
+    StartupWaitTimeout,
     /// The ingress thread panicked during startup.
     #[error("Windows proxy ingress thread panicked during startup")]
     StartupThreadPanicked,
@@ -389,13 +393,8 @@ impl WindowsProxyIngress {
                 continue;
             }
             if shared.starting.contains(&identity) {
-                shared = match ready.wait(shared) {
-                    Ok(shared) => shared,
-                    Err(_) => {
-                        ready.notify_all();
-                        return Err(WindowsNetworkGatewayError::SharedRegistryPoisoned);
-                    }
-                };
+                let deadline = Instant::now() + INGRESS_STARTUP_WAIT_TIMEOUT;
+                shared = wait_for_starting_ingress(ready, shared, &identity, deadline)?;
                 drop(shared);
                 continue;
             }
@@ -542,6 +541,23 @@ impl WindowsProxyIngress {
                 Err(_) => Err(WindowsNetworkGatewayError::StartupThreadPanicked),
             },
         }
+    }
+}
+
+fn wait_for_starting_ingress<'registry>(
+    ready: &Condvar,
+    shared: MutexGuard<'registry, SharedIngressRegistry>,
+    identity: &IngressIdentity,
+    deadline: Instant,
+) -> Result<MutexGuard<'registry, SharedIngressRegistry>, WindowsNetworkGatewayError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let (shared, result) = ready
+        .wait_timeout(shared, remaining)
+        .map_err(|_| WindowsNetworkGatewayError::SharedRegistryPoisoned)?;
+    if result.timed_out() && shared.starting.contains(identity) {
+        Err(WindowsNetworkGatewayError::StartupWaitTimeout)
+    } else {
+        Ok(shared)
     }
 }
 
@@ -1055,9 +1071,9 @@ fn random_route_sid() -> Result<String, WindowsNetworkGatewayError> {
 mod tests {
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
-    use std::sync::{Arc, Barrier, Mutex, mpsc};
+    use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use cageforge_command::EnvironmentSpec;
     use cageforge_network_proxy::{GatewayConfig, NetworkGateway};
@@ -1071,9 +1087,10 @@ mod tests {
 
     use super::{
         IngressIdentity, ProxyAddresses, ProxyProtocol, RouteServices, SHARED_INGRESSES,
-        WindowsNetworkGatewayError, WindowsNetworkIngressError, WindowsProxyIngress,
-        exclusive_listener, initialize_winsock, random_route_sid, registered_route_for_sids,
-        remove_route_if_owned, verify_protocol_while_admitted,
+        SharedIngressRegistry, WindowsNetworkGatewayError, WindowsNetworkIngressError,
+        WindowsProxyIngress, exclusive_listener, initialize_winsock, random_route_sid,
+        registered_route_for_sids, remove_route_if_owned, verify_protocol_while_admitted,
+        wait_for_starting_ingress,
     };
 
     #[test]
@@ -1281,6 +1298,26 @@ mod tests {
             .expect("coalesced ingress released its listener");
             drop(listener);
         }
+    }
+
+    #[test]
+    fn starting_ingress_wait_has_a_bounded_deadline() {
+        let identity = IngressIdentity {
+            owner_sid: "bounded-startup-test".to_string(),
+            addresses: ProxyAddresses::from_setup_ports(&[49_152, 49_153])
+                .expect("test ingress ports"),
+        };
+        let registry = Mutex::new(SharedIngressRegistry::default());
+        let ready = Condvar::new();
+        let mut shared = registry.lock().expect("startup registry");
+        shared.starting.insert(identity.clone());
+
+        let result = wait_for_starting_ingress(&ready, shared, &identity, Instant::now());
+
+        assert!(matches!(
+            result,
+            Err(WindowsNetworkGatewayError::StartupWaitTimeout)
+        ));
     }
 
     #[test]

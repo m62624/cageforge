@@ -6,13 +6,13 @@
 
 # cageforge-windows
 
-`cageforge-windows` is the native Windows execution backend for Cageforge. It
-turns one backend-bound `PreparedBackendRequest` into a restricted Windows
-process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
-firewall/WFP, and per-process network-route enforcement.
+`cageforge-windows` provides an OS-enforced Windows sandbox for applications
+that run potentially untrusted commands, agents, plugins, build scripts, and
+mods. It turns one backend-bound `PreparedBackendRequest` into a restricted
+Windows process tree with account, token, ACL, desktop, Job Object,
+handle-inheritance, firewall/WFP, and per-process network-route enforcement.
 
-The sandbox is created to run potentially untrusted commands, agents, plugins,
-build scripts, and mods inside an OS-enforced boundary. It:
+The sandbox:
 
 - limits access to files and the working directory;
 - limits network access and routing;
@@ -21,15 +21,12 @@ build scripts, and mods inside an OS-enforced boundary. It:
 - passes only explicitly authorized file descriptors or handles; and
 - supports multiple independent instances at the same time.
 
-One `spawn` creates one sandbox boundary for a command and all of its
-descendants. The backend and policy can be reused for several commands, while
-each spawn receives its own process, lifecycle, and native enforcement state.
-
-The crate is intended for applications that need to run agents, build steps,
-plugins, or other untrusted commands behind the portable Cageforge policy API.
-It supports multiple simultaneous backend instances and launches with different
-filesystem and network policies without sharing their route or capability
-authority.
+One `spawn` creates one Windows sandbox boundary for a command and all of its
+descendants. The `WindowsBackend` and policy can be reused for several
+commands, while each spawn receives its own process, lifecycle, and native
+enforcement state. Multiple backend instances and launches can run
+simultaneously with different filesystem and network policies without sharing
+their route or capability authority.
 
 ## Workspace role
 
@@ -206,26 +203,46 @@ following uses the `effective`, `context`, `workspace`, and `environment`
 values prepared in the example above:
 
 ```rust,no_run
-let commands = [
-    ("cargo.exe", &["check"] as &[&str]),
-    ("cargo.exe", &["test"] as &[&str]),
-    ("git.exe", &["diff", "--check"] as &[&str]),
-];
+use std::error::Error;
+use std::path::Path;
 
-for (program, arguments) in commands {
-    let command_spec = CommandSpec::new(program)?.with_args(arguments.iter().copied())?;
-    let command = CommandRequest::new(command_spec)
-        .with_working_directory(workspace.clone())?
-        .with_environment(environment.clone());
-    let prepared = backend.prepare(
-        BackendRequest::new(&command, &effective),
-        &context,
-    )?;
-    let status = backend.spawn(prepared)?.wait()?;
-    if !status.success() {
-        break;
+use cageforge_backend_api::BackendRequest;
+use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
+use cageforge_policy::PathResolutionContext;
+use cageforge_policy_compose::EffectiveSandbox;
+use cageforge_windows::WindowsBackend;
+
+fn run_three(
+    backend: &WindowsBackend,
+    effective: &EffectiveSandbox,
+    context: &PathResolutionContext,
+    workspace: &Path,
+    environment: &EnvironmentSpec,
+) -> Result<(), Box<dyn Error>> {
+    let commands: &[(&str, &[&str])] = &[
+        ("cargo.exe", &["check"]),
+        ("cargo.exe", &["test"]),
+        ("git.exe", &["diff", "--check"]),
+    ];
+
+    for (program, arguments) in commands {
+        let command_spec = CommandSpec::new(*program)?.with_args(arguments.iter().copied())?;
+        let command = CommandRequest::new(command_spec)
+            .with_working_directory(workspace.to_path_buf())?
+            .with_environment(environment.clone());
+        let prepared = backend.prepare(
+            BackendRequest::new(&command, effective),
+            context,
+        )?;
+        let status = backend.spawn(prepared)?.wait()?;
+        if !status.success() {
+            break;
+        }
     }
+    Ok(())
 }
+
+let _ = run_three;
 ```
 
 This creates three independent Windows sandbox instances. They use the same

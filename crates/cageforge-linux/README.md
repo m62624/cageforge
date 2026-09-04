@@ -6,14 +6,13 @@
 
 # cageforge-linux
 
-`cageforge-linux` is the Linux execution backend for Cageforge. It validates a
-composed request against the capabilities of one configured backend instance,
+`cageforge-linux` provides an OS-enforced Linux sandbox for applications that
+run potentially untrusted commands, agents, plugins, build scripts, and mods.
+It validates a composed request against one configured backend instance and
 lowers the complete effective policy into Bubblewrap mounts, namespaces,
-seccomp rules, environment state, and process-lifecycle controls, and starts
-the command inside that boundary.
+seccomp rules, environment state, and process-lifecycle controls.
 
-The sandbox is created to run potentially untrusted commands, agents, plugins,
-build scripts, and mods inside an OS-enforced boundary. It:
+The sandbox:
 
 - limits access to files and the working directory;
 - limits network access and routing;
@@ -22,13 +21,11 @@ build scripts, and mods inside an OS-enforced boundary. It:
 - passes only explicitly authorized file descriptors or handles; and
 - supports multiple independent instances at the same time.
 
-One `spawn` creates one sandbox boundary for a command and all of its
-descendants. The backend and policy can be reused for several commands, while
-each spawn receives its own process, lifecycle, and native enforcement state.
-
-The crate is intended for applications that need a native Linux sandbox behind
-the portable Cageforge policy API. A future `cageforge-core` facade will select
-this backend on Linux; applications may also use `LinuxBackend` directly.
+One `spawn` creates one Linux sandbox boundary for a command and all of its
+descendants. The `LinuxBackend` and policy can be reused for several commands,
+while each spawn receives its own process, lifecycle, and native enforcement
+state. A future `cageforge-core` facade will select this backend on Linux;
+applications may also use `LinuxBackend` directly.
 
 ## Workspace role
 
@@ -258,26 +255,46 @@ command separately. The following uses the `effective`, `context`,
 `workspace`, and `environment` values prepared in the example above:
 
 ```rust,no_run
-let commands = [
-    ("/usr/bin/cargo", &["check"] as &[&str]),
-    ("/usr/bin/cargo", &["test"] as &[&str]),
-    ("/usr/bin/git", &["diff", "--check"] as &[&str]),
-];
+use std::error::Error;
+use std::path::Path;
 
-for (program, arguments) in commands {
-    let command_spec = CommandSpec::new(program)?.with_args(arguments.iter().copied())?;
-    let command = CommandRequest::new(command_spec)
-        .with_working_directory(workspace.clone())?
-        .with_environment(environment.clone());
-    let prepared = backend.prepare(
-        BackendRequest::new(&command, &effective),
-        &context,
-    )?;
-    let status = backend.spawn(prepared)?.wait()?;
-    if !status.success() {
-        break;
+use cageforge_backend_api::BackendRequest;
+use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
+use cageforge_linux::LinuxBackend;
+use cageforge_policy::PathResolutionContext;
+use cageforge_policy_compose::EffectiveSandbox;
+
+fn run_three(
+    backend: &LinuxBackend,
+    effective: &EffectiveSandbox,
+    context: &PathResolutionContext,
+    workspace: &Path,
+    environment: &EnvironmentSpec,
+) -> Result<(), Box<dyn Error>> {
+    let commands: &[(&str, &[&str])] = &[
+        ("/usr/bin/cargo", &["check"]),
+        ("/usr/bin/cargo", &["test"]),
+        ("/usr/bin/git", &["diff", "--check"]),
+    ];
+
+    for (program, arguments) in commands {
+        let command_spec = CommandSpec::new(*program)?.with_args(arguments.iter().copied())?;
+        let command = CommandRequest::new(command_spec)
+            .with_working_directory(workspace.to_path_buf())?
+            .with_environment(environment.clone());
+        let prepared = backend.prepare(
+            BackendRequest::new(&command, effective),
+            context,
+        )?;
+        let status = backend.spawn(prepared)?.wait()?;
+        if !status.success() {
+            break;
+        }
     }
+    Ok(())
 }
+
+let _ = run_three;
 ```
 
 This creates three independent boundaries. They use the same effective policy,
