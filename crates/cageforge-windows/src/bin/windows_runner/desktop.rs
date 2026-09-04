@@ -13,6 +13,7 @@ use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
     SECURITY_ATTRIBUTES,
 };
+use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, CreateDesktopW, DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW, DESKTOP_DELETE,
     DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK, DESKTOP_JOURNALRECORD,
@@ -230,6 +231,13 @@ fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, Private
 #[allow(unsafe_code)]
 fn wide_string(value: *const u16, length: u32) -> Option<String> {
     if value.is_null() || length == 0 {
+        return None;
+    }
+    let allocation_bytes = unsafe { LocalSize(value as HLOCAL) };
+    if allocation_bytes == 0
+        || !allocation_bytes.is_multiple_of(size_of::<u16>())
+        || usize::try_from(length).ok()? > allocation_bytes / size_of::<u16>()
+    {
         return None;
     }
     let units = unsafe { std::slice::from_raw_parts(value, length as usize) };

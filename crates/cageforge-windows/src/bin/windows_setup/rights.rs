@@ -156,10 +156,21 @@ fn verify_rights(
         ));
     }
     let values = LsaMemory(values);
-    let actual = unsafe { std::slice::from_raw_parts(values.0, count as usize) }
-        .iter()
-        .map(lsa_string_to_owned)
-        .collect::<NativeSetupResult<Vec<_>>>()?;
+    let actual = if count == 0 {
+        Vec::new()
+    } else if values.0.is_null() {
+        return Err(NativeSetupFailure::new(
+            SetupStage::AccountRights,
+            SetupFailureCode::BatchLogonRight,
+            None,
+            "Windows returned no account-right array for a nonzero count",
+        ));
+    } else {
+        unsafe { std::slice::from_raw_parts(values.0, count as usize) }
+            .iter()
+            .map(lsa_string_to_owned)
+            .collect::<NativeSetupResult<Vec<_>>>()?
+    };
     for required in REQUIRED_RIGHTS {
         if !actual
             .iter()
@@ -215,7 +226,10 @@ fn lsa_string(value: &mut [u16]) -> NativeSetupResult<LSA_UNICODE_STRING> {
 
 #[allow(unsafe_code)]
 fn lsa_string_to_owned(value: &LSA_UNICODE_STRING) -> NativeSetupResult<String> {
-    if !value.Length.is_multiple_of(2) || (value.Length != 0 && value.Buffer.is_null()) {
+    if !value.Length.is_multiple_of(2)
+        || value.Length > value.MaximumLength
+        || (value.Length != 0 && value.Buffer.is_null())
+    {
         return Err(NativeSetupFailure::new(
             SetupStage::AccountRights,
             SetupFailureCode::BatchLogonRight,
