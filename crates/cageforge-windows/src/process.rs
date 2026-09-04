@@ -11,18 +11,25 @@ use crate::capability::store::CapabilityActiveLease;
 use crate::error::WindowsBackendError;
 use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::network::WindowsProxyRoute;
-use crate::runner::session::RunnerSession;
+use crate::runner::session::{RunnerSession, RunnerSessionError};
+
+const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
+const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-windows-boundary-recovery";
 
 /// A child launched inside the complete Windows sandbox boundary.
 pub struct WindowsChild {
-    // Rust drops fields in declaration order. Keep the process boundary first,
-    // then the route and pinned filesystem resources, and release the
-    // active-child lease last so uninstall cannot begin ACL cleanup before
-    // those resources are gone. This mirrors release_completed_boundaries.
-    session: RunnerSession,
+    session: Option<RunnerSession>,
     network_route: Option<WindowsProxyRoute>,
     filesystem_enforcement: Option<FilesystemAclEnforcement>,
     active_lease: Option<CapabilityActiveLease>,
+}
+
+struct WindowsBoundaryRecovery {
+    session: Option<RunnerSession>,
+    network_route: Option<WindowsProxyRoute>,
+    filesystem_enforcement: Option<FilesystemAclEnforcement>,
+    active_lease: Option<CapabilityActiveLease>,
+    released: bool,
 }
 
 impl WindowsChild {
@@ -33,7 +40,7 @@ impl WindowsChild {
         network_route: Option<WindowsProxyRoute>,
     ) -> Self {
         Self {
-            session,
+            session: Some(session),
             network_route,
             filesystem_enforcement: Some(filesystem_enforcement),
             active_lease: Some(active_lease),
@@ -42,34 +49,50 @@ impl WindowsChild {
 
     /// Returns the sandboxed user-process identifier.
     pub const fn id(&self) -> u32 {
-        self.session.id()
+        match &self.session {
+            Some(session) => session.id(),
+            None => 0,
+        }
     }
 
     /// Returns the command's standard-input transport when pipe mode was requested.
     pub fn stdin(&mut self) -> Option<&mut dyn Write> {
-        self.session.stdin().map(|input| input as &mut dyn Write)
+        self.session
+            .as_mut()
+            .and_then(RunnerSession::stdin)
+            .map(|input| input as &mut dyn Write)
     }
 
     /// Returns the command's standard-output transport when pipe mode was requested.
     pub fn stdout(&mut self) -> Option<&mut dyn Read> {
-        self.session.stdout().map(|output| output as &mut dyn Read)
+        self.session
+            .as_mut()
+            .and_then(RunnerSession::stdout)
+            .map(|output| output as &mut dyn Read)
     }
 
     /// Returns the command's standard-error transport when pipe mode was requested.
     pub fn stderr(&mut self) -> Option<&mut dyn Read> {
-        self.session.stderr().map(|output| output as &mut dyn Read)
+        self.session
+            .as_mut()
+            .and_then(RunnerSession::stderr)
+            .map(|output| output as &mut dyn Read)
     }
 
     /// Closes piped standard input so the child observes end-of-file.
     pub fn close_stdin(&mut self) -> Result<(), WindowsBackendError> {
-        self.session.close_stdin();
+        self.session_mut()?.close_stdin();
         Ok(())
     }
 
     /// Checks whether the command has exited without blocking.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, WindowsBackendError> {
         if let Err(error) = self.check_network_health() {
-            if self.session.kill().is_ok() {
+            if self
+                .session
+                .as_mut()
+                .is_some_and(|session| session.kill().is_ok())
+            {
                 // A successful kill proves that the complete Job Object and
                 // runner boundary terminated. A failed kill leaves every
                 // enforcement resource owned until Drop can retry it.
@@ -77,19 +100,23 @@ impl WindowsChild {
             }
             return Err(error);
         }
-        match self.session.try_wait() {
+        match self.session_mut()?.try_wait() {
             Ok(Some(status)) => {
                 self.release_completed_boundaries();
                 Ok(Some(status))
             }
             Ok(None) => Ok(None),
             Err(error) => {
-                if self.session.finished() {
+                if self.session.as_ref().is_some_and(RunnerSession::finished) {
                     // A timeout is reported as an error to preserve the
                     // command result, but a successful watchdog termination
                     // already proved that the complete boundary is gone.
                     self.release_completed_boundaries();
-                } else if self.session.kill().is_ok() {
+                } else if self
+                    .session
+                    .as_mut()
+                    .is_some_and(|session| session.kill().is_ok())
+                {
                     // The recovery kill is also a proof when it succeeds.
                     // If it fails, keep the lease and enforcement handles
                     // until Drop can make another bounded attempt.
@@ -110,13 +137,13 @@ impl WindowsChild {
                 thread::sleep(Duration::from_millis(5));
             }
         }
-        let result = match self.session.wait() {
+        let result = match self.session_mut()?.wait() {
             Ok(status) => {
                 self.release_completed_boundaries();
                 Ok(status)
             }
             Err(error) => {
-                if self.session.finished() {
+                if self.session.as_ref().is_some_and(RunnerSession::finished) {
                     // Preserve the typed timeout error while releasing the
                     // resources whose boundary termination was confirmed.
                     self.release_completed_boundaries();
@@ -133,7 +160,7 @@ impl WindowsChild {
     /// Terminates the complete parent-owned Job Object and command runner.
     pub fn kill(&mut self) -> Result<(), WindowsBackendError> {
         let result = self
-            .session
+            .session_mut()?
             .kill()
             .map_err(WindowsBackendError::runner_session);
         if result.is_ok() {
@@ -159,5 +186,80 @@ impl WindowsChild {
             enforcement.release();
         }
         self.active_lease.take();
+    }
+
+    fn session_mut(&mut self) -> Result<&mut RunnerSession, WindowsBackendError> {
+        self.session.as_mut().ok_or_else(|| {
+            WindowsBackendError::runner_session(RunnerSessionError::LifecycleConsumed)
+        })
+    }
+}
+
+impl WindowsBoundaryRecovery {
+    fn recover_until_terminated(mut self) {
+        loop {
+            let terminated = self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.terminate_boundary().is_ok());
+            if terminated {
+                self.release_after_confirmed_boundary();
+                return;
+            }
+            thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
+        }
+    }
+
+    fn release_after_confirmed_boundary(&mut self) {
+        if let Some(mut session) = self.session.take() {
+            session.mark_termination_confirmed();
+            drop(session);
+        }
+        self.network_route.take();
+        self.filesystem_enforcement.take();
+        self.active_lease.take();
+        self.released = true;
+    }
+}
+
+impl Drop for WindowsBoundaryRecovery {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        // If the recovery thread cannot be created or terminates unexpectedly,
+        // do not release enforcement while the process boundary may still be
+        // alive. Keep every owner until an external recovery action succeeds.
+        std::mem::forget(self.session.take());
+        std::mem::forget(self.network_route.take());
+        std::mem::forget(self.filesystem_enforcement.take());
+        std::mem::forget(self.active_lease.take());
+    }
+}
+
+impl Drop for WindowsChild {
+    fn drop(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let recovery = WindowsBoundaryRecovery {
+            session: Some(session),
+            network_route: self.network_route.take(),
+            filesystem_enforcement: self.filesystem_enforcement.take(),
+            active_lease: self.active_lease.take(),
+            released: false,
+        };
+        if recovery
+            .session
+            .as_ref()
+            .is_some_and(|session| session.terminate_boundary().is_ok())
+        {
+            let mut recovery = recovery;
+            recovery.release_after_confirmed_boundary();
+            return;
+        }
+        let _ = thread::Builder::new()
+            .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
+            .spawn(move || recovery.recover_until_terminated());
     }
 }

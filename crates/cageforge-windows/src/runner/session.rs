@@ -312,6 +312,24 @@ impl RunnerSession {
         Ok(())
     }
 
+    pub(crate) fn terminate_boundary(&self) -> Result<(), RunnerSessionError> {
+        self.launch
+            .boundary()
+            .terminate(125)
+            .map_err(RunnerSessionError::Boundary)
+    }
+
+    pub(crate) fn mark_termination_confirmed(&mut self) {
+        self.finished = true;
+        self.close_stdin();
+        if let Some(mut watchdog) = self.watchdog.take() {
+            let _ = watchdog.stop();
+        }
+        if let Some(dispatcher) = self.dispatcher.take() {
+            let _ = dispatcher.join();
+        }
+    }
+
     fn finish(&mut self, terminal: RunnerTerminal) -> Result<ExitStatus, RunnerSessionError> {
         let result = self.finish_inner(terminal);
         if matches!(&result, Err(RunnerSessionError::TimedOut)) {

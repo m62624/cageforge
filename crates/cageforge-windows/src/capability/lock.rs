@@ -14,7 +14,7 @@ use windows_sys::Win32::System::IO::OVERLAPPED;
 
 pub(crate) struct CapabilityLock {
     file: File,
-    overlapped: OVERLAPPED,
+    offset: u32,
     locked: bool,
 }
 
@@ -51,7 +51,7 @@ impl CapabilityLock {
         }
         Ok(Self {
             file,
-            overlapped,
+            offset,
             locked: true,
         })
     }
@@ -61,14 +61,10 @@ impl CapabilityLock {
 impl Drop for CapabilityLock {
     fn drop(&mut self) {
         if self.locked {
+            let mut overlapped = OVERLAPPED::default();
+            overlapped.Anonymous.Anonymous.Offset = self.offset;
             unsafe {
-                UnlockFileEx(
-                    self.file.as_raw_handle() as _,
-                    0,
-                    1,
-                    0,
-                    &mut self.overlapped,
-                );
+                UnlockFileEx(self.file.as_raw_handle() as _, 0, 1, 0, &mut overlapped);
             }
         }
     }

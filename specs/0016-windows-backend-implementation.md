@@ -500,9 +500,15 @@ terminated. A runner, wait, or network-runtime error is not proof of
 termination: that error path must retain the active-child lease and pinned
 enforcement resources, keep uninstall blocked, and let the caller retry or
 drop the child. Releasing those resources after an unconfirmed error could
-allow setup cleanup to race a still-live process. Once termination is
-confirmed, the same ordered release is used for both success and failure
-completion.
+allow setup cleanup to race a still-live process. `WindowsChild::Drop` first
+attempts bounded termination itself; if confirmation fails, it transfers the
+runner session and every enforcement owner to a detached per-instance recovery
+owner. That owner retries termination and performs the ordered release only
+after the Job Object is empty and the runner has exited. If the recovery owner
+cannot be created or is interrupted, it deliberately retains those owners
+rather than dropping enforcement while the boundary may still be live. Once
+termination is confirmed, the same ordered release is used for both success
+and failure completion.
 
 The trusted parent queries `JobObjectBasicAccountingInformation` after every
 normal, explicit-kill, timeout, failure, and drop termination path and does not

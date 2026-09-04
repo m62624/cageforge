@@ -167,9 +167,12 @@ Keep `WindowsBackend`, the backend-bound prepared request handoff, and
 - A runner, wait, or network-runtime error does not prove that the Job Object
   has terminated. Keep the active-child lease and pinned enforcement resources
   on that path so uninstall remains blocked; release them only after a
-  confirmed terminal boundary, or after the caller drops the child and its
-  bounded cleanup path has run. Never trade an unconfirmed error for an early
-  cleanup race.
+  confirmed terminal boundary. `WindowsChild::Drop` transfers those owners to
+  a detached per-instance recovery owner when its bounded termination attempt
+  cannot confirm the boundary; the recovery owner retries and releases them
+  only after the Job is empty and the runner has exited. If that owner cannot
+  be created or is interrupted, the owners remain intentionally retained.
+  Never trade an unconfirmed error for an early cleanup race.
 - Return typed library errors. Printing belongs only in binaries. Avoid
   `expect` and `unwrap` outside tests; a recoverable per-launch failure must not
   panic the host application.
