@@ -222,21 +222,22 @@ impl BoundaryTerminator {
             });
         }
         let process = unsafe { OwnedHandle::from_raw_handle(process as RawHandle) };
-        let job = self
-            .job
-            .lock()
-            .map_err(|_| ParentBoundaryError::StatePoisoned)?;
-        let Some(job) = job.as_ref() else {
-            return Err(ParentBoundaryError::ChildOutsideJob { process_id });
+        // `&self` keeps the BoundaryTerminator (and its owned Job HANDLE)
+        // alive for the complete native query; release the state lock before
+        // entering Win32 so another lifecycle observer cannot be blocked.
+        let job_handle = {
+            let job = self
+                .job
+                .lock()
+                .map_err(|_| ParentBoundaryError::StatePoisoned)?;
+            let Some(job) = job.as_ref() else {
+                return Err(ParentBoundaryError::ChildOutsideJob { process_id });
+            };
+            job.handle.as_raw_handle()
         };
         let mut assigned = 0;
-        if unsafe {
-            IsProcessInJob(
-                process.as_raw_handle() as _,
-                job.handle.as_raw_handle() as _,
-                &mut assigned,
-            )
-        } == 0
+        if unsafe { IsProcessInJob(process.as_raw_handle() as _, job_handle as _, &mut assigned) }
+            == 0
         {
             return Err(ParentBoundaryError::ChildJobQuery {
                 process_id,
@@ -251,14 +252,20 @@ impl BoundaryTerminator {
     }
 
     pub(crate) fn terminate_job(&self, exit_code: u32) -> Result<(), ParentBoundaryError> {
-        let job = self
-            .job
-            .lock()
-            .map_err(|_| ParentBoundaryError::StatePoisoned)?;
-        let Some(current) = job.as_ref() else {
-            return Ok(());
+        // `&self` keeps the BoundaryTerminator (and its owned Job HANDLE)
+        // alive for the complete termination and bounded wait; release the
+        // state lock before entering Win32.
+        let job_handle = {
+            let job = self
+                .job
+                .lock()
+                .map_err(|_| ParentBoundaryError::StatePoisoned)?;
+            let Some(current) = job.as_ref() else {
+                return Ok(());
+            };
+            current.handle.as_raw_handle()
         };
-        if let Err(error) = current.terminate(exit_code) {
+        if let Err(error) = ParentJob::terminate_handle(job_handle, exit_code) {
             // The runner owns an assign-only duplicate of this Job handle.
             // Dropping the parent copy here would therefore not trigger
             // kill-on-close and would also prevent Drop from retrying a
@@ -382,12 +389,17 @@ impl ParentJob {
 
     #[allow(unsafe_code)]
     pub(crate) fn terminate(&self, exit_code: u32) -> Result<(), ParentJobError> {
-        if unsafe { TerminateJobObject(self.handle.as_raw_handle() as _, exit_code) } == 0 {
+        Self::terminate_handle(self.handle.as_raw_handle(), exit_code)
+    }
+
+    #[allow(unsafe_code)]
+    fn terminate_handle(handle: RawHandle, exit_code: u32) -> Result<(), ParentJobError> {
+        if unsafe { TerminateJobObject(handle as _, exit_code) } == 0 {
             return Err(ParentJobError::Terminate {
                 code: unsafe { GetLastError() },
             });
         }
-        self.wait_until_empty(Duration::from_secs(5))
+        Self::wait_until_empty_handle(handle, Duration::from_secs(5))
     }
 
     #[allow(unsafe_code)]
@@ -438,12 +450,12 @@ impl ParentJob {
     }
 
     #[allow(unsafe_code)]
-    fn active_processes(&self) -> Result<u32, ParentJobError> {
+    fn active_processes_handle(handle: RawHandle) -> Result<u32, ParentJobError> {
         let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         let mut returned = 0;
         if unsafe {
             QueryInformationJobObject(
-                self.handle.as_raw_handle() as _,
+                handle as _,
                 JobObjectBasicAccountingInformation,
                 (&raw mut accounting).cast(),
                 size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
@@ -461,10 +473,10 @@ impl ParentJob {
         Ok(accounting.ActiveProcesses)
     }
 
-    fn wait_until_empty(&self, timeout: Duration) -> Result<(), ParentJobError> {
+    fn wait_until_empty_handle(handle: RawHandle, timeout: Duration) -> Result<(), ParentJobError> {
         let deadline = Instant::now() + timeout;
         loop {
-            let active_processes = self.active_processes()?;
+            let active_processes = Self::active_processes_handle(handle)?;
             if active_processes == 0 {
                 return Ok(());
             }
