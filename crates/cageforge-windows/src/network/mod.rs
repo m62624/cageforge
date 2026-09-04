@@ -454,11 +454,12 @@ impl WindowsProxyIngress {
 
 impl Drop for WindowsProxyIngress {
     fn drop(&mut self) {
-        // Serialize final socket release with a new shared-ingress lookup. A
-        // weak registry entry alone would allow a replacement to race the
-        // old runtime while it is still closing its listeners.
-        let registry = SHARED_INGRESSES.lock().ok();
-        if let Some(mut registry) = registry {
+        // Hold the registry lock through shutdown and join. Removing the
+        // weak entry before the runtime has released its listeners would let
+        // a replacement lookup start binding the same fixed ports while the
+        // old ingress is still closing them.
+        let mut registry = SHARED_INGRESSES.lock().ok();
+        if let Some(registry) = registry.as_mut() {
             registry.remove(&self.identity);
         }
         let shutdown_sender = match self.shutdown.get_mut() {
@@ -951,8 +952,10 @@ fn random_route_sid() -> Result<String, WindowsNetworkGatewayError> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::net::Ipv4Addr;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use cageforge_command::EnvironmentSpec;
     use cageforge_network_proxy::{GatewayConfig, NetworkGateway};
@@ -965,8 +968,9 @@ mod tests {
     use tokio::time::timeout;
 
     use super::{
-        ProxyAddresses, ProxyProtocol, RouteServices, WindowsNetworkGatewayError,
-        WindowsNetworkIngressError, random_route_sid, registered_route_for_sids,
+        IngressIdentity, ProxyAddresses, ProxyProtocol, RouteServices, SHARED_INGRESSES,
+        WindowsNetworkGatewayError, WindowsNetworkIngressError, WindowsProxyIngress,
+        exclusive_listener, initialize_winsock, random_route_sid, registered_route_for_sids,
         remove_route_if_owned, verify_protocol_while_admitted,
     };
 
@@ -1033,6 +1037,75 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(routes.contains_key(sid));
+    }
+
+    #[test]
+    fn ingress_replacement_waits_for_old_listeners_to_close() {
+        let winsock = initialize_winsock().expect("Winsock for test ingress");
+        let first = exclusive_listener(
+            ProxyProtocol::Http,
+            std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
+        )
+        .expect("first test ingress listener");
+        let first_port = first.local_addr().expect("first listener address").port();
+        let second = exclusive_listener(
+            ProxyProtocol::Socks5,
+            std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
+        )
+        .expect("second test ingress listener");
+        let second_port = second.local_addr().expect("second listener address").port();
+        let ports = [first_port, second_port];
+        let identity = IngressIdentity {
+            owner_sid: format!("test-owner-{first_port}-{second_port}"),
+            addresses: ProxyAddresses::from_setup_ports(&ports).expect("test ingress ports"),
+        };
+        let replacement_identity = format!("{}-replacement", identity.owner_sid);
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
+        let (shutdown_seen_sender, shutdown_seen_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let runtime = thread::spawn(move || {
+            let _ = shutdown_receiver.blocking_recv();
+            shutdown_seen_sender.send(()).expect("shutdown observer");
+            release_receiver.recv().expect("release old listeners");
+            drop(first);
+            drop(second);
+            Ok(())
+        });
+        let ingress = Arc::new(WindowsProxyIngress {
+            identity: identity.clone(),
+            routes: Arc::new(Mutex::new(HashMap::new())),
+            thread: Mutex::new(Some(runtime)),
+            shutdown: Mutex::new(Some(shutdown_sender)),
+            _winsock: winsock,
+        });
+        SHARED_INGRESSES
+            .lock()
+            .expect("shared ingress registry")
+            .insert(identity, Arc::downgrade(&ingress));
+
+        let dropper = thread::spawn(move || drop(ingress));
+        shutdown_seen_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("old ingress entered shutdown");
+
+        let replacement =
+            thread::spawn(move || WindowsProxyIngress::shared(&replacement_identity, &ports));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !replacement.is_finished() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert!(
+            !replacement.is_finished(),
+            "replacement ingress raced old listener shutdown"
+        );
+
+        release_sender.send(()).expect("release old ingress");
+        dropper.join().expect("old ingress drop thread");
+        let replacement = replacement
+            .join()
+            .expect("replacement ingress thread")
+            .expect("replacement ingress starts after old listeners close");
+        drop(replacement);
     }
 
     #[test]
