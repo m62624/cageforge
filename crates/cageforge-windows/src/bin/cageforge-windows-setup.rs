@@ -26,11 +26,16 @@ mod capability_state;
 #[path = "../capability/state_setup.rs"]
 mod capability_state_setup;
 #[cfg(target_os = "windows")]
+#[path = "../command_runner_name.rs"]
+mod command_runner_name;
+#[cfg(target_os = "windows")]
 #[path = "../firewall_contract.rs"]
 mod firewall_contract;
 #[cfg(target_os = "windows")]
 #[path = "../owner_identity.rs"]
 mod owner_identity;
+#[path = "../resource_names.rs"]
+mod resource_names;
 #[cfg(target_os = "windows")]
 #[path = "../runner/manifest.rs"]
 mod runner_manifest;
@@ -85,7 +90,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("cageforge-windows-setup: {error}");
+            eprintln!("{}: {error}", resource_names::SETUP_HELPER_NAME);
             ExitCode::from(125)
         }
     }
@@ -184,6 +189,9 @@ fn run() -> Result<(), String> {
 
 #[cfg(not(target_os = "windows"))]
 fn main() -> ExitCode {
-    eprintln!("cageforge-windows-setup is only available on Windows");
+    eprintln!(
+        "{} is only available on Windows",
+        resource_names::SETUP_HELPER_NAME
+    );
     ExitCode::from(1)
 }

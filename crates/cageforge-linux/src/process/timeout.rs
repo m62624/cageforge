@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use crate::error::LinuxBackendError;
 
+const TIMEOUT_THREAD_NAME: &str = "cageforge-timeout";
+
 enum Control {
     Cancel,
 }
@@ -40,7 +42,7 @@ impl TimeoutWatchdog {
         let timed_out = Arc::new(AtomicBool::new(false));
         let watchdog_timed_out = Arc::clone(&timed_out);
         let thread = thread::Builder::new()
-            .name("cageforge-timeout".to_string())
+            .name(TIMEOUT_THREAD_NAME.to_owned())
             .spawn(move || {
                 if matches!(
                     control.recv_timeout(timeout),

@@ -20,6 +20,7 @@ use crate::config::{
 use crate::error::{
     BubblewrapFlag, ExecutableSnapshotOperation, LinuxBackendError, LinuxExecutable, LinuxNamespace,
 };
+use crate::resource_names::HARDENING_HELPER_NAME;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROBE_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -133,9 +134,9 @@ pub(crate) fn discover_hardening_helper(
         std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf))
-            .map(|directory| directory.join("cageforge-linux-helper"))
+            .map(|directory| directory.join(HARDENING_HELPER_NAME))
     };
-    let resource = || resource_directory.map(|directory| directory.join("cageforge-linux-helper"));
+    let resource = || resource_directory.map(|directory| directory.join(HARDENING_HELPER_NAME));
     let paths = match source {
         HardeningHelperSource::Sibling => vec![sibling()],
         HardeningHelperSource::Resource => vec![resource()],

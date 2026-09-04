@@ -2,6 +2,10 @@
 
 #![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
+#[cfg(not(target_os = "linux"))]
+#[path = "../resource_names.rs"]
+mod resource_names;
+
 #[cfg(target_os = "linux")]
 #[path = "../helper_protocol.rs"]
 mod helper_protocol;
@@ -21,6 +25,9 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> std::process::ExitCode {
-    eprintln!("cageforge-linux-helper is supported only on Linux");
+    eprintln!(
+        "{} is supported only on Linux",
+        resource_names::HARDENING_HELPER_NAME
+    );
     std::process::ExitCode::from(1)
 }

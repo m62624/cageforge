@@ -23,6 +23,7 @@ mod hardening_error;
 mod helper_protocol;
 mod network;
 mod process;
+mod resource_names;
 mod setup_transport;
 mod status_transport;
 

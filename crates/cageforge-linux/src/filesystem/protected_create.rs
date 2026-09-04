@@ -15,6 +15,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const REMOVE_RENAME_ATTEMPTS: usize = 8;
+const PROTECTED_CREATE_THREAD_NAME: &str = "cageforge-protected-create";
 static REMOVE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 use crate::error::LinuxBackendError;
@@ -61,7 +62,7 @@ impl ProtectedCreateMonitor {
         let monitor_stop = Arc::clone(&stop);
         let (event_sender, event) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
-            .name("cageforge-protected-create".to_string())
+            .name(PROTECTED_CREATE_THREAD_NAME.to_owned())
             .spawn(move || monitor_paths(&paths, watcher, &monitor_stop, &event_sender))
             .map_err(|source| LinuxBackendError::ProtectedPathMonitorSetupFailed { source })?;
         Ok(Some(Self {

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::command_runner_name::COMMAND_RUNNER_NAME;
 use crate::error::WindowsSetupVerificationError;
+use crate::resource_names::SETUP_HELPER_NAME;
 use crate::setup::WindowsSetupDetails;
 
 pub(crate) mod credentials;
@@ -15,9 +17,6 @@ pub(crate) mod paths;
 mod rights;
 mod runner;
 mod wfp;
-
-const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
-const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
 
 pub(crate) struct PinnedRunnerResources {
     command_runner_path: PathBuf,

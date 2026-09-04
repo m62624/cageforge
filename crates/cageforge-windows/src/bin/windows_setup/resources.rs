@@ -7,9 +7,8 @@ use crate::runner_manifest::{RUNNER_MANIFEST_NAME, RUNNER_MANIFEST_VERSION, Runn
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts, security};
-
-const RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
-const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
+use crate::command_runner_name::COMMAND_RUNNER_NAME;
+use crate::resource_names::SETUP_HELPER_NAME;
 
 pub(super) struct VerifiedResources {
     helper_bytes: Vec<u8>,
@@ -78,7 +77,7 @@ pub(super) fn stage(
         request,
     )?;
     stage_runner_resource(
-        &bin_directory.join(RUNNER_NAME),
+        &bin_directory.join(COMMAND_RUNNER_NAME),
         &resources.runner_bytes,
         request,
         &accounts.group_sid,

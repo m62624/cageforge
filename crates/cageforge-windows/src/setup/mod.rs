@@ -17,12 +17,14 @@ use sha2::{Digest, Sha256};
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
 use crate::capability::store::{CapabilityStateStore, CapabilityStateStoreError};
+use crate::command_runner_name::COMMAND_RUNNER_NAME;
 use crate::config::{
     CommandRunnerSource, SetupHelperSource, WindowsSetupConfig, WindowsStateDirectorySource,
 };
 use crate::error::WindowsSetupError;
 use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::filesystem::path::ValidatedPath;
+use crate::resource_names::SETUP_HELPER_NAME;
 use crate::setup::protocol::{
     MAX_SETUP_MESSAGE_BYTES, SETUP_PROTOCOL_VERSION, SetupMessageReadError, SetupOperation,
     SetupOutcome, SetupRequest, SetupResponse, read_bounded_message,
@@ -32,8 +34,6 @@ use crate::setup::state::{SETUP_STATE_VERSION, SetupMarker};
 /// Current on-disk Windows setup contract version.
 pub const WINDOWS_SETUP_VERSION: u32 = SETUP_STATE_VERSION;
 const MARKER_NAME: &str = "setup.json";
-const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
-const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
 const BIN_DIRNAME: &str = "bin";
 const RESOURCES_DIRNAME: &str = "cageforge-resources";
 

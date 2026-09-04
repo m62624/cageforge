@@ -64,6 +64,7 @@ const SANDBOX_FIXTURE_NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_
 const SANDBOX_FIXTURE_UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HANDLE";
 const SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT: &str =
     "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT";
+const POWERSHELL_COMMAND: &str = "powershell";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 // Keep the host-side target alive longer than the backend's 15-second probe
@@ -543,7 +544,7 @@ fn raw_acl_diagnostic(path: &Path) -> String {
     let script = format!(
         "$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new((Get-Acl -LiteralPath '{literal_path}').GetSecurityDescriptorBinaryForm(), 0); $descriptor.DiscretionaryAcl | ForEach-Object {{ \"type=$($_.AceType) flags=$([int]$_.AceFlags) mask=$($_.AccessMask) sid=$($_.SecurityIdentifier.Value)\" }}"
     );
-    match Command::new("powershell")
+    match Command::new(POWERSHELL_COMMAND)
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
     {
@@ -564,7 +565,7 @@ fn raw_dacl_fingerprint(path: &Path) -> String {
     let script = format!(
         "$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new((Get-Acl -LiteralPath '{literal_path}').GetSecurityDescriptorBinaryForm(), 0); $bytes = New-Object byte[] $descriptor.DiscretionaryAcl.BinaryLength; $descriptor.DiscretionaryAcl.GetBinaryForm($bytes, 0); $hasher = [System.Security.Cryptography.SHA256]::Create(); try {{ $hash = $hasher.ComputeHash($bytes) }} finally {{ $hasher.Dispose() }}; \"bytes=$($bytes.Length) sha256=$([BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant())\""
     );
-    match Command::new("powershell")
+    match Command::new(POWERSHELL_COMMAND)
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
     {

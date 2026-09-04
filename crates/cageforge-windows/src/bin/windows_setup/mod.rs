@@ -16,6 +16,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 use zeroize::Zeroizing;
 
 use crate::capability_lock::{CapabilityLock, CapabilityLockError};
+use crate::command_runner_name::COMMAND_RUNNER_NAME;
+use crate::resource_names::SETUP_HELPER_NAME;
 use crate::setup_protocol::{SetupFailureCode, SetupOperation, SetupRequest, SetupStage};
 use crate::setup_state::{SETUP_STATE_VERSION, SetupMarker, SetupMarkerAccounts};
 
@@ -543,14 +545,11 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
         request.state_directory.join("capabilities.json.next"),
         request.state_directory.join("capabilities.json.backup"),
         request.state_directory.join("credentials.json.dpapi"),
+        request.state_directory.join("bin").join(SETUP_HELPER_NAME),
         request
             .state_directory
             .join("bin")
-            .join("cageforge-windows-setup.exe"),
-        request
-            .state_directory
-            .join("bin")
-            .join("cageforge-windows-command-runner.exe"),
+            .join(COMMAND_RUNNER_NAME),
         request
             .state_directory
             .join("bin")

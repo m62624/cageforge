@@ -37,6 +37,7 @@ const AUTHENTICATED_BRIDGE_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_PRE_ATTRIBUTION_CONNECTIONS: usize = 256;
 const MAX_ROUTE_SID_ATTEMPTS: usize = 64;
 const WINSOCK_VERSION_2_2: u16 = 0x0202;
+const PROXY_INGRESS_THREAD_NAME: &str = "cageforge-windows-proxy-ingress";
 
 pub(crate) struct WindowsProxyIngress {
     identity: IngressIdentity,
@@ -425,7 +426,7 @@ impl WindowsProxyIngress {
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
         let (shutdown_sender, shutdown_receiver) = oneshot::channel();
         let thread = std::thread::Builder::new()
-            .name("cageforge-windows-proxy-ingress".to_string())
+            .name(PROXY_INGRESS_THREAD_NAME.to_owned())
             .spawn({
                 let routes = Arc::clone(&routes);
                 move || run_ingress(http, socks, routes, ready_sender, shutdown_receiver)

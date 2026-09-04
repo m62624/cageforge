@@ -18,6 +18,7 @@ use crate::helper_protocol::BRIDGE_TOKEN_BYTES;
 
 const LOOPBACK_INTERFACE_NAME: &[u8] = b"lo";
 const BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const NETWORK_BRIDGE_THREAD_NAME: &str = "cageforge-network-bridge";
 
 pub(super) struct LocalGatewayBridge {
     port: u16,
@@ -236,7 +237,7 @@ fn run_bridge(
         let bridge_token = Arc::clone(&bridge_token);
         let active_for_thread = Arc::clone(&active);
         if std::thread::Builder::new()
-            .name("cageforge-network-bridge".to_string())
+            .name(NETWORK_BRIDGE_THREAD_NAME.to_owned())
             .spawn(move || {
                 if let Ok(unix_stream) = UnixStream::connect(socket_path) {
                     let _ = relay(tcp_stream, unix_stream, bridge_token.as_ref());

@@ -16,6 +16,7 @@
 mod account_identity;
 mod backend;
 mod capability;
+mod command_runner_name;
 mod config;
 mod error;
 mod filesystem;
@@ -23,6 +24,7 @@ mod firewall_contract;
 mod network;
 mod owner_identity;
 mod process;
+mod resource_names;
 mod runner;
 mod setup;
 mod win;

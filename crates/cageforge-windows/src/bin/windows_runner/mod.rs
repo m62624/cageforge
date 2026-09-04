@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::process::ExitCode;
 
+use crate::command_runner_name::COMMAND_RUNNER_NAME;
 use crate::runner_protocol::{
     RunnerBootstrapStage, RunnerMessage, WindowsRunnerFailure, WindowsRunnerFailureCode,
     WindowsRunnerFailureStage, WindowsRunnerProtocolError, read_frame, write_frame,
@@ -84,7 +85,7 @@ impl AuthenticatedTransport {
         let detail = failure.detail().to_string();
         if let Err(error) = write_frame(&mut self.response, RunnerMessage::Failed { failure }) {
             eprintln!(
-                "cageforge-windows-command-runner: failed to report {stage:?}/{code:?} ({native_code:?}): {detail}: {error}"
+                "{COMMAND_RUNNER_NAME}: failed to report {stage:?}/{code:?} ({native_code:?}): {detail}: {error}"
             );
         }
         ExitCode::from(125)
@@ -96,7 +97,7 @@ pub(super) fn run() -> ExitCode {
     let _program = raw_arguments.next();
     let Some(first) = raw_arguments.next() else {
         let error = identity::RunnerAuthenticationError::MissingPipeArguments;
-        eprintln!("cageforge-windows-command-runner: {error}");
+        eprintln!("{COMMAND_RUNNER_NAME}: {error}");
         return ExitCode::from(RunnerBootstrapStage::Arguments as u8);
     };
     if first == "--cageforge-bootstrap" {
@@ -105,14 +106,14 @@ pub(super) fn run() -> ExitCode {
     let arguments = match RunnerArguments::parse(first, raw_arguments) {
         Ok(arguments) => arguments,
         Err(error) => {
-            eprintln!("cageforge-windows-command-runner: {error}");
+            eprintln!("{COMMAND_RUNNER_NAME}: {error}");
             return ExitCode::from(RunnerBootstrapStage::Arguments as u8);
         }
     };
     let (mut request, mut response) = match AuthenticatedTransport::open_pipes(&arguments) {
         Ok(pipes) => pipes,
         Err(error) => {
-            eprintln!("cageforge-windows-command-runner: {error}");
+            eprintln!("{COMMAND_RUNNER_NAME}: {error}");
             std::process::exit(bootstrap_exit_code(&error) as i32);
         }
     };
@@ -156,9 +157,7 @@ pub(super) fn run() -> ExitCode {
         account,
     };
     if let Err(error) = write_frame(&mut transport.response, RunnerMessage::Ready) {
-        eprintln!(
-            "cageforge-windows-command-runner: failed to report authenticated readiness: {error}"
-        );
+        eprintln!("{COMMAND_RUNNER_NAME}: failed to report authenticated readiness: {error}");
         return ExitCode::from(125);
     }
     let message = match read_frame(&mut transport.request) {
@@ -256,7 +255,7 @@ pub(super) fn run() -> ExitCode {
     match write_frame(&mut transport.response, RunnerMessage::Exited { exit_code }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("cageforge-windows-command-runner: failed to report process exit: {error}");
+            eprintln!("{COMMAND_RUNNER_NAME}: failed to report process exit: {error}");
             ExitCode::from(125)
         }
     }
@@ -294,7 +293,7 @@ fn report_bootstrap_failure(
     let failure = authentication_failure(error);
     if let Err(write_error) = write_frame(response, RunnerMessage::Failed { failure }) {
         eprintln!(
-            "cageforge-windows-command-runner: failed to report bootstrap failure {error}: {write_error}"
+            "{COMMAND_RUNNER_NAME}: failed to report bootstrap failure {error}: {write_error}"
         );
         return ExitCode::from(error.bootstrap_stage() as u8);
     }

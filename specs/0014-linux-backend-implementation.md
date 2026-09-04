@@ -754,6 +754,11 @@ job is an enforcement gate.
 - relative cwd is resolved against the runtime current directory;
 - timeout and cancellation terminate the sandboxed process tree;
 - dropping a running `LinuxChild` terminates and reaps the Bubblewrap boundary;
+- if `LinuxChild` cannot confirm boundary termination during drop, it transfers
+  the child and every enforcement guard to a launch-specific recovery owner;
+  that owner retries bounded termination and releases the guards only after a
+  confirmed wait, while failure to create the owner retains the guards
+  fail-closed rather than disabling enforcement;
 - parent death does not leave an orphaned sandbox process;
 - restricted and unrestricted filesystem modes cannot attach to host System V
   IPC objects;

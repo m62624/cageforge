@@ -259,7 +259,10 @@ pub(super) fn run(arguments: impl Iterator<Item = std::ffi::OsString>) -> ExitCo
         Ok(()) => ExitCode::SUCCESS,
         Err(BootstrapRunError::Reported) => ExitCode::from(125),
         Err(BootstrapRunError::Unreported(error)) => {
-            eprintln!("cageforge-windows-command-runner bootstrap: {error:?}");
+            eprintln!(
+                "{} bootstrap: {error:?}",
+                crate::command_runner_name::COMMAND_RUNNER_NAME
+            );
             ExitCode::from(125)
         }
     }

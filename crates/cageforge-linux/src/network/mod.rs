@@ -32,6 +32,7 @@ pub(crate) const IN_SANDBOX_GATEWAY_SOCKET: &str = "/dev/.cageforge-runtime/netw
 const HOST_GATEWAY_SOCKET: &str = "gateway.sock";
 const UNIX_SOCKET_PATH_MAX_BYTES: usize = 107;
 const AUTHENTICATED_BRIDGE_BUFFER_BYTES: usize = 64 * 1024;
+const NETWORK_GATEWAY_THREAD_NAME: &str = "cageforge-network-gateway";
 
 #[derive(Clone)]
 struct BridgeIngressToken(Arc<[u8; BRIDGE_TOKEN_BYTES]>);
@@ -151,7 +152,7 @@ impl GatewayRuntime {
         let (shutdown, shutdown_rx) = oneshot::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
-            .name("cageforge-network-gateway".to_string())
+            .name(NETWORK_GATEWAY_THREAD_NAME.to_owned())
             .spawn({
                 let server = GatewayServer {
                     listener,

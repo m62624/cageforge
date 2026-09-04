@@ -559,12 +559,17 @@ fn wide_pointer_to_string(value: *const u16) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::{
         FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
         PipeDirection, client_pipe_access, runner_resources_are_adjacent,
     };
+    use crate::command_runner_name::COMMAND_RUNNER_NAME;
+
+    fn command_runner_path() -> PathBuf {
+        PathBuf::from(r"\\?\C:\ProgramData\Cageforge\bin").join(COMMAND_RUNNER_NAME)
+    }
 
     #[test]
     fn client_pipe_access_excludes_named_pipe_instance_creation() {
@@ -581,16 +586,17 @@ mod tests {
 
     #[test]
     fn runner_resources_must_share_one_directory_and_manifest_name() {
+        let runner = command_runner_path();
         assert!(runner_resources_are_adjacent(
-            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\cageforge-windows-command-runner.exe"),
+            &runner,
             Path::new(r"\\?\C:\ProgramData\Cageforge\bin\runner-manifest.json"),
         ));
         assert!(!runner_resources_are_adjacent(
-            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\cageforge-windows-command-runner.exe"),
+            &runner,
             Path::new(r"\\?\C:\ProgramData\Cageforge\other\runner-manifest.json"),
         ));
         assert!(!runner_resources_are_adjacent(
-            Path::new(r"\\?\C:\ProgramData\Cageforge\bin\cageforge-windows-command-runner.exe"),
+            &runner,
             Path::new(r"\\?\C:\ProgramData\Cageforge\bin\other.json"),
         ));
     }
