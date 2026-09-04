@@ -5,6 +5,7 @@
 use std::ffi::c_void;
 use std::fmt;
 use std::fs::File;
+use std::mem::{align_of, offset_of, size_of};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -19,7 +20,8 @@ use windows_sys::Win32::Security::Authorization::{
     SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetLengthSid,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+    DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetLengthSid,
     GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
     IsValidSecurityDescriptor, IsValidSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
@@ -39,6 +41,7 @@ const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
+const SID_HEADER_BYTES: usize = 8;
 
 pub(crate) struct RunnerPipeNames {
     pub(crate) request: String,
@@ -51,6 +54,13 @@ pub(crate) struct ParentRunnerPipe {
 }
 
 struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
+
+#[derive(Clone, Copy)]
+struct AclBounds {
+    start: usize,
+    end: usize,
+    ace_count: u16,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParentPipeDirection {
@@ -369,12 +379,27 @@ fn descriptor_difference(
     if unsafe { (*expected_dacl).AclRevision } != unsafe { (*actual_dacl).AclRevision } {
         return Some(RunnerPipeDescriptorComponent::Dacl);
     }
-    if unsafe { (*expected_dacl).AceCount } != unsafe { (*actual_dacl).AceCount } {
+    let Some(expected_bounds) = acl_bounds(expected_dacl) else {
+        return Some(RunnerPipeDescriptorComponent::Dacl);
+    };
+    let Some(actual_bounds) = acl_bounds(actual_dacl) else {
+        return Some(RunnerPipeDescriptorComponent::Dacl);
+    };
+    if unsafe { (*expected_dacl).AceCount } != unsafe { (*actual_dacl).AceCount }
+        || expected_bounds.ace_count != unsafe { (*expected_dacl).AceCount }
+        || actual_bounds.ace_count != unsafe { (*actual_dacl).AceCount }
+    {
         return Some(RunnerPipeDescriptorComponent::AceCount);
     }
 
     for index in 0..unsafe { (*expected_dacl).AceCount } {
-        if !ace_matches(expected_dacl, actual_dacl, index) {
+        if !ace_matches(
+            expected_dacl,
+            actual_dacl,
+            index,
+            expected_bounds,
+            actual_bounds,
+        ) {
             return Some(RunnerPipeDescriptorComponent::Ace { index });
         }
     }
@@ -421,10 +446,37 @@ fn has_protected_dacl(descriptor: PSECURITY_DESCRIPTOR) -> bool {
 }
 
 #[allow(unsafe_code)]
+fn acl_bounds(dacl: *mut ACL) -> Option<AclBounds> {
+    let mut information = ACL_SIZE_INFORMATION::default();
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut information).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+        || information.AclBytesInUse < size_of::<ACL>() as u32
+    {
+        return None;
+    }
+    let start = dacl as usize;
+    let end = start.checked_add(information.AclBytesInUse as usize)?;
+    let ace_count = u16::try_from(information.AceCount).ok()?;
+    Some(AclBounds {
+        start,
+        end,
+        ace_count,
+    })
+}
+
+#[allow(unsafe_code)]
 fn ace_matches(
     expected_dacl: *mut windows_sys::Win32::Security::ACL,
     actual_dacl: *mut windows_sys::Win32::Security::ACL,
     index: u16,
+    expected_bounds: AclBounds,
+    actual_bounds: AclBounds,
 ) -> bool {
     let mut expected_raw = std::ptr::null_mut();
     let mut actual_raw = std::ptr::null_mut();
@@ -432,6 +484,19 @@ fn ace_matches(
         || expected_raw.is_null()
         || unsafe { GetAce(actual_dacl, u32::from(index), &mut actual_raw) } == 0
         || actual_raw.is_null()
+    {
+        return false;
+    }
+    let Some(expected_size) = ace_size(expected_raw, expected_bounds) else {
+        return false;
+    };
+    let Some(actual_size) = ace_size(actual_raw, actual_bounds) else {
+        return false;
+    };
+    if expected_size < size_of::<ACCESS_ALLOWED_ACE>()
+        || actual_size < size_of::<ACCESS_ALLOWED_ACE>()
+        || !sid_fits_ace(expected_raw, expected_size)
+        || !sid_fits_ace(actual_raw, actual_size)
     {
         return false;
     }
@@ -450,13 +515,54 @@ fn ace_matches(
     if unsafe { IsValidSid(expected_sid) } == 0 || unsafe { IsValidSid(actual_sid) } == 0 {
         return false;
     }
-    let expected_size = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart)
+    let expected_sid_size = offset_of!(ACCESS_ALLOWED_ACE, SidStart)
         .checked_add(unsafe { GetLengthSid(expected_sid) } as usize);
-    let actual_size = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart)
+    let actual_sid_size = offset_of!(ACCESS_ALLOWED_ACE, SidStart)
         .checked_add(unsafe { GetLengthSid(actual_sid) } as usize);
-    expected_size == Some(unsafe { (*expected).Header.AceSize } as usize)
-        && actual_size == Some(unsafe { (*actual).Header.AceSize } as usize)
+    expected_sid_size == Some(expected_size)
+        && actual_sid_size == Some(actual_size)
         && unsafe { EqualSid(expected_sid, actual_sid) } != 0
+}
+
+#[allow(unsafe_code)]
+fn ace_size(raw: *mut c_void, bounds: AclBounds) -> Option<usize> {
+    let start = raw as usize;
+    let header_end = start.checked_add(size_of::<ACE_HEADER>())?;
+    if !start.is_multiple_of(align_of::<ACE_HEADER>())
+        || start < bounds.start
+        || header_end > bounds.end
+    {
+        return None;
+    }
+    let header = unsafe { &*raw.cast::<ACE_HEADER>() };
+    let size = usize::from(header.AceSize);
+    let end = start.checked_add(size)?;
+    if !start.is_multiple_of(align_of::<ACCESS_ALLOWED_ACE>()) || end > bounds.end {
+        return None;
+    }
+    Some(size)
+}
+
+#[allow(unsafe_code)]
+fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
+    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
+        return false;
+    };
+    if sid_header_end > ace_size {
+        return false;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
+    let count = usize::from(bytes[sid_offset + 1]);
+    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
+        return false;
+    };
+    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
+        return false;
+    };
+    sid_offset
+        .checked_add(length)
+        .is_some_and(|end| end <= bytes.len())
 }
 
 const fn client_access_mask(direction: ParentPipeDirection) -> u32 {
@@ -528,7 +634,7 @@ fn connect_and_verify(
 mod tests {
     use super::{
         FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
-        client_access_mask,
+        client_access_mask, sid_fits_ace,
     };
     use crate::runner::pipe::ParentPipeDirection;
 
@@ -546,5 +652,12 @@ mod tests {
             client_access_mask(ParentPipeDirection::Response) & FILE_APPEND_DATA,
             0
         );
+    }
+
+    #[test]
+    fn malformed_pipe_ace_sid_is_rejected_before_native_sid_validation() {
+        let mut ace = [0u8; 20];
+        ace[1] = 3;
+        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
     }
 }
