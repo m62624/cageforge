@@ -606,7 +606,10 @@ fn filter_specs(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterSpec> {
         .map(|spec| FilterSpec {
             key: derived_guid(owner_sid, spec.label),
             name: format!("cageforge_{}_{}", spec.label, owner_key(owner_sid)),
-            description: format!("Cageforge offline identity - {}", spec.description),
+            description: format!(
+                "Cageforge offline identity - {}",
+                base_filter_description(spec.label)
+            ),
             layer_key: spec.layer.key(),
             action: FWP_ACTION_BLOCK,
             weight: 1,
@@ -656,6 +659,24 @@ fn filter_specs(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterSpec> {
         });
     }
     filters
+}
+
+fn base_filter_description(label: &str) -> &'static str {
+    match label {
+        "icmp-connect-v4" => "Block ICMP connect v4",
+        "icmp-connect-v6" => "Block ICMP connect v6",
+        "icmp-assign-v4" => "Block ICMP resource assignment v4",
+        "icmp-assign-v6" => "Block ICMP resource assignment v6",
+        "dns-53-v4" => "Block DNS port 53 v4",
+        "dns-53-v6" => "Block DNS port 53 v6",
+        "dns-853-v4" => "Block DNS over TLS v4",
+        "dns-853-v6" => "Block DNS over TLS v6",
+        "smb-445-v4" => "Block SMB port 445 v4",
+        "smb-445-v6" => "Block SMB port 445 v6",
+        "smb-139-v4" => "Block NetBIOS SMB port 139 v4",
+        "smb-139-v6" => "Block NetBIOS SMB port 139 v6",
+        _ => "Cageforge offline identity filter",
+    }
 }
 
 fn derived_guid(owner_sid: &str, label: &str) -> GUID {

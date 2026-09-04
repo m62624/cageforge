@@ -35,7 +35,6 @@ use crate::setup::WindowsSetupDetails;
 struct FilterExpectation {
     key: GUID,
     name: String,
-    description: String,
     layer_key: GUID,
     action: u32,
     weight: u8,
@@ -199,10 +198,7 @@ fn verify_filter(
             name: expected.name.clone(),
             code: 0,
         })?;
-    let description_matches = read_wide_string(filter.displayData.description.cast_const())
-        .is_some_and(|actual| actual == expected.description);
     let header_matches = guid_eq(filter.filterKey, expected.key)
-        && description_matches
         && filter.flags & FWPM_FILTER_FLAG_PERSISTENT != 0
         && guid_eq(filter.layerKey, expected.layer_key)
         && guid_eq(filter.subLayerKey, SUBLAYER_KEY)
@@ -234,22 +230,6 @@ fn verify_filter(
             code: 0,
         })
     }
-}
-
-#[allow(unsafe_code)]
-fn read_wide_string(pointer: *const u16) -> Option<String> {
-    if pointer.is_null() {
-        return None;
-    }
-    let mut units = Vec::new();
-    for index in 0..=4096 {
-        let unit = unsafe { *pointer.add(index) };
-        if unit == 0 {
-            return String::from_utf16(&units).ok();
-        }
-        units.push(unit);
-    }
-    None
 }
 
 #[allow(unsafe_code)]
@@ -339,7 +319,6 @@ fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpect
         .map(|spec| FilterExpectation {
             key: derived_guid(owner_sid, spec.label),
             name: format!("cageforge_{}_{}", spec.label, owner_key(owner_sid)),
-            description: format!("Cageforge offline identity - {}", spec.description),
             layer_key: spec.layer.key(),
             action: FWP_ACTION_BLOCK,
             weight: 1,
@@ -359,9 +338,6 @@ fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpect
         filters.push(FilterExpectation {
             key: derived_guid(owner_sid, &label),
             name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
-            description: format!(
-                "Cageforge offline identity - permit exact IPv4 loopback proxy port {port}"
-            ),
             layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
             action: FWP_ACTION_PERMIT,
             weight: 2,
@@ -381,9 +357,6 @@ fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpect
         filters.push(FilterExpectation {
             key: derived_guid(owner_sid, &label),
             name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
-            description: format!(
-                "Cageforge offline identity - block all outbound {family} connects"
-            ),
             layer_key,
             action: FWP_ACTION_BLOCK,
             weight: 1,

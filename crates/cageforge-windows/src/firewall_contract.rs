@@ -46,7 +46,6 @@ impl WfpLayer {
 #[derive(Clone, Copy)]
 pub(crate) struct WfpBaseFilter {
     pub(crate) label: &'static str,
-    pub(crate) description: &'static str,
     pub(crate) layer: WfpLayer,
     pub(crate) condition: WfpBaseCondition,
 }
@@ -54,73 +53,61 @@ pub(crate) struct WfpBaseFilter {
 pub(crate) const WFP_BASE_FILTERS: [WfpBaseFilter; 12] = [
     WfpBaseFilter {
         label: "icmp-connect-v4",
-        description: "Block ICMP connect v4",
         layer: WfpLayer::AuthConnectV4,
         condition: WfpBaseCondition::Protocol(IPPROTO_ICMP as u8),
     },
     WfpBaseFilter {
         label: "icmp-connect-v6",
-        description: "Block ICMP connect v6",
         layer: WfpLayer::AuthConnectV6,
         condition: WfpBaseCondition::Protocol(IPPROTO_ICMPV6 as u8),
     },
     WfpBaseFilter {
         label: "icmp-assign-v4",
-        description: "Block ICMP resource assignment v4",
         layer: WfpLayer::ResourceAssignmentV4,
         condition: WfpBaseCondition::Protocol(IPPROTO_ICMP as u8),
     },
     WfpBaseFilter {
         label: "icmp-assign-v6",
-        description: "Block ICMP resource assignment v6",
         layer: WfpLayer::ResourceAssignmentV6,
         condition: WfpBaseCondition::Protocol(IPPROTO_ICMPV6 as u8),
     },
     WfpBaseFilter {
         label: "dns-53-v4",
-        description: "Block DNS port 53 v4",
         layer: WfpLayer::AuthConnectV4,
         condition: WfpBaseCondition::RemotePort(53),
     },
     WfpBaseFilter {
         label: "dns-53-v6",
-        description: "Block DNS port 53 v6",
         layer: WfpLayer::AuthConnectV6,
         condition: WfpBaseCondition::RemotePort(53),
     },
     WfpBaseFilter {
         label: "dns-853-v4",
-        description: "Block DNS over TLS v4",
         layer: WfpLayer::AuthConnectV4,
         condition: WfpBaseCondition::RemotePort(853),
     },
     WfpBaseFilter {
         label: "dns-853-v6",
-        description: "Block DNS over TLS v6",
         layer: WfpLayer::AuthConnectV6,
         condition: WfpBaseCondition::RemotePort(853),
     },
     WfpBaseFilter {
         label: "smb-445-v4",
-        description: "Block SMB port 445 v4",
         layer: WfpLayer::AuthConnectV4,
         condition: WfpBaseCondition::RemotePort(445),
     },
     WfpBaseFilter {
         label: "smb-445-v6",
-        description: "Block SMB port 445 v6",
         layer: WfpLayer::AuthConnectV6,
         condition: WfpBaseCondition::RemotePort(445),
     },
     WfpBaseFilter {
         label: "smb-139-v4",
-        description: "Block NetBIOS SMB port 139 v4",
         layer: WfpLayer::AuthConnectV4,
         condition: WfpBaseCondition::RemotePort(139),
     },
     WfpBaseFilter {
         label: "smb-139-v6",
-        description: "Block NetBIOS SMB port 139 v6",
         layer: WfpLayer::AuthConnectV6,
         condition: WfpBaseCondition::RemotePort(139),
     },
