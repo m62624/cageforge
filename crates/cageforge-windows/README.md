@@ -6,16 +6,30 @@
 
 # cageforge-windows
 
-`cageforge-windows` is the elevated Windows execution backend for Cageforge.
-The crate is being assembled in fail-closed layers. Its current API defines
-versioned provisioning configuration, deterministic per-user identities, typed
-setup failures, and read-only account-state verification. The execution backend
-will be exposed only together with the complete restricted-token, ACL,
-firewall/WFP, proxy-attribution, private-desktop, Job Object, and child-lifecycle
-path.
+`cageforge-windows` is the native Windows execution backend for Cageforge. It
+turns one backend-bound `PreparedBackendRequest` into a restricted Windows
+process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
+firewall/WFP, and per-process network-route enforcement.
 
-The completed backend uses the same integration sequence as
-`cageforge-linux`:
+The crate is intended for applications that need to run agents, build steps,
+plugins, or other untrusted commands behind the portable Cageforge policy API.
+It supports multiple simultaneous backend instances and launches with different
+filesystem and network policies without sharing their route or capability
+authority.
+
+## Workspace role
+
+| Crate | Role in the relationship |
+|---|---|
+| `cageforge-config` | Optionally resolves TOML profiles into validated command, policy, environment, and gateway values. |
+| `cageforge-command` | Supplies validated argv, cwd, stdio, timeout, and environment intent. |
+| `cageforge-policy` | Supplies portable filesystem and network rules. |
+| `cageforge-policy-compose` | Produces the `EffectiveSandbox` formed by the requested policy and its outer ceiling. |
+| `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
+| `cageforge-network-proxy` | Enforces exact resolved-target HTTP and SOCKS5 gateway policy. |
+| `cageforge-windows` | Applies the Windows-native setup, ACL, token, process, Job Object, desktop, firewall/WFP, and route boundary. |
+
+The integration sequence is:
 
 ```text
 command + requested policy + PolicyCeiling + runtime paths
@@ -33,22 +47,214 @@ command + requested policy + PolicyCeiling + runtime paths
                 WindowsBackend::spawn
 ```
 
-The secure backend requires one administrator-approved provisioning step.
-Ordinary launches do not require elevation. Provisioning creates dedicated
-offline and online local users, protects their credentials and control state,
-and installs account-scoped firewall and WFP rules. Backend construction reads
-that state back and reports a typed error instead of falling back to the weaker
-current-user restricted-token mode.
+## Windows requirements and setup
 
-Restricted commands run with request-specific restricting capability SIDs,
-atomic Job Object assignment, kill-on-close without breakaway, a private
-desktop, and an explicit inherited-handle list. Proxy-routed commands also get
-a random route SID. The shared IPv4 loopback ingress attributes each accepted
-connection by its exact reversed TCP four-tuple and selects exactly one
-registered route before entering the Cageforge exact-target gateway.
+The strong Windows backend has one administrator-approved provisioning step.
+`WindowsSetup::install` requests UAC only when setup state must be created or
+reconciled. Ordinary `WindowsBackend::new`, `prepare`, and `spawn` calls use
+the verified installed state and do not request UAC for every command.
 
-The crate reuses `cageforge-command`, `cageforge-policy`,
-`cageforge-policy-compose`, `cageforge-backend-api`, `cageforge-path`, and
-`cageforge-network-proxy`; it does not define a second command or policy model.
-See Specification 0016 in the repository for the complete setup, enforcement,
-and native test contract.
+Setup creates two persistent ordinary local accounts scoped to the signed-in
+owner:
+
+- an offline account for disabled and proxy-routed networking;
+- an online account for unrestricted direct networking.
+
+It also creates a managed local group, DPAPI-protected credentials, protected
+state and lock files, owner-scoped ACLs, offline firewall rules, and mandatory
+WFP filters. The setup marker is written only after all required components have
+been configured and read back. If WFP or another mandatory component cannot be
+verified, setup fails closed and the backend will not launch a command.
+
+The accounts remain installed between launches. This avoids requiring UAC and
+firewall/WFP reconfiguration for every process. `WindowsSetup::uninstall` is an
+explicit owner-scoped operation; it refuses to remove state while a backend or
+child still holds the lifecycle boundary and never recursively deletes unknown
+files.
+
+The default release layout is:
+
+```text
+application/
+├── bin/application.exe
+└── cageforge-resources/
+    ├── cageforge-windows-setup.exe
+    ├── cageforge-windows-command-runner.exe
+    └── runner-manifest.json
+```
+
+`WindowsSetupConfig` can instead select the sibling executables or explicit
+absolute paths. Resource selection is not a download: every helper and runner
+is opened through a pinned handle, checked for reparse and final-path changes,
+hashed, and retained through the operation that uses it. The `bundled-helpers`
+feature selects the release resource layout; it does not turn an unverified
+pathname into a trusted executable.
+
+The crate exposes documentation targets for the supported Windows library
+architectures:
+
+```toml
+[package.metadata.docs.rs]
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+```
+
+Native enforcement is performed by Windows APIs. Cross-compiling the library
+checks its target surface, but does not replace execution on Windows.
+
+## Basic use
+
+Provision the setup explicitly, compose the portable values, then prepare and
+spawn through the same backend instance:
+
+```rust,no_run
+use std::path::PathBuf;
+
+use cageforge_backend_api::BackendRequest;
+use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
+use cageforge_policy::{PathResolutionContext, SandboxPolicy};
+use cageforge_policy_compose::{compose, CompositionRequest, PolicyCeiling};
+use cageforge_windows::{WindowsBackend, WindowsBackendConfig, WindowsSetup, WindowsSetupConfig};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let setup_config = WindowsSetupConfig::new();
+    let setup = WindowsSetup::new(setup_config.clone());
+    setup.install()?; // Administrator approval through UAC, when required.
+
+    let workspace = std::env::current_dir()?;
+    let environment = EnvironmentSpec::inherit_core();
+    let requested = SandboxPolicy::workspace();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::workspace(), environment.clone())
+        .with_workspace_roots([workspace.clone()])?;
+    let effective = compose(
+        CompositionRequest::new(&requested, &environment, &ceiling)
+            .with_workspace_roots([workspace.clone()])?,
+    )?;
+
+    let command = CommandRequest::new(CommandSpec::new("cmd.exe")?)
+        .with_working_directory(workspace.clone())?
+        .with_environment(environment);
+    let context = PathResolutionContext::new()
+        .with_root(PathBuf::from(r"C:\"))?
+        .with_workspace_root(workspace.clone())?
+        .with_minimal_path(PathBuf::from(r"C:\Windows\System32"))?
+        .with_current_directory(workspace)?;
+
+    let backend = WindowsBackend::new(
+        WindowsBackendConfig::new().with_setup(setup_config),
+    )?;
+    let prepared = backend.prepare(BackendRequest::new(&command, &effective), &context)?;
+    let status = backend.spawn(prepared)?.wait()?;
+    assert!(status.success());
+    Ok(())
+}
+```
+
+`WindowsBackend::prepare` binds the request to the exact backend identity and
+validates the complete effective filesystem, network, environment, stdio, cwd,
+and timeout contract. `spawn` accepts only that prepared value; it does not
+reconstruct policy from the original request.
+
+## Protection matrix
+
+The backend combines the following protections according to the effective
+policy. A capability is advertised only when its native setup and runtime path
+are available; unsupported ownership combinations return a typed error before
+launch.
+
+| Protection | When it is active | What it enforces |
+|---|---|---|
+| Owner-scoped setup identity | Every installed setup | Binds accounts, state, credentials, firewall, WFP, and helper resources to the real user's SID. |
+| Persistent low-privilege accounts | Every restricted launch | Runs the command as a verified ordinary offline or online local account, never as the current user or an administrator. |
+| DPAPI credentials and protected state | Setup and every launch | Keeps account passwords and capability state out of argv, environment, logs, and public status; protects their files with owner/DACL verification. |
+| Pinned helper and runner resources | Setup, verification, and launch | Checks digest, owner, DACL, reparse state, and final path through retained handles so a pathname replacement cannot redirect elevation or execution. |
+| Versioned setup lifecycle and lock | Install, launch, cleanup, and uninstall | Serializes mutations, excludes uninstall while children are active, and recovers only exact durable state. |
+| Write-ahead ACL journal | Every persistent ACL mutation | Records complete before/after descriptors and file identity before mutation; a replacement or third descriptor state fails closed. |
+| Handle-pinned filesystem paths | Restricted filesystem | Checks volume, file identity, final path, and reparse state before applying or restoring ACLs. |
+| Capability and profile SIDs | Restricted filesystem | Gives each complete effective filesystem profile its own deny authority and gives each writable root a separate allow authority. |
+| Native ACL enforcement | Restricted filesystem | Applies read, write, deny, read-only, protected-path, missing-path, and inherited-DACL rules without widening on a path race. |
+| Transactional missing-path materialization | Missing protected or read-only paths | Creates only Cageforge-owned components with their final descriptor, records a random marker, and removes them only after exact identity and descriptor checks. |
+| Restricted primary token | Every restricted launch | Drops maximum privileges, applies LUA and write-restricted token behavior, and retains only the required traversal privilege plus checked capability SIDs. |
+| Per-launch route SID | Proxy-routed networking | Adds one cryptographically random restricting SID to that launch's token, but never to the token default DACL or another launch. |
+| Private desktop | Every restricted launch | Creates a launch-unique desktop in the sandbox logon session with a verified DACL; the child receives no host desktop or window-station handle. |
+| Job Object boundary | Every restricted launch | Assigns the child atomically at creation, enables kill-on-close and all configured UI restrictions, and disallows breakaway. |
+| Explicit HANDLE list | Every restricted launch | Passes only the three validated standard-stream endpoints to the child; unrelated inheritable handles cannot cross the boundary. |
+| Linear HANDLE ownership | Every launch | Closes runner duplicates after process creation and Job assignment while `WindowsChild` retains its parent pipe endpoints until their documented lifecycle boundary. |
+| Authenticated runner transport | Every launch | Uses bounded, versioned typed frames for readiness, spawn, failure, and exit; expected failures become typed library errors. |
+| Private named-pipe authentication | Runner bootstrap and lifecycle | Uses launch-unique protected pipes, verifies server PID and owner identity, and rejects forged or direct helper protocols. |
+| Offline firewall and WFP deny boundary | Disabled and proxy-routed networking | Blocks direct outbound and loopback access for the offline account; failure to verify WFP is fatal. |
+| Direct networking account separation | Unrestricted direct networking | Uses the separately verified online account for direct sockets without weakening restricted filesystem enforcement. |
+| Four-tuple PID attribution | Proxy-routed networking | Maps an accepted IPv4 connection to its owning PID, pins process identity against PID reuse, and reads the exact token restriction set. |
+| Exact per-process route selection | Proxy-routed networking | Enters a route only when exactly one registered route SID matches the client token; missing, stale, duplicate, and foreign routes fail closed. |
+| Exact gateway target verification | HTTP and SOCKS5 routing | Resolves once, checks the effective policy, and verifies the exact `SocketAddr` immediately before connecting. |
+| Environment isolation | Every launch | Selects `all`, `core`, or `none` through typed transformations, canonicalizes Windows variable identity, terminates the environment block correctly, and owns proxy overrides. |
+| Timeout and complete-tree termination | Backend-default or explicit timeout, kill, drop, and parent loss | Terminates the runner-owned Job boundary and descendants, closes pipes, stops watchdogs, and releases routes and ACL leases in a deterministic order. |
+| Concurrent-instance isolation | Multiple backend instances or children | Keeps account state, profile authorities, lifecycle leases, routes, gateway policies, and process trees separate. |
+| Typed fail-closed errors | Setup, prepare, spawn, wait, and cleanup | Identifies the failing native stage and code without requiring applications to parse display text. |
+
+`External` filesystem or network ownership and pathname Unix-socket policy are
+not advertised as Windows-native capabilities. Windows named pipes are handled
+as Windows objects through token, desktop, DACL, and explicit-handle controls;
+they are not silently treated as Unix sockets.
+
+## Filesystem behavior
+
+The effective filesystem policy is lowered into a Windows ACL plan before any
+launch. Absolute, workspace, root, minimal-runtime, temporary, read-only,
+protected, missing-path, and bounded glob forms are validated against native
+path identity. Existing objects are inspected through handles that do not
+follow reparse points. A path replacement, junction, symlink, alternate data
+stream, device path, drive alias, or changed final identity fails closed.
+
+Writable workspace scopes protect `.git` by default. Applications may
+explicitly opt out through `FilesystemPolicy::dangerously_allow_git_write()` or
+the matching `cageforge-config` setting; additional protected paths remain
+protected and an outer `PolicyCeiling` can retain the protection.
+
+Missing protected and read-only paths are materialized only after the existing
+ancestor chain has been pinned. The journal and marker make recovery
+resumable, while cleanup removes only the exact object that Cageforge created.
+An active child, non-empty directory, reparse substitution, descriptor drift,
+or unexpected descendant returns a typed cleanup failure rather than deleting
+an unrelated host object.
+
+## Network behavior
+
+Disabled and proxy-routed modes use the verified offline account and its
+firewall/WFP deny boundary. Direct mode uses the separately verified online
+account. Restricted filesystem plus unrestricted direct networking remains a
+native restricted launch; unrestricted filesystem combined with restricted
+networking is rejected when Windows cannot enforce that combination without
+widening ownership.
+
+For domain, local-address, or resolved-target restrictions, the backend creates
+one random route SID and registers one gateway policy for that launch. The
+fixed IPv4 loopback ingress requires exclusive port ownership, attributes the
+connection by the reversed TCP four-tuple, checks the process creation identity
+and token, and selects exactly one route. The route then enters the independent
+Cageforge HTTP or SOCKS5 gateway, which rechecks the exact resolved destination
+at connect time. A process cannot use another instance's route SID or gateway
+credential.
+
+## Process lifecycle and errors
+
+`WindowsChild` exposes the child identifier, configured standard-stream pipes,
+`try_wait`, `wait`, `kill`, and `close_stdin`. Its lifetime retains the runner
+boundary, private desktop, Job Object relationship, filesystem enforcement,
+network route, and active-child lease. Completion releases the route and ACL
+resources only after the process boundary and runner lifecycle have finished.
+
+The parent does not parse runner `stdout` or `stderr` as a protocol. The
+authenticated runner reports `Ready`, `Spawned`, `Exited`, and typed `Failed`
+frames through the bounded transport. `stderr` is only a non-authoritative
+diagnostic for direct invocation or for the case where even the authenticated
+failure report cannot be established.
+
+Use `WindowsBackendError`, `WindowsSetupError`, and the exported nested error
+types to classify failures. Setup, token, desktop, Job, handle-list, ACL,
+firewall/WFP, attribution, gateway, timeout, and process-start failures remain
+distinct; applications should match enum variants rather than parse display
+strings.
+
+`WindowsSetup::uninstall` is intentionally separate from child cleanup. Drop or
+wait for every `WindowsChild` and backend before uninstalling so that the
+protected setup resources can be reconciled in their dependency order.

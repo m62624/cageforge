@@ -15,12 +15,13 @@ use crate::runner::session::RunnerSession;
 
 /// A child launched inside the complete Windows sandbox boundary.
 pub struct WindowsChild {
-    // Rust drops fields in declaration order. Keep the boundary first, then its
-    // pinned filesystem resources, and release the active-child lease last so
-    // uninstall cannot begin ACL cleanup before those resources are gone.
+    // Rust drops fields in declaration order. Keep the process boundary first,
+    // then the route and pinned filesystem resources, and release the
+    // active-child lease last so uninstall cannot begin ACL cleanup before
+    // those resources are gone. This mirrors release_completed_boundaries.
     session: RunnerSession,
-    filesystem_enforcement: Option<FilesystemAclEnforcement>,
     network_route: Option<WindowsProxyRoute>,
+    filesystem_enforcement: Option<FilesystemAclEnforcement>,
     active_lease: Option<CapabilityActiveLease>,
 }
 
@@ -33,9 +34,9 @@ impl WindowsChild {
     ) -> Self {
         Self {
             session,
-            active_lease: Some(active_lease),
-            filesystem_enforcement: Some(filesystem_enforcement),
             network_route,
+            filesystem_enforcement: Some(filesystem_enforcement),
+            active_lease: Some(active_lease),
         }
     }
 
