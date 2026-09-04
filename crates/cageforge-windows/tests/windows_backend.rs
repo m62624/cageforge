@@ -29,8 +29,11 @@ use cageforge_windows::{
 use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, GetLastError, INVALID_HANDLE_VALUE,
-    STILL_ACTIVE, WAIT_TIMEOUT,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, GetLastError, HLOCAL, INVALID_HANDLE_VALUE,
+    LocalFree, STILL_ACTIVE, WAIT_TIMEOUT,
+};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
     GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenRestrictedSids,
@@ -71,6 +74,8 @@ struct SetupCleanup<'a> {
 
 struct WaitChainSession(*mut c_void);
 
+struct LocalSecurityDescriptor(*mut c_void);
+
 impl Drop for SetupCleanup<'_> {
     fn drop(&mut self) {
         if self.armed {
@@ -83,6 +88,15 @@ impl Drop for SetupCleanup<'_> {
 impl Drop for WaitChainSession {
     fn drop(&mut self) {
         unsafe { CloseThreadWaitChainSession(self.0) };
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for LocalSecurityDescriptor {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { LocalFree(self.0 as HLOCAL) };
+        }
     }
 }
 
@@ -281,7 +295,31 @@ fn unrelated_named_event(unique_name: &str) -> (String, OwnedHandle) {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide_name.as_ptr()) };
+    let descriptor_text = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut descriptor = std::ptr::null_mut();
+    assert_ne!(
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                descriptor_text.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        },
+        0,
+        "create unrelated named Event security descriptor: Windows error {}",
+        unsafe { GetLastError() }
+    );
+    let descriptor = LocalSecurityDescriptor(descriptor);
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    let event = unsafe { CreateEventW(&attributes, 1, 0, wide_name.as_ptr()) };
     assert!(
         !event.is_null(),
         "create unrelated named parent Event: Windows error {}",

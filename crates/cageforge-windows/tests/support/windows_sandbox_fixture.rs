@@ -9,7 +9,8 @@ use std::time::Duration;
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_HANDLE, GetLastError,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
+    ERROR_INVALID_HANDLE, GetLastError,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::StationsAndDesktops::{
@@ -179,8 +180,14 @@ fn signal_unrelated_named_object() -> Result<(), String> {
         .collect::<Vec<_>>();
     let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, wide.as_ptr()) };
     if !event.is_null() {
-        let _ = unsafe { SetEvent(event) };
         unsafe { CloseHandle(event) };
+        return Err("sandboxed process opened an unrelated named parent Event".to_string());
+    }
+    let error = unsafe { GetLastError() };
+    if error != ERROR_ACCESS_DENIED && error != ERROR_FILE_NOT_FOUND {
+        return Err(format!(
+            "reject unrelated named parent Event: Windows error {error}"
+        ));
     }
     Ok(())
 }
