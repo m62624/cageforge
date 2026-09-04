@@ -252,6 +252,12 @@ exit code and the last checkpoint. Checkpoints contain stage and operation
 labels only; account SIDs, credentials, request contents, and policy data are
 never written to this diagnostic channel.
 
+The UAC setup exchange uses the protected request and response files created by
+the unelevated caller rather than the runtime named-pipe transport. Both files
+are bounded by the setup protocol's maximum message size before allocation or
+serialization is accepted. An oversized request or response is a typed setup
+transport failure; it is never parsed as an unbounded JSON document.
+
 ## 5. Token and process boundary
 
 Restricted launches use a primary token derived from the selected dedicated

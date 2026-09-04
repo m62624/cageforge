@@ -11,6 +11,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[cfg(target_os = "windows")]
+use setup_protocol::{
+    MAX_SETUP_MESSAGE_BYTES, SETUP_PROTOCOL_VERSION, SetupFailureCode, SetupMessageReadError,
+    SetupOutcome, SetupRequest, SetupResponse, SetupStage, read_bounded_message,
+};
+
+#[cfg(target_os = "windows")]
 #[path = "../capability/lock.rs"]
 mod capability_lock;
 #[cfg(target_os = "windows")]
@@ -45,11 +51,6 @@ mod setup_state;
 mod setup_state_path;
 #[cfg(target_os = "windows")]
 mod windows_setup;
-
-#[cfg(target_os = "windows")]
-use setup_protocol::{
-    SETUP_PROTOCOL_VERSION, SetupFailureCode, SetupOutcome, SetupRequest, SetupResponse, SetupStage,
-};
 
 #[cfg(target_os = "windows")]
 struct Arguments {
@@ -97,47 +98,77 @@ fn run() -> Result<(), String> {
     let mut report_progress = |stage: SetupStage, detail: &str| {
         let _ = fs::write(&progress_path, format!("{stage:?}: {detail}"));
     };
-    let request_bytes = fs::read(&arguments.request).map_err(|error| {
-        format!(
-            "failed to read setup request {:?}: {error}",
-            arguments.request
-        )
-    })?;
-    let request: SetupRequest = serde_json::from_slice(&request_bytes)
-        .map_err(|error| format!("failed to decode setup request: {error}"))?;
-    let response = if request.version != SETUP_PROTOCOL_VERSION {
-        SetupResponse {
-            version: SETUP_PROTOCOL_VERSION,
-            outcome: SetupOutcome::Failed {
-                stage: SetupStage::Request,
-                code: SetupFailureCode::InvalidProtocolVersion,
-                native_code: None,
-                detail: format!(
-                    "expected protocol version {SETUP_PROTOCOL_VERSION}, found {}",
-                    request.version
-                ),
-            },
-        }
-    } else {
-        match windows_setup::execute(&request, &mut report_progress) {
-            Ok(()) => SetupResponse {
+    let response = match read_bounded_message(&arguments.request) {
+        Ok(request_bytes) => match serde_json::from_slice::<SetupRequest>(&request_bytes) {
+            Ok(request) if request.version != SETUP_PROTOCOL_VERSION => SetupResponse {
                 version: SETUP_PROTOCOL_VERSION,
-                outcome: SetupOutcome::Complete,
+                outcome: SetupOutcome::Failed {
+                    stage: SetupStage::Request,
+                    code: SetupFailureCode::InvalidProtocolVersion,
+                    native_code: None,
+                    detail: format!(
+                        "expected protocol version {SETUP_PROTOCOL_VERSION}, found {}",
+                        request.version
+                    ),
+                },
+            },
+            Ok(request) => match windows_setup::execute(&request, &mut report_progress) {
+                Ok(()) => SetupResponse {
+                    version: SETUP_PROTOCOL_VERSION,
+                    outcome: SetupOutcome::Complete,
+                },
+                Err(error) => SetupResponse {
+                    version: SETUP_PROTOCOL_VERSION,
+                    outcome: SetupOutcome::Failed {
+                        stage: error.stage,
+                        code: error.code,
+                        native_code: error.native_code,
+                        detail: error.detail,
+                    },
+                },
             },
             Err(error) => SetupResponse {
                 version: SETUP_PROTOCOL_VERSION,
                 outcome: SetupOutcome::Failed {
-                    stage: error.stage,
-                    code: error.code,
-                    native_code: error.native_code,
-                    detail: error.detail,
+                    stage: SetupStage::Request,
+                    code: SetupFailureCode::RequestDecode,
+                    native_code: None,
+                    detail: format!("failed to decode setup request: {error}"),
                 },
             },
-        }
+        },
+        Err(SetupMessageReadError::TooLarge { actual, maximum }) => SetupResponse {
+            version: SETUP_PROTOCOL_VERSION,
+            outcome: SetupOutcome::Failed {
+                stage: SetupStage::Request,
+                code: SetupFailureCode::RequestTooLarge,
+                native_code: None,
+                detail: format!("setup request is too large: {actual} bytes exceeds {maximum}"),
+            },
+        },
+        Err(SetupMessageReadError::Io { source }) => SetupResponse {
+            version: SETUP_PROTOCOL_VERSION,
+            outcome: SetupOutcome::Failed {
+                stage: SetupStage::Request,
+                code: SetupFailureCode::RequestRead,
+                native_code: source.raw_os_error().map(|code| code as u32),
+                detail: format!(
+                    "failed to read setup request {:?}: {source}",
+                    arguments.request
+                ),
+            },
+        },
     };
     let success = matches!(response.outcome, SetupOutcome::Complete);
     let response_bytes = serde_json::to_vec(&response)
         .map_err(|error| format!("failed to encode setup response: {error}"))?;
+    if response_bytes.len() > MAX_SETUP_MESSAGE_BYTES {
+        return Err(format!(
+            "encoded setup response is too large: {} bytes exceeds {}",
+            response_bytes.len(),
+            MAX_SETUP_MESSAGE_BYTES
+        ));
+    }
     fs::write(&arguments.response, response_bytes).map_err(|error| {
         format!(
             "failed to write setup response {:?}: {error}",

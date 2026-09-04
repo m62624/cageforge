@@ -2,11 +2,15 @@
 
 //! Versioned messages exchanged with the elevated setup helper.
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 pub(crate) const SETUP_PROTOCOL_VERSION: u32 = 3;
+pub(crate) const MAX_SETUP_MESSAGE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SetupRequest {
@@ -81,6 +85,12 @@ pub enum SetupStage {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SetupFailureCode {
+    /// The setup request file could not be read.
+    RequestRead,
+    /// The setup request exceeded the protocol memory bound.
+    RequestTooLarge,
+    /// The setup request was not valid JSON.
+    RequestDecode,
     /// The helper protocol version is unsupported.
     InvalidProtocolVersion,
     /// The owner SID is malformed.
@@ -177,4 +187,55 @@ pub enum SetupFailureCode {
     Cleanup,
     /// A live sandbox child still owns the setup lifetime boundary.
     ActiveSandboxes,
+}
+
+/// Failure while reading the bounded setup request or response file.
+#[derive(Debug, Error)]
+pub(crate) enum SetupMessageReadError {
+    /// The setup message could not be read from its protected file.
+    #[error("failed to read setup message: {source}")]
+    Io {
+        #[source]
+        source: io::Error,
+    },
+    /// The setup message exceeded the protocol memory bound.
+    #[error("setup message is too large: {actual} bytes exceeds {maximum}")]
+    TooLarge { actual: usize, maximum: usize },
+}
+
+pub(crate) fn read_bounded_message(path: &Path) -> Result<Vec<u8>, SetupMessageReadError> {
+    let file = File::open(path).map_err(|source| SetupMessageReadError::Io { source })?;
+    let mut bytes = Vec::new();
+    file.take((MAX_SETUP_MESSAGE_BYTES as u64) + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| SetupMessageReadError::Io { source })?;
+    if bytes.len() > MAX_SETUP_MESSAGE_BYTES {
+        return Err(SetupMessageReadError::TooLarge {
+            actual: bytes.len(),
+            maximum: MAX_SETUP_MESSAGE_BYTES,
+        });
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::{MAX_SETUP_MESSAGE_BYTES, SetupMessageReadError, read_bounded_message};
+
+    #[test]
+    fn bounded_setup_message_rejects_oversized_files_before_returning_them() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("message.json");
+        fs::write(&path, vec![0u8; MAX_SETUP_MESSAGE_BYTES + 1]).expect("oversized message");
+
+        assert!(matches!(
+            read_bounded_message(&path),
+            Err(SetupMessageReadError::TooLarge {
+                actual,
+                maximum: MAX_SETUP_MESSAGE_BYTES
+            }) if actual == MAX_SETUP_MESSAGE_BYTES + 1
+        ));
+    }
 }

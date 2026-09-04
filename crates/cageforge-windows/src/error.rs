@@ -551,6 +551,16 @@ pub enum WindowsSetupError {
         #[source]
         source: io::Error,
     },
+    /// The structured setup response exceeded the protocol memory bound.
+    #[error("Windows setup response {path:?} is too large: {actual} bytes exceeds {maximum}")]
+    ResponseTooLarge {
+        /// Response file path.
+        path: PathBuf,
+        /// Number of bytes observed before rejecting the response.
+        actual: usize,
+        /// Maximum accepted response size.
+        maximum: usize,
+    },
     /// The structured setup response was malformed.
     #[error("failed to decode Windows setup response {path:?}: {source}")]
     ResponseDecode {

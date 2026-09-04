@@ -24,7 +24,8 @@ use crate::error::WindowsSetupError;
 use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::filesystem::path::ValidatedPath;
 use crate::setup::protocol::{
-    SETUP_PROTOCOL_VERSION, SetupOperation, SetupOutcome, SetupRequest, SetupResponse,
+    MAX_SETUP_MESSAGE_BYTES, SETUP_PROTOCOL_VERSION, SetupMessageReadError, SetupOperation,
+    SetupOutcome, SetupRequest, SetupResponse, read_bounded_message,
 };
 use crate::setup::state::{SETUP_STATE_VERSION, SetupMarker};
 
@@ -395,6 +396,16 @@ impl WindowsSetup {
                 path: request_path.clone(),
                 detail: error.to_string(),
             })?;
+        if encoded.len() > MAX_SETUP_MESSAGE_BYTES {
+            return Err(WindowsSetupError::RequestWrite {
+                path: request_path,
+                detail: format!(
+                    "encoded setup request is too large: {} bytes exceeds {}",
+                    encoded.len(),
+                    MAX_SETUP_MESSAGE_BYTES
+                ),
+            });
+        }
         let _request_file = write_pinned_setup_request(&request_path, &encoded)?;
         let arguments = [
             "--request".to_string(),
@@ -428,9 +439,11 @@ impl WindowsSetup {
                 });
             }
         };
-        let response_bytes = match fs::read(&response_path) {
+        let response_bytes = match read_bounded_message(&response_path) {
             Ok(response) => response,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            Err(SetupMessageReadError::Io { source })
+                if source.kind() == io::ErrorKind::NotFound =>
+            {
                 let last_checkpoint = fs::read_to_string(response_path.with_extension("progress"))
                     .ok()
                     .filter(|checkpoint| !checkpoint.is_empty());
@@ -441,10 +454,17 @@ impl WindowsSetup {
                     source,
                 });
             }
-            Err(source) => {
+            Err(SetupMessageReadError::Io { source }) => {
                 return Err(WindowsSetupError::ResponseRead {
                     path: response_path.clone(),
                     source,
+                });
+            }
+            Err(SetupMessageReadError::TooLarge { actual, maximum }) => {
+                return Err(WindowsSetupError::ResponseTooLarge {
+                    path: response_path,
+                    actual,
+                    maximum,
                 });
             }
         };
