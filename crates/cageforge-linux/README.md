@@ -237,6 +237,66 @@ any descendants it starts. Multiple children or backend instances may run
 concurrently; their gateway, lifecycle, and enforcement state is separate,
 while host paths are shared only when the effective filesystem scopes allow it.
 
+## One policy, several commands
+
+`SandboxPolicy` contains the rules. `LinuxBackend` is the reusable native
+execution engine. `CommandRequest` describes one command, and `spawn` creates
+one Linux sandbox boundary for that command and every descendant it starts:
+
+```text
+SandboxPolicy + LinuxBackend + CommandRequest
+                              │
+                              ▼
+                           spawn()
+                              │
+                              ▼
+                    one Bubblewrap boundary
+```
+
+Compose the policy and create the backend once, then prepare and spawn each
+command separately. The following uses the `effective`, `context`,
+`workspace`, and `environment` values prepared in the example above:
+
+```rust,no_run
+let commands = [
+    ("/usr/bin/cargo", &["check"] as &[&str]),
+    ("/usr/bin/cargo", &["test"] as &[&str]),
+    ("/usr/bin/git", &["diff", "--check"] as &[&str]),
+];
+
+for (program, arguments) in commands {
+    let command_spec = CommandSpec::new(program)?.with_args(arguments.iter().copied())?;
+    let command = CommandRequest::new(command_spec)
+        .with_working_directory(workspace.clone())?
+        .with_environment(environment.clone());
+    let prepared = backend.prepare(
+        BackendRequest::new(&command, &effective),
+        &context,
+    )?;
+    let status = backend.spawn(prepared)?.wait()?;
+    if !status.success() {
+        break;
+    }
+}
+```
+
+This creates three independent boundaries. They use the same effective policy,
+but have separate Bubblewrap processes, process trees, timeout state, gateway
+state, and cleanup lifecycle. If `cargo` starts `rustc` and `build.rs`, those
+descendants remain inside the boundary of that particular `spawn`:
+
+```text
+one sandbox boundary
+└── cargo
+    └── rustc
+        └── build.rs
+```
+
+For one shared boundary around several steps, an application may explicitly
+launch a shell command, but then the shell and all three steps form one process
+tree. Cageforge itself is a library and does not provide a `cageforge run`
+command; an application can expose its own CLI around this API.
+
 ## Filesystem behavior
 
 Restricted policies become a deterministic Bubblewrap mount plan. The backend

@@ -182,6 +182,70 @@ tree. Separate `spawn` calls are separate sandbox instances and may run at the
 same time with different policies. They share host data only where their
 effective filesystem scopes deliberately name the same path.
 
+## One policy, several commands
+
+`SandboxPolicy` contains the rules. `WindowsBackend` is the reusable native
+execution engine. `CommandRequest` describes one command, and `spawn` creates
+one Windows sandbox boundary for that command and every descendant it starts:
+
+```text
+SandboxPolicy + WindowsBackend + CommandRequest
+                                │
+                                ▼
+                             spawn()
+                                │
+                                ▼
+                    one token and Job boundary
+```
+
+`WindowsSetup::install` is performed once when the owner-scoped setup is not
+yet installed or needs reconciliation. It is provisioning for the backend,
+not a separate sandbox around one command. After setup, compose the policy and
+create the backend once, then prepare and spawn each command separately. The
+following uses the `effective`, `context`, `workspace`, and `environment`
+values prepared in the example above:
+
+```rust,no_run
+let commands = [
+    ("cargo.exe", &["check"] as &[&str]),
+    ("cargo.exe", &["test"] as &[&str]),
+    ("git.exe", &["diff", "--check"] as &[&str]),
+];
+
+for (program, arguments) in commands {
+    let command_spec = CommandSpec::new(program)?.with_args(arguments.iter().copied())?;
+    let command = CommandRequest::new(command_spec)
+        .with_working_directory(workspace.clone())?
+        .with_environment(environment.clone());
+    let prepared = backend.prepare(
+        BackendRequest::new(&command, &effective),
+        &context,
+    )?;
+    let status = backend.spawn(prepared)?.wait()?;
+    if !status.success() {
+        break;
+    }
+}
+```
+
+This creates three independent Windows sandbox instances. They use the same
+effective policy, but have separate restricted tokens, Job Objects, process
+trees, route state, timeout state, and cleanup lifecycle. If `cargo` starts
+`rustc` and `build.rs`, those descendants remain inside the boundary of that
+particular `spawn`:
+
+```text
+one sandbox boundary
+└── cargo
+    └── rustc
+        └── build.rs
+```
+
+For one shared boundary around several steps, an application may explicitly
+launch a shell command, but then the shell and all steps form one process tree.
+Cageforge itself is a library and does not provide a `cageforge run` command;
+an application can expose its own CLI around this API.
+
 ## Protection matrix
 
 The backend combines the following protections according to the effective
