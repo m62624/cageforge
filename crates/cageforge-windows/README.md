@@ -249,12 +249,6 @@ frames through the bounded transport. `stderr` is only a non-authoritative
 diagnostic for direct invocation or for the case where even the authenticated
 failure report cannot be established.
 
-Use `WindowsBackendError`, `WindowsSetupError`, and the exported nested error
-types to classify failures. Setup, token, desktop, Job, handle-list, ACL,
-firewall/WFP, attribution, gateway, timeout, and process-start failures remain
-distinct; applications should match enum variants rather than parse display
-strings.
-
 `WindowsSetup::uninstall` is intentionally separate from child cleanup. Drop or
 wait for every `WindowsChild` and backend before uninstalling so that the
 protected setup resources can be reconciled in their dependency order.
