@@ -10,13 +10,11 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT8, FWP_UINT16, FWP_UINT32, FWPM_CONDITION_ALE_USER_ID,
     FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT,
     FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
-    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-    FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
-    FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_SESSION0, FWPM_SUBLAYER_FLAG_PERSISTENT, FwpmEngineClose0,
-    FwpmEngineOpen0, FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmProviderGetByKey0,
-    FwpmSubLayerGetByKey0,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_PROVIDER_FLAG_PERSISTENT,
+    FWPM_SESSION0, FWPM_SUBLAYER_FLAG_PERSISTENT, FwpmEngineClose0, FwpmEngineOpen0,
+    FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmProviderGetByKey0, FwpmSubLayerGetByKey0,
 };
-use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP};
+use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, EqualSid, GetAce, GetSecurityDescriptorDacl, IsValidSecurityDescriptor,
@@ -29,14 +27,15 @@ use windows_sys::core::GUID;
 
 use crate::error::WindowsSetupVerificationError;
 use crate::firewall_contract::{
-    WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER, WFP_PROVIDER_KEY as PROVIDER_KEY,
-    WFP_SUBLAYER_KEY as SUBLAYER_KEY,
+    WFP_BASE_FILTERS, WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER,
+    WFP_PROVIDER_KEY as PROVIDER_KEY, WFP_SUBLAYER_KEY as SUBLAYER_KEY, WfpBaseCondition,
 };
 use crate::setup::WindowsSetupDetails;
 
 struct FilterExpectation {
     key: GUID,
     name: String,
+    description: String,
     layer_key: GUID,
     action: u32,
     weight: u8,
@@ -200,7 +199,10 @@ fn verify_filter(
             name: expected.name.clone(),
             code: 0,
         })?;
+    let description_matches = read_wide_string(filter.displayData.description.cast_const())
+        .is_some_and(|actual| actual == expected.description);
     let header_matches = guid_eq(filter.filterKey, expected.key)
+        && description_matches
         && filter.flags & FWPM_FILTER_FLAG_PERSISTENT != 0
         && guid_eq(filter.layerKey, expected.layer_key)
         && guid_eq(filter.subLayerKey, SUBLAYER_KEY)
@@ -232,6 +234,22 @@ fn verify_filter(
             code: 0,
         })
     }
+}
+
+#[allow(unsafe_code)]
+fn read_wide_string(pointer: *const u16) -> Option<String> {
+    if pointer.is_null() {
+        return None;
+    }
+    let mut units = Vec::new();
+    for index in 0..=4096 {
+        let unit = unsafe { *pointer.add(index) };
+        if unit == 0 {
+            return String::from_utf16(&units).ok();
+        }
+        units.push(unit);
+    }
+    None
 }
 
 #[allow(unsafe_code)]
@@ -316,113 +334,24 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
 }
 
 fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpectation> {
-    let specs: [(&str, GUID, Vec<ConditionExpectation>); 12] = [
-        (
-            "icmp-connect-v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::Protocol(IPPROTO_ICMP as u8),
-            ],
-        ),
-        (
-            "icmp-connect-v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::Protocol(IPPROTO_ICMPV6 as u8),
-            ],
-        ),
-        (
-            "icmp-assign-v4",
-            FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::Protocol(IPPROTO_ICMP as u8),
-            ],
-        ),
-        (
-            "icmp-assign-v6",
-            FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::Protocol(IPPROTO_ICMPV6 as u8),
-            ],
-        ),
-        (
-            "dns-53-v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(53),
-            ],
-        ),
-        (
-            "dns-53-v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(53),
-            ],
-        ),
-        (
-            "dns-853-v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(853),
-            ],
-        ),
-        (
-            "dns-853-v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(853),
-            ],
-        ),
-        (
-            "smb-445-v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(445),
-            ],
-        ),
-        (
-            "smb-445-v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(445),
-            ],
-        ),
-        (
-            "smb-139-v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(139),
-            ],
-        ),
-        (
-            "smb-139-v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![
-                ConditionExpectation::User,
-                ConditionExpectation::RemotePort(139),
-            ],
-        ),
-    ];
-    let mut filters = specs
-        .into_iter()
-        .map(|(label, layer_key, conditions)| FilterExpectation {
-            key: derived_guid(owner_sid, label),
-            name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
-            layer_key,
+    let mut filters = WFP_BASE_FILTERS
+        .iter()
+        .map(|spec| FilterExpectation {
+            key: derived_guid(owner_sid, spec.label),
+            name: format!("cageforge_{}_{}", spec.label, owner_key(owner_sid)),
+            description: format!("Cageforge offline identity - {}", spec.description),
+            layer_key: spec.layer.key(),
             action: FWP_ACTION_BLOCK,
             weight: 1,
-            conditions,
+            conditions: vec![
+                ConditionExpectation::User,
+                match spec.condition {
+                    WfpBaseCondition::Protocol(protocol) => {
+                        ConditionExpectation::Protocol(protocol)
+                    }
+                    WfpBaseCondition::RemotePort(port) => ConditionExpectation::RemotePort(port),
+                },
+            ],
         })
         .collect::<Vec<_>>();
     for port in proxy_ports {
@@ -430,6 +359,9 @@ fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpect
         filters.push(FilterExpectation {
             key: derived_guid(owner_sid, &label),
             name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
+            description: format!(
+                "Cageforge offline identity - permit exact IPv4 loopback proxy port {port}"
+            ),
             layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
             action: FWP_ACTION_PERMIT,
             weight: 2,
@@ -449,6 +381,9 @@ fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpect
         filters.push(FilterExpectation {
             key: derived_guid(owner_sid, &label),
             name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
+            description: format!(
+                "Cageforge offline identity - block all outbound {family} connects"
+            ),
             layer_key,
             action: FWP_ACTION_BLOCK,
             weight: 1,

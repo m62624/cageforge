@@ -14,15 +14,13 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWPM_ACTION0, FWPM_ACTION0_0, FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_IP_PROTOCOL,
     FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
     FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0, FWPM_FILTER0_0,
-    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-    FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
-    FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0, FWPM_SESSION0, FWPM_SUBLAYER_FLAG_PERSISTENT,
-    FWPM_SUBLAYER0, FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterDeleteByKey0,
-    FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmProviderAdd0, FwpmProviderGetByKey0,
-    FwpmSubLayerAdd0, FwpmSubLayerGetByKey0, FwpmTransactionAbort0, FwpmTransactionBegin0,
-    FwpmTransactionCommit0,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_PROVIDER_FLAG_PERSISTENT,
+    FWPM_PROVIDER0, FWPM_SESSION0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0, FwpmEngineClose0,
+    FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterDeleteByKey0, FwpmFilterGetByKey0, FwpmFreeMemory0,
+    FwpmProviderAdd0, FwpmProviderGetByKey0, FwpmSubLayerAdd0, FwpmSubLayerGetByKey0,
+    FwpmTransactionAbort0, FwpmTransactionBegin0, FwpmTransactionCommit0,
 };
-use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP};
+use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
 use windows_sys::Win32::Security::Authorization::{
     BuildExplicitAccessWithNameW, BuildSecurityDescriptorW, ConvertStringSidToSidW,
     EXPLICIT_ACCESS_W, GRANT_ACCESS,
@@ -37,8 +35,8 @@ use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::core::GUID;
 
 use crate::firewall_contract::{
-    WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER, WFP_PROVIDER_KEY as PROVIDER_KEY,
-    WFP_SUBLAYER_KEY as SUBLAYER_KEY,
+    WFP_BASE_FILTERS, WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER,
+    WFP_PROVIDER_KEY as PROVIDER_KEY, WFP_SUBLAYER_KEY as SUBLAYER_KEY, WfpBaseCondition,
 };
 use crate::setup_protocol::{SetupFailureCode, SetupStage};
 
@@ -603,102 +601,22 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
 }
 
 fn filter_specs(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterSpec> {
-    let specs: [(&str, &str, GUID, Vec<ConditionSpec>); 12] = [
-        (
-            "icmp-connect-v4",
-            "Block ICMP connect v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![
-                ConditionSpec::User,
-                ConditionSpec::Protocol(IPPROTO_ICMP as u8),
-            ],
-        ),
-        (
-            "icmp-connect-v6",
-            "Block ICMP connect v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![
-                ConditionSpec::User,
-                ConditionSpec::Protocol(IPPROTO_ICMPV6 as u8),
-            ],
-        ),
-        (
-            "icmp-assign-v4",
-            "Block ICMP resource assignment v4",
-            FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
-            vec![
-                ConditionSpec::User,
-                ConditionSpec::Protocol(IPPROTO_ICMP as u8),
-            ],
-        ),
-        (
-            "icmp-assign-v6",
-            "Block ICMP resource assignment v6",
-            FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
-            vec![
-                ConditionSpec::User,
-                ConditionSpec::Protocol(IPPROTO_ICMPV6 as u8),
-            ],
-        ),
-        (
-            "dns-53-v4",
-            "Block DNS port 53 v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(53)],
-        ),
-        (
-            "dns-53-v6",
-            "Block DNS port 53 v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(53)],
-        ),
-        (
-            "dns-853-v4",
-            "Block DNS over TLS v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(853)],
-        ),
-        (
-            "dns-853-v6",
-            "Block DNS over TLS v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(853)],
-        ),
-        (
-            "smb-445-v4",
-            "Block SMB port 445 v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(445)],
-        ),
-        (
-            "smb-445-v6",
-            "Block SMB port 445 v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(445)],
-        ),
-        (
-            "smb-139-v4",
-            "Block NetBIOS SMB port 139 v4",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(139)],
-        ),
-        (
-            "smb-139-v6",
-            "Block NetBIOS SMB port 139 v6",
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            vec![ConditionSpec::User, ConditionSpec::RemotePort(139)],
-        ),
-    ];
-    let mut filters: Vec<_> = specs
-        .into_iter()
-        .map(|(label, description, layer_key, conditions)| FilterSpec {
-            key: derived_guid(owner_sid, label),
-            name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
-            description: format!("Cageforge offline identity - {description}"),
-            layer_key,
+    let mut filters: Vec<_> = WFP_BASE_FILTERS
+        .iter()
+        .map(|spec| FilterSpec {
+            key: derived_guid(owner_sid, spec.label),
+            name: format!("cageforge_{}_{}", spec.label, owner_key(owner_sid)),
+            description: format!("Cageforge offline identity - {}", spec.description),
+            layer_key: spec.layer.key(),
             action: FWP_ACTION_BLOCK,
             weight: 1,
-            conditions,
+            conditions: vec![
+                ConditionSpec::User,
+                match spec.condition {
+                    WfpBaseCondition::Protocol(protocol) => ConditionSpec::Protocol(protocol),
+                    WfpBaseCondition::RemotePort(port) => ConditionSpec::RemotePort(port),
+                },
+            ],
         })
         .collect();
     for port in proxy_ports {

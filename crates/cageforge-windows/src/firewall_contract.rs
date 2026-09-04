@@ -2,6 +2,11 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
+};
+use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6};
 use windows_sys::core::GUID;
 
 /// Stable WFP provider identity shared by setup and read-back verification.
@@ -12,6 +17,114 @@ pub(crate) const WFP_SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8
 
 /// IPv4 loopback in the byte order required by WFP address conditions.
 pub(crate) const WFP_IPV4_LOOPBACK_HOST_ORDER: u32 = u32::from_be_bytes([127, 0, 0, 1]);
+
+#[derive(Clone, Copy)]
+pub(crate) enum WfpBaseCondition {
+    Protocol(u8),
+    RemotePort(u16),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum WfpLayer {
+    AuthConnectV4,
+    AuthConnectV6,
+    ResourceAssignmentV4,
+    ResourceAssignmentV6,
+}
+
+impl WfpLayer {
+    pub(crate) const fn key(self) -> GUID {
+        match self {
+            Self::AuthConnectV4 => FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            Self::AuthConnectV6 => FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            Self::ResourceAssignmentV4 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
+            Self::ResourceAssignmentV6 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct WfpBaseFilter {
+    pub(crate) label: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) layer: WfpLayer,
+    pub(crate) condition: WfpBaseCondition,
+}
+
+pub(crate) const WFP_BASE_FILTERS: [WfpBaseFilter; 12] = [
+    WfpBaseFilter {
+        label: "icmp-connect-v4",
+        description: "Block ICMP connect v4",
+        layer: WfpLayer::AuthConnectV4,
+        condition: WfpBaseCondition::Protocol(IPPROTO_ICMP as u8),
+    },
+    WfpBaseFilter {
+        label: "icmp-connect-v6",
+        description: "Block ICMP connect v6",
+        layer: WfpLayer::AuthConnectV6,
+        condition: WfpBaseCondition::Protocol(IPPROTO_ICMPV6 as u8),
+    },
+    WfpBaseFilter {
+        label: "icmp-assign-v4",
+        description: "Block ICMP resource assignment v4",
+        layer: WfpLayer::ResourceAssignmentV4,
+        condition: WfpBaseCondition::Protocol(IPPROTO_ICMP as u8),
+    },
+    WfpBaseFilter {
+        label: "icmp-assign-v6",
+        description: "Block ICMP resource assignment v6",
+        layer: WfpLayer::ResourceAssignmentV6,
+        condition: WfpBaseCondition::Protocol(IPPROTO_ICMPV6 as u8),
+    },
+    WfpBaseFilter {
+        label: "dns-53-v4",
+        description: "Block DNS port 53 v4",
+        layer: WfpLayer::AuthConnectV4,
+        condition: WfpBaseCondition::RemotePort(53),
+    },
+    WfpBaseFilter {
+        label: "dns-53-v6",
+        description: "Block DNS port 53 v6",
+        layer: WfpLayer::AuthConnectV6,
+        condition: WfpBaseCondition::RemotePort(53),
+    },
+    WfpBaseFilter {
+        label: "dns-853-v4",
+        description: "Block DNS over TLS v4",
+        layer: WfpLayer::AuthConnectV4,
+        condition: WfpBaseCondition::RemotePort(853),
+    },
+    WfpBaseFilter {
+        label: "dns-853-v6",
+        description: "Block DNS over TLS v6",
+        layer: WfpLayer::AuthConnectV6,
+        condition: WfpBaseCondition::RemotePort(853),
+    },
+    WfpBaseFilter {
+        label: "smb-445-v4",
+        description: "Block SMB port 445 v4",
+        layer: WfpLayer::AuthConnectV4,
+        condition: WfpBaseCondition::RemotePort(445),
+    },
+    WfpBaseFilter {
+        label: "smb-445-v6",
+        description: "Block SMB port 445 v6",
+        layer: WfpLayer::AuthConnectV6,
+        condition: WfpBaseCondition::RemotePort(445),
+    },
+    WfpBaseFilter {
+        label: "smb-139-v4",
+        description: "Block NetBIOS SMB port 139 v4",
+        layer: WfpLayer::AuthConnectV4,
+        condition: WfpBaseCondition::RemotePort(139),
+    },
+    WfpBaseFilter {
+        label: "smb-139-v6",
+        description: "Block NetBIOS SMB port 139 v6",
+        layer: WfpLayer::AuthConnectV6,
+        condition: WfpBaseCondition::RemotePort(139),
+    },
+];
 
 #[derive(Eq, PartialEq)]
 struct AddressSet {
