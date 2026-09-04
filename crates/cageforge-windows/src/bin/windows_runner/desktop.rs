@@ -3,7 +3,7 @@
 use std::mem::size_of;
 
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_INVALID_DATA, GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
@@ -206,13 +206,14 @@ fn parse_descriptor(value: &str) -> Result<LocalSecurityDescriptor, PrivateDeskt
 #[allow(unsafe_code)]
 fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, PrivateDesktopError> {
     let mut value = std::ptr::null_mut();
+    let mut value_length = 0u32;
     if unsafe {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
             descriptor,
             SDDL_REVISION_1,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &mut value,
-            std::ptr::null_mut(),
+            &mut value_length,
         )
     } == 0
     {
@@ -221,18 +222,19 @@ fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, Private
         });
     }
     let value = LocalWideString(value);
-    Ok(wide_string(value.0))
+    wide_string(value.0, value_length).ok_or(PrivateDesktopError::DescriptorReadBack {
+        code: ERROR_INVALID_DATA,
+    })
 }
 
 #[allow(unsafe_code)]
-fn wide_string(value: *const u16) -> String {
-    unsafe {
-        let mut length = 0;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
+fn wide_string(value: *const u16, length: u32) -> Option<String> {
+    if value.is_null() || length == 0 {
+        return None;
     }
+    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
+    let units = units.strip_suffix(&[0]).unwrap_or(units);
+    Some(String::from_utf16_lossy(units))
 }
 
 fn to_wide(value: &str) -> Vec<u16> {

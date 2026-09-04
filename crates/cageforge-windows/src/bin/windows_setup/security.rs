@@ -11,8 +11,8 @@ use std::path::{Component, Path, PathBuf};
 use cageforge_path::paths_equal;
 use getrandom::fill;
 use windows_sys::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, GENERIC_WRITE, GetLastError, HLOCAL,
-    INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, ERROR_INVALID_DATA, GENERIC_WRITE, GetLastError,
+    HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
@@ -761,13 +761,14 @@ fn verify_descriptor_value(
     descriptor_kind: &ProtectedDescriptor<'_>,
 ) -> NativeSetupResult<()> {
     let mut value = std::ptr::null_mut();
+    let mut value_length = 0u32;
     if unsafe {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
             descriptor.0,
             SDDL_REVISION_1,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &mut value,
-            std::ptr::null_mut(),
+            &mut value_length,
         )
     } == 0
     {
@@ -778,7 +779,14 @@ fn verify_descriptor_value(
         ));
     }
     let value = LocalWideString(value);
-    let actual = wide_pointer_to_string(value.0);
+    let Some(actual) = wide_string_with_length(value.0, value_length) else {
+        return Err(NativeSetupFailure::new(
+            SetupStage::StateDirectory,
+            SetupFailureCode::DirectoryAcl,
+            Some(ERROR_INVALID_DATA),
+            format!("Windows returned an invalid protected DACL string for {path:?}"),
+        ));
+    };
     if !protected_descriptor_matches(descriptor.0, owner_sid, descriptor_kind) {
         return Err(NativeSetupFailure::new(
             SetupStage::StateDirectory,
@@ -968,6 +976,16 @@ fn wide_pointer_to_string(value: *const u16) -> String {
         }
         String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
     }
+}
+
+#[allow(unsafe_code)]
+fn wide_string_with_length(value: *const u16, length: u32) -> Option<String> {
+    if value.is_null() || length == 0 {
+        return None;
+    }
+    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
+    let units = units.strip_suffix(&[0]).unwrap_or(units);
+    Some(String::from_utf16_lossy(units))
 }
 
 #[cfg(test)]

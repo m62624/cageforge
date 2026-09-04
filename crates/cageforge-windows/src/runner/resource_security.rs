@@ -8,7 +8,7 @@ use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_INVALID_DATA, GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSidToSidW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
@@ -127,13 +127,14 @@ fn descriptor_snapshot(
     descriptor: PSECURITY_DESCRIPTOR,
 ) -> Result<ResourceSecuritySnapshot, RunnerResourceSecurityError> {
     let mut value = std::ptr::null_mut();
+    let mut value_length = 0u32;
     if unsafe {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
             descriptor,
             SDDL_REVISION_1,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &mut value,
-            std::ptr::null_mut(),
+            &mut value_length,
         )
     } == 0
     {
@@ -143,9 +144,15 @@ fn descriptor_snapshot(
         });
     }
     let value = LocalWideString(value);
+    let Some(descriptor) = wide_string_with_length(value.0, value_length) else {
+        return Err(RunnerResourceSecurityError::Read {
+            path: path.to_path_buf(),
+            code: ERROR_INVALID_DATA,
+        });
+    };
     Ok(ResourceSecuritySnapshot {
         path: path.to_path_buf(),
-        descriptor: wide_pointer_to_string(value.0),
+        descriptor,
     })
 }
 
@@ -267,4 +274,14 @@ fn wide_pointer_to_string(value: *const u16) -> String {
         }
         String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
     }
+}
+
+#[allow(unsafe_code)]
+fn wide_string_with_length(value: *const u16, length: u32) -> Option<String> {
+    if value.is_null() || length == 0 {
+        return None;
+    }
+    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
+    let units = units.strip_suffix(&[0]).unwrap_or(units);
+    Some(String::from_utf16_lossy(units))
 }
