@@ -1246,6 +1246,15 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         ),
         "missing command error: {missing_error:?}"
     );
+    assert!(
+        matches!(
+            setup
+                .status()
+                .expect("verify state after runtime persistence"),
+            WindowsSetupStatus::Ready(_)
+        ),
+        "runtime capability-state persistence weakened the protected setup"
+    );
 
     let outside_secret = temporary.path().join("outside-secret.txt");
     let outside_secret_ads = PathBuf::from(format!("{}:cageforge", outside_secret.display()));

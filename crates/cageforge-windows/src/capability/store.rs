@@ -2,17 +2,25 @@
 
 //! Serialized multi-process access to protected capability-SID state.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::fs::MetadataExt;
+use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, GetLastError};
+use windows_sys::Win32::Foundation::{
+    ERROR_LOCK_VIOLATION, GENERIC_WRITE, GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, MOVEFILE_WRITE_THROUGH,
-    MoveFileExW, REPLACEFILE_WRITE_THROUGH, ReplaceFileW,
+    CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL, REPLACEFILE_WRITE_THROUGH, ReplaceFileW,
 };
 
 use crate::capability::lock::{CapabilityLock, CapabilityLockError};
@@ -48,6 +56,8 @@ pub(crate) struct CapabilityStateSession<'store> {
     lock: CapabilityLock,
     state: CapabilityState,
 }
+
+struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 #[derive(Debug, Error)]
 pub(crate) enum CapabilityStateStoreError {
@@ -109,6 +119,17 @@ pub(crate) enum CapabilityStateStoreError {
     ReadBackMismatch,
 }
 
+#[allow(unsafe_code)]
+impl Drop for LocalSecurityDescriptor {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                LocalFree(self.0 as HLOCAL);
+            }
+        }
+    }
+}
+
 impl CapabilityStateStore {
     pub(crate) fn new(state_directory: &Path, owner_sid: &str) -> Self {
         Self {
@@ -166,6 +187,53 @@ impl CapabilityStateStore {
             .map_err(Into::into)
     }
 
+    #[allow(unsafe_code)]
+    fn create_protected_replacement(&self, path: &Path) -> Result<File, CapabilityStateStoreError> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| CapabilityStateStoreError::ReplacementOpen {
+                path: path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "capability-state replacement has no parent",
+                ),
+            })?;
+        let _parent = ValidatedPath::open_for_acl(parent).map_err(|source| {
+            CapabilityStateStoreError::UnsafeProtectedPath {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
+        let descriptor = state_file_security_descriptor(&self.owner_sid)?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: 0,
+        };
+        let path_wide = wide_path(path);
+        let handle = unsafe {
+            CreateFileW(
+                path_wide.as_ptr(),
+                GENERIC_WRITE | READ_CONTROL | DELETE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                &raw const attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(CapabilityStateStoreError::ReplacementOpen {
+                path: path.to_path_buf(),
+                source: io::Error::from_raw_os_error(unsafe { GetLastError() } as i32),
+            });
+        }
+        let file = unsafe { File::from_raw_handle(handle as RawHandle) };
+        crate::setup::verification::paths::verify_protected_dacl(path, &self.owner_sid, false)
+            .map_err(CapabilityStateStoreError::Security)?;
+        Ok(file)
+    }
+
     fn open_protected_file(&self, path: &Path) -> Result<std::fs::File, CapabilityStateStoreError> {
         let pinned = ValidatedPath::open_file_for_readback(path).map_err(|source| {
             CapabilityStateStoreError::UnsafeProtectedPath {
@@ -205,15 +273,7 @@ impl CapabilityStateStore {
         verify_existing_regular_replacement(&backup_path)?;
         remove_stale_replacement(&replacement_path)?;
         remove_stale_replacement(&backup_path)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
-            .open(&replacement_path)
-            .map_err(|source| CapabilityStateStoreError::ReplacementOpen {
-                path: replacement_path.clone(),
-                source,
-            })?;
+        let mut file = self.create_protected_replacement(&replacement_path)?;
         file.write_all(&encoded)
             .and_then(|()| file.sync_all())
             .map_err(|source| CapabilityStateStoreError::Write {
@@ -365,6 +425,43 @@ fn wide_path(path: &Path) -> Vec<u16> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect()
+}
+
+#[allow(unsafe_code)]
+fn state_file_security_descriptor(
+    owner_sid: &str,
+) -> Result<LocalSecurityDescriptor, CapabilityStateStoreError> {
+    if owner_sid.contains('\0') {
+        return Err(CapabilityStateStoreError::ReplacementOpen {
+            path: PathBuf::from(CAPABILITY_STATE_NAME),
+            source: io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "capability-state owner SID contains NUL",
+            ),
+        });
+    }
+    let sddl = format!("O:{owner_sid}D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{owner_sid})");
+    let sddl = sddl
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut descriptor = std::ptr::null_mut();
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    } == 0
+        || descriptor.is_null()
+    {
+        return Err(CapabilityStateStoreError::ReplacementOpen {
+            path: PathBuf::from(CAPABILITY_STATE_NAME),
+            source: io::Error::from_raw_os_error(unsafe { GetLastError() } as i32),
+        });
+    }
+    Ok(LocalSecurityDescriptor(descriptor))
 }
 
 impl CapabilityUninstallGuard {
