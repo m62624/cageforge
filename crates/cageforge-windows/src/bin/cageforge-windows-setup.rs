@@ -32,6 +32,9 @@ mod firewall_contract;
 #[path = "../native_strings.rs"]
 mod native_strings;
 #[cfg(target_os = "windows")]
+#[path = "../net_api_strings.rs"]
+mod net_api_strings;
+#[cfg(target_os = "windows")]
 #[path = "../owner_identity.rs"]
 mod owner_identity;
 #[cfg(target_os = "windows")]

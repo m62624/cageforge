@@ -25,6 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
 use crate::native_strings::local_sid_string;
+use crate::net_api_strings::net_api_wide_string;
 
 struct NetApiBuffer(*mut u8);
 
@@ -321,11 +322,14 @@ fn user_local_group_sids(
     };
     let mut sids = Vec::with_capacity(entries.len());
     for entry in entries {
-        let group_name = wide_ptr_to_string(entry.lgrui0_name).ok_or_else(|| {
-            WindowsAccountVerificationError::InvalidGroupEntry {
+        let group_name = net_api_wide_string(buffer.0, entry.lgrui0_name)
+            .map_err(|code| WindowsAccountVerificationError::GroupEnumeration {
                 account: account_name.to_string(),
-            }
-        })?;
+                code,
+            })?
+            .ok_or_else(|| WindowsAccountVerificationError::InvalidGroupEntry {
+                account: account_name.to_string(),
+            })?;
         let sid = account_sid(&group_name).map_err(|source| {
             WindowsAccountVerificationError::GroupSidLookup {
                 account: account_name.to_string(),
@@ -384,21 +388,6 @@ fn is_privileged_group_sid(sid: &str) -> bool {
             | "S-1-5-32-556"
             | "S-1-5-32-578"
     )
-}
-
-#[allow(unsafe_code)]
-fn wide_ptr_to_string(value: *const u16) -> Option<String> {
-    if value.is_null() {
-        return None;
-    }
-    let value = unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(value, length))
-    };
-    Some(value)
 }
 
 pub(crate) fn to_wide(value: &str) -> Vec<u16> {

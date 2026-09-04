@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Bounded conversion of Windows-owned, `LocalAlloc`-backed wide strings.
+//! Bounded conversion of Windows-owned wide strings.
 
 use std::mem::size_of;
 

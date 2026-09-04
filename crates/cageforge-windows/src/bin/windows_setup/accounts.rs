@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use crate::native_strings::local_sid_string;
+use crate::net_api_strings::net_api_wide_string;
 
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts};
 
@@ -200,14 +201,25 @@ fn verify_account(
     };
     let mut found_managed = false;
     for group in groups {
-        let name = wide_pointer_to_string(group.lgrui0_name).ok_or_else(|| {
-            NativeSetupFailure::new(
-                stage,
-                SetupFailureCode::GroupMembership,
-                None,
-                format!("Windows returned a null group name for sandbox user {account:?}"),
-            )
-        })?;
+        let name = net_api_wide_string(group_buffer.0, group.lgrui0_name)
+            .map_err(|code| {
+                NativeSetupFailure::new(
+                    stage,
+                    SetupFailureCode::GroupMembership,
+                    Some(code),
+                    format!(
+                        "failed to determine the NetAPI group-name buffer size for sandbox user {account:?}"
+                    ),
+                )
+            })?
+            .ok_or_else(|| {
+                NativeSetupFailure::new(
+                    stage,
+                    SetupFailureCode::GroupMembership,
+                    None,
+                    format!("Windows returned an invalid group name for sandbox user {account:?}"),
+                )
+            })?;
         let sid = account_sid(&name, stage)?;
         found_managed |= sid.eq_ignore_ascii_case(managed_group_sid);
         if is_privileged_group_sid(&sid) {
@@ -542,22 +554,6 @@ fn is_privileged_group_sid(sid: &str) -> bool {
             | "S-1-5-32-556"
             | "S-1-5-32-578"
     )
-}
-
-#[allow(unsafe_code)]
-fn wide_pointer_to_string(value: *const u16) -> Option<String> {
-    if value.is_null() {
-        return None;
-    }
-    unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
-        Some(String::from_utf16_lossy(std::slice::from_raw_parts(
-            value, length,
-        )))
-    }
 }
 
 fn wide(value: &str) -> Vec<u16> {
