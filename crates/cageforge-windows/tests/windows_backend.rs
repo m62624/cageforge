@@ -256,11 +256,11 @@ fn unrelated_inheritable_event() -> OwnedHandle {
 }
 
 #[allow(unsafe_code)]
-fn assert_unrelated_event_was_not_inherited(event: &OwnedHandle) {
+fn assert_unrelated_event_is_unsignaled(event: &OwnedHandle, phase: &str) {
     assert_eq!(
         unsafe { WaitForSingleObject(event.as_raw_handle() as _, 0) },
         WAIT_TIMEOUT,
-        "an unrelated inheritable parent Event crossed the explicit sandbox handle list"
+        "an unrelated inheritable parent Event was signaled {phase}"
     );
 }
 
@@ -1163,6 +1163,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     );
 
     let parent_event = unrelated_inheritable_event();
+    assert_unrelated_event_is_unsignaled(&parent_event, "before the sandbox launch");
     run_access_probe(
         &backend,
         workspace.path(),
@@ -1177,7 +1178,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
             )
             .expect("unrelated parent Event fixture handle"),
     );
-    assert_unrelated_event_was_not_inherited(&parent_event);
+    assert_unrelated_event_is_unsignaled(&parent_event, "during the sandbox launch");
 
     let named_event_seed = workspace
         .path()
@@ -1196,7 +1197,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
             .with_var(SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT, named_event_name)
             .expect("unrelated parent named Event fixture name"),
     );
-    assert_unrelated_event_was_not_inherited(&named_event);
+    assert_unrelated_event_is_unsignaled(&named_event, "during the sandbox launch");
 
     let disabled_target =
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("disabled-network target listener");
