@@ -357,80 +357,11 @@ jobs:
           cargo clippy -p cageforge-windows --all-targets --features bundled-helpers -- -D warnings
           cargo clippy -p cageforge-windows --all-targets --all-features -- -D warnings
       - name: Test Windows backend in every feature mode
-        shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
-          $reportDirectory = Join-Path $PWD 'test-reports'
-          New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
-          $modes = @(
-            [pscustomobject]@{
-              Name = 'no-default-features'
-              Arguments = @('--no-default-features')
-            },
-            [pscustomobject]@{
-              Name = 'bundled-helpers'
-              Arguments = @('--features', 'bundled-helpers')
-            },
-            [pscustomobject]@{
-              Name = 'all-features'
-              Arguments = @('--all-features')
-            }
-          )
-          $reports = @()
-          $failed = $false
-
-          foreach ($mode in $modes) {
-            $logPath = Join-Path $reportDirectory "$($mode.Name).log"
-            $arguments = @('test', '-p', 'cageforge-windows') + $mode.Arguments
-            & cargo @arguments *> $logPath
-            $exitCode = $LASTEXITCODE
-            $output = if (Test-Path -LiteralPath $logPath) {
-              Get-Content -LiteralPath $logPath -Raw
-            } else {
-              ''
-            }
-            if ($output) {
-              Write-Output $output
-            }
-
-            $tests = [regex]::Matches(
-              $output,
-              '(?m)^test (?<name>.+?) \.\.\. (?<status>ok|FAILED|ignored)\r?$'
-            ) | ForEach-Object {
-              [ordered]@{
-                name = $_.Groups['name'].Value
-                status = $_.Groups['status'].Value
-              }
-            }
-            $summaries = [regex]::Matches(
-              $output,
-              '(?m)^test result: (?<summary>.+?)\r?$'
-            ) | ForEach-Object {
-              $_.Groups['summary'].Value
-            }
-            $reports += [ordered]@{
-              feature_mode = $mode.Name
-              exit_code = $exitCode
-              log_file = Split-Path -Leaf $logPath
-              tests = @($tests)
-              summaries = @($summaries)
-            }
-            if ($exitCode -ne 0) {
-              $failed = $true
-            }
-          }
-
-          $reports | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 -LiteralPath (Join-Path $reportDirectory 'report.json')
-          if ($failed) {
-            exit 1
-          }
-      - name: Upload Windows native test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cageforge-windows-test-report
-          path: test-reports
-          if-no-files-found: error
+          set -euo pipefail
+          cargo test -p cageforge-windows --no-default-features
+          cargo test -p cageforge-windows --features bundled-helpers
+          cargo test -p cageforge-windows --all-features
 
   coverage-portable:
     name: "portable coverage (build target: Linux)"
