@@ -100,6 +100,15 @@ Setup is idempotent. It reconciles stale state without silently deleting
 unrelated accounts, rules, ACLs, or files. Destructive uninstall is a separate
 explicit operation and is not performed by backend construction.
 
+The owner has one persistent setup binding because the installed account,
+firewall, and WFP identifiers are owner-scoped. The binding records the exact
+state root in a protected machine registry entry and is serialized by an
+owner-scoped lifecycle mutex. Reusing that root is idempotent; a different
+state root for the same owner fails closed before account, firewall, or WFP
+reconciliation. This setup-level restriction does not limit concurrent runtime
+instances, which share the verified setup while receiving independent runtime
+state, tokens, jobs, ACL leases, and network route identities.
+
 The elevated helper independently resolves the default ProgramData path and
 accepts the caller's requested path as that default only when canonical Windows
 path equality matches. It pins every existing ancestor without delete sharing,

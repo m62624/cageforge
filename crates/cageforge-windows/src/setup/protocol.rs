@@ -100,6 +100,14 @@ mod windows {
         InvalidOwnerSid,
         /// The selected setup path is unsafe.
         InvalidStateDirectory,
+        /// Another state root already owns this user's global setup objects.
+        OwnerSetupConflict,
+        /// Another setup lifecycle currently owns the user's global setup lock.
+        SetupLifecycleActive,
+        /// The owner setup registry could not be read safely.
+        SetupRegistryRead,
+        /// The owner setup registry could not be updated safely.
+        SetupRegistryWrite,
         /// The helper does not have an elevated administrator token.
         NotElevated,
         /// A required state directory could not be created.

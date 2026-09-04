@@ -10,7 +10,7 @@ use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc;
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -73,6 +73,8 @@ const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 // Keep the host-side target alive longer than the backend's 15-second probe
 // timeout; the backend must own timeout classification for a stalled launch.
 const FIXTURE_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+static SETUP_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 struct SetupCleanup<'a> {
     setup: &'a WindowsSetup,
@@ -160,6 +162,13 @@ fn fixture_command(path: &Path) -> CommandSpec {
         .expect("sandbox fixture command")
         .with_args(["--exact", "sandbox_process_fixture", "--nocapture"])
         .expect("sandbox fixture arguments")
+}
+
+fn setup_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    SETUP_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn access_fixture_command(path: &Path) -> CommandSpec {
@@ -1026,6 +1035,7 @@ fn elevated_setup_rejects_a_reparse_state_root_before_touching_its_target() {
 
 #[test]
 fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
+    let _setup_test_guard = setup_test_lock();
     let temporary = tempfile::tempdir().expect("temporary directory");
     let state_base_directory = temporary.path().join("state");
     let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
@@ -1743,6 +1753,46 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         setup.status().expect("status after cleanup"),
         WindowsSetupStatus::Missing { .. }
     ));
+}
+
+#[test]
+fn different_setup_roots_for_one_owner_fail_closed_before_global_reconciliation() {
+    let _setup_test_guard = setup_test_lock();
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let first_base = temporary.path().join("first-state");
+    let second_base = temporary.path().join("second-state");
+    let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
+    let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
+    let first_config = WindowsSetupConfig::new()
+        .with_state_directory(&first_base)
+        .expect("first state directory")
+        .with_setup_helper_path(&helper)
+        .expect("setup helper")
+        .with_command_runner_path(&runner)
+        .expect("command runner");
+    let second_config = WindowsSetupConfig::new()
+        .with_state_directory(&second_base)
+        .expect("second state directory")
+        .with_setup_helper_path(helper)
+        .expect("setup helper")
+        .with_command_runner_path(runner)
+        .expect("command runner");
+    let first = WindowsSetup::new(first_config);
+    let second = WindowsSetup::new(second_config);
+
+    first.install().expect("first owner setup");
+    let error = second
+        .install()
+        .expect_err("a second owner setup root must be rejected");
+    assert!(matches!(
+        error,
+        WindowsSetupError::OwnerSetupConflict { .. }
+    ));
+    assert!(matches!(
+        first.status().expect("first setup remains verifiable"),
+        WindowsSetupStatus::Ready(_)
+    ));
+    first.uninstall().expect("first owner setup cleanup");
 }
 
 #[test]

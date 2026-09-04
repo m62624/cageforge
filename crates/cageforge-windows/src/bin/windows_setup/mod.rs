@@ -25,6 +25,7 @@ mod accounts;
 mod credentials;
 mod firewall;
 mod pinned;
+mod registry;
 mod resources;
 mod rights;
 mod security;
@@ -89,6 +90,7 @@ fn install(
         "preparing protected state directory",
     );
     security::prepare_state_directory(&request.state_directory, &request.owner_sid)?;
+    let owner_setup_lease = registry::claim(request)?;
     let lifecycle_guard = acquire_install_lifecycle_guard(request)?;
     progress(
         SetupStage::CapabilityState,
@@ -160,6 +162,7 @@ fn install(
         wfp_provider_id,
     );
     drop(lifecycle_guard);
+    drop(owner_setup_lease);
     result
 }
 
@@ -485,6 +488,7 @@ fn capability_state_model_failure(
 }
 
 fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
+    let owner_setup_lease = registry::claim(request)?;
     let lock_path = request
         .state_directory
         .join(crate::capability_state::CAPABILITY_LOCK_NAME);
@@ -588,6 +592,7 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
             }
         }
     }
+    owner_setup_lease.clear()?;
     Ok(())
 }
 

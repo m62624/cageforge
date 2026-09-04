@@ -488,6 +488,15 @@ impl WindowsSetup {
                 ..
             } => Err(WindowsSetupError::ActiveSandboxes),
             SetupOutcome::Failed {
+                code: crate::setup::protocol::SetupFailureCode::OwnerSetupConflict,
+                detail,
+                ..
+            } => Err(WindowsSetupError::OwnerSetupConflict { detail }),
+            SetupOutcome::Failed {
+                code: crate::setup::protocol::SetupFailureCode::SetupLifecycleActive,
+                ..
+            } => Err(WindowsSetupError::SetupLifecycleActive),
+            SetupOutcome::Failed {
                 stage,
                 code,
                 native_code,

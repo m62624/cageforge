@@ -590,6 +590,15 @@ pub enum WindowsSetupError {
     /// At least one live child still depends on the installed setup boundary.
     #[error("cannot uninstall Windows setup while a sandbox child is active")]
     ActiveSandboxes,
+    /// Another state directory already owns this user's global setup objects.
+    #[error("Windows setup for this user is already bound to another state directory: {detail}")]
+    OwnerSetupConflict {
+        /// Bounded registry diagnostic identifying the existing owner binding.
+        detail: String,
+    },
+    /// Another setup lifecycle is currently reconciling this user's global setup objects.
+    #[error("another Windows setup lifecycle is already active")]
+    SetupLifecycleActive,
     /// The protected setup lifecycle lock could not be acquired or verified.
     #[error("failed to coordinate Windows setup uninstall: {source}")]
     UninstallCoordination {
