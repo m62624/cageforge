@@ -3325,10 +3325,10 @@ mod tests {
 
     #[test]
     fn sid_must_fit_inside_the_ace_before_native_validation() {
-        let mut ace = vec![0u8; 12];
+        let mut ace = vec![0u8; 16];
         ace[5] = 1;
         assert!(sid_fits_ace_bytes(&ace, 4));
-        assert!(!sid_fits_ace_bytes(&ace[..11], 4));
+        assert!(!sid_fits_ace_bytes(&ace[..15], 4));
         assert!(!sid_fits_ace_bytes(&ace, 5));
     }
 
