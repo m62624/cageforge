@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::Path;
 
 use serde::Deserialize;
-use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_INVALID_DATA, GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
 };
@@ -164,10 +164,21 @@ fn decrypt(component: &'static str, data: &[u8]) -> Result<Vec<u8>, WindowsSetup
             code: unsafe { GetLastError() },
         });
     }
-    let decrypted =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-    unsafe {
-        LocalFree(output.pbData as HLOCAL);
+    if output.cbData != 0 && output.pbData.is_null() {
+        return Err(WindowsSetupVerificationError::CredentialDecrypt {
+            component,
+            code: ERROR_INVALID_DATA,
+        });
+    }
+    let decrypted = if output.cbData == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec()
+    };
+    if !output.pbData.is_null() {
+        unsafe {
+            LocalFree(output.pbData as HLOCAL);
+        }
     }
     Ok(decrypted)
 }

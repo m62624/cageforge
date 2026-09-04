@@ -4,6 +4,7 @@
 
 use std::ffi::c_void;
 use std::fs::File;
+use std::mem::{align_of, offset_of, size_of};
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +15,8 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetSecurityDescriptorControl,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+    DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
     GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidSecurityDescriptor, IsValidSid,
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
@@ -24,6 +26,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
 use crate::native_strings::local_sid_string;
+
+const SID_HEADER_BYTES: usize = 8;
 
 pub(crate) enum RunnerResourceKind {
     Executable,
@@ -209,7 +213,25 @@ fn descriptor_matches(
         (owner_sid.to_string(), FILE_ALL_ACCESS),
         (group_sid.to_string(), group_mask),
     ];
-    if unsafe { (*dacl).AceCount } as usize != expected.len() {
+    let mut acl_size = ACL_SIZE_INFORMATION::default();
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut acl_size).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+        || acl_size.AceCount as usize != expected.len()
+        || acl_size.AclBytesInUse < size_of::<ACL>() as u32
+    {
+        return false;
+    }
+    let acl_start = dacl as usize;
+    let Some(acl_end) = acl_start.checked_add(acl_size.AclBytesInUse as usize) else {
+        return false;
+    };
+    if !range_fits(acl_start, acl_end, dacl.cast(), size_of::<ACL>()) {
         return false;
     }
     let mut actual = Vec::with_capacity(expected.len());
@@ -218,11 +240,26 @@ fn descriptor_matches(
         if unsafe { GetAce(dacl, index as u32, &mut raw_ace) } == 0 || raw_ace.is_null() {
             return false;
         }
+        let raw_start = raw_ace as usize;
+        let Some(header_end) = raw_start.checked_add(size_of::<ACE_HEADER>()) else {
+            return false;
+        };
+        if !raw_start.is_multiple_of(align_of::<ACE_HEADER>())
+            || raw_start < acl_start
+            || header_end > acl_end
+        {
+            return false;
+        }
         let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
+        let ace_size = unsafe { (*ace).Header.AceSize } as usize;
+        let Some(ace_end) = raw_start.checked_add(ace_size) else {
+            return false;
+        };
         if unsafe { (*ace).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
             || unsafe { (*ace).Header.AceFlags } != 0
-            || (unsafe { (*ace).Header.AceSize } as usize)
-                < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            || ace_size < size_of::<ACCESS_ALLOWED_ACE>()
+            || ace_end > acl_end
+            || !sid_fits_ace(raw_ace.cast(), ace_size)
         {
             return false;
         }
@@ -238,6 +275,36 @@ fn descriptor_matches(
     actual.sort_unstable();
     expected.sort_unstable();
     actual == expected
+}
+
+fn range_fits(start: usize, end: usize, pointer: *const c_void, length: usize) -> bool {
+    let pointer = pointer as usize;
+    let Some(pointer_end) = pointer.checked_add(length) else {
+        return false;
+    };
+    pointer >= start && pointer_end <= end
+}
+
+#[allow(unsafe_code)]
+fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
+    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
+        return false;
+    };
+    if sid_header_end > ace_size {
+        return false;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
+    let count = usize::from(bytes[sid_offset + 1]);
+    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
+        return false;
+    };
+    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
+        return false;
+    };
+    sid_offset
+        .checked_add(length)
+        .is_some_and(|end| end <= bytes.len())
 }
 
 #[allow(unsafe_code)]

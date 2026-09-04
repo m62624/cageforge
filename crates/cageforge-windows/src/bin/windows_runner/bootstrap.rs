@@ -13,8 +13,8 @@ use std::process::ExitCode;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL,
-    INVALID_HANDLE_VALUE, LocalFree,
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_DATA,
+    GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
@@ -39,6 +39,7 @@ use crate::native_strings::local_sid_string;
 
 const CREDENTIALS_VERSION: u32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
+const SID_HEADER_BYTES: usize = 8;
 
 struct BootstrapArguments {
     report_pipe: String,
@@ -219,19 +220,20 @@ impl SuspendedRunner {
             return Err(BootstrapFailure::RunnerLogonSid);
         }
         let entries = unsafe { buffer.0.as_ptr().add(offset).cast::<SID_AND_ATTRIBUTES>() };
-        let mut logon = (0..count)
-            .filter_map(|index| {
-                let entry = unsafe { std::ptr::read_unaligned(entries.add(index)) };
-                (entry.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID).then_some(entry.Sid)
-            })
-            .map(sid_string);
-        let Some(sid) = logon.next() else {
-            return Err(BootstrapFailure::RunnerLogonSid);
-        };
-        if logon.next().is_some() {
+        let mut logon = Vec::new();
+        for index in 0..count {
+            let entry = unsafe { std::ptr::read_unaligned(entries.add(index)) };
+            if entry.Attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID {
+                if !sid_fits_buffer(&buffer.0, entry.Sid) {
+                    return Err(BootstrapFailure::RunnerLogonSid);
+                }
+                logon.push(entry.Sid);
+            }
+        }
+        if logon.len() != 1 {
             return Err(BootstrapFailure::RunnerLogonSid);
         }
-        sid
+        sid_string(logon[0])
     }
 
     #[allow(unsafe_code)]
@@ -522,10 +524,47 @@ fn decrypt_credential(protected: &[u8]) -> Result<Vec<u8>, BootstrapFailure> {
             GetLastError()
         }));
     }
-    let plaintext =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-    unsafe { LocalFree(output.pbData as HLOCAL) };
+    if output.cbData != 0 && output.pbData.is_null() {
+        return Err(BootstrapFailure::CredentialDecrypt(ERROR_INVALID_DATA));
+    }
+    let plaintext = if output.cbData == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec()
+    };
+    if !output.pbData.is_null() {
+        unsafe { LocalFree(output.pbData as HLOCAL) };
+    }
     Ok(plaintext)
+}
+
+fn range_fits_buffer(buffer: &[u8], pointer: *const u8, length: usize) -> bool {
+    let start = buffer.as_ptr() as usize;
+    let Some(end) = start.checked_add(buffer.len()) else {
+        return false;
+    };
+    let pointer = pointer as usize;
+    let Some(pointer_end) = pointer.checked_add(length) else {
+        return false;
+    };
+    pointer >= start && pointer_end <= end
+}
+
+fn sid_fits_buffer(buffer: &[u8], sid: *mut c_void) -> bool {
+    let Some(offset) = (sid as usize).checked_sub(buffer.as_ptr() as usize) else {
+        return false;
+    };
+    if !range_fits_buffer(buffer, sid.cast(), SID_HEADER_BYTES) {
+        return false;
+    }
+    let count = usize::from(buffer[offset + 1]);
+    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
+        return false;
+    };
+    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
+        return false;
+    };
+    range_fits_buffer(buffer, sid.cast(), length)
 }
 
 #[allow(unsafe_code)]

@@ -3,13 +3,16 @@
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::Read;
+use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 
 use cageforge_path::paths_equal;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    ERROR_INSUFFICIENT_BUFFER, GetLastError, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -36,6 +39,8 @@ pub(super) struct AuthenticatedRunnerAccount {
     kind: RunnerAccountKind,
     sid: String,
 }
+
+const SID_HEADER_BYTES: usize = 8;
 
 #[derive(PartialEq, Eq)]
 enum RunnerAccountKind {
@@ -497,10 +502,9 @@ fn token_user_sid(token: *mut c_void) -> Result<String, RunnerAuthenticationErro
     unsafe {
         GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut length);
     }
-    if length < std::mem::size_of::<TOKEN_USER>() as u32 {
-        return Err(RunnerAuthenticationError::TokenUserRead {
-            code: unsafe { GetLastError() },
-        });
+    let code = unsafe { GetLastError() };
+    if code != ERROR_INSUFFICIENT_BUFFER || length < size_of::<TOKEN_USER>() as u32 {
+        return Err(RunnerAuthenticationError::TokenUserRead { code });
     }
     let mut buffer = vec![0u8; length as usize];
     if unsafe {
@@ -517,8 +521,12 @@ fn token_user_sid(token: *mut c_void) -> Result<String, RunnerAuthenticationErro
             code: unsafe { GetLastError() },
         });
     }
+    if length as usize > buffer.len() || length < size_of::<TOKEN_USER>() as u32 {
+        return Err(RunnerAuthenticationError::InvalidTokenUser);
+    }
+    buffer.truncate(length as usize);
     let token_user = unsafe { std::ptr::read_unaligned(buffer.as_ptr().cast::<TOKEN_USER>()) };
-    if token_user.User.Sid.is_null() {
+    if !sid_fits_buffer(&buffer, token_user.User.Sid) {
         return Err(RunnerAuthenticationError::InvalidTokenUser);
     }
     let mut value = std::ptr::null_mut();
@@ -530,6 +538,35 @@ fn token_user_sid(token: *mut c_void) -> Result<String, RunnerAuthenticationErro
     local_sid_string(value).ok_or(RunnerAuthenticationError::TokenUserFormat {
         code: windows_sys::Win32::Foundation::ERROR_INVALID_DATA,
     })
+}
+
+fn range_fits_buffer(buffer: &[u8], pointer: *const u8, length: usize) -> bool {
+    let start = buffer.as_ptr() as usize;
+    let Some(end) = start.checked_add(buffer.len()) else {
+        return false;
+    };
+    let pointer = pointer as usize;
+    let Some(pointer_end) = pointer.checked_add(length) else {
+        return false;
+    };
+    pointer >= start && pointer_end <= end
+}
+
+fn sid_fits_buffer(buffer: &[u8], sid: *mut c_void) -> bool {
+    let Some(offset) = (sid as usize).checked_sub(buffer.as_ptr() as usize) else {
+        return false;
+    };
+    if !range_fits_buffer(buffer, sid.cast(), SID_HEADER_BYTES) {
+        return false;
+    }
+    let count = usize::from(buffer[offset + 1]);
+    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
+        return false;
+    };
+    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
+        return false;
+    };
+    range_fits_buffer(buffer, sid.cast(), length)
 }
 
 fn hex_digest(bytes: &[u8]) -> String {

@@ -3,7 +3,7 @@
 use std::ffi::c_void;
 use std::mem::size_of;
 
-use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::{ERROR_INVALID_DATA, HLOCAL};
 use windows_sys::Win32::Security::Authentication::Identity::{
     LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaClose, LsaEnumerateAccountRights,
     LsaFreeMemory, LsaNtStatusToWinError, LsaOpenPolicy, POLICY_LOOKUP_NAMES,
@@ -92,10 +92,19 @@ pub(super) fn verify(account_sid: &str) -> Result<(), WindowsSetupVerificationEr
         return Err(rights_error(account_sid, enumerated));
     }
     let values = LsaMemory(values);
-    let actual = unsafe { std::slice::from_raw_parts(values.0, count as usize) }
-        .iter()
-        .map(lsa_string)
-        .collect::<Vec<_>>();
+    let actual = if count == 0 {
+        Vec::new()
+    } else if values.0.is_null() {
+        return Err(WindowsSetupVerificationError::AccountRightsRead {
+            account: account_sid.to_string(),
+            code: ERROR_INVALID_DATA,
+        });
+    } else {
+        unsafe { std::slice::from_raw_parts(values.0, count as usize) }
+            .iter()
+            .map(lsa_string)
+            .collect::<Vec<_>>()
+    };
     for right in REQUIRED_RIGHTS {
         if !actual
             .iter()
@@ -123,7 +132,11 @@ pub(super) fn verify(account_sid: &str) -> Result<(), WindowsSetupVerificationEr
 
 #[allow(unsafe_code)]
 fn lsa_string(value: &LSA_UNICODE_STRING) -> String {
-    if value.Length == 0 || value.Buffer.is_null() || !value.Length.is_multiple_of(2) {
+    if value.Length == 0
+        || value.Buffer.is_null()
+        || !value.Length.is_multiple_of(2)
+        || value.Length > value.MaximumLength
+    {
         return String::new();
     }
     unsafe {
