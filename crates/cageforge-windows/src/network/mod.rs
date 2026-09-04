@@ -839,7 +839,11 @@ async fn serve_ingress(
     let mut connections = JoinSet::new();
     loop {
         tokio::select! {
-            _ = &mut shutdown => return Ok(()),
+            _ = &mut shutdown => {
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
+                return Ok(());
+            },
             accepted = http.accept() => {
                 let (stream, _) = accepted.map_err(|source| WindowsNetworkRuntimeFailure::Listener {
                     protocol: ProxyProtocol::Http.label(),
