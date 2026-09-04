@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsString};
 use std::fs::{self, File};
 use std::num::NonZeroUsize;
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -57,6 +57,42 @@ struct LayerMountCollector<'scope, 'request> {
 }
 
 impl FilesystemPlan {
+    pub(crate) fn take_descriptor_files(&mut self) -> Vec<OwnedFd> {
+        std::mem::take(&mut self.preserved_files)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub(crate) fn remap_descriptor_arguments(
+        args: &mut [OsString],
+        descriptors: &BTreeMap<RawFd, RawFd>,
+    ) -> Result<(), LinuxBackendError> {
+        for index in 1..args.len() {
+            if !matches!(
+                args[index - 1].to_str(),
+                Some("--bind-fd" | "--ro-bind-fd" | "--ro-bind-data")
+            ) {
+                continue;
+            }
+            let descriptor = args[index]
+                .to_str()
+                .and_then(|argument| argument.parse::<RawFd>().ok())
+                .ok_or_else(|| LinuxBackendError::FilesystemLoweringFailed {
+                    path: PathBuf::from("/proc/self/fd"),
+                    source: FilesystemLoweringError::UnretainedMountDescriptor { descriptor: -1 },
+                })?;
+            let mapped = descriptors.get(&descriptor).copied().ok_or_else(|| {
+                LinuxBackendError::FilesystemLoweringFailed {
+                    path: PathBuf::from("/proc/self/fd"),
+                    source: FilesystemLoweringError::UnretainedMountDescriptor { descriptor },
+                }
+            })?;
+            args[index] = mapped.to_string().into();
+        }
+        Ok(())
+    }
+
     pub(crate) fn take_synthetic_targets(&mut self) -> Vec<SyntheticMountTarget> {
         std::mem::take(&mut self.synthetic_targets)
     }

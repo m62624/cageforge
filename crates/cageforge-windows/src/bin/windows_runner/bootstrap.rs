@@ -6,14 +6,15 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::{offset_of, size_of};
-use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError,
-    HANDLE_FLAG_INHERIT, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation,
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HLOCAL,
+    INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
@@ -25,8 +26,7 @@ use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_GENERIC_WRITE, O
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithLogonW,
-    GetCurrentProcess, GetProcessId, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW,
-    TerminateProcess,
+    GetCurrentProcess, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -40,8 +40,8 @@ const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 
 struct BootstrapArguments {
     report_pipe: String,
-    parent_process: OwnedHandle,
-    credential: File,
+    parent_process_id: u32,
+    credential_path: PathBuf,
     credential_sha256: String,
     account_name: String,
     request_pipe: String,
@@ -72,8 +72,7 @@ struct ProtectedCredentials {
 #[derive(Debug)]
 enum BootstrapFailure {
     Arguments,
-    ParentHandle,
-    CredentialHandle,
+    ParentProcess,
     PipeOpen(u32),
     PipeServerPid(u32),
     PipeServerMismatch,
@@ -103,10 +102,10 @@ impl BootstrapArguments {
         mut arguments: impl Iterator<Item = std::ffi::OsString>,
     ) -> Result<Self, BootstrapFailure> {
         let report_pipe = argument(&mut arguments)?;
-        let parent_process = inherited_handle(argument(&mut arguments)?)?;
-        let credential = unsafe {
-            File::from_raw_handle(inherited_handle(argument(&mut arguments)?)?.into_raw_handle())
-        };
+        let parent_process_id = argument(&mut arguments)?
+            .parse()
+            .map_err(|_| BootstrapFailure::Arguments)?;
+        let credential_path = PathBuf::from(argument(&mut arguments)?);
         let credential_sha256 = argument(&mut arguments)?;
         let account_name = argument(&mut arguments)?;
         let request_pipe = argument(&mut arguments)?;
@@ -114,6 +113,9 @@ impl BootstrapArguments {
         let working_directory = argument(&mut arguments)?;
         if arguments.next().is_some()
             || report_pipe.contains('\0')
+            || parent_process_id == 0
+            || credential_path.as_os_str().is_empty()
+            || credential_path.as_os_str().to_string_lossy().contains('\0')
             || credential_sha256.contains('\0')
             || account_name.contains('\0')
             || request_pipe.contains('\0')
@@ -125,21 +127,10 @@ impl BootstrapArguments {
         {
             return Err(BootstrapFailure::Arguments);
         }
-        if unsafe {
-            SetHandleInformation(parent_process.as_raw_handle() as _, HANDLE_FLAG_INHERIT, 0)
-        } == 0
-        {
-            return Err(BootstrapFailure::ParentHandle);
-        }
-        if unsafe { SetHandleInformation(credential.as_raw_handle() as _, HANDLE_FLAG_INHERIT, 0) }
-            == 0
-        {
-            return Err(BootstrapFailure::CredentialHandle);
-        }
         Ok(Self {
             report_pipe,
-            parent_process,
-            credential,
+            parent_process_id,
+            credential_path,
             credential_sha256,
             account_name,
             request_pipe,
@@ -153,7 +144,7 @@ impl SuspendedRunner {
     #[allow(unsafe_code)]
     fn start(arguments: &BootstrapArguments) -> Result<Self, BootstrapFailure> {
         let password = credential_password(
-            &arguments.credential,
+            &arguments.credential_path,
             &arguments.credential_sha256,
             &arguments.account_name,
         )?;
@@ -244,9 +235,12 @@ impl SuspendedRunner {
     }
 
     #[allow(unsafe_code)]
-    fn duplicate_into_parent(&self, parent: &OwnedHandle) -> Result<(u64, u64), BootstrapFailure> {
-        let process = duplicate_into_parent(self.process.as_raw_handle() as _, parent)?;
-        let thread = duplicate_into_parent(self.thread.as_raw_handle() as _, parent)?;
+    fn duplicate_into_parent(
+        &self,
+        parent_process_id: u32,
+    ) -> Result<(u64, u64), BootstrapFailure> {
+        let process = duplicate_into_parent(self.process.as_raw_handle() as _, parent_process_id)?;
+        let thread = duplicate_into_parent(self.thread.as_raw_handle() as _, parent_process_id)?;
         Ok((process, thread))
     }
 }
@@ -279,7 +273,7 @@ fn run_inner(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), 
         let mut runner = SuspendedRunner::start(&arguments)?;
         let logon_sid = runner.logon_sid()?;
         let (process_handle, thread_handle) =
-            runner.duplicate_into_parent(&arguments.parent_process)?;
+            runner.duplicate_into_parent(arguments.parent_process_id)?;
         write_frame(
             &mut report,
             RunnerMessage::BootstrapRunner {
@@ -317,13 +311,13 @@ impl BootstrapFailure {
                 None,
                 "bootstrap arguments were invalid",
             ),
-            Self::ParentHandle => (
+            Self::ParentProcess => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::ParentIdentityHandle,
                 None,
                 "bootstrap parent process handle was invalid",
             ),
-            Self::CredentialHandle | Self::CredentialRead => (
+            Self::CredentialRead => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::BootstrapCredentialRead,
                 None,
@@ -423,17 +417,6 @@ fn argument(
 }
 
 #[allow(unsafe_code)]
-fn inherited_handle(value: String) -> Result<OwnedHandle, BootstrapFailure> {
-    let value = value
-        .parse::<usize>()
-        .map_err(|_| BootstrapFailure::Arguments)?;
-    if value == 0 || value == usize::MAX {
-        return Err(BootstrapFailure::Arguments);
-    }
-    Ok(unsafe { OwnedHandle::from_raw_handle(value as RawHandle) })
-}
-
-#[allow(unsafe_code)]
 fn open_report_pipe(arguments: &BootstrapArguments) -> Result<File, BootstrapFailure> {
     let wide = arguments
         .report_pipe
@@ -459,19 +442,19 @@ fn open_report_pipe(arguments: &BootstrapArguments) -> Result<File, BootstrapFai
     if unsafe { GetNamedPipeServerProcessId(report.as_raw_handle() as _, &mut server) } == 0 {
         return Err(BootstrapFailure::PipeServerPid(unsafe { GetLastError() }));
     }
-    let parent = unsafe { GetProcessId(arguments.parent_process.as_raw_handle() as _) };
-    if parent == 0 || server != parent {
+    if server != arguments.parent_process_id {
         return Err(BootstrapFailure::PipeServerMismatch);
     }
     Ok(report)
 }
 
 fn credential_password(
-    credential: &File,
+    credential_path: &Path,
     expected_sha256: &str,
     account_name: &str,
 ) -> Result<Zeroizing<Vec<u16>>, BootstrapFailure> {
-    let mut credential = credential;
+    let mut credential = crate::setup_pinned_file::open_for_readback(credential_path, true)
+        .map_err(|_| BootstrapFailure::CredentialRead)?;
     credential
         .seek(SeekFrom::Start(0))
         .map_err(|_| BootstrapFailure::CredentialRead)?;
@@ -588,8 +571,19 @@ fn sid_string(sid: *mut c_void) -> Result<String, BootstrapFailure> {
 #[allow(unsafe_code)]
 fn duplicate_into_parent(
     source: *mut c_void,
-    parent: &OwnedHandle,
+    parent_process_id: u32,
 ) -> Result<u64, BootstrapFailure> {
+    let parent = unsafe {
+        windows_sys::Win32::System::Threading::OpenProcess(
+            windows_sys::Win32::System::Threading::PROCESS_DUP_HANDLE,
+            0,
+            parent_process_id,
+        )
+    };
+    if parent.is_null() {
+        return Err(BootstrapFailure::ParentProcess);
+    }
+    let parent = unsafe { OwnedHandle::from_raw_handle(parent as RawHandle) };
     let mut duplicate = std::ptr::null_mut();
     if unsafe {
         DuplicateHandle(

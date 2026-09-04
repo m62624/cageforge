@@ -192,7 +192,8 @@ impl RunnerLaunch {
         runner_resources.verify_launch_security(setup.owner_sid(), setup.accounts().group_sid())?;
         let names = RunnerPipeNames::generate()?;
         let job = ParentJob::new()?;
-        let credentials = open_verified_credentials(setup)?;
+        let _credentials = open_verified_credentials(setup)?;
+        let credential_path = setup.state_directory().join("credentials.json.dpapi");
         let report_name = RunnerPipeNames::bootstrap_report()?;
         let report = ParentRunnerPipe::create(
             &report_name,
@@ -207,7 +208,7 @@ impl RunnerLaunch {
         let bootstrap = BootstrapResult::start(
             runner_resources.command_runner_path(),
             working_directory,
-            &credentials,
+            &credential_path,
             setup.credential_sha256(),
             account_name,
             &names,

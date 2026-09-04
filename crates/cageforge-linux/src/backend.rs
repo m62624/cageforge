@@ -2,10 +2,11 @@
 
 //! Linux backend construction, capability declaration, and policy lowering.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -19,7 +20,7 @@ use cageforge_backend_api::{
 use cageforge_command::{EnvironmentBase, EnvironmentInput, StdioMode};
 use cageforge_policy::NetworkMode;
 use cageforge_policy_compose::EffectiveSandbox;
-use command_fds::CommandFdExt;
+use command_fds::{CommandFdExt, FdMapping};
 
 #[cfg(feature = "bundled-bubblewrap")]
 use crate::bwrap::materialize_bundled_resource;
@@ -45,6 +46,7 @@ use crate::setup_transport::read_setup_result;
 pub(crate) const IN_SANDBOX_HELPER_PATH: &str = "/dev/.cageforge-runtime/helper";
 const SETUP_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const SETUP_DIAGNOSTIC_LIMIT_BYTES: u64 = 64 * 1024;
+const FIRST_CONTROLLED_FD: RawFd = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LinuxNetworkMode {
@@ -52,6 +54,11 @@ enum LinuxNetworkMode {
     DirectWithoutUnixSockets,
     Disabled,
     ProxyRouted,
+}
+
+struct ControlledDescriptors {
+    next: RawFd,
+    mappings: Vec<FdMapping>,
 }
 
 /// A validated immutable Bubblewrap argument plan before the command and
@@ -76,6 +83,32 @@ pub struct LinuxBackend {
     /// lifetime of the pinned executable.
     #[cfg(feature = "bundled-bubblewrap")]
     _bundled_resource_guard: Option<Arc<tempfile::TempDir>>,
+}
+
+impl ControlledDescriptors {
+    fn new() -> Self {
+        Self {
+            next: FIRST_CONTROLLED_FD,
+            mappings: Vec::new(),
+        }
+    }
+
+    fn insert(&mut self, descriptor: OwnedFd) -> Result<RawFd, LinuxBackendError> {
+        let target = self.next;
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or(LinuxBackendError::ProcessDescriptorRangeExhausted)?;
+        self.mappings.push(FdMapping {
+            parent_fd: descriptor,
+            child_fd: target,
+        });
+        Ok(target)
+    }
+
+    fn into_mappings(self) -> Vec<FdMapping> {
+        self.mappings
+    }
 }
 
 impl LinuxBackend {
@@ -250,7 +283,23 @@ impl LinuxBackend {
             .bubblewrap_file
             .try_clone()
             .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
-        let bubblewrap_program = format!("/proc/self/fd/{}", bubblewrap_file.as_raw_fd());
+        let (auth_reader, auth_writer) = UnixStream::pair()
+            .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
+        let auth_reader = move_stream_above_standard_streams(auth_reader)
+            .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
+        let mut auth_writer = move_stream_above_standard_streams(auth_writer)
+            .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
+        let mut descriptors = ControlledDescriptors::new();
+        let mut filesystem_descriptors = BTreeMap::new();
+        for descriptor in plan.filesystem.take_descriptor_files() {
+            let source = descriptor.as_raw_fd();
+            let target = descriptors.insert(descriptor)?;
+            filesystem_descriptors.insert(source, target);
+        }
+        FilesystemPlan::remap_descriptor_arguments(&mut plan.args, &filesystem_descriptors)?;
+        let bubblewrap_fd = descriptors.insert(bubblewrap_file.into())?;
+        let auth_fd = descriptors.insert(auth_reader.into())?;
+        let bubblewrap_program = format!("/proc/self/fd/{bubblewrap_fd}");
         let mut process = std::process::Command::new(bubblewrap_program);
         process.args(&plan.args);
         process.arg("--");
@@ -259,13 +308,6 @@ impl LinuxBackend {
         process.arg(command.program());
         process.args(command.args());
         process.env_clear();
-        let (auth_reader, auth_writer) = UnixStream::pair()
-            .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
-        let auth_reader = move_stream_above_standard_streams(auth_reader)
-            .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
-        let mut auth_writer = move_stream_above_standard_streams(auth_writer)
-            .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;
-        let auth_fd = auth_reader.as_raw_fd();
         process.env(AUTH_FD_ENV, auth_fd.to_string());
         let filesystem_restricted = sandbox.filesystem().requirements().mode()
             == cageforge_policy::FilesystemMode::Restricted;
@@ -298,13 +340,9 @@ impl LinuxBackend {
             cageforge_command::TimeoutPolicy::Limit(limit) => Some(limit),
             cageforge_command::TimeoutPolicy::Disabled => None,
         };
-        let mut inherited_fds = std::mem::take(&mut plan.filesystem.preserved_files)
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        inherited_fds.push(bubblewrap_file.into());
-        inherited_fds.push(auth_reader.into());
-        process.preserved_fds(inherited_fds);
+        process
+            .fd_mappings(descriptors.into_mappings())
+            .map_err(|_| LinuxBackendError::ProcessDescriptorMappingCollision)?;
         let mut child = process
             .spawn()
             .map_err(|source| LinuxBackendError::ProcessSpawnFailed { source })?;

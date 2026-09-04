@@ -125,8 +125,8 @@ impl SpawnedProcess {
             let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
             let child_handles = standard.raw_handles();
             let mut attributes = ProcessAttributeList::new(2)?;
-            attributes.apply_handles(child_handles)?;
             attributes.apply_job(job.as_raw_handle())?;
+            attributes.apply_handles(child_handles)?;
             startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
             startup.StartupInfo.hStdInput = child_handles[0];
             startup.StartupInfo.hStdOutput = child_handles[1];

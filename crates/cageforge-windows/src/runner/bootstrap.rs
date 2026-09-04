@@ -2,24 +2,15 @@
 
 //! Clean current-user bootstrap for a runner that must use `CreateProcessWithLogonW`.
 
-use std::ffi::c_void;
-use std::fs::File;
-use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::time::Duration;
 
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, GetLastError, HANDLE_FLAG_INHERIT,
-};
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_DUP_HANDLE, PROCESS_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetExitCodeProcess,
+    PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 
 use crate::runner::pipe::{ParentRunnerPipe, ParentRunnerPipeError, RunnerPipeNames};
@@ -42,12 +33,6 @@ struct BootstrapProcess {
     completed: bool,
 }
 
-struct ProcessAttributeList {
-    storage: Vec<usize>,
-    handles: Vec<*mut c_void>,
-    initialized: bool,
-}
-
 #[derive(Debug, Error)]
 pub(crate) enum BootstrapError {
     #[error(transparent)]
@@ -62,22 +47,6 @@ pub(crate) enum BootstrapError {
         code: crate::runner::protocol::WindowsRunnerFailureCode,
         native_code: Option<u32>,
     },
-    #[error(
-        "failed to duplicate the parent process authority for the clean bootstrap: Windows error {code}"
-    )]
-    ParentHandleDuplicate { code: u32 },
-    #[error(
-        "failed to duplicate the pinned credential record for the clean bootstrap: Windows error {code}"
-    )]
-    CredentialHandleDuplicate { code: u32 },
-    #[error("Windows returned an invalid duplicate while preparing the clean bootstrap")]
-    InvalidDuplicate,
-    #[error("failed to size the clean-bootstrap handle list: Windows error {code}")]
-    AttributeListSize { code: u32 },
-    #[error("failed to initialize the clean-bootstrap handle list: Windows error {code}")]
-    AttributeListInitialize { code: u32 },
-    #[error("failed to install the clean-bootstrap explicit handle list: Windows error {code}")]
-    AttributeListApply { code: u32 },
     #[error("failed to start the clean Windows runner bootstrap: Windows error {code}")]
     ProcessStart { code: u32 },
     #[error("Windows returned invalid clean-bootstrap process information")]
@@ -105,7 +74,7 @@ impl BootstrapResult {
     pub(crate) fn start(
         runner_path: &Path,
         working_directory: &Path,
-        credential: &File,
+        credential_path: &Path,
         credential_sha256: &str,
         account_name: &str,
         names: &RunnerPipeNames,
@@ -115,7 +84,7 @@ impl BootstrapResult {
         let bootstrap = BootstrapProcess::start(
             runner_path,
             working_directory,
-            credential,
+            credential_path,
             credential_sha256,
             account_name,
             names,
@@ -155,7 +124,7 @@ impl BootstrapProcess {
     fn start(
         runner_path: &Path,
         working_directory: &Path,
-        credential: &File,
+        credential_path: &Path,
         credential_sha256: &str,
         account_name: &str,
         names: &RunnerPipeNames,
@@ -165,21 +134,15 @@ impl BootstrapProcess {
         let cwd = working_directory
             .to_str()
             .ok_or(BootstrapError::InvalidReport)?;
-        let parent_handle = duplicate_current_handle(
-            unsafe { GetCurrentProcess() } as _,
-            PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION,
-            |code| BootstrapError::ParentHandleDuplicate { code },
-        )?;
-        let credential_handle =
-            duplicate_current_handle(credential.as_raw_handle() as _, 0, |code| {
-                BootstrapError::CredentialHandleDuplicate { code }
-            })?;
+        let credential_path = credential_path
+            .to_str()
+            .ok_or(BootstrapError::InvalidReport)?;
         let command_line = [
             runner.to_string(),
             BOOTSTRAP_MODE.to_string(),
             report_name.to_string(),
-            format!("{}", parent_handle.as_raw_handle() as usize),
-            format!("{}", credential_handle.as_raw_handle() as usize),
+            std::process::id().to_string(),
+            credential_path.to_string(),
             credential_sha256.to_string(),
             account_name.to_string(),
             names.request.clone(),
@@ -193,14 +156,10 @@ impl BootstrapProcess {
         let application = crate::win::to_wide(runner);
         let mut command_line = crate::win::to_wide(&command_line);
         let cwd = crate::win::to_wide(cwd);
-        let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
-        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-        let mut attributes = ProcessAttributeList::new(1)?;
-        attributes.apply_handles(&[
-            parent_handle.as_raw_handle(),
-            credential_handle.as_raw_handle(),
-        ])?;
-        startup.lpAttributeList = attributes.as_mut_ptr();
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
         let mut process = PROCESS_INFORMATION::default();
         if unsafe {
             CreateProcessW(
@@ -208,11 +167,11 @@ impl BootstrapProcess {
                 command_line.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
-                1,
-                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                0,
+                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                 std::ptr::null(),
                 cwd.as_ptr(),
-                &startup.StartupInfo,
+                &startup,
                 &mut process,
             )
         } == 0
@@ -289,116 +248,6 @@ impl Drop for BootstrapProcess {
             }
         }
     }
-}
-
-impl ProcessAttributeList {
-    #[allow(unsafe_code)]
-    fn new(attribute_count: u32) -> Result<Self, BootstrapError> {
-        let mut bytes = 0usize;
-        let first = unsafe {
-            InitializeProcThreadAttributeList(std::ptr::null_mut(), attribute_count, 0, &mut bytes)
-        };
-        if first != 0 || bytes == 0 {
-            return Err(BootstrapError::AttributeListSize {
-                code: unsafe { GetLastError() },
-            });
-        }
-        let words = bytes.div_ceil(size_of::<usize>());
-        let mut list = Self {
-            storage: vec![0usize; words],
-            handles: Vec::new(),
-            initialized: false,
-        };
-        if unsafe {
-            InitializeProcThreadAttributeList(list.as_mut_ptr(), attribute_count, 0, &mut bytes)
-        } == 0
-        {
-            return Err(BootstrapError::AttributeListInitialize {
-                code: unsafe { GetLastError() },
-            });
-        }
-        list.initialized = true;
-        Ok(list)
-    }
-
-    #[allow(unsafe_code)]
-    fn apply_handles(&mut self, handles: &[*mut c_void]) -> Result<(), BootstrapError> {
-        self.handles = handles.to_vec();
-        if unsafe {
-            UpdateProcThreadAttribute(
-                self.as_mut_ptr(),
-                0,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                self.handles.as_ptr().cast(),
-                std::mem::size_of_val(self.handles.as_slice()),
-                std::ptr::null_mut(),
-                std::ptr::null(),
-            )
-        } == 0
-        {
-            return Err(BootstrapError::AttributeListApply {
-                code: unsafe { GetLastError() },
-            });
-        }
-        Ok(())
-    }
-
-    fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
-        self.storage.as_mut_ptr().cast()
-    }
-}
-
-#[allow(unsafe_code)]
-impl Drop for ProcessAttributeList {
-    fn drop(&mut self) {
-        if self.initialized {
-            unsafe { DeleteProcThreadAttributeList(self.as_mut_ptr()) };
-        }
-    }
-}
-
-#[allow(unsafe_code)]
-fn duplicate_current_handle(
-    source: *mut c_void,
-    desired_access: u32,
-    map_error: impl FnOnce(u32) -> BootstrapError,
-) -> Result<OwnedHandle, BootstrapError> {
-    let mut duplicate = std::ptr::null_mut();
-    let options = if desired_access == 0 {
-        DUPLICATE_SAME_ACCESS
-    } else {
-        0
-    };
-    if unsafe {
-        DuplicateHandle(
-            GetCurrentProcess(),
-            source,
-            GetCurrentProcess(),
-            &mut duplicate,
-            desired_access,
-            1,
-            options,
-        )
-    } == 0
-    {
-        return Err(map_error(unsafe { GetLastError() }));
-    }
-    if duplicate.is_null() {
-        return Err(BootstrapError::InvalidDuplicate);
-    }
-    let duplicate = unsafe { OwnedHandle::from_raw_handle(duplicate as RawHandle) };
-    let mut flags = 0;
-    if unsafe {
-        windows_sys::Win32::Foundation::GetHandleInformation(
-            duplicate.as_raw_handle() as _,
-            &mut flags,
-        )
-    } == 0
-        || flags != HANDLE_FLAG_INHERIT
-    {
-        return Err(BootstrapError::InvalidDuplicate);
-    }
-    Ok(duplicate)
 }
 
 #[allow(unsafe_code)]

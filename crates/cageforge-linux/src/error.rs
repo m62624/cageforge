@@ -170,6 +170,12 @@ pub enum FilesystemLoweringError {
         #[source]
         source: io::Error,
     },
+    /// A generated Bubblewrap argument did not refer to a retained mount descriptor.
+    #[error("Bubblewrap mount descriptor {descriptor} was not retained for launch")]
+    UnretainedMountDescriptor {
+        /// Descriptor named by the generated Bubblewrap argument.
+        descriptor: i32,
+    },
     /// The filesystem root cannot be replaced with a deny mask.
     #[error("the filesystem root cannot be masked")]
     RootCannotBeMasked,
@@ -777,6 +783,12 @@ pub enum LinuxBackendError {
         /// Operating-system error returned by process creation.
         source: std::io::Error,
     },
+    /// Controlled descriptors for a sandbox launch could not be assigned distinct targets.
+    #[error("controlled Linux sandbox descriptor mappings collided")]
+    ProcessDescriptorMappingCollision,
+    /// Controlled descriptor assignment exhausted the native descriptor range.
+    #[error("controlled Linux sandbox descriptor assignment exhausted the native range")]
+    ProcessDescriptorRangeExhausted,
     /// Selecting or validating the platform environment failed.
     #[error("failed to prepare the sandboxed process environment: {source}")]
     EnvironmentPreparationFailed {

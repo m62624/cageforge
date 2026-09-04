@@ -318,21 +318,24 @@ unless explicitly present in the process handle list.
 
 An ordinary Cageforge application needs no per-launch Windows privilege or
 post-install account-right configuration. A clean current-user bootstrap is
-created with `CreateProcessW` and `STARTUPINFOEXW`'s explicit inherited-HANDLE
-list. That list contains exactly two temporary duplicates: a
-`PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION` handle to the parent,
-and the already verified, no-write/no-delete-share credential-record handle.
-The bootstrap clears `HANDLE_FLAG_INHERIT` on both before it calls
-`CreateProcessWithLogonW`; therefore that API cannot carry an arbitrary
-inheritable application HANDLE into the dedicated-account runner. The
-bootstrap checks the pinned credential digest, decrypts its selected account
-password only in zeroizing memory, creates the real runner suspended, reads
-its unique logon SID, and duplicates only the suspended process and thread
-handles back into the authenticated parent process. It sends that result or a
-stage/code/native-error `failed` result through its launch-unique report pipe;
-the report pipe verifies the bootstrap client PID, while the bootstrap verifies
-the report server PID through its explicit parent-process handle. `stderr` is
-only a direct-invocation fallback after that typed channel cannot be opened.
+created with `CreateProcessW`, ordinary `STARTUPINFOW`, and
+`bInheritHandles = FALSE`: no application HANDLE, including an unrelated
+inheritable one, crosses the first launch boundary. The parent retains its
+already verified credential-record handle with no write/delete sharing for the
+complete bootstrap lifetime, but passes the bootstrap only the absolute
+credential path and expected digest. The bootstrap reopens that path through
+the pinned-file verifier, which rejects reparse points and final-path changes,
+then checks the digest and decrypts the selected account password only in
+zeroizing memory. After connecting to the launch-unique report pipe, the
+bootstrap verifies that its server PID is the live parent PID passed at launch;
+it may then open that parent with `PROCESS_DUP_HANDLE`, create the real runner
+suspended, read its unique logon SID, and duplicate only the suspended process
+and thread handles into that authenticated parent. The parent independently
+verifies the bootstrap client PID before accepting the report. This paired live
+pipe binding makes a recycled numeric parent PID insufficient to transfer
+runner authority. The bootstrap sends that result or a stage/code/native-error
+`failed` result through the report pipe. `stderr` is only a direct-invocation
+fallback after that typed channel cannot be opened.
 Setup denies remote-interactive logon, but does not deny local interactive
 logon: `CreateProcessWithLogonW` requires an interactive logon session, and
 substituting a batch-token API would require a host `SeImpersonatePrivilege` or
