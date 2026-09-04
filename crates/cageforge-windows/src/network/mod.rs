@@ -9,7 +9,7 @@ use std::io;
 use std::mem::size_of;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener};
 use std::os::windows::io::{FromRawSocket, RawSocket};
-use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, Weak, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -88,6 +88,7 @@ type RouteRegistry = Arc<Mutex<HashMap<String, Arc<RouteServices>>>>;
 struct SharedIngressRegistry {
     ingresses: HashMap<IngressIdentity, Weak<WindowsProxyIngress>>,
     retiring_ports: HashSet<u16>,
+    starting: HashSet<IngressIdentity>,
 }
 
 /// Failure while constructing the shared Windows ingress or one isolated route.
@@ -324,8 +325,8 @@ enum WindowsNetworkIngressError {
     AttributionWorker,
 }
 
-static SHARED_INGRESSES: LazyLock<Mutex<SharedIngressRegistry>> =
-    LazyLock::new(|| Mutex::new(SharedIngressRegistry::default()));
+static SHARED_INGRESSES: LazyLock<(Mutex<SharedIngressRegistry>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(SharedIngressRegistry::default()), Condvar::new()));
 
 impl WindowsProxyIngress {
     pub(crate) fn shared(
@@ -337,30 +338,111 @@ impl WindowsProxyIngress {
             owner_sid: owner_sid.to_string(),
             addresses,
         };
-        let mut shared = SHARED_INGRESSES
-            .lock()
-            .map_err(|_| WindowsNetworkGatewayError::SharedRegistryPoisoned)?;
-        if let Some(ingress) = shared.ingresses.get(&identity).and_then(Weak::upgrade) {
-            ingress
-                .check_health()
-                .map_err(|source| WindowsNetworkGatewayError::ExistingRuntime { source })?;
-            return Ok(Arc::clone(&ingress));
+        loop {
+            let existing = {
+                let (registry, _) = &*SHARED_INGRESSES;
+                let mut shared = registry
+                    .lock()
+                    .map_err(|_| WindowsNetworkGatewayError::SharedRegistryPoisoned)?;
+                match shared.ingresses.get(&identity).and_then(Weak::upgrade) {
+                    Some(ingress) => Some(ingress),
+                    None => {
+                        shared.ingresses.remove(&identity);
+                        None
+                    }
+                }
+            };
+            if let Some(ingress) = existing {
+                match ingress.check_health() {
+                    Ok(()) => return Ok(ingress),
+                    Err(source) => {
+                        let (registry, _) = &*SHARED_INGRESSES;
+                        let mut shared = registry
+                            .lock()
+                            .map_err(|_| WindowsNetworkGatewayError::SharedRegistryPoisoned)?;
+                        let is_current = shared
+                            .ingresses
+                            .get(&identity)
+                            .and_then(Weak::upgrade)
+                            .is_some_and(|registered| Arc::ptr_eq(&registered, &ingress));
+                        if is_current {
+                            shared.ingresses.remove(&identity);
+                        }
+                        return Err(WindowsNetworkGatewayError::ExistingRuntime { source });
+                    }
+                }
+            }
+
+            let (registry, ready) = &*SHARED_INGRESSES;
+            let mut shared = registry
+                .lock()
+                .map_err(|_| WindowsNetworkGatewayError::SharedRegistryPoisoned)?;
+
+            // Another caller may have published the ingress after the first
+            // short lookup. Re-check before reserving a new startup.
+            if shared
+                .ingresses
+                .get(&identity)
+                .and_then(Weak::upgrade)
+                .is_some()
+            {
+                continue;
+            }
+            if shared.starting.contains(&identity) {
+                shared = match ready.wait(shared) {
+                    Ok(shared) => shared,
+                    Err(_) => {
+                        ready.notify_all();
+                        return Err(WindowsNetworkGatewayError::SharedRegistryPoisoned);
+                    }
+                };
+                drop(shared);
+                continue;
+            }
+            shared.ingresses.remove(&identity);
+            if let Some(port) = shared
+                .ingresses
+                .keys()
+                .flat_map(|key| [key.addresses.http.port(), key.addresses.socks.port()])
+                .chain(shared.retiring_ports.iter().copied())
+                .chain(
+                    shared
+                        .starting
+                        .iter()
+                        .flat_map(|key| [key.addresses.http.port(), key.addresses.socks.port()]),
+                )
+                .find(|port| *port == addresses.http.port() || *port == addresses.socks.port())
+            {
+                return Err(WindowsNetworkGatewayError::PortOwnedByDifferentSetup { port });
+            }
+            shared.starting.insert(identity.clone());
+            drop(shared);
+
+            // Native listener creation and readiness may perform blocking I/O
+            // and join a failed startup thread; never do either under the
+            // process-wide registry mutex.
+            let started = Self::start(identity.clone());
+            let mut shared = match registry.lock() {
+                Ok(shared) => shared,
+                Err(_) => {
+                    ready.notify_all();
+                    return Err(WindowsNetworkGatewayError::SharedRegistryPoisoned);
+                }
+            };
+            shared.starting.remove(&identity);
+            let result = match started {
+                Ok(ingress) => {
+                    let ingress = Arc::new(ingress);
+                    shared
+                        .ingresses
+                        .insert(ingress.identity.clone(), Arc::downgrade(&ingress));
+                    Ok(ingress)
+                }
+                Err(error) => Err(error),
+            };
+            ready.notify_all();
+            return result;
         }
-        shared.ingresses.remove(&identity);
-        if let Some(port) = shared
-            .ingresses
-            .keys()
-            .flat_map(|key| [key.addresses.http.port(), key.addresses.socks.port()])
-            .chain(shared.retiring_ports.iter().copied())
-            .find(|port| *port == addresses.http.port() || *port == addresses.socks.port())
-        {
-            return Err(WindowsNetworkGatewayError::PortOwnedByDifferentSetup { port });
-        }
-        let ingress = Arc::new(Self::start(identity)?);
-        shared
-            .ingresses
-            .insert(ingress.identity.clone(), Arc::downgrade(&ingress));
-        Ok(ingress)
     }
 
     pub(crate) fn register_route(
@@ -473,7 +555,7 @@ impl Drop for WindowsProxyIngress {
         // short critical section. The reservation prevents a replacement
         // ingress from racing the old listeners while the runtime is joined,
         // without holding the registry mutex during shutdown or I/O.
-        if let Ok(mut registry) = SHARED_INGRESSES.lock() {
+        if let Ok(mut registry) = SHARED_INGRESSES.0.lock() {
             registry.ingresses.remove(&self.identity);
             registry.retiring_ports.extend(ports);
         }
@@ -491,7 +573,7 @@ impl Drop for WindowsProxyIngress {
         if let Some(thread) = thread {
             let _ = thread.join();
         }
-        if let Ok(mut registry) = SHARED_INGRESSES.lock() {
+        if let Ok(mut registry) = SHARED_INGRESSES.0.lock() {
             for port in ports {
                 registry.retiring_ports.remove(&port);
             }
@@ -973,7 +1055,7 @@ fn random_route_sid() -> Result<String, WindowsNetworkGatewayError> {
 mod tests {
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -1099,6 +1181,7 @@ mod tests {
             _winsock: winsock,
         });
         SHARED_INGRESSES
+            .0
             .lock()
             .expect("shared ingress registry")
             .ingresses
@@ -1135,6 +1218,70 @@ mod tests {
             WindowsProxyIngress::shared(&format!("{replacement_identity}-after"), &ports)
                 .expect("replacement ingress starts after old listeners close");
         drop(replacement);
+    }
+
+    #[test]
+    fn concurrent_shared_calls_coalesce_one_ingress() {
+        let winsock = initialize_winsock().expect("Winsock for concurrent ingress test");
+        let http = exclusive_listener(
+            ProxyProtocol::Http,
+            std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
+        )
+        .expect("reserve concurrent HTTP test port");
+        let http_port = http
+            .local_addr()
+            .expect("concurrent HTTP test address")
+            .port();
+        let socks = exclusive_listener(
+            ProxyProtocol::Socks5,
+            std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
+        )
+        .expect("reserve concurrent SOCKS5 test port");
+        let socks_port = socks
+            .local_addr()
+            .expect("concurrent SOCKS5 test address")
+            .port();
+        drop(http);
+        drop(socks);
+        drop(winsock);
+
+        let ports = [http_port, socks_port];
+        let owner = format!("concurrent-ingress-test-{http_port}-{socks_port}");
+        let barrier = Arc::new(Barrier::new(2));
+        let first_barrier = Arc::clone(&barrier);
+        let first_owner = owner.clone();
+        let first = thread::spawn(move || {
+            first_barrier.wait();
+            WindowsProxyIngress::shared(&first_owner, &ports)
+        });
+        let second_barrier = Arc::clone(&barrier);
+        let second = thread::spawn(move || {
+            second_barrier.wait();
+            WindowsProxyIngress::shared(&owner, &ports)
+        });
+        let first = first
+            .join()
+            .expect("first concurrent ingress lookup")
+            .expect("first concurrent ingress startup");
+        let second = second
+            .join()
+            .expect("second concurrent ingress lookup")
+            .expect("second concurrent ingress startup");
+        assert!(Arc::ptr_eq(&first, &second));
+        drop(first);
+        drop(second);
+
+        for (protocol, port) in [
+            (ProxyProtocol::Http, http_port),
+            (ProxyProtocol::Socks5, socks_port),
+        ] {
+            let listener = exclusive_listener(
+                protocol,
+                std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+            )
+            .expect("coalesced ingress released its listener");
+            drop(listener);
+        }
     }
 
     #[test]
