@@ -240,44 +240,48 @@ impl WindowsBackend {
     }
 }
 
+fn windows_capabilities() -> BackendCapabilities {
+    BackendCapabilities::from_capabilities([
+        BackendCapability::CommandExecution,
+        BackendCapability::WorkingDirectory,
+        BackendCapability::StdioInherit,
+        BackendCapability::StdioNull,
+        BackendCapability::StdioPipe,
+        BackendCapability::TimeoutBackendDefault,
+        BackendCapability::TimeoutLimit,
+        BackendCapability::TimeoutDisabled,
+        BackendCapability::FilesystemRestricted,
+        BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemAbsoluteScopes,
+        BackendCapability::FilesystemWorkspaceScopes,
+        BackendCapability::FilesystemRootScopes,
+        BackendCapability::FilesystemMinimalScopes,
+        BackendCapability::FilesystemTmpdirScopes,
+        BackendCapability::FilesystemReadOnlySubpaths,
+        BackendCapability::FilesystemGlobs,
+        BackendCapability::FilesystemGlobScanDepth,
+        BackendCapability::FilesystemMissingPathBehavior,
+        BackendCapability::FilesystemProtectedPaths,
+        BackendCapability::NetworkDisabled,
+        BackendCapability::NetworkEnabled,
+        BackendCapability::NetworkDomainRules,
+        BackendCapability::NetworkLocalAddressRestrictions,
+        BackendCapability::NetworkResolvedTargets,
+        BackendCapability::EnvironmentAll,
+        BackendCapability::EnvironmentCore,
+        BackendCapability::EnvironmentNone,
+        BackendCapability::EnvironmentFilters,
+        BackendCapability::EnvironmentOverrides,
+    ])
+}
+
 impl SandboxBackend for WindowsBackend {
     fn identity(&self) -> &BackendIdentity {
         &self.identity
     }
 
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities::from_capabilities([
-            BackendCapability::CommandExecution,
-            BackendCapability::WorkingDirectory,
-            BackendCapability::StdioInherit,
-            BackendCapability::StdioNull,
-            BackendCapability::StdioPipe,
-            BackendCapability::TimeoutBackendDefault,
-            BackendCapability::TimeoutLimit,
-            BackendCapability::TimeoutDisabled,
-            BackendCapability::FilesystemRestricted,
-            BackendCapability::FilesystemScopes,
-            BackendCapability::FilesystemAbsoluteScopes,
-            BackendCapability::FilesystemWorkspaceScopes,
-            BackendCapability::FilesystemRootScopes,
-            BackendCapability::FilesystemMinimalScopes,
-            BackendCapability::FilesystemTmpdirScopes,
-            BackendCapability::FilesystemReadOnlySubpaths,
-            BackendCapability::FilesystemGlobs,
-            BackendCapability::FilesystemGlobScanDepth,
-            BackendCapability::FilesystemMissingPathBehavior,
-            BackendCapability::FilesystemProtectedPaths,
-            BackendCapability::NetworkDisabled,
-            BackendCapability::NetworkEnabled,
-            BackendCapability::NetworkDomainRules,
-            BackendCapability::NetworkLocalAddressRestrictions,
-            BackendCapability::NetworkResolvedTargets,
-            BackendCapability::EnvironmentAll,
-            BackendCapability::EnvironmentCore,
-            BackendCapability::EnvironmentNone,
-            BackendCapability::EnvironmentFilters,
-            BackendCapability::EnvironmentOverrides,
-        ])
+        windows_capabilities()
     }
 }
 
@@ -436,8 +440,12 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use super::{apply_proxy_environment, encode_environment, is_windows_core_environment_name};
+    use super::{
+        apply_proxy_environment, encode_environment, is_windows_core_environment_name,
+        windows_capabilities,
+    };
     use crate::network::ProxyAddresses;
+    use cageforge_backend_api::{BackendCapabilities, BackendCapability};
 
     #[test]
     fn empty_environment_block_has_the_required_double_terminator() {
@@ -478,6 +486,60 @@ mod tests {
         assert!(!is_windows_core_environment_name(OsStr::new(
             "SSH_AUTH_SOCK"
         )));
+    }
+
+    #[test]
+    fn capability_surface_matches_the_enforced_windows_boundary() {
+        let actual = windows_capabilities();
+        let expected = BackendCapabilities::from_capabilities([
+            BackendCapability::CommandExecution,
+            BackendCapability::WorkingDirectory,
+            BackendCapability::StdioInherit,
+            BackendCapability::StdioNull,
+            BackendCapability::StdioPipe,
+            BackendCapability::TimeoutBackendDefault,
+            BackendCapability::TimeoutLimit,
+            BackendCapability::TimeoutDisabled,
+            BackendCapability::FilesystemRestricted,
+            BackendCapability::FilesystemScopes,
+            BackendCapability::FilesystemAbsoluteScopes,
+            BackendCapability::FilesystemWorkspaceScopes,
+            BackendCapability::FilesystemRootScopes,
+            BackendCapability::FilesystemMinimalScopes,
+            BackendCapability::FilesystemTmpdirScopes,
+            BackendCapability::FilesystemReadOnlySubpaths,
+            BackendCapability::FilesystemGlobs,
+            BackendCapability::FilesystemGlobScanDepth,
+            BackendCapability::FilesystemMissingPathBehavior,
+            BackendCapability::FilesystemProtectedPaths,
+            BackendCapability::NetworkDisabled,
+            BackendCapability::NetworkEnabled,
+            BackendCapability::NetworkDomainRules,
+            BackendCapability::NetworkLocalAddressRestrictions,
+            BackendCapability::NetworkResolvedTargets,
+            BackendCapability::EnvironmentAll,
+            BackendCapability::EnvironmentCore,
+            BackendCapability::EnvironmentNone,
+            BackendCapability::EnvironmentFilters,
+            BackendCapability::EnvironmentOverrides,
+        ]);
+        assert_eq!(
+            actual.iter().copied().collect::<Vec<_>>(),
+            expected.iter().copied().collect::<Vec<_>>()
+        );
+        for unsupported in [
+            BackendCapability::FilesystemUnrestricted,
+            BackendCapability::FilesystemExternal,
+            BackendCapability::FilesystemConventionalTemporaryScopes,
+            BackendCapability::NetworkExternal,
+            BackendCapability::NetworkLocalIpcIsolation,
+            BackendCapability::NetworkLocalIpcRules,
+        ] {
+            assert!(
+                !actual.supports(unsupported),
+                "Windows backend must not advertise {unsupported:?}"
+            );
+        }
     }
 
     #[test]
