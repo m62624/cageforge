@@ -9,6 +9,7 @@ use windows_sys::Win32::Foundation::{ERROR_INVALID_DATA, GetLastError, HLOCAL, L
 use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
 };
+use windows_sys::Win32::System::Memory::LocalSize;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::WindowsSetupVerificationError;
@@ -170,10 +171,25 @@ fn decrypt(component: &'static str, data: &[u8]) -> Result<Vec<u8>, WindowsSetup
             code: ERROR_INVALID_DATA,
         });
     }
-    let decrypted = if output.cbData == 0 {
+    let allocated_bytes = if output.pbData.is_null() {
+        0
+    } else {
+        unsafe { LocalSize(output.pbData as HLOCAL) }
+    };
+    let length = output.cbData as usize;
+    if length > allocated_bytes {
+        if !output.pbData.is_null() {
+            unsafe { LocalFree(output.pbData as HLOCAL) };
+        }
+        return Err(WindowsSetupVerificationError::CredentialDecrypt {
+            component,
+            code: ERROR_INVALID_DATA,
+        });
+    }
+    let decrypted = if length == 0 {
         Vec::new()
     } else {
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(output.pbData, length) }.to_vec()
     };
     if !output.pbData.is_null() {
         unsafe {

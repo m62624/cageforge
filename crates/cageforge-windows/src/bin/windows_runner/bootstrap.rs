@@ -23,6 +23,7 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
 };
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_GENERIC_WRITE, OPEN_EXISTING};
+use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithLogonW,
@@ -527,10 +528,22 @@ fn decrypt_credential(protected: &[u8]) -> Result<Vec<u8>, BootstrapFailure> {
     if output.cbData != 0 && output.pbData.is_null() {
         return Err(BootstrapFailure::CredentialDecrypt(ERROR_INVALID_DATA));
     }
-    let plaintext = if output.cbData == 0 {
+    let allocated_bytes = if output.pbData.is_null() {
+        0
+    } else {
+        unsafe { LocalSize(output.pbData as HLOCAL) }
+    };
+    let length = output.cbData as usize;
+    if length > allocated_bytes {
+        if !output.pbData.is_null() {
+            unsafe { LocalFree(output.pbData as HLOCAL) };
+        }
+        return Err(BootstrapFailure::CredentialDecode);
+    }
+    let plaintext = if length == 0 {
         Vec::new()
     } else {
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(output.pbData, length) }.to_vec()
     };
     if !output.pbData.is_null() {
         unsafe { LocalFree(output.pbData as HLOCAL) };

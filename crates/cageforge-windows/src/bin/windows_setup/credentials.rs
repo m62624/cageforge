@@ -5,6 +5,7 @@ use windows_sys::Win32::Foundation::{GetLastError, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData,
 };
+use windows_sys::Win32::System::Memory::LocalSize;
 
 use serde::Serialize;
 
@@ -95,10 +96,38 @@ fn protect(data: &[u8]) -> NativeSetupResult<Vec<u8>> {
             "Windows DPAPI could not protect a sandbox credential",
         ));
     }
-    let bytes =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-    unsafe {
-        LocalFree(output.pbData as HLOCAL);
+    if output.cbData != 0 && output.pbData.is_null() {
+        return Err(NativeSetupFailure::new(
+            SetupStage::Credentials,
+            SetupFailureCode::DpapiProtect,
+            None,
+            "Windows DPAPI returned no protected buffer for a nonzero length",
+        ));
+    }
+    let allocated_bytes = if output.pbData.is_null() {
+        0
+    } else {
+        unsafe { LocalSize(output.pbData as HLOCAL) }
+    };
+    let length = output.cbData as usize;
+    if length > allocated_bytes {
+        if !output.pbData.is_null() {
+            unsafe { LocalFree(output.pbData as HLOCAL) };
+        }
+        return Err(NativeSetupFailure::new(
+            SetupStage::Credentials,
+            SetupFailureCode::DpapiProtect,
+            None,
+            "Windows DPAPI returned a protected buffer shorter than its declared length",
+        ));
+    }
+    let bytes = if length == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(output.pbData, length) }.to_vec()
+    };
+    if !output.pbData.is_null() {
+        unsafe { LocalFree(output.pbData as HLOCAL) };
     }
     Ok(bytes)
 }
