@@ -4,7 +4,7 @@
 
 pub(crate) mod attribution;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::mem::size_of;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener};
@@ -83,6 +83,12 @@ enum ProxyProtocol {
 }
 
 type RouteRegistry = Arc<Mutex<HashMap<String, Arc<RouteServices>>>>;
+
+#[derive(Default)]
+struct SharedIngressRegistry {
+    ingresses: HashMap<IngressIdentity, Weak<WindowsProxyIngress>>,
+    retiring_ports: HashSet<u16>,
+}
 
 /// Failure while constructing the shared Windows ingress or one isolated route.
 #[derive(Debug, Error)]
@@ -318,8 +324,8 @@ enum WindowsNetworkIngressError {
     AttributionWorker,
 }
 
-static SHARED_INGRESSES: LazyLock<Mutex<HashMap<IngressIdentity, Weak<WindowsProxyIngress>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static SHARED_INGRESSES: LazyLock<Mutex<SharedIngressRegistry>> =
+    LazyLock::new(|| Mutex::new(SharedIngressRegistry::default()));
 
 impl WindowsProxyIngress {
     pub(crate) fn shared(
@@ -334,22 +340,26 @@ impl WindowsProxyIngress {
         let mut shared = SHARED_INGRESSES
             .lock()
             .map_err(|_| WindowsNetworkGatewayError::SharedRegistryPoisoned)?;
-        if let Some(ingress) = shared.get(&identity).and_then(Weak::upgrade) {
+        if let Some(ingress) = shared.ingresses.get(&identity).and_then(Weak::upgrade) {
             ingress
                 .check_health()
                 .map_err(|source| WindowsNetworkGatewayError::ExistingRuntime { source })?;
             return Ok(Arc::clone(&ingress));
         }
-        shared.remove(&identity);
+        shared.ingresses.remove(&identity);
         if let Some(port) = shared
+            .ingresses
             .keys()
             .flat_map(|key| [key.addresses.http.port(), key.addresses.socks.port()])
+            .chain(shared.retiring_ports.iter().copied())
             .find(|port| *port == addresses.http.port() || *port == addresses.socks.port())
         {
             return Err(WindowsNetworkGatewayError::PortOwnedByDifferentSetup { port });
         }
         let ingress = Arc::new(Self::start(identity)?);
-        shared.insert(ingress.identity.clone(), Arc::downgrade(&ingress));
+        shared
+            .ingresses
+            .insert(ingress.identity.clone(), Arc::downgrade(&ingress));
         Ok(ingress)
     }
 
@@ -455,13 +465,17 @@ impl WindowsProxyIngress {
 
 impl Drop for WindowsProxyIngress {
     fn drop(&mut self) {
-        // Hold the registry lock through shutdown and join. Removing the
-        // weak entry before the runtime has released its listeners would let
-        // a replacement lookup start binding the same fixed ports while the
-        // old ingress is still closing them.
-        let mut registry = SHARED_INGRESSES.lock().ok();
-        if let Some(registry) = registry.as_mut() {
-            registry.remove(&self.identity);
+        let ports = [
+            self.identity.addresses.http.port(),
+            self.identity.addresses.socks.port(),
+        ];
+        // Remove the weak entry and reserve both fixed ports only for this
+        // short critical section. The reservation prevents a replacement
+        // ingress from racing the old listeners while the runtime is joined,
+        // without holding the registry mutex during shutdown or I/O.
+        if let Ok(mut registry) = SHARED_INGRESSES.lock() {
+            registry.ingresses.remove(&self.identity);
+            registry.retiring_ports.extend(ports);
         }
         let shutdown_sender = match self.shutdown.get_mut() {
             Ok(sender) => sender.take(),
@@ -476,6 +490,11 @@ impl Drop for WindowsProxyIngress {
         };
         if let Some(thread) = thread {
             let _ = thread.join();
+        }
+        if let Ok(mut registry) = SHARED_INGRESSES.lock() {
+            for port in ports {
+                registry.retiring_ports.remove(&port);
+            }
         }
     }
 }
@@ -956,7 +975,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use cageforge_command::EnvironmentSpec;
     use cageforge_network_proxy::{GatewayConfig, NetworkGateway};
@@ -1082,6 +1101,7 @@ mod tests {
         SHARED_INGRESSES
             .lock()
             .expect("shared ingress registry")
+            .ingresses
             .insert(identity, Arc::downgrade(&ingress));
 
         let dropper = thread::spawn(move || drop(ingress));
@@ -1089,23 +1109,31 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("old ingress entered shutdown");
 
-        let replacement =
-            thread::spawn(move || WindowsProxyIngress::shared(&replacement_identity, &ports));
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while !replacement.is_finished() && Instant::now() < deadline {
-            thread::yield_now();
-        }
-        assert!(
-            !replacement.is_finished(),
-            "replacement ingress raced old listener shutdown"
-        );
+        let replacement_identity_for_lookup = replacement_identity.clone();
+        let replacement = thread::spawn(move || {
+            WindowsProxyIngress::shared(&replacement_identity_for_lookup, &ports)
+        });
+        let replacement_error = match replacement
+            .join()
+            .expect("replacement ingress lookup thread")
+        {
+            Ok(ingress) => {
+                drop(ingress);
+                panic!("replacement ingress raced old listener shutdown");
+            }
+            Err(error) => error,
+        };
+        assert!(matches!(
+            replacement_error,
+            WindowsNetworkGatewayError::PortOwnedByDifferentSetup { port }
+                if ports.contains(&port)
+        ));
 
         release_sender.send(()).expect("release old ingress");
         dropper.join().expect("old ingress drop thread");
-        let replacement = replacement
-            .join()
-            .expect("replacement ingress thread")
-            .expect("replacement ingress starts after old listeners close");
+        let replacement =
+            WindowsProxyIngress::shared(&format!("{replacement_identity}-after"), &ports)
+                .expect("replacement ingress starts after old listeners close");
         drop(replacement);
     }
 
