@@ -312,8 +312,13 @@ impl RunnerSession {
         let result = self.finish_inner(terminal);
         if result.is_err() {
             let _ = self.launch.boundary().terminate(125);
+        } else {
+            // An error does not prove that the complete process boundary was
+            // terminated. Keep Drop responsible for another bounded
+            // termination attempt instead of making a failed lifecycle
+            // indistinguishable from a confirmed terminal state.
+            self.finished = true;
         }
-        self.finished = true;
         result
     }
 
