@@ -189,7 +189,7 @@ launch.
 | Environment isolation | Every launch | Selects `all`, `core`, or `none` through typed transformations, canonicalizes Windows variable identity, terminates the environment block correctly, and owns proxy overrides. |
 | Timeout and complete-tree termination | Backend-default or explicit timeout, kill, drop, and parent loss | Terminates the runner-owned Job boundary and descendants, closes pipes, stops watchdogs, and releases routes and ACL leases in a deterministic order. |
 | Concurrent-instance isolation | Multiple backend instances or children | Keeps account state, profile authorities, lifecycle leases, routes, gateway policies, and process trees separate. |
-| Typed fail-closed errors | Setup, prepare, spawn, wait, and cleanup | Identifies the failing native stage and code without requiring applications to parse display text. |
+| Typed fail-closed errors | Setup, prepare, spawn, wait, and cleanup | Identifies the failing native stage and code. |
 
 `External` filesystem or network ownership and pathname Unix-socket policy are
 not advertised as Windows-native capabilities. Windows named pipes are handled
