@@ -70,6 +70,11 @@ pub(crate) struct LinuxLaunchPlan {
 }
 
 /// A Linux native Cageforge backend bound to one validated Bubblewrap binary.
+///
+/// The backend is reusable: every [`Self::spawn`] call creates a separate
+/// Bubblewrap boundary for the complete command process tree. Multiple
+/// children may run concurrently; a backend is not a shared persistent
+/// container between commands.
 #[derive(Debug, Clone)]
 pub struct LinuxBackend {
     config: LinuxBackendConfig,

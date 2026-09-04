@@ -34,6 +34,12 @@ use crate::setup::verification::PinnedRunnerResources;
 use crate::setup::{WindowsSetup, WindowsSetupDetails};
 
 /// A Windows-native Cageforge backend bound to one verified elevated setup.
+///
+/// The backend is reusable: every [`Self::spawn`] call creates a new
+/// launch-specific Windows process boundary. Multiple backend instances and
+/// children may run concurrently over the same verified setup while retaining
+/// independent tokens, Job Objects, filesystem authorities, and network
+/// routes.
 pub struct WindowsBackend {
     config: WindowsBackendConfig,
     setup: WindowsSetupDetails,

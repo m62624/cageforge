@@ -54,6 +54,15 @@ The strong Windows backend has one administrator-approved provisioning step.
 reconciled. Ordinary `WindowsBackend::new`, `prepare`, and `spawn` calls use
 the verified installed state and do not request UAC for every command.
 
+`WindowsSetup` represents this persistent owner-scoped provisioning, not a
+single command sandbox. For one signed-in Windows user, the setup has one
+state root: repeated installation with that same root is serialized and
+idempotent, while a different root is rejected with the typed
+`WindowsSetupError::OwnerSetupConflict` before global account, firewall, or
+WFP state is reconciled. To run several isolated workloads, reuse the verified
+setup and create one or more `WindowsBackend` instances; each `spawn` then
+creates its own launch boundary.
+
 Setup creates two persistent ordinary local accounts scoped to the signed-in
 owner:
 
@@ -153,6 +162,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 validates the complete effective filesystem, network, environment, stdio, cwd,
 and timeout contract. `spawn` accepts only that prepared value; it does not
 reconstruct policy from the original request.
+
+One `spawn` protects the command and all of its descendants as one process
+tree. Separate `spawn` calls are separate sandbox instances and may run at the
+same time with different policies. They share host data only where their
+effective filesystem scopes deliberately name the same path.
 
 ## Protection matrix
 

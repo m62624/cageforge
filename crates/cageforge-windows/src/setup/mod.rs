@@ -301,6 +301,12 @@ impl WindowsSetup {
     ///
     /// The helper is elevated through the Windows `runas` shell verb. Cancelling
     /// the UAC prompt is returned as [`WindowsSetupError::ElevationCanceled`].
+    /// Setup is persistent and owner-scoped: repeated calls with the same
+    /// state directory are serialized and idempotent, while a different state
+    /// directory for the same signed-in owner is rejected before global
+    /// account, firewall, or WFP reconciliation. Runtime isolation belongs to
+    /// [`WindowsBackend`](crate::WindowsBackend) and its children, not to
+    /// creating another setup root.
     pub fn install(&self) -> Result<WindowsSetupDetails, WindowsSetupError> {
         self.run_helper(SetupOperation::Install)?;
         self.verify()

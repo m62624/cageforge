@@ -217,6 +217,12 @@ cannot be launched by another instance, cannot substitute a broader path
 context, and cannot bypass capability checks by returning to the original
 command or requested policy.
 
+`LinuxBackend` is reusable rather than a persistent shared container. Each
+`spawn` creates a new sandbox boundary for one command process tree, including
+any descendants it starts. Multiple children or backend instances may run
+concurrently; their gateway, lifecycle, and enforcement state is separate,
+while host paths are shared only when the effective filesystem scopes allow it.
+
 ## Filesystem behavior
 
 Restricted policies become a deterministic Bubblewrap mount plan. The backend
