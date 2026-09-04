@@ -30,7 +30,6 @@ use crate::native_strings::local_sid_string;
 const MAX_TCP_TABLE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TCP_TABLE_READ_ATTEMPTS: usize = 8;
 const MAX_RESTRICTED_SID_BYTES: usize = 1024 * 1024;
-const MAX_RESTRICTED_SIDS: usize = 4096;
 const SID_HEADER_BYTES: usize = 8;
 
 /// Failure while attributing one accepted Windows loopback TCP connection.
@@ -430,9 +429,6 @@ fn parse_restricted_sids(
         return Err(WindowsNetworkAttributionError::RestrictedSidMalformed);
     }
     let count = unsafe { buffer.as_ptr().cast::<u32>().read_unaligned() } as usize;
-    if count > MAX_RESTRICTED_SIDS {
-        return Err(WindowsNetworkAttributionError::RestrictedSidMalformed);
-    }
     let expected = count
         .checked_mul(size_of::<SID_AND_ATTRIBUTES>())
         .and_then(|groups| groups_offset.checked_add(groups))
