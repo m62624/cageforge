@@ -1,46 +1,63 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(target_os = "windows")]
 #![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
+#[cfg(target_os = "windows")]
 use std::env;
+#[cfg(target_os = "windows")]
 use std::fs;
+#[cfg(target_os = "windows")]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[cfg(target_os = "windows")]
 #[path = "../capability/lock.rs"]
 mod capability_lock;
+#[cfg(target_os = "windows")]
 #[path = "../capability/state.rs"]
 mod capability_state;
+#[cfg(target_os = "windows")]
 #[path = "../capability/state_setup.rs"]
 mod capability_state_setup;
+#[cfg(target_os = "windows")]
 #[path = "../firewall_contract.rs"]
 mod firewall_contract;
+#[cfg(target_os = "windows")]
 #[path = "../owner_identity.rs"]
 mod owner_identity;
+#[cfg(target_os = "windows")]
 #[path = "../runner/manifest.rs"]
 mod runner_manifest;
+#[cfg(target_os = "windows")]
 #[path = "../setup/pinned/setup.rs"]
 mod setup_pinned;
+#[cfg(target_os = "windows")]
 #[path = "../setup/pinned/file.rs"]
 mod setup_pinned_file;
+#[cfg(target_os = "windows")]
 #[path = "../setup/protocol.rs"]
 mod setup_protocol;
+#[cfg(target_os = "windows")]
 #[path = "../setup/state.rs"]
 mod setup_state;
+#[cfg(target_os = "windows")]
 #[path = "../setup/state_path.rs"]
 mod setup_state_path;
+#[cfg(target_os = "windows")]
 mod windows_setup;
 
+#[cfg(target_os = "windows")]
 use setup_protocol::{
     SETUP_PROTOCOL_VERSION, SetupFailureCode, SetupOutcome, SetupRequest, SetupResponse, SetupStage,
 };
 
+#[cfg(target_os = "windows")]
 struct Arguments {
     request: PathBuf,
     response: PathBuf,
 }
 
+#[cfg(target_os = "windows")]
 impl Arguments {
     fn parse() -> Result<Self, String> {
         let mut values = env::args_os().skip(1);
@@ -62,6 +79,7 @@ impl Arguments {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -72,6 +90,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn run() -> Result<(), String> {
     let arguments = Arguments::parse()?;
     let progress_path = arguments.response.with_extension("progress");
@@ -130,4 +149,10 @@ fn run() -> Result<(), String> {
     } else {
         Err("elevated setup failed; inspect the structured response".to_string())
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn main() -> ExitCode {
+    eprintln!("cageforge-windows-setup is only available on Windows");
+    ExitCode::from(1)
 }
