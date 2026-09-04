@@ -1235,14 +1235,17 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         Ok(_) => panic!("missing command must fail through the runner protocol"),
         Err(error) => error,
     };
-    assert!(matches!(
-        missing_error,
-        WindowsBackendError::RunnerFailure {
-            stage: WindowsRunnerFailureStage::Process,
-            code: WindowsRunnerFailureCode::ProcessStart,
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            missing_error,
+            WindowsBackendError::RunnerFailure {
+                stage: WindowsRunnerFailureStage::Process,
+                code: WindowsRunnerFailureCode::ProcessStart,
+                ..
+            }
+        ),
+        "missing command error: {missing_error:?}"
+    );
 
     let outside_secret = temporary.path().join("outside-secret.txt");
     let outside_secret_ads = PathBuf::from(format!("{}:cageforge", outside_secret.display()));

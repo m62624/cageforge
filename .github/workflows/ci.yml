@@ -395,7 +395,7 @@ jobs:
 
             $tests = [regex]::Matches(
               $output,
-              '(?m)^test (?<name>.+?) \.\.\. (?<status>ok|FAILED|ignored)$'
+              '(?m)^test (?<name>.+?) \.\.\. (?<status>ok|FAILED|ignored)\r?$'
             ) | ForEach-Object {
               [ordered]@{
                 name = $_.Groups['name'].Value
@@ -404,7 +404,7 @@ jobs:
             }
             $summaries = [regex]::Matches(
               $output,
-              '(?m)^test result: (?<summary>.+)$'
+              '(?m)^test result: (?<summary>.+?)\r?$'
             ) | ForEach-Object {
               $_.Groups['summary'].Value
             }
