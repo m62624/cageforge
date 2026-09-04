@@ -24,7 +24,9 @@ use zeroize::Zeroizing;
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use crate::native_strings::local_sid_string;
-use crate::net_api_strings::{net_api_array_len, net_api_buffer_size, net_api_wide_string};
+use crate::net_api_strings::{
+    net_api_array_len, net_api_buffer_size, net_api_struct_fits, net_api_wide_string,
+};
 
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts};
 
@@ -141,6 +143,22 @@ fn verify_account(
         ));
     }
     let user_buffer = NetApiBuffer(user_buffer);
+    let allocation_bytes = net_api_buffer_size(user_buffer.0).map_err(|code| {
+        NativeSetupFailure::new(
+            stage,
+            SetupFailureCode::UserUpdate,
+            Some(code),
+            format!("failed to determine the NetAPI user allocation for sandbox user {account:?}"),
+        )
+    })?;
+    if !net_api_struct_fits::<USER_INFO_1>(user_buffer.0, allocation_bytes) {
+        return Err(NativeSetupFailure::new(
+            stage,
+            SetupFailureCode::UserUpdate,
+            None,
+            format!("Windows returned a truncated user record for sandbox user {account:?}"),
+        ));
+    }
     let info = unsafe { &*user_buffer.0.cast::<USER_INFO_1>() };
     if info.usri1_priv != USER_PRIV_USER {
         return Err(NativeSetupFailure::new(

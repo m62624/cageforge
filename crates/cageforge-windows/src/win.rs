@@ -25,7 +25,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
 use crate::native_strings::local_sid_string;
-use crate::net_api_strings::{net_api_array_len, net_api_buffer_size, net_api_wide_string};
+use crate::net_api_strings::{
+    net_api_array_len, net_api_buffer_size, net_api_struct_fits, net_api_wide_string,
+};
 
 struct NetApiBuffer(*mut u8);
 
@@ -264,6 +266,18 @@ fn verify_regular_enabled_user(account_name: &str) -> Result<(), WindowsAccountV
         });
     }
     let buffer = NetApiBuffer(buffer);
+    let allocation_bytes = net_api_buffer_size(buffer.0).map_err(|code| {
+        WindowsAccountVerificationError::UserRecordRead {
+            account: account_name.to_string(),
+            code,
+        }
+    })?;
+    if !net_api_struct_fits::<USER_INFO_1>(buffer.0, allocation_bytes) {
+        return Err(WindowsAccountVerificationError::UserRecordRead {
+            account: account_name.to_string(),
+            code: ERROR_INVALID_DATA,
+        });
+    }
     let info = unsafe { &*buffer.0.cast::<USER_INFO_1>() };
     if info.usri1_priv != USER_PRIV_USER {
         return Err(WindowsAccountVerificationError::NotRegularUser {

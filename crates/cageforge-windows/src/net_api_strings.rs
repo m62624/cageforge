@@ -45,6 +45,14 @@ pub(crate) fn net_api_array_len<T>(allocation_bytes: usize, count: u32) -> Optio
         .map(|_| count)
 }
 
+/// Check that a fixed-size record fits inside a NetAPI allocation.
+pub(crate) fn net_api_struct_fits<T>(buffer: *const u8, allocation_bytes: usize) -> bool {
+    let start = buffer as usize;
+    start.is_multiple_of(align_of::<T>())
+        && size_of::<T>() <= allocation_bytes
+        && start.checked_add(size_of::<T>()).is_some()
+}
+
 #[allow(unsafe_code)]
 fn wide_string_within_allocation(
     buffer: *const u8,
@@ -72,7 +80,7 @@ fn wide_string_within_allocation(
 
 #[cfg(test)]
 mod tests {
-    use super::{net_api_array_len, wide_string_within_allocation};
+    use super::{net_api_array_len, net_api_struct_fits, wide_string_within_allocation};
 
     #[test]
     fn wide_string_is_bounded_by_the_netapi_allocation() {
@@ -130,5 +138,16 @@ mod tests {
         assert_eq!(net_api_array_len::<u32>(8, 2), Some(2));
         assert_eq!(net_api_array_len::<u32>(7, 2), None);
         assert_eq!(net_api_array_len::<[u8; 8]>(7, 1), None);
+    }
+
+    #[test]
+    fn fixed_record_must_fit_and_be_aligned() {
+        let record = [0u64; 1];
+        assert!(net_api_struct_fits::<u64>(record.as_ptr().cast(), 8));
+        assert!(!net_api_struct_fits::<u64>(record.as_ptr().cast(), 7));
+        assert!(!net_api_struct_fits::<u64>(
+            record.as_ptr().cast::<u8>().wrapping_add(1),
+            8
+        ));
     }
 }
