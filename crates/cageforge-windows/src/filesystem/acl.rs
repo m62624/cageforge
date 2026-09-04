@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::mem::{offset_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
@@ -68,6 +68,7 @@ const WRITE_DENY_MASK: u32 = FILE_GENERIC_WRITE
     | WRITE_OWNER;
 const SUBTREE_INHERITANCE: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
 const MATERIALIZATION_MARKER_NAME: &str = ".cageforge-materialized-path";
+const SID_HEADER_BYTES: usize = 8;
 
 pub(crate) struct FilesystemAclEnforcement {
     authorities: FilesystemAuthorities,
@@ -2751,27 +2752,31 @@ fn filter_acl(
     let mut bytes = size_of::<ACL>();
     for index in 0..information.AceCount {
         let raw = ace(path, source, index)?;
+        let ace_size = checked_ace_size(path, source, &information, raw, index)?;
         let header = unsafe { &*raw.cast::<ACE_HEADER>() };
-        let ace_size = header.AceSize as usize;
-        if ace_size < size_of::<ACE_HEADER>() {
-            return Err(FilesystemAclError::MalformedAce {
-                path: path.final_path().to_path_buf(),
-                index,
-            });
-        }
         let raw_bytes = unsafe { std::slice::from_raw_parts(raw.cast::<u8>(), ace_size) };
         let standard_sid = if matches!(
             header.AceType,
             ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE
-        ) && ace_size >= size_of::<ACCESS_ALLOWED_ACE>()
-        {
-            Some(
-                unsafe {
-                    raw.cast::<u8>()
-                        .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
-                }
-                .cast(),
-            )
+        ) {
+            if ace_size < size_of::<ACCESS_ALLOWED_ACE>() {
+                return Err(FilesystemAclError::MalformedAce {
+                    path: path.final_path().to_path_buf(),
+                    index,
+                });
+            }
+            let sid = unsafe {
+                raw.cast::<u8>()
+                    .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
+            }
+            .cast();
+            if !sid_fits_ace(raw, ace_size, sid) {
+                return Err(FilesystemAclError::MalformedAce {
+                    path: path.final_path().to_path_buf(),
+                    index,
+                });
+            }
+            Some(sid)
         } else {
             None
         };
@@ -2942,6 +2947,7 @@ fn verify_entry(
     let mut opposite = false;
     for index in 0..information.AceCount {
         let raw = ace(path, dacl, index)?;
+        let ace_size = checked_ace_size(path, dacl, &information, raw, index)?;
         let header = unsafe { &*raw.cast::<ACE_HEADER>() };
         if header.AceFlags & INHERIT_ONLY_ACE as u8 != 0
             || !matches!(
@@ -2951,7 +2957,7 @@ fn verify_entry(
         {
             continue;
         }
-        if (header.AceSize as usize) < size_of::<ACCESS_ALLOWED_ACE>() {
+        if ace_size < size_of::<ACCESS_ALLOWED_ACE>() {
             return Err(FilesystemAclError::MalformedAce {
                 path: path.final_path().to_path_buf(),
                 index,
@@ -2963,7 +2969,7 @@ fn verify_entry(
                 .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
         }
         .cast::<c_void>();
-        if unsafe { IsValidSid(sid) } == 0 {
+        if !sid_fits_ace(raw, ace_size, sid) || unsafe { IsValidSid(sid) } == 0 {
             return Err(FilesystemAclError::MalformedAce {
                 path: path.final_path().to_path_buf(),
                 index,
@@ -3029,6 +3035,7 @@ fn verify_exact_entry(
     let mut matched = false;
     for index in 0..information.AceCount {
         let raw = ace(path, dacl, index)?;
+        let ace_size = checked_ace_size(path, dacl, &information, raw, index)?;
         let header = unsafe { &*raw.cast::<ACE_HEADER>() };
         if header.AceFlags & INHERIT_ONLY_ACE as u8 != 0
             || !matches!(
@@ -3038,7 +3045,7 @@ fn verify_exact_entry(
         {
             continue;
         }
-        if (header.AceSize as usize) < size_of::<ACCESS_ALLOWED_ACE>() {
+        if ace_size < size_of::<ACCESS_ALLOWED_ACE>() {
             return Err(FilesystemAclError::MalformedAce {
                 path: path.final_path().to_path_buf(),
                 index,
@@ -3050,7 +3057,7 @@ fn verify_exact_entry(
                 .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
         }
         .cast::<c_void>();
-        if unsafe { IsValidSid(sid) } == 0 {
+        if !sid_fits_ace(raw, ace_size, sid) || unsafe { IsValidSid(sid) } == 0 {
             return Err(FilesystemAclError::MalformedAce {
                 path: path.final_path().to_path_buf(),
                 index,
@@ -3103,14 +3110,7 @@ fn verify_sid_absent(
     let information = acl_information(path, dacl)?;
     for index in 0..information.AceCount {
         let raw = ace(path, dacl, index)?;
-        let header = unsafe { &*raw.cast::<ACE_HEADER>() };
-        let size = header.AceSize as usize;
-        if size < size_of::<ACE_HEADER>() {
-            return Err(FilesystemAclError::MalformedAce {
-                path: path.final_path().to_path_buf(),
-                index,
-            });
-        }
+        let size = checked_ace_size(path, dacl, &information, raw, index)?;
         let bytes = unsafe { std::slice::from_raw_parts(raw.cast::<u8>(), size) };
         if contains_bytes(bytes, sid.bytes()) {
             return Err(FilesystemAclError::AceMismatch {
@@ -3145,6 +3145,88 @@ fn acl_information(
         });
     }
     Ok(information)
+}
+
+#[allow(unsafe_code)]
+fn checked_ace_size(
+    path: &ValidatedPath,
+    dacl: *mut ACL,
+    information: &ACL_SIZE_INFORMATION,
+    raw: *mut c_void,
+    index: u32,
+) -> Result<usize, FilesystemAclError> {
+    let acl_start = dacl as usize;
+    let acl_end = acl_start
+        .checked_add(information.AclBytesInUse as usize)
+        .ok_or_else(|| FilesystemAclError::MalformedAce {
+            path: path.final_path().to_path_buf(),
+            index,
+        })?;
+    let ace_start = raw as usize;
+    let header_end = ace_start
+        .checked_add(size_of::<ACE_HEADER>())
+        .ok_or_else(|| FilesystemAclError::MalformedAce {
+            path: path.final_path().to_path_buf(),
+            index,
+        })?;
+    if !ace_start.is_multiple_of(align_of::<ACE_HEADER>())
+        || ace_start < acl_start
+        || header_end > acl_end
+    {
+        return Err(FilesystemAclError::MalformedAce {
+            path: path.final_path().to_path_buf(),
+            index,
+        });
+    }
+    let ace_size = unsafe { (*raw.cast::<ACE_HEADER>()).AceSize as usize };
+    let ace_end =
+        ace_start
+            .checked_add(ace_size)
+            .ok_or_else(|| FilesystemAclError::MalformedAce {
+                path: path.final_path().to_path_buf(),
+                index,
+            })?;
+    if ace_size < size_of::<ACE_HEADER>() || ace_end > acl_end {
+        return Err(FilesystemAclError::MalformedAce {
+            path: path.final_path().to_path_buf(),
+            index,
+        });
+    }
+    Ok(ace_size)
+}
+
+#[allow(unsafe_code)]
+fn sid_fits_ace(raw: *mut c_void, ace_size: usize, sid: *mut c_void) -> bool {
+    let raw_start = raw as usize;
+    let sid_offset = (sid as usize).checked_sub(raw_start);
+    let Some(sid_offset) = sid_offset else {
+        return false;
+    };
+    let Some(bytes) = (sid_offset <= ace_size)
+        .then(|| unsafe { std::slice::from_raw_parts(raw.cast::<u8>(), ace_size) })
+    else {
+        return false;
+    };
+    sid_fits_ace_bytes(bytes, sid_offset)
+}
+
+fn sid_fits_ace_bytes(ace: &[u8], sid_offset: usize) -> bool {
+    let Some(header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
+        return false;
+    };
+    if header_end > ace.len() {
+        return false;
+    }
+    let subauthority_count = usize::from(ace[sid_offset + 1]);
+    let Some(subauthority_bytes) = subauthority_count.checked_mul(size_of::<u32>()) else {
+        return false;
+    };
+    let Some(sid_length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
+        return false;
+    };
+    sid_offset
+        .checked_add(sid_length)
+        .is_some_and(|end| end <= ace.len())
 }
 
 #[allow(unsafe_code)]
@@ -3200,7 +3282,7 @@ mod tests {
     use super::{
         AclAccessMode, AclEntry, AclInheritance, PendingAclOperation, READ_ALLOW_MASK,
         WRITE_ALLOW_MASK, entries_for_existing_path, materialization_components,
-        nested_acl_boundaries, open_discovered_acl_path, subtree_paths,
+        nested_acl_boundaries, open_discovered_acl_path, sid_fits_ace_bytes, subtree_paths,
     };
 
     #[test]
@@ -3239,6 +3321,15 @@ mod tests {
     #[test]
     fn writable_root_grant_cannot_delete_unprotected_children() {
         assert_eq!(WRITE_ALLOW_MASK & FILE_DELETE_CHILD, 0);
+    }
+
+    #[test]
+    fn sid_must_fit_inside_the_ace_before_native_validation() {
+        let mut ace = vec![0u8; 12];
+        ace[5] = 1;
+        assert!(sid_fits_ace_bytes(&ace, 4));
+        assert!(!sid_fits_ace_bytes(&ace[..11], 4));
+        assert!(!sid_fits_ace_bytes(&ace, 5));
     }
 
     #[test]
