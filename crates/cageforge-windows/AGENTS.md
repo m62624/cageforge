@@ -220,6 +220,10 @@ Codex parity requires per-process route ownership, not only a firewall port.
    routes. The last route must signal and join the ingress runtime before its
    listener ports can be reused; a dropped backend must not leave a stale
    listener or runtime thread across uninstall/reinstall.
+10. Use the ingress thread Mutex only to transfer `JoinHandle` ownership; never
+    hold it while joining or while doing runtime I/O. Cleanup must recover a
+    poisoned local lifecycle guard and still terminate/join the runtime; a
+    poisoned lock must not silently detach a security boundary.
 
 Do not weaken the model to a shared proxy credential or firewall-only routing
 because that is easier to implement.

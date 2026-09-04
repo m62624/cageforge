@@ -286,9 +286,11 @@ impl BoundaryTerminator {
 #[allow(unsafe_code)]
 impl Drop for BoundaryTerminator {
     fn drop(&mut self) {
-        if let Ok(job) = self.job.get_mut()
-            && let Some(job) = job.take()
-        {
+        let job = match self.job.get_mut() {
+            Ok(job) => job,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(job) = job.take() {
             let _ = job.terminate(125);
         }
         if self.wait_runner(Duration::ZERO).ok().flatten().is_none() {

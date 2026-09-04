@@ -395,18 +395,20 @@ impl WindowsProxyIngress {
     }
 
     pub(crate) fn check_health(&self) -> Result<(), WindowsNetworkRuntimeError> {
-        let mut thread = self
-            .thread
-            .lock()
-            .map_err(|_| WindowsNetworkRuntimeError::StatePoisoned)?;
-        let Some(handle) = thread.as_ref() else {
-            return Err(WindowsNetworkRuntimeError::StoppedBeforeProcess);
-        };
-        if !handle.is_finished() {
-            return Ok(());
-        }
-        let Some(handle) = thread.take() else {
-            return Err(WindowsNetworkRuntimeError::StoppedBeforeProcess);
+        let handle = {
+            let mut thread = self
+                .thread
+                .lock()
+                .map_err(|_| WindowsNetworkRuntimeError::StatePoisoned)?;
+            let Some(handle) = thread.as_ref() else {
+                return Err(WindowsNetworkRuntimeError::StoppedBeforeProcess);
+            };
+            if !handle.is_finished() {
+                return Ok(());
+            }
+            thread
+                .take()
+                .ok_or(WindowsNetworkRuntimeError::StoppedBeforeProcess)?
         };
         match handle.join() {
             Ok(Ok(())) => Err(WindowsNetworkRuntimeError::StoppedBeforeProcess),
@@ -459,19 +461,18 @@ impl Drop for WindowsProxyIngress {
         if let Some(mut registry) = registry {
             registry.remove(&self.identity);
         }
-        let shutdown_sender = self
-            .shutdown
-            .lock()
-            .ok()
-            .and_then(|mut sender| sender.take());
-        let should_join = shutdown_sender.is_some();
+        let shutdown_sender = match self.shutdown.get_mut() {
+            Ok(sender) => sender.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
         if let Some(sender) = shutdown_sender {
             let _ = sender.send(());
         }
-        if should_join
-            && let Ok(mut thread) = self.thread.lock()
-            && let Some(thread) = thread.take()
-        {
+        let thread = match self.thread.get_mut() {
+            Ok(thread) => thread.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(thread) = thread {
             let _ = thread.join();
         }
     }
