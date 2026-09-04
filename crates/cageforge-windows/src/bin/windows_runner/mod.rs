@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::process::ExitCode;
 
-use crate::command_runner_name::COMMAND_RUNNER_NAME;
+use crate::runner_manifest::COMMAND_RUNNER_NAME;
 use crate::runner_protocol::{
     RunnerBootstrapStage, RunnerMessage, WindowsRunnerFailure, WindowsRunnerFailureCode,
     WindowsRunnerFailureStage, WindowsRunnerProtocolError, read_frame, write_frame,

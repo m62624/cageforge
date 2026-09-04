@@ -261,7 +261,7 @@ pub(super) fn run(arguments: impl Iterator<Item = std::ffi::OsString>) -> ExitCo
         Err(BootstrapRunError::Unreported(error)) => {
             eprintln!(
                 "{} bootstrap: {error:?}",
-                crate::command_runner_name::COMMAND_RUNNER_NAME
+                crate::runner_manifest::COMMAND_RUNNER_NAME
             );
             ExitCode::from(125)
         }

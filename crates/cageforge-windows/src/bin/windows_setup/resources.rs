@@ -7,8 +7,8 @@ use crate::runner_manifest::{RUNNER_MANIFEST_NAME, RUNNER_MANIFEST_VERSION, Runn
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts, security};
-use crate::command_runner_name::COMMAND_RUNNER_NAME;
-use crate::resource_names::SETUP_HELPER_NAME;
+use crate::runner_manifest::COMMAND_RUNNER_NAME;
+use crate::setup_protocol::SETUP_HELPER_NAME;
 
 pub(super) struct VerifiedResources {
     helper_bytes: Vec<u8>,

@@ -900,8 +900,6 @@ fn parent_death_child_harness() {
         .expect("parent-death setup helper")
         .with_command_runner_path(runner)
         .expect("parent-death command runner");
-    let setup = WindowsSetup::new(setup_config.clone());
-    setup.install().expect("parent-death elevated setup");
     let backend = WindowsBackend::new(
         WindowsBackendConfig::new()
             .with_setup(setup_config)
@@ -932,15 +930,12 @@ fn parent_death_child_harness() {
     std::process::exit(0);
 }
 
-#[test]
-fn parent_process_death_terminates_the_complete_sandbox_boundary() {
-    let temporary = tempfile::tempdir().expect("parent-death temporary directory");
-    let state_directory = temporary.path().join("state");
-    let child_marker = temporary.path().join("child.pid");
+fn run_parent_process_death_probe(state_directory: &Path, temporary_root: &Path) {
+    let child_marker = temporary_root.join("parent-death-child.pid");
     let mut parent = Command::new(std::env::current_exe().expect("integration test executable"))
         .args(["--exact", "parent_death_child_harness", "--nocapture"])
         .env(PARENT_DEATH_MODE, "1")
-        .env(PARENT_DEATH_STATE, &state_directory)
+        .env(PARENT_DEATH_STATE, state_directory)
         .env(PARENT_DEATH_CHILD, &child_marker)
         .spawn()
         .expect("spawn parent-death harness");
@@ -953,19 +948,6 @@ fn parent_process_death_terminates_the_complete_sandbox_boundary() {
         .expect("parse parent-death child PID");
     wait_for_fixture_exit(child_id)
         .unwrap_or_else(|detail| panic!("parent death left the sandbox boundary active: {detail}"));
-
-    let setup_config = WindowsSetupConfig::new()
-        .with_state_directory(&state_directory)
-        .expect("parent-death cleanup state directory")
-        .with_setup_helper_path(PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup")))
-        .expect("parent-death cleanup setup helper")
-        .with_command_runner_path(PathBuf::from(env!(
-            "CARGO_BIN_EXE_cageforge-windows-command-runner"
-        )))
-        .expect("parent-death cleanup command runner");
-    WindowsSetup::new(setup_config)
-        .uninstall()
-        .expect("parent-death cleanup after Job termination");
 }
 
 #[test]
@@ -1746,6 +1728,8 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         )
     });
     drop(drop_backend);
+
+    run_parent_process_death_probe(first.state_directory(), temporary.path());
 
     setup.uninstall().unwrap_or_else(|error| {
         panic!(

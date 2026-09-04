@@ -565,7 +565,7 @@ mod tests {
         FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
         PipeDirection, client_pipe_access, runner_resources_are_adjacent,
     };
-    use crate::command_runner_name::COMMAND_RUNNER_NAME;
+    use crate::runner_manifest::COMMAND_RUNNER_NAME;
 
     fn command_runner_path() -> PathBuf {
         PathBuf::from(r"\\?\C:\ProgramData\Cageforge\bin").join(COMMAND_RUNNER_NAME)

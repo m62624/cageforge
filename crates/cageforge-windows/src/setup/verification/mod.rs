@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::command_runner_name::COMMAND_RUNNER_NAME;
 use crate::error::WindowsSetupVerificationError;
-use crate::resource_names::SETUP_HELPER_NAME;
+use crate::runner::manifest::COMMAND_RUNNER_NAME;
 use crate::setup::WindowsSetupDetails;
+use crate::setup::protocol::SETUP_HELPER_NAME;
 
 pub(crate) mod credentials;
 mod firewall;

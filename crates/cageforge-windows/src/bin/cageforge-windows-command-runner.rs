@@ -7,8 +7,6 @@ use std::process::ExitCode;
 #[cfg(target_os = "windows")]
 #[path = "../account_identity.rs"]
 mod account_identity;
-#[path = "../command_runner_name.rs"]
-mod command_runner_name;
 #[cfg(target_os = "windows")]
 #[path = "../owner_identity.rs"]
 mod owner_identity;
@@ -34,9 +32,6 @@ fn main() -> ExitCode {
 
 #[cfg(not(target_os = "windows"))]
 fn main() -> ExitCode {
-    eprintln!(
-        "{} is only available on Windows",
-        command_runner_name::COMMAND_RUNNER_NAME
-    );
+    eprintln!("{} is only available on Windows", env!("CARGO_BIN_NAME"));
     ExitCode::from(1)
 }

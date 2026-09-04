@@ -16,8 +16,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 use zeroize::Zeroizing;
 
 use crate::capability_lock::{CapabilityLock, CapabilityLockError};
-use crate::command_runner_name::COMMAND_RUNNER_NAME;
-use crate::resource_names::SETUP_HELPER_NAME;
+use crate::runner_manifest::COMMAND_RUNNER_NAME;
+use crate::setup_protocol::SETUP_HELPER_NAME;
 use crate::setup_protocol::{SetupFailureCode, SetupOperation, SetupRequest, SetupStage};
 use crate::setup_state::{SETUP_STATE_VERSION, SetupMarker, SetupMarkerAccounts};
 

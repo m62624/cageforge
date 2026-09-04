@@ -17,17 +17,16 @@ use sha2::{Digest, Sha256};
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
 use crate::capability::store::{CapabilityStateStore, CapabilityStateStoreError};
-use crate::command_runner_name::COMMAND_RUNNER_NAME;
 use crate::config::{
     CommandRunnerSource, SetupHelperSource, WindowsSetupConfig, WindowsStateDirectorySource,
 };
 use crate::error::WindowsSetupError;
 use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::filesystem::path::ValidatedPath;
-use crate::resource_names::SETUP_HELPER_NAME;
+use crate::runner::manifest::COMMAND_RUNNER_NAME;
 use crate::setup::protocol::{
-    MAX_SETUP_MESSAGE_BYTES, SETUP_PROTOCOL_VERSION, SetupMessageReadError, SetupOperation,
-    SetupOutcome, SetupRequest, SetupResponse, read_bounded_message,
+    MAX_SETUP_MESSAGE_BYTES, SETUP_HELPER_NAME, SETUP_PROTOCOL_VERSION, SetupMessageReadError,
+    SetupOperation, SetupOutcome, SetupRequest, SetupResponse, read_bounded_message,
 };
 use crate::setup::state::{SETUP_STATE_VERSION, SetupMarker};
 
