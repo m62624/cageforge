@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::c_void;
+use std::mem::align_of;
 
 use getrandom::fill;
 use sha2::{Digest, Sha256};
@@ -23,7 +24,7 @@ use zeroize::Zeroizing;
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use crate::native_strings::local_sid_string;
-use crate::net_api_strings::net_api_wide_string;
+use crate::net_api_strings::{net_api_array_len, net_api_buffer_size, net_api_wide_string};
 
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts};
 
@@ -193,10 +194,37 @@ fn verify_account(
         ));
     }
     let group_buffer = NetApiBuffer(group_buffer);
+    let allocation_bytes = net_api_buffer_size(group_buffer.0).map_err(|code| {
+        NativeSetupFailure::new(
+            stage,
+            SetupFailureCode::GroupMembership,
+            Some(code),
+            format!("failed to determine the NetAPI group allocation for sandbox user {account:?}"),
+        )
+    })?;
+    let entry_count = net_api_array_len::<LOCALGROUP_USERS_INFO_0>(allocation_bytes, entries)
+        .ok_or_else(|| {
+            NativeSetupFailure::new(
+                stage,
+                SetupFailureCode::GroupMembership,
+                None,
+                format!(
+                    "Windows returned a truncated local-group array for sandbox user {account:?}"
+                ),
+            )
+        })?;
+    if !(group_buffer.0 as usize).is_multiple_of(align_of::<LOCALGROUP_USERS_INFO_0>()) {
+        return Err(NativeSetupFailure::new(
+            stage,
+            SetupFailureCode::GroupMembership,
+            None,
+            format!("Windows returned an unaligned local-group array for sandbox user {account:?}"),
+        ));
+    }
     let groups = unsafe {
         std::slice::from_raw_parts(
             group_buffer.0.cast::<LOCALGROUP_USERS_INFO_0>(),
-            entries as usize,
+            entry_count,
         )
     };
     let mut found_managed = false;

@@ -4,7 +4,7 @@
 
 use std::ffi::c_void;
 use std::io;
-use std::mem::{offset_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
 use crate::native_strings::local_sid_string;
-use crate::net_api_strings::net_api_wide_string;
+use crate::net_api_strings::{net_api_array_len, net_api_buffer_size, net_api_wide_string};
 
 struct NetApiBuffer(*mut u8);
 
@@ -314,11 +314,25 @@ fn user_local_group_sids(
     if entries_read == 0 {
         return Ok(Vec::new());
     }
+    let allocation_bytes = net_api_buffer_size(buffer.0).map_err(|code| {
+        WindowsAccountVerificationError::GroupEnumeration {
+            account: account_name.to_string(),
+            code,
+        }
+    })?;
+    let entry_count = net_api_array_len::<LOCALGROUP_USERS_INFO_0>(allocation_bytes, entries_read)
+        .ok_or_else(|| WindowsAccountVerificationError::GroupEnumeration {
+            account: account_name.to_string(),
+            code: ERROR_INVALID_DATA,
+        })?;
+    if !(buffer.0 as usize).is_multiple_of(align_of::<LOCALGROUP_USERS_INFO_0>()) {
+        return Err(WindowsAccountVerificationError::GroupEnumeration {
+            account: account_name.to_string(),
+            code: ERROR_INVALID_DATA,
+        });
+    }
     let entries = unsafe {
-        std::slice::from_raw_parts(
-            buffer.0.cast::<LOCALGROUP_USERS_INFO_0>(),
-            entries_read as usize,
-        )
+        std::slice::from_raw_parts(buffer.0.cast::<LOCALGROUP_USERS_INFO_0>(), entry_count)
     };
     let mut sids = Vec::with_capacity(entries.len());
     for entry in entries {

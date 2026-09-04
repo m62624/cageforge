@@ -17,18 +17,32 @@ pub(crate) fn net_api_wide_string(
         return Ok(None);
     }
 
+    Ok(wide_string_within_allocation(
+        buffer,
+        net_api_buffer_size(buffer)?,
+        value,
+    ))
+}
+
+/// Return the byte length reported for a NetAPI allocation.
+#[allow(unsafe_code)]
+pub(crate) fn net_api_buffer_size(buffer: *const u8) -> Result<usize, u32> {
     let mut allocation_bytes = 0u32;
     let status =
         unsafe { NetApiBufferSize(buffer.cast(), std::ptr::addr_of_mut!(allocation_bytes)) };
     if status != 0 {
         return Err(status);
     }
+    Ok(allocation_bytes as usize)
+}
 
-    Ok(wide_string_within_allocation(
-        buffer,
-        allocation_bytes as usize,
-        value,
-    ))
+/// Validate an array count against the byte length of its NetAPI allocation.
+pub(crate) fn net_api_array_len<T>(allocation_bytes: usize, count: u32) -> Option<usize> {
+    let count = usize::try_from(count).ok()?;
+    count
+        .checked_mul(std::mem::size_of::<T>())
+        .filter(|length| *length <= allocation_bytes)
+        .map(|_| count)
 }
 
 #[allow(unsafe_code)]
@@ -58,7 +72,7 @@ fn wide_string_within_allocation(
 
 #[cfg(test)]
 mod tests {
-    use super::wide_string_within_allocation;
+    use super::{net_api_array_len, wide_string_within_allocation};
 
     #[test]
     fn wide_string_is_bounded_by_the_netapi_allocation() {
@@ -109,5 +123,12 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn array_count_must_fit_the_netapi_allocation() {
+        assert_eq!(net_api_array_len::<u32>(8, 2), Some(2));
+        assert_eq!(net_api_array_len::<u32>(7, 2), None);
+        assert_eq!(net_api_array_len::<[u8; 8]>(7, 1), None);
     }
 }
