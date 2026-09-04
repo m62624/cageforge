@@ -69,18 +69,21 @@ impl LinuxChild {
     /// Checks whether the child has exited.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, LinuxBackendError> {
         if let Err(error) = self.check_protected_create_health() {
-            self.terminate_after_boundary_failure();
-            let _ = self.cleanup_boundaries();
+            if self.terminate_after_boundary_failure() {
+                let _ = self.cleanup_boundaries();
+            }
             return Err(error);
         }
         if let Err(error) = self.check_gateway_health() {
-            self.terminate_after_boundary_failure();
-            let _ = self.cleanup_boundaries();
+            if self.terminate_after_boundary_failure() {
+                let _ = self.cleanup_boundaries();
+            }
             return Err(error);
         }
         if let Err(error) = self.check_timeout_health() {
-            self.terminate_after_boundary_failure();
-            let _ = self.cleanup_boundaries();
+            if self.terminate_after_boundary_failure() {
+                let _ = self.cleanup_boundaries();
+            }
             return Err(error);
         }
         let status = self
@@ -227,18 +230,31 @@ impl LinuxChild {
         timeout.and(protected).and(gateway).and(synthetic)
     }
 
-    fn terminate_after_boundary_failure(&mut self) {
+    fn terminate_after_boundary_failure(&mut self) -> bool {
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.child.wait().is_ok()
     }
 }
 
 impl Drop for LinuxChild {
     fn drop(&mut self) {
-        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+        let boundary_terminated = if matches!(self.child.try_wait(), Ok(Some(_))) {
+            true
+        } else {
             let _ = self.child.kill();
-            let _ = self.child.wait();
+            self.child.wait().is_ok()
+        };
+        if boundary_terminated {
+            let _ = self.cleanup_boundaries();
+        } else {
+            // Dropping these resources would disable monitoring, remove the
+            // gateway, or unmount synthetic targets while the boundary may
+            // still be alive. Leak them deliberately until the process can
+            // be recovered; this is fail-closed and preserves enforcement.
+            std::mem::forget(self.timeout_watchdog.take());
+            std::mem::forget(self.gateway_runtime.take());
+            std::mem::forget(self.protected_create_monitor.take());
+            std::mem::forget(std::mem::take(&mut self.synthetic_targets));
         }
-        let _ = self.cleanup_boundaries();
     }
 }
