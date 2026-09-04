@@ -887,14 +887,14 @@ fn parent_death_child_harness() {
     if std::env::var_os(PARENT_DEATH_MODE).is_none() {
         return;
     }
-    let state_directory =
+    let state_base_directory =
         PathBuf::from(std::env::var_os(PARENT_DEATH_STATE).expect("parent-death state directory"));
     let child_marker =
         PathBuf::from(std::env::var_os(PARENT_DEATH_CHILD).expect("parent-death child marker"));
     let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
     let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
     let setup_config = WindowsSetupConfig::new()
-        .with_state_directory(&state_directory)
+        .with_state_directory(&state_base_directory)
         .expect("parent-death state directory")
         .with_setup_helper_path(helper)
         .expect("parent-death setup helper")
@@ -907,10 +907,7 @@ fn parent_death_child_harness() {
             .expect("parent-death timeout"),
     )
     .expect("parent-death backend");
-    let workspace = state_directory
-        .parent()
-        .expect("parent-death workspace parent")
-        .join("parent-death-workspace");
+    let workspace = state_base_directory.join("parent-death-workspace");
     fs::create_dir_all(&workspace).expect("parent-death workspace");
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"));
     let environment = EnvironmentSpec::inherit_core()
@@ -930,12 +927,12 @@ fn parent_death_child_harness() {
     std::process::exit(0);
 }
 
-fn run_parent_process_death_probe(state_directory: &Path, temporary_root: &Path) {
+fn run_parent_process_death_probe(state_base_directory: &Path, temporary_root: &Path) {
     let child_marker = temporary_root.join("parent-death-child.pid");
     let mut parent = Command::new(std::env::current_exe().expect("integration test executable"))
         .args(["--exact", "parent_death_child_harness", "--nocapture"])
         .env(PARENT_DEATH_MODE, "1")
-        .env(PARENT_DEATH_STATE, state_directory)
+        .env(PARENT_DEATH_STATE, state_base_directory)
         .env(PARENT_DEATH_CHILD, &child_marker)
         .spawn()
         .expect("spawn parent-death harness");
@@ -1729,7 +1726,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     });
     drop(drop_backend);
 
-    run_parent_process_death_probe(first.state_directory(), temporary.path());
+    run_parent_process_death_probe(temporary.path(), temporary.path());
 
     setup.uninstall().unwrap_or_else(|error| {
         panic!(
