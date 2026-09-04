@@ -1442,6 +1442,13 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     drop(second_parallel_child);
     drop(parallel_backend);
 
+    for port in first.proxy_ports() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, *port)).unwrap_or_else(|error| {
+            panic!("last routed child did not release Windows ingress port {port}: {error}")
+        });
+        drop(listener);
+    }
+
     let workspace_acl_before_descendant = acl_diagnostic(workspace.path());
     let workspace_raw_dacl_before_descendant = raw_dacl_fingerprint(workspace.path());
     let workspace_raw_acl_before_descendant = raw_acl_diagnostic(workspace.path());

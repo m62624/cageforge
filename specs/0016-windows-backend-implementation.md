@@ -740,6 +740,13 @@ protocol byte under the route's handshake deadline. A client therefore cannot
 escape the pre-gateway connection bound by obtaining a route and then stalling
 before the portable gateway acquires its own per-route connection permit.
 
+The process-wide ingress is shared only while at least one routed child retains
+its route. When the last route is released, the owning ingress sends an explicit
+shutdown signal, joins its runtime thread, aborts any unfinished admission
+tasks, and releases both fixed listener sockets before another setup may reuse
+those ports. The registry retains only a weak reference, so a dropped backend
+cannot keep a stale ingress runtime alive across uninstall or reinstall.
+
 The Cageforge ingress strengthens the frozen implementation by requiring
 `SO_EXCLUSIVEADDRUSE` before binding each fixed setup port, bounding owner-table
 resize retries and token buffers, binding the attributed process creation time

@@ -9,7 +9,7 @@ use std::io;
 use std::mem::size_of;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener};
 use std::os::windows::io::{FromRawSocket, RawSocket};
-use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use cageforge_policy_compose::EffectiveNetworkPolicy;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use windows_sys::Win32::Networking::WinSock::{
@@ -42,6 +42,7 @@ pub(crate) struct WindowsProxyIngress {
     identity: IngressIdentity,
     routes: RouteRegistry,
     thread: Mutex<Option<JoinHandle<Result<(), WindowsNetworkRuntimeFailure>>>>,
+    shutdown: Mutex<Option<oneshot::Sender<()>>>,
     _winsock: WinsockSession,
 }
 
@@ -316,7 +317,7 @@ enum WindowsNetworkIngressError {
     AttributionWorker,
 }
 
-static SHARED_INGRESSES: LazyLock<Mutex<HashMap<IngressIdentity, Arc<WindowsProxyIngress>>>> =
+static SHARED_INGRESSES: LazyLock<Mutex<HashMap<IngressIdentity, Weak<WindowsProxyIngress>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl WindowsProxyIngress {
@@ -332,12 +333,13 @@ impl WindowsProxyIngress {
         let mut shared = SHARED_INGRESSES
             .lock()
             .map_err(|_| WindowsNetworkGatewayError::SharedRegistryPoisoned)?;
-        if let Some(ingress) = shared.get(&identity) {
+        if let Some(ingress) = shared.get(&identity).and_then(Weak::upgrade) {
             ingress
                 .check_health()
                 .map_err(|source| WindowsNetworkGatewayError::ExistingRuntime { source })?;
-            return Ok(Arc::clone(ingress));
+            return Ok(Arc::clone(&ingress));
         }
+        shared.remove(&identity);
         if let Some(port) = shared
             .keys()
             .flat_map(|key| [key.addresses.http.port(), key.addresses.socks.port()])
@@ -346,7 +348,7 @@ impl WindowsProxyIngress {
             return Err(WindowsNetworkGatewayError::PortOwnedByDifferentSetup { port });
         }
         let ingress = Arc::new(Self::start(identity)?);
-        shared.insert(ingress.identity.clone(), Arc::clone(&ingress));
+        shared.insert(ingress.identity.clone(), Arc::downgrade(&ingress));
         Ok(ingress)
     }
 
@@ -419,11 +421,12 @@ impl WindowsProxyIngress {
         let socks = exclusive_listener(ProxyProtocol::Socks5, identity.addresses.socks)?;
         let routes = Arc::new(Mutex::new(HashMap::new()));
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
         let thread = std::thread::Builder::new()
             .name("cageforge-windows-proxy-ingress".to_string())
             .spawn({
                 let routes = Arc::clone(&routes);
-                move || run_ingress(http, socks, routes, ready_sender)
+                move || run_ingress(http, socks, routes, ready_sender, shutdown_receiver)
             })
             .map_err(|source| WindowsNetworkGatewayError::ThreadSpawn { source })?;
         match ready_receiver.recv() {
@@ -431,6 +434,7 @@ impl WindowsProxyIngress {
                 identity,
                 routes,
                 thread: Mutex::new(Some(thread)),
+                shutdown: Mutex::new(Some(shutdown_sender)),
                 _winsock: winsock,
             }),
             Ok(Err(source)) => {
@@ -442,6 +446,33 @@ impl WindowsProxyIngress {
                 Ok(Ok(())) => Err(WindowsNetworkGatewayError::StartupChannelClosed),
                 Err(_) => Err(WindowsNetworkGatewayError::StartupThreadPanicked),
             },
+        }
+    }
+}
+
+impl Drop for WindowsProxyIngress {
+    fn drop(&mut self) {
+        // Serialize final socket release with a new shared-ingress lookup. A
+        // weak registry entry alone would allow a replacement to race the
+        // old runtime while it is still closing its listeners.
+        let registry = SHARED_INGRESSES.lock().ok();
+        if let Some(mut registry) = registry {
+            registry.remove(&self.identity);
+        }
+        let shutdown_sender = self
+            .shutdown
+            .lock()
+            .ok()
+            .and_then(|mut sender| sender.take());
+        let should_join = shutdown_sender.is_some();
+        if let Some(sender) = shutdown_sender {
+            let _ = sender.send(());
+        }
+        if should_join
+            && let Ok(mut thread) = self.thread.lock()
+            && let Some(thread) = thread.take()
+        {
+            let _ = thread.join();
         }
     }
 }
@@ -636,6 +667,7 @@ fn run_ingress(
     socks: StdTcpListener,
     routes: RouteRegistry,
     ready: mpsc::SyncSender<Result<(), WindowsNetworkRuntimeFailure>>,
+    shutdown: oneshot::Receiver<()>,
 ) -> Result<(), WindowsNetworkRuntimeFailure> {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -673,7 +705,7 @@ fn run_ingress(
         ready
             .send(Ok(()))
             .map_err(|_| WindowsNetworkRuntimeFailure::StartupReceiverClosed)?;
-        serve_ingress(http, socks, routes).await
+        serve_ingress(http, socks, routes, shutdown).await
     })
 }
 
@@ -681,11 +713,13 @@ async fn serve_ingress(
     http: TcpListener,
     socks: TcpListener,
     routes: RouteRegistry,
+    mut shutdown: oneshot::Receiver<()>,
 ) -> Result<(), WindowsNetworkRuntimeFailure> {
     let pre_attribution = Arc::new(Semaphore::new(MAX_PRE_ATTRIBUTION_CONNECTIONS));
     let mut connections = JoinSet::new();
     loop {
         tokio::select! {
+            _ = &mut shutdown => return Ok(()),
             accepted = http.accept() => {
                 let (stream, _) = accepted.map_err(|source| WindowsNetworkRuntimeFailure::Listener {
                     protocol: ProxyProtocol::Http.label(),

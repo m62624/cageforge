@@ -216,6 +216,10 @@ Codex parity requires per-process route ownership, not only a firewall port.
 8. Cover disabled, unrestricted direct, HTTP proxy, SOCKS proxy, denied target,
    DNS/address substitution, route-SID mismatch, PID reuse, direct gateway,
    direct loopback, concurrent profiles, timeout, and cleanup behavior.
+9. Keep the process-wide ingress weakly registered and lifecycle-bound to its
+   routes. The last route must signal and join the ingress runtime before its
+   listener ports can be reused; a dropped backend must not leave a stale
+   listener or runtime thread across uninstall/reinstall.
 
 Do not weaken the model to a shared proxy credential or firewall-only routing
 because that is easier to implement.
