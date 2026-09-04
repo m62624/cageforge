@@ -889,7 +889,7 @@ mod tests {
     #[test]
     fn malformed_wfp_user_ace_sid_is_rejected_before_native_validation() {
         let mut ace = [0u8; 20];
-        ace[1] = 3;
+        ace[9] = 3;
         assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
     }
 
