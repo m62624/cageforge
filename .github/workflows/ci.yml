@@ -320,6 +320,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Run native macOS backend when available
         shell: bash
@@ -424,6 +425,15 @@ jobs:
           if ($failed) {
             exit 1
           }
+      - name: Check Windows ARM64 target surfaces
+        run: |
+          set -euo pipefail
+          cargo check -p cageforge-windows --target aarch64-pc-windows-msvc --lib --all-targets --no-default-features
+          cargo check -p cageforge-windows --target aarch64-pc-windows-msvc --lib --all-targets --all-features
+      - name: Check Windows backend documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p cageforge-windows --no-deps
       - name: Upload Windows native test report
         if: always()
         uses: actions/upload-artifact@v4
