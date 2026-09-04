@@ -149,7 +149,12 @@ fn signal_unrelated_handle() -> Result<(), String> {
     if raw_handle == 0 {
         return Err("unrelated parent handle was null".to_string());
     }
-    let _ = unsafe { SetEvent(raw_handle as *mut _) };
+    if unsafe { SetEvent(raw_handle as *mut _) } == 0 {
+        return Err(format!(
+            "signal unrelated parent handle: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
     Ok(())
 }
 

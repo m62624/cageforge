@@ -6,7 +6,8 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
 use thiserror::Error;
 use windows_sys::Win32::Foundation::{
-    GetHandleInformation, GetLastError, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    SetHandleInformation,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
@@ -40,8 +41,8 @@ struct PreparedStandardHandles {
 
 struct ProcessAttributeList {
     storage: Vec<usize>,
-    handle_list: Vec<*mut c_void>,
-    job_list: Vec<*mut c_void>,
+    handle_list: Vec<HANDLE>,
+    job_list: Vec<HANDLE>,
     initialized: bool,
 }
 
@@ -76,6 +77,10 @@ pub(super) enum ProcessStartError {
     StandardHandleNotInheritable { stream: &'static str },
     #[error("parent-supplied {stream} has unexpected handle flags {flags:#x}")]
     UnexpectedStandardHandleFlags { stream: &'static str, flags: u32 },
+    #[error(
+        "failed to mark parent-supplied {stream} inheritable for the explicit child list: Windows error {code}"
+    )]
+    StandardHandleInherit { stream: &'static str, code: u32 },
     #[error("failed to size the process attribute list: Windows error {code}")]
     AttributeListSize { code: u32 },
     #[error("failed to initialize the process attribute list: Windows error {code}")]
@@ -124,6 +129,7 @@ impl SpawnedProcess {
             let standard = PreparedStandardHandles::new(request.standard_handles, job_value)?;
             let job = unsafe { OwnedHandle::from_raw_handle(job_handle as RawHandle) };
             let child_handles = standard.raw_handles();
+            standard.mark_inheritable()?;
             let mut attributes = ProcessAttributeList::new(2)?;
             attributes.apply_job(job.as_raw_handle())?;
             attributes.apply_handles(child_handles)?;
@@ -260,6 +266,26 @@ impl PreparedStandardHandles {
             self.stderr.as_raw_handle(),
         ]
     }
+
+    #[allow(unsafe_code)]
+    fn mark_inheritable(&self) -> Result<(), ProcessStartError> {
+        for (stream, handle) in [
+            ("stdin", self.stdin.as_raw_handle()),
+            ("stdout", self.stdout.as_raw_handle()),
+            ("stderr", self.stderr.as_raw_handle()),
+        ] {
+            if unsafe {
+                SetHandleInformation(handle as _, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+            } == 0
+            {
+                return Err(ProcessStartError::StandardHandleInherit {
+                    stream,
+                    code: unsafe { GetLastError() },
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 impl ProcessAttributeList {
@@ -384,7 +410,8 @@ impl ProcessStartError {
             | Self::StandardHandleMatchesJob { .. }
             | Self::StandardHandleInspect { .. }
             | Self::StandardHandleNotInheritable { .. }
-            | Self::UnexpectedStandardHandleFlags { .. } => WindowsRunnerFailureStage::Request,
+            | Self::UnexpectedStandardHandleFlags { .. }
+            | Self::StandardHandleInherit { .. } => WindowsRunnerFailureStage::Request,
             Self::PrivateDesktop(_) => WindowsRunnerFailureStage::Process,
             Self::AttributeListSize { .. }
             | Self::AttributeListInitialize { .. }
@@ -411,9 +438,8 @@ impl ProcessStartError {
             | Self::StandardHandleMatchesJob { .. }
             | Self::StandardHandleInspect { .. }
             | Self::StandardHandleNotInheritable { .. }
-            | Self::UnexpectedStandardHandleFlags { .. } => {
-                WindowsRunnerFailureCode::StandardStreamPrepare
-            }
+            | Self::UnexpectedStandardHandleFlags { .. }
+            | Self::StandardHandleInherit { .. } => WindowsRunnerFailureCode::StandardStreamPrepare,
             Self::AttributeListSize { .. } | Self::AttributeListInitialize { .. } => {
                 WindowsRunnerFailureCode::AttributeListCreate
             }
@@ -432,6 +458,7 @@ impl ProcessStartError {
     pub(super) const fn native_code(&self) -> Option<u32> {
         match self {
             Self::StandardHandleInspect { code, .. }
+            | Self::StandardHandleInherit { code, .. }
             | Self::AttributeListSize { code }
             | Self::AttributeListInitialize { code }
             | Self::HandleListApply { code }
