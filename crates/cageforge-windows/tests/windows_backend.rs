@@ -1027,10 +1027,11 @@ fn elevated_setup_rejects_a_reparse_state_root_before_touching_its_target() {
 #[test]
 fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let temporary = tempfile::tempdir().expect("temporary directory");
+    let state_base_directory = temporary.path().join("state");
     let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
     let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
     let config = WindowsSetupConfig::new()
-        .with_state_directory(temporary.path().join("state"))
+        .with_state_directory(&state_base_directory)
         .expect("absolute state directory")
         .with_setup_helper_path(helper)
         .expect("absolute setup helper")
@@ -1726,7 +1727,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     });
     drop(drop_backend);
 
-    run_parent_process_death_probe(temporary.path(), temporary.path());
+    run_parent_process_death_probe(&state_base_directory, temporary.path());
 
     setup.uninstall().unwrap_or_else(|error| {
         panic!(
