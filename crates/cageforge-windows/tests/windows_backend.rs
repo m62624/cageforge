@@ -223,6 +223,19 @@ fn run_access_probe(
     mode: &str,
     environment: EnvironmentSpec,
 ) {
+    let mut child = start_access_probe(backend, workspace, fixture, mode, environment);
+    if let Err(error) = probe_result(&mut child, mode) {
+        panic!("{error}");
+    }
+}
+
+fn start_access_probe(
+    backend: &WindowsBackend,
+    workspace: &Path,
+    fixture: &Path,
+    mode: &str,
+    environment: EnvironmentSpec,
+) -> WindowsChild {
     let (command, effective, context) = restricted_request_with_environment(
         workspace,
         access_fixture_command(fixture),
@@ -231,12 +244,9 @@ fn run_access_probe(
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
         .unwrap_or_else(|error| panic!("prepare {mode} probe: {error}"));
-    let mut child = backend
+    backend
         .spawn(prepared)
-        .unwrap_or_else(|error| panic!("spawn {mode} probe: {error}"));
-    if let Err(error) = probe_result(&mut child, mode) {
-        panic!("{error}");
-    }
+        .unwrap_or_else(|error| panic!("spawn {mode} probe: {error}"))
 }
 
 #[allow(unsafe_code)]
@@ -1164,7 +1174,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
 
     let parent_event = unrelated_inheritable_event();
     assert_unrelated_event_is_unsignaled(&parent_event, "before the sandbox launch");
-    run_access_probe(
+    let mut parent_event_child = start_access_probe(
         &backend,
         workspace.path(),
         &access_fixture,
@@ -1178,7 +1188,13 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
             )
             .expect("unrelated parent Event fixture handle"),
     );
-    assert_unrelated_event_is_unsignaled(&parent_event, "during the sandbox launch");
+    assert_unrelated_event_is_unsignaled(&parent_event, "immediately after child spawn");
+    if let Err(error) = probe_result(&mut parent_event_child, "unrelated-handle") {
+        panic!("{error}");
+    }
+    assert_unrelated_event_is_unsignaled(&parent_event, "after child completion");
+    drop(parent_event_child);
+    assert_unrelated_event_is_unsignaled(&parent_event, "after child cleanup");
 
     let named_event_seed = workspace
         .path()
