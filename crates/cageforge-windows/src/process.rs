@@ -82,9 +82,17 @@ impl WindowsChild {
             }
             Ok(None) => Ok(None),
             Err(error) => {
-                let _ = self.session.kill();
-                // Do not release the active-child lease on an unconfirmed
-                // termination. An error path must remain uninstall-blocking.
+                if self.session.finished() {
+                    // A timeout is reported as an error to preserve the
+                    // command result, but a successful watchdog termination
+                    // already proved that the complete boundary is gone.
+                    self.release_completed_boundaries();
+                } else {
+                    let _ = self.session.kill();
+                    // Do not release the active-child lease on an
+                    // unconfirmed termination. An error path must remain
+                    // uninstall-blocking.
+                }
                 Err(WindowsBackendError::runner_session(error))
             }
         }
@@ -105,7 +113,14 @@ impl WindowsChild {
                 self.release_completed_boundaries();
                 Ok(status)
             }
-            Err(error) => Err(WindowsBackendError::runner_session(error)),
+            Err(error) => {
+                if self.session.finished() {
+                    // Preserve the typed timeout error while releasing the
+                    // resources whose boundary termination was confirmed.
+                    self.release_completed_boundaries();
+                }
+                Err(WindowsBackendError::runner_session(error))
+            }
         };
         // On error the session may still own a live runner or Job Object.
         // Keeping the lease is fail-closed; the caller can retry/Drop the

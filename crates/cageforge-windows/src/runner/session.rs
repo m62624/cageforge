@@ -255,6 +255,10 @@ impl RunnerSession {
         self.process_id
     }
 
+    pub(crate) const fn finished(&self) -> bool {
+        self.finished
+    }
+
     pub(crate) fn stdin(&mut self) -> Option<&mut File> {
         self.stdin.as_mut()
     }
@@ -310,7 +314,13 @@ impl RunnerSession {
 
     fn finish(&mut self, terminal: RunnerTerminal) -> Result<ExitStatus, RunnerSessionError> {
         let result = self.finish_inner(terminal);
-        if result.is_err() {
+        if matches!(&result, Err(RunnerSessionError::TimedOut)) {
+            // The watchdog reports this error only after the complete Job
+            // Object termination has succeeded. The command result is an
+            // error, but the process boundary is already a confirmed
+            // terminal state.
+            self.finished = true;
+        } else if result.is_err() {
             // An error does not prove that the complete process boundary was
             // terminated. Keep Drop responsible for another bounded
             // termination attempt instead of making a failed lifecycle
