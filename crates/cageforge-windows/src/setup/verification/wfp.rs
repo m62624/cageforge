@@ -6,16 +6,17 @@ use std::mem::zeroed;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{HANDLE, HLOCAL, LocalFree};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWP_ACTION_BLOCK, FWP_ACTRL_MATCH_FILTER, FWP_MATCH_EQUAL, FWP_SECURITY_DESCRIPTOR_TYPE,
-    FWP_UINT8, FWP_UINT16, FWPM_CONDITION_ALE_USER_ID, FWPM_CONDITION_IP_PROTOCOL,
-    FWPM_CONDITION_IP_REMOTE_PORT, FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_PERSISTENT,
-    FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTRL_MATCH_FILTER, FWP_MATCH_EQUAL,
+    FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT8, FWP_UINT16, FWP_UINT32, FWPM_CONDITION_ALE_USER_ID,
+    FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT,
+    FWPM_FILTER_CONDITION0, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
     FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_SESSION0, FWPM_SUBLAYER_FLAG_PERSISTENT, FwpmEngineClose0,
     FwpmEngineOpen0, FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmProviderGetByKey0,
     FwpmSubLayerGetByKey0,
 };
-use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6};
+use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_TCP};
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, EqualSid, GetAce, GetSecurityDescriptorDacl, IsValidSecurityDescriptor,
@@ -31,17 +32,21 @@ use crate::setup::WindowsSetupDetails;
 
 const PROVIDER_KEY: GUID = GUID::from_u128(0x6d27a6ef_979d_42bf_97e7_6c7a61c86281);
 const SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8213_6db9db995224);
+const IPV4_LOOPBACK_HOST_ORDER: u32 = u32::from_be_bytes([127, 0, 0, 1]);
 
 struct FilterExpectation {
     key: GUID,
     name: String,
     layer_key: GUID,
+    action: u32,
+    weight: u8,
     conditions: Vec<ConditionExpectation>,
 }
 
 enum ConditionExpectation {
     User,
     Protocol(u8),
+    RemoteAddressV4(u32),
     RemotePort(u16),
 }
 
@@ -129,7 +134,7 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     let engine = Engine::open()?;
     verify_provider(&engine)?;
     verify_sublayer(&engine)?;
-    for filter in filter_expectations(details.owner_sid()) {
+    for filter in filter_expectations(details.owner_sid(), details.proxy_ports()) {
         verify_filter(&engine, &filter, details.accounts().offline_sid())?;
     }
     Ok(())
@@ -201,7 +206,9 @@ fn verify_filter(
         && guid_eq(filter.subLayerKey, SUBLAYER_KEY)
         && !filter.providerKey.is_null()
         && guid_eq(unsafe { *filter.providerKey }, PROVIDER_KEY)
-        && filter.action.r#type == FWP_ACTION_BLOCK
+        && filter.action.r#type == expected.action
+        && filter.weight.r#type == FWP_UINT8
+        && unsafe { filter.weight.Anonymous.uint8 } == expected.weight
         && filter.numFilterConditions == expected.conditions.len() as u32
         && !filter.filterCondition.is_null();
     if !header_matches {
@@ -242,6 +249,11 @@ fn condition_matches(
             guid_eq(actual.fieldKey, FWPM_CONDITION_IP_PROTOCOL)
                 && actual.conditionValue.r#type == FWP_UINT8
                 && unsafe { actual.conditionValue.Anonymous.uint8 } == *protocol
+        }
+        ConditionExpectation::RemoteAddressV4(address) => {
+            guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_ADDRESS)
+                && actual.conditionValue.r#type == FWP_UINT32
+                && unsafe { actual.conditionValue.Anonymous.uint32 } == *address
         }
         ConditionExpectation::RemotePort(port) => {
             guid_eq(actual.fieldKey, FWPM_CONDITION_IP_REMOTE_PORT)
@@ -303,7 +315,7 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
     unsafe { IsValidSid(actual_sid) != 0 && EqualSid(actual_sid, expected_sid.0) != 0 }
 }
 
-fn filter_expectations(owner_sid: &str) -> Vec<FilterExpectation> {
+fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpectation> {
     let specs: [(&str, GUID, Vec<ConditionExpectation>); 12] = [
         (
             "icmp-connect-v4",
@@ -402,15 +414,48 @@ fn filter_expectations(owner_sid: &str) -> Vec<FilterExpectation> {
             ],
         ),
     ];
-    specs
+    let mut filters = specs
         .into_iter()
         .map(|(label, layer_key, conditions)| FilterExpectation {
             key: derived_guid(owner_sid, label),
             name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
             layer_key,
+            action: FWP_ACTION_BLOCK,
+            weight: 1,
             conditions,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for port in proxy_ports {
+        let label = format!("proxy-v4-{port}");
+        filters.push(FilterExpectation {
+            key: derived_guid(owner_sid, &label),
+            name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
+            layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            action: FWP_ACTION_PERMIT,
+            weight: 2,
+            conditions: vec![
+                ConditionExpectation::User,
+                ConditionExpectation::Protocol(IPPROTO_TCP as u8),
+                ConditionExpectation::RemoteAddressV4(IPV4_LOOPBACK_HOST_ORDER),
+                ConditionExpectation::RemotePort(*port),
+            ],
+        });
+    }
+    for (family, layer_key) in [
+        ("v4", FWPM_LAYER_ALE_AUTH_CONNECT_V4),
+        ("v6", FWPM_LAYER_ALE_AUTH_CONNECT_V6),
+    ] {
+        let label = format!("default-deny-{family}");
+        filters.push(FilterExpectation {
+            key: derived_guid(owner_sid, &label),
+            name: format!("cageforge_{label}_{}", owner_key(owner_sid)),
+            layer_key,
+            action: FWP_ACTION_BLOCK,
+            weight: 1,
+            conditions: vec![ConditionExpectation::User],
+        });
+    }
+    filters
 }
 
 fn derived_guid(owner_sid: &str, label: &str) -> GUID {
@@ -456,4 +501,69 @@ fn guid_string(value: GUID) -> String {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
+        FWP_ACTION_BLOCK, FWP_ACTION_PERMIT,
+    };
+    use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
+
+    use super::{ConditionExpectation, IPV4_LOOPBACK_HOST_ORDER, filter_expectations};
+
+    #[test]
+    fn expectations_cover_the_complete_offline_wfp_boundary() {
+        let specs = filter_expectations("S-1-5-21-1-2-3-1001", &[40_000, 40_002]);
+
+        assert_eq!(specs.len(), 16);
+        assert_eq!(
+            specs
+                .iter()
+                .filter(|spec| spec.action == FWP_ACTION_BLOCK)
+                .count(),
+            14
+        );
+        assert_eq!(
+            specs
+                .iter()
+                .filter(|spec| spec.action == FWP_ACTION_PERMIT)
+                .count(),
+            2
+        );
+        assert!(
+            specs
+                .iter()
+                .filter(|spec| spec.action == FWP_ACTION_BLOCK)
+                .all(|spec| spec.weight == 1)
+        );
+        assert!(
+            specs
+                .iter()
+                .filter(|spec| spec.action == FWP_ACTION_PERMIT)
+                .all(|spec| {
+                    spec.weight == 2
+                        && matches!(
+                            spec.conditions.as_slice(),
+                            [
+                                ConditionExpectation::User,
+                                ConditionExpectation::Protocol(protocol),
+                                ConditionExpectation::RemoteAddressV4(address),
+                                ConditionExpectation::RemotePort(_),
+                            ] if *protocol == IPPROTO_TCP as u8
+                                && *address == IPV4_LOOPBACK_HOST_ORDER
+                        )
+                })
+        );
+        assert!(
+            specs
+                .iter()
+                .any(|spec| spec.name.contains("default-deny-v4"))
+        );
+        assert!(
+            specs
+                .iter()
+                .any(|spec| spec.name.contains("default-deny-v6"))
+        );
+    }
 }
