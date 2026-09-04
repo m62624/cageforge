@@ -1222,7 +1222,7 @@ mod tests {
 
     #[test]
     fn concurrent_shared_calls_coalesce_one_ingress() {
-        let winsock = initialize_winsock().expect("Winsock for concurrent ingress test");
+        let _winsock = initialize_winsock().expect("Winsock for concurrent ingress test");
         let http = exclusive_listener(
             ProxyProtocol::Http,
             std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
@@ -1243,7 +1243,6 @@ mod tests {
             .port();
         drop(http);
         drop(socks);
-        drop(winsock);
 
         let ports = [http_port, socks_port];
         let owner = format!("concurrent-ingress-test-{http_port}-{socks_port}");
