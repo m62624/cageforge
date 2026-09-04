@@ -135,11 +135,11 @@ impl WindowsChild {
             .kill()
             .map_err(WindowsBackendError::runner_session);
         if result.is_ok() {
-            // A failed kill does not prove that the complete Job Object and
-            // runner boundary terminated. Keep the route alive until Drop
-            // can retry the boundary and release every enforcement resource
-            // together.
-            self.network_route.take();
+            // RunnerSession marks itself terminal only after the complete
+            // Job Object and runner boundary have terminated successfully.
+            // Release all enforcement resources at that point; an error path
+            // leaves them owned until Drop can retry the boundary.
+            self.release_completed_boundaries();
         }
         result
     }

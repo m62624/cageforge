@@ -1555,6 +1555,9 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     );
 
     child.kill().expect("terminate complete sandbox job");
+    setup
+        .install()
+        .expect("confirmed kill must release the active-child lease");
     let _ = child.wait().expect("reap terminated sandbox job");
 
     let timeout_backend = WindowsBackend::new(
