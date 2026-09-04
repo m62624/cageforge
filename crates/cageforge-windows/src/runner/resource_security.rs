@@ -23,6 +23,7 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
 };
+use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
 use crate::native_strings::local_sid_string;
@@ -333,6 +334,13 @@ fn sid_string(sid: *mut c_void) -> Option<String> {
 #[allow(unsafe_code)]
 fn wide_string_with_length(value: *const u16, length: u32) -> Option<String> {
     if value.is_null() || length == 0 {
+        return None;
+    }
+    let allocation_bytes = unsafe { LocalSize(value as HLOCAL) };
+    if allocation_bytes == 0
+        || !allocation_bytes.is_multiple_of(size_of::<u16>())
+        || usize::try_from(length).ok()? > allocation_bytes / size_of::<u16>()
+    {
         return None;
     }
     let units = unsafe { std::slice::from_raw_parts(value, length as usize) };

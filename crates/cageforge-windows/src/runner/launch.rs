@@ -24,6 +24,7 @@ use windows_sys::Win32::Security::{
     OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
     TOKEN_QUERY,
 };
+use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
     PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread, THREAD_ALL_ACCESS, TerminateProcess,
@@ -595,6 +596,13 @@ fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, RunnerL
 #[allow(unsafe_code)]
 fn wide_string(value: *const u16, length: u32) -> Option<String> {
     if value.is_null() || length == 0 {
+        return None;
+    }
+    let allocation_bytes = unsafe { LocalSize(value as HLOCAL) };
+    if allocation_bytes == 0
+        || !allocation_bytes.is_multiple_of(std::mem::size_of::<u16>())
+        || usize::try_from(length).ok()? > allocation_bytes / std::mem::size_of::<u16>()
+    {
         return None;
     }
     let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
