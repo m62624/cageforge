@@ -674,3 +674,18 @@ fn quote_argument(value: &str) -> String {
     quoted.push('"');
     quoted
 }
+
+#[cfg(test)]
+mod tests {
+    use super::sid_fits_buffer;
+
+    #[test]
+    fn bootstrap_sid_must_fit_the_token_groups_buffer() {
+        let mut buffer = vec![0u8; 16];
+        buffer[5] = 1;
+        let sid = buffer.as_mut_ptr().wrapping_add(4).cast();
+
+        assert!(sid_fits_buffer(&buffer, sid));
+        assert!(!sid_fits_buffer(&buffer[..15], sid));
+    }
+}

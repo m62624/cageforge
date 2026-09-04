@@ -590,7 +590,7 @@ mod tests {
 
     use super::{
         FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
-        PipeDirection, client_pipe_access, runner_resources_are_adjacent,
+        PipeDirection, client_pipe_access, runner_resources_are_adjacent, sid_fits_buffer,
     };
     use crate::runner_manifest::COMMAND_RUNNER_NAME;
 
@@ -626,5 +626,15 @@ mod tests {
             &runner,
             Path::new(r"\\?\C:\ProgramData\Cageforge\bin\other.json"),
         ));
+    }
+
+    #[test]
+    fn authenticated_token_sid_must_fit_the_returned_buffer() {
+        let mut buffer = vec![0u8; 16];
+        buffer[5] = 1;
+        let sid = buffer.as_mut_ptr().wrapping_add(4).cast();
+
+        assert!(sid_fits_buffer(&buffer, sid));
+        assert!(!sid_fits_buffer(&buffer[..15], sid));
     }
 }
