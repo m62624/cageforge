@@ -52,6 +52,11 @@ pub(crate) struct PendingRunnerSpawnRequest {
     pub(crate) account: RunnerAccount,
 }
 
+pub(crate) struct RunnerSessionStartError {
+    pub(crate) error: RunnerSessionError,
+    pub(crate) boundary: Arc<BoundaryTerminator>,
+}
+
 struct TimeoutWatchdog {
     cancel: mpsc::SyncSender<()>,
     join: Option<JoinHandle<()>>,
@@ -127,6 +132,17 @@ pub(crate) enum RunnerSessionError {
 
 impl RunnerSession {
     pub(crate) fn start(
+        launch: RunnerLaunch,
+        request: PendingRunnerSpawnRequest,
+        stdio_spec: StdioSpec,
+        timeout: Option<Duration>,
+    ) -> Result<Self, RunnerSessionStartError> {
+        let boundary = launch.boundary();
+        Self::start_inner(launch, request, stdio_spec, timeout)
+            .map_err(|error| RunnerSessionStartError { error, boundary })
+    }
+
+    fn start_inner(
         mut launch: RunnerLaunch,
         request: PendingRunnerSpawnRequest,
         stdio_spec: StdioSpec,
@@ -255,6 +271,10 @@ impl RunnerSession {
         self.process_id
     }
 
+    pub(crate) fn boundary(&self) -> Arc<BoundaryTerminator> {
+        self.launch.boundary()
+    }
+
     pub(crate) const fn finished(&self) -> bool {
         self.finished
     }
@@ -310,13 +330,6 @@ impl RunnerSession {
             self.explicit_exit_code = Some(1);
         }
         Ok(())
-    }
-
-    pub(crate) fn terminate_boundary(&self) -> Result<(), RunnerSessionError> {
-        self.launch
-            .boundary()
-            .terminate(125)
-            .map_err(RunnerSessionError::Boundary)
     }
 
     pub(crate) fn mark_termination_confirmed(&mut self) {

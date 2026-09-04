@@ -26,7 +26,7 @@ use crate::error::{
 use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::filesystem::plan::{FilesystemPlan, FilesystemPlanError};
 use crate::network::{ProxyAddresses, WindowsProxyIngress, WindowsProxyRoute};
-use crate::process::WindowsChild;
+use crate::process::{WindowsChild, recover_failed_session_start};
 use crate::runner::launch::RunnerLaunch;
 use crate::runner::protocol::RunnerAccount;
 use crate::runner::session::{PendingRunnerSpawnRequest, RunnerSession};
@@ -161,8 +161,19 @@ impl WindowsBackend {
             plan.account,
         )
         .map_err(WindowsBackendError::runner_launch)?;
-        let session = RunnerSession::start(launch, request, stdio, timeout)
-            .map_err(WindowsBackendError::runner_session)?;
+        let session = match RunnerSession::start(launch, request, stdio, timeout) {
+            Ok(session) => session,
+            Err(failure) => {
+                let error = failure.error;
+                recover_failed_session_start(
+                    failure.boundary,
+                    network_route,
+                    enforcement,
+                    active_lease,
+                );
+                return Err(WindowsBackendError::runner_session(error));
+            }
+        };
         Ok(WindowsChild::new(
             session,
             active_lease,

@@ -172,7 +172,11 @@ Keep `WindowsBackend`, the backend-bound prepared request handoff, and
   cannot confirm the boundary; the recovery owner retries and releases them
   only after the Job is empty and the runner has exited. If that owner cannot
   be created or is interrupted, the owners remain intentionally retained.
-  Never trade an unconfirmed error for an early cleanup race.
+  The same transfer applies to a failed `spawn` after the runner and native
+  enforcement have been created but before `WindowsChild` is returned: the
+  typed start error is returned, while the recovery owner retains the
+  boundary, route, ACL handles, and active-child lease until termination is
+  confirmed. Never trade an unconfirmed error for an early cleanup race.
 - Return typed library errors. Printing belongs only in binaries. Avoid
   `expect` and `unwrap` outside tests; a recoverable per-launch failure must not
   panic the host application.

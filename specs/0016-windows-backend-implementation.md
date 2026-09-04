@@ -510,6 +510,15 @@ rather than dropping enforcement while the boundary may still be live. Once
 termination is confirmed, the same ordered release is used for both success
 and failure completion.
 
+The same ownership rule applies before `WindowsChild` can be returned. If the
+runner has been created and filesystem/network enforcement is already active,
+but the authenticated readiness or spawn handshake fails, the start error
+transfers the boundary authority together with the route, ACL handles, and
+active-child lease to the per-instance recovery owner. The typed start error is
+returned immediately, while those owners are released only after the Job is
+empty and the runner has exited. A failed `spawn` therefore cannot expose an
+early setup-cleanup window merely because no public child value was produced.
+
 The trusted parent queries `JobObjectBasicAccountingInformation` after every
 normal, explicit-kill, timeout, failure, and drop termination path and does not
 release the active-child lease until `ActiveProcesses` is zero. A successful

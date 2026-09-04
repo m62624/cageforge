@@ -23,8 +23,8 @@ use cageforge_policy::{
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use cageforge_windows::{
     WindowsBackend, WindowsBackendConfig, WindowsBackendConfigError, WindowsBackendError,
-    WindowsChild, WindowsSetup, WindowsSetupConfig, WindowsSetupError, WindowsSetupStatus,
-    WindowsSetupVerificationError,
+    WindowsChild, WindowsRunnerFailureCode, WindowsRunnerFailureStage, WindowsSetup,
+    WindowsSetupConfig, WindowsSetupError, WindowsSetupStatus, WindowsSetupVerificationError,
 };
 use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
@@ -1138,6 +1138,32 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         &access_fixture,
     )
     .expect("copy denied-read fixture into the writable workspace");
+
+    let missing_command = workspace.path().join("cageforge-windows-missing.exe");
+    let (missing_command_request, missing_effective, missing_context) =
+        restricted_request_with_environment(
+            workspace.path(),
+            access_fixture_command(&missing_command),
+            EnvironmentSpec::inherit_core(),
+        );
+    let missing_prepared = backend
+        .prepare(
+            BackendRequest::new(&missing_command_request, &missing_effective),
+            &missing_context,
+        )
+        .expect("prepare missing-command failure probe");
+    let missing_error = match backend.spawn(missing_prepared) {
+        Ok(_) => panic!("missing command must fail through the runner protocol"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        missing_error,
+        WindowsBackendError::RunnerFailure {
+            stage: WindowsRunnerFailureStage::Process,
+            code: WindowsRunnerFailureCode::ProcessStart,
+            ..
+        }
+    ));
 
     let outside_secret = temporary.path().join("outside-secret.txt");
     let outside_secret_ads = PathBuf::from(format!("{}:cageforge", outside_secret.display()));

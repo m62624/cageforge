@@ -4,6 +4,7 @@
 
 use std::io::{Read, Write};
 use std::process::ExitStatus;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use crate::capability::store::CapabilityActiveLease;
 use crate::error::WindowsBackendError;
 use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::network::WindowsProxyRoute;
+use crate::runner::parent::BoundaryTerminator;
 use crate::runner::session::{RunnerSession, RunnerSessionError};
 
 const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
@@ -26,6 +28,7 @@ pub struct WindowsChild {
 
 struct WindowsBoundaryRecovery {
     session: Option<RunnerSession>,
+    boundary: Option<Arc<BoundaryTerminator>>,
     network_route: Option<WindowsProxyRoute>,
     filesystem_enforcement: Option<FilesystemAclEnforcement>,
     active_lease: Option<CapabilityActiveLease>,
@@ -196,13 +199,19 @@ impl WindowsChild {
 }
 
 impl WindowsBoundaryRecovery {
+    fn start_or_retain(mut self) {
+        if self.try_terminate() {
+            self.release_after_confirmed_boundary();
+            return;
+        }
+        let _ = thread::Builder::new()
+            .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
+            .spawn(move || self.recover_until_terminated());
+    }
+
     fn recover_until_terminated(mut self) {
         loop {
-            let terminated = self
-                .session
-                .as_ref()
-                .is_some_and(|session| session.terminate_boundary().is_ok());
-            if terminated {
+            if self.try_terminate() {
                 self.release_after_confirmed_boundary();
                 return;
             }
@@ -210,11 +219,18 @@ impl WindowsBoundaryRecovery {
         }
     }
 
+    fn try_terminate(&self) -> bool {
+        self.boundary
+            .as_ref()
+            .is_some_and(|boundary| boundary.terminate(125).is_ok())
+    }
+
     fn release_after_confirmed_boundary(&mut self) {
         if let Some(mut session) = self.session.take() {
             session.mark_termination_confirmed();
             drop(session);
         }
+        self.boundary.take();
         self.network_route.take();
         self.filesystem_enforcement.take();
         self.active_lease.take();
@@ -231,6 +247,7 @@ impl Drop for WindowsBoundaryRecovery {
         // do not release enforcement while the process boundary may still be
         // alive. Keep every owner until an external recovery action succeeds.
         std::mem::forget(self.session.take());
+        std::mem::forget(self.boundary.take());
         std::mem::forget(self.network_route.take());
         std::mem::forget(self.filesystem_enforcement.take());
         std::mem::forget(self.active_lease.take());
@@ -243,23 +260,30 @@ impl Drop for WindowsChild {
             return;
         };
         let recovery = WindowsBoundaryRecovery {
+            boundary: Some(session.boundary()),
             session: Some(session),
             network_route: self.network_route.take(),
             filesystem_enforcement: self.filesystem_enforcement.take(),
             active_lease: self.active_lease.take(),
             released: false,
         };
-        if recovery
-            .session
-            .as_ref()
-            .is_some_and(|session| session.terminate_boundary().is_ok())
-        {
-            let mut recovery = recovery;
-            recovery.release_after_confirmed_boundary();
-            return;
-        }
-        let _ = thread::Builder::new()
-            .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
-            .spawn(move || recovery.recover_until_terminated());
+        recovery.start_or_retain();
     }
+}
+
+pub(crate) fn recover_failed_session_start(
+    boundary: Arc<BoundaryTerminator>,
+    network_route: Option<WindowsProxyRoute>,
+    filesystem_enforcement: FilesystemAclEnforcement,
+    active_lease: CapabilityActiveLease,
+) {
+    WindowsBoundaryRecovery {
+        session: None,
+        boundary: Some(boundary),
+        network_route,
+        filesystem_enforcement: Some(filesystem_enforcement),
+        active_lease: Some(active_lease),
+        released: false,
+    }
+    .start_or_retain();
 }
