@@ -6,11 +6,25 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
+use windows_sys::Win32::Foundation::E_INVALIDARG;
 use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::System::SystemServices::UNICODE_STRING_MAX_CHARS;
 use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
 
 const STATE_PARENT: &str = "Cageforge";
 const STATE_COMPONENT: &str = "windows-sandbox";
+const MAX_KNOWN_FOLDER_PATH_UNITS: usize = UNICODE_STRING_MAX_CHARS as usize;
+
+struct CoTaskMemWideString(*mut u16);
+
+#[allow(unsafe_code)]
+impl Drop for CoTaskMemWideString {
+    fn drop(&mut self) {
+        unsafe {
+            CoTaskMemFree(self.0.cast());
+        }
+    }
+}
 
 pub(crate) fn default_state_directory(owner_sid: &str) -> Result<PathBuf, i32> {
     Ok(program_data_directory()?
@@ -33,17 +47,14 @@ pub(crate) fn program_data_directory() -> Result<PathBuf, i32> {
     if result < 0 || value.is_null() {
         return Err(result);
     }
+    let value = CoTaskMemWideString(value);
+    let length = (0..=MAX_KNOWN_FOLDER_PATH_UNITS)
+        .find(|&index| unsafe { *value.0.add(index) == 0 })
+        .ok_or(E_INVALIDARG)?;
     let path = unsafe {
-        let mut length = 0usize;
-        while *value.add(length) != 0 {
-            length += 1;
-        }
         PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(
-            value, length,
+            value.0, length,
         )))
     };
-    unsafe {
-        CoTaskMemFree(value.cast());
-    }
     Ok(path)
 }
