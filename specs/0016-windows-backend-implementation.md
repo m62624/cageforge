@@ -234,6 +234,17 @@ helper by that verified final path, and retains both handles until staging
 finishes. Replacing a helper or runner pathname after verification therefore
 cannot redirect elevation or persistent installation.
 
+The `Bundled` setup-resource source means resources supplied by the integrating
+application's release layout, not an implicit download or an unverified
+pathname. Resolution checks the executable directory for the named helper
+first, then `cageforge-resources/<name>`, and, when the executable is under a
+`bin` directory, the adjacent package-level `cageforge-resources/<name>`.
+`Sibling` selects only the direct executable-directory entry. A missing
+bundled resource is a typed setup error. Whichever layout is selected, the
+resolved file is passed through the same handle-pinned reparse, final-path,
+digest, and no-write/no-delete-sharing checks before elevation or runner
+staging.
+
 The helper records a non-secret native-operation checkpoint beside its
 structured response before entering each setup boundary. If Windows terminates
 the helper before it can encode a response, the caller reports both the native

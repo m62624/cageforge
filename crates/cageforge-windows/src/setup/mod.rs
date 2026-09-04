@@ -33,6 +33,8 @@ pub const WINDOWS_SETUP_VERSION: u32 = SETUP_STATE_VERSION;
 const MARKER_NAME: &str = "setup.json";
 const SETUP_HELPER_NAME: &str = "cageforge-windows-setup.exe";
 const COMMAND_RUNNER_NAME: &str = "cageforge-windows-command-runner.exe";
+const BIN_DIRNAME: &str = "bin";
+const RESOURCES_DIRNAME: &str = "cageforge-resources";
 
 /// Current state of elevated Windows provisioning.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,15 +497,16 @@ impl WindowsSetup {
         resolve_resource(
             self.config.setup_helper_source(),
             SETUP_HELPER_NAME,
-            "bundled Windows setup helper is not staged in this build",
+            "bundled Windows setup helper is not present in the application resource layout",
         )
     }
 
     fn resolve_command_runner(&self) -> Result<PathBuf, WindowsSetupError> {
         match self.config.command_runner_source() {
-            CommandRunnerSource::Bundled => Err(WindowsSetupError::HelperUnavailable {
-                detail: "bundled Windows command runner is not staged in this build".to_string(),
-            }),
+            CommandRunnerSource::Bundled => bundled_resource(
+                COMMAND_RUNNER_NAME,
+                "bundled Windows command runner is not present in the application resource layout",
+            ),
             CommandRunnerSource::Sibling => sibling_resource(COMMAND_RUNNER_NAME),
             CommandRunnerSource::Explicit(path) => Ok(path.clone()),
         }
@@ -602,12 +605,46 @@ fn resolve_resource(
     bundled_error: &str,
 ) -> Result<PathBuf, WindowsSetupError> {
     match source {
-        SetupHelperSource::Bundled => Err(WindowsSetupError::HelperUnavailable {
-            detail: bundled_error.to_string(),
-        }),
+        SetupHelperSource::Bundled => bundled_resource(sibling_name, bundled_error),
         SetupHelperSource::Sibling => sibling_resource(sibling_name),
         SetupHelperSource::Explicit(path) => Ok(path.clone()),
     }
+}
+
+fn bundled_resource(name: &str, missing_detail: &str) -> Result<PathBuf, WindowsSetupError> {
+    let executable =
+        std::env::current_exe().map_err(|error| WindowsSetupError::HelperUnavailable {
+            detail: format!("failed to resolve current executable: {error}"),
+        })?;
+    bundled_resource_path_for_exe(&executable, name).ok_or_else(|| {
+        WindowsSetupError::HelperUnavailable {
+            detail: format!(
+                "{missing_detail}; searched beside {executable:?} and in {RESOURCES_DIRNAME}"
+            ),
+        }
+    })
+}
+
+fn bundled_resource_path_for_exe(executable: &Path, name: &str) -> Option<PathBuf> {
+    let directory = executable.parent()?;
+    let direct = directory.join(name);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    if directory
+        .file_name()
+        .is_some_and(|file_name| file_name == BIN_DIRNAME)
+        && let Some(package_directory) = directory.parent()
+    {
+        let package_resource = package_directory.join(RESOURCES_DIRNAME).join(name);
+        if package_resource.is_file() {
+            return Some(package_resource);
+        }
+    }
+
+    let resource = directory.join(RESOURCES_DIRNAME).join(name);
+    resource.is_file().then_some(resource)
 }
 
 fn sibling_resource(name: &str) -> Result<PathBuf, WindowsSetupError> {
@@ -694,7 +731,7 @@ mod tests {
 
     use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
-    use super::{pin_setup_resource, write_pinned_setup_request};
+    use super::{bundled_resource_path_for_exe, pin_setup_resource, write_pinned_setup_request};
 
     #[test]
     fn pinned_setup_resource_cannot_be_rewritten_or_replaced() {
@@ -737,5 +774,53 @@ mod tests {
         );
         drop(request);
         fs::remove_file(path).expect("pin release permits cleanup");
+    }
+
+    #[test]
+    fn bundled_resource_lookup_prefers_a_direct_sibling() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let resources = temporary.path().join(super::RESOURCES_DIRNAME);
+        fs::create_dir_all(&resources).expect("resource directory");
+        let executable = temporary.path().join("application.exe");
+        let sibling = temporary.path().join(super::SETUP_HELPER_NAME);
+        let resource = resources.join(super::SETUP_HELPER_NAME);
+        fs::write(&executable, b"application").expect("application");
+        fs::write(&sibling, b"sibling").expect("sibling");
+        fs::write(&resource, b"resource").expect("resource");
+
+        assert_eq!(
+            bundled_resource_path_for_exe(&executable, super::SETUP_HELPER_NAME),
+            Some(sibling)
+        );
+    }
+
+    #[test]
+    fn bundled_resource_lookup_checks_package_resources_for_bin_executables() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let bin = temporary.path().join(super::BIN_DIRNAME);
+        let resources = temporary.path().join(super::RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin).expect("bin directory");
+        fs::create_dir_all(&resources).expect("resource directory");
+        let executable = bin.join("application.exe");
+        let resource = resources.join(super::COMMAND_RUNNER_NAME);
+        fs::write(&executable, b"application").expect("application");
+        fs::write(&resource, b"runner").expect("runner");
+
+        assert_eq!(
+            bundled_resource_path_for_exe(&executable, super::COMMAND_RUNNER_NAME),
+            Some(resource)
+        );
+    }
+
+    #[test]
+    fn bundled_resource_lookup_returns_none_for_missing_resources() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let executable = temporary.path().join("application.exe");
+        fs::write(&executable, b"application").expect("application");
+
+        assert_eq!(
+            bundled_resource_path_for_exe(&executable, super::SETUP_HELPER_NAME),
+            None
+        );
     }
 }

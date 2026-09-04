@@ -36,7 +36,8 @@ pub enum WindowsStateDirectorySource {
 /// How Cageforge locates the administrator setup helper.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetupHelperSource {
-    /// Materialize the helper embedded by the `bundled-helpers` feature.
+    /// Use a release-packaged helper next to the application or in
+    /// `cageforge-resources`.
     Bundled,
     /// Use `cageforge-windows-setup.exe` next to the current executable.
     Sibling,
@@ -47,7 +48,8 @@ pub enum SetupHelperSource {
 /// How Cageforge locates the authenticated sandbox command runner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandRunnerSource {
-    /// Materialize the command runner embedded by the `bundled-helpers` feature.
+    /// Use a release-packaged command runner next to the application or in
+    /// `cageforge-resources`.
     Bundled,
     /// Use `cageforge-windows-command-runner.exe` next to the current executable.
     Sibling,
@@ -172,7 +174,8 @@ impl WindowsSetupConfig {
         self
     }
 
-    /// Uses the helper embedded by the `bundled-helpers` feature.
+    /// Uses a release-packaged helper resolved by the `bundled-helpers`
+    /// resource layout.
     pub fn with_bundled_setup_helper(mut self) -> Self {
         self.setup_helper = SetupHelperSource::Bundled;
         self
@@ -223,7 +226,8 @@ impl WindowsSetupConfig {
         self
     }
 
-    /// Uses the command runner embedded by the `bundled-helpers` feature.
+    /// Uses a release-packaged command runner resolved by the
+    /// `bundled-helpers` resource layout.
     pub fn with_bundled_command_runner(mut self) -> Self {
         self.command_runner = CommandRunnerSource::Bundled;
         self
