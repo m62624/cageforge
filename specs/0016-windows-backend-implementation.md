@@ -761,6 +761,14 @@ cryptographic randomness with a bounded collision loop. These are native
 enforcement details; the public API remains the generalized effective network
 policy and gateway configuration used by other Cageforge backends.
 
+Setup derives each owner's two persisted ingress ports deterministically from
+its state root, but constrains them to the registered user-port range below
+Windows' default dynamic client-port range (`49152..=65535`). This avoids
+collisions with OS-reserved ephemeral ports. If an exact selected port is
+already unavailable, ingress startup returns a typed bind error; it does not
+silently switch to an ephemeral port that would no longer match the verified
+firewall/WFP allowlist.
+
 The gateway still performs one DNS snapshot and exact `SocketAddr`
 authorization immediately before connect. Firewall and route attribution are
 native ingress boundaries, not replacements for portable policy checks.
