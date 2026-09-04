@@ -66,6 +66,9 @@ const SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT: &str =
     "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
+// Keep the host-side target alive longer than the backend's 15-second probe
+// timeout; the backend must own timeout classification for a stalled launch.
+const FIXTURE_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct SetupCleanup<'a> {
     setup: &'a WindowsSetup,
@@ -420,8 +423,8 @@ fn start_counting_http_server(
 }
 
 fn serve_http_connection(stream: &mut TcpStream) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(FIXTURE_IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(FIXTURE_IO_TIMEOUT))?;
     let mut request = Vec::new();
     let mut chunk = [0; 1024];
     loop {

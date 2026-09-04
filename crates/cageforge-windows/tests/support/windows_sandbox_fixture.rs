@@ -29,6 +29,10 @@ const DENIED_READ_DEVICE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_
 const DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
+// The backend's launch timeout is 15 seconds. Keep the fixture's socket
+// timeout above it so a slow Windows/WFP handshake is reported by the
+// sandbox boundary instead of being converted into a misleading empty EOF.
+const FIXTURE_IO_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "windows")]
 const UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HANDLE";
 #[cfg(target_os = "windows")]
@@ -353,13 +357,13 @@ fn proxy_endpoint(name: &str) -> Result<SocketAddr, String> {
 }
 
 fn connect(address: SocketAddr) -> Result<TcpStream, String> {
-    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+    let stream = TcpStream::connect_timeout(&address, FIXTURE_IO_TIMEOUT)
         .map_err(|error| format!("connect to {address}: {error}"))?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(FIXTURE_IO_TIMEOUT))
         .map_err(|error| format!("set read timeout: {error}"))?;
     stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
+        .set_write_timeout(Some(FIXTURE_IO_TIMEOUT))
         .map_err(|error| format!("set write timeout: {error}"))?;
     Ok(stream)
 }
