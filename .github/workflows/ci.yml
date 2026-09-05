@@ -99,9 +99,13 @@ jobs:
           manual_windows=false
           root_manifest_change=false
 
-          # Keep these lists synchronized with the native backend manifests.
-          # A changed workspace crate selects only the sandboxes that consume
-          # it, while common-components still runs for every PR.
+          # Explicit workspace-package -> native-lane map. Keep this table
+          # synchronized with each backend manifest, including its test-only
+          # workspace dependencies. A changed package selects only the native
+          # sandboxes that consume it; common-components still runs everywhere.
+          #
+          # Linux: cageforge-linux and cageforge-bwrap, plus the portable
+          # crates used by Linux's runtime and integration tests.
           linux_sandbox_packages=(
             cageforge-linux
             cageforge-bwrap
@@ -113,6 +117,9 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
+          # Windows: cageforge-windows and the portable crates used by its
+          # runtime and integration tests. cageforge-config is not a Windows
+          # dependency and therefore does not select this lane.
           windows_sandbox_packages=(
             cageforge-windows
             cageforge-backend-api
@@ -122,7 +129,18 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
-          macos_sandbox_packages=(cageforge-macos)
+          # macOS: the native crate when it is added, plus the portable
+          # backend-facing crates shared by every native backend. Until the
+          # crate exists, the lane reports its unavailable backend explicitly.
+          macos_sandbox_packages=(
+            cageforge-macos
+            cageforge-backend-api
+            cageforge-command
+            cageforge-network-proxy
+            cageforge-path
+            cageforge-policy
+            cageforge-policy-compose
+          )
 
           for label in ${PR_LABELS:-}; do
             case "$label" in
@@ -237,10 +255,10 @@ jobs:
             fi
           done
 
-          # The root manifest always affects common components. If a PR also
-          # names an affected native crate, that crate's lane is sufficient;
-          # only a manifest-only change has no narrower native owner.
-          if [[ "$root_manifest_change" == true && "$linux_sandbox" == false && "$macos_sandbox" == false && "$windows_sandbox" == false ]]; then
+          # The root manifest controls workspace-wide dependency resolution.
+          # It therefore selects every native lane even when another changed
+          # path already selected one narrower lane.
+          if [[ "$root_manifest_change" == true ]]; then
             shared_change=true
           fi
 
