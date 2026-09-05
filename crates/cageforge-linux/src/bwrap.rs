@@ -65,6 +65,17 @@ enum ProbeError {
 
 #[cfg(feature = "bundled-bubblewrap")]
 pub(crate) fn materialize_bundled_resource() -> Result<tempfile::TempDir, LinuxBackendError> {
+    let bytes = cageforge_bwrap::bundled_bubblewrap();
+    let expected = cageforge_bwrap::bundled_bubblewrap_sha256();
+    let actual = sha256_bytes(bytes);
+    if actual != expected {
+        return Err(LinuxBackendError::BubblewrapDigestMismatch {
+            path: PathBuf::from("<embedded Bubblewrap>"),
+            expected: expected.to_owned(),
+            actual,
+        });
+    }
+
     let resource = tempfile::Builder::new()
         .prefix(BUNDLED_RESOURCE_PREFIX)
         .tempdir()
@@ -90,7 +101,7 @@ pub(crate) fn materialize_bundled_resource() -> Result<tempfile::TempDir, LinuxB
         }
     })?;
     let binary = resource.path().join("bwrap");
-    fs::write(&binary, cageforge_bwrap::bundled_bubblewrap()).map_err(|source| {
+    fs::write(&binary, bytes).map_err(|source| {
         LinuxBackendError::BundledBubblewrapMaterialization {
             operation: "writing the embedded executable",
             source,
@@ -330,6 +341,17 @@ fn verify_bundled_digest_file(file: &File, path: &Path) -> Result<(), LinuxBacke
 
 fn sha256_file(path: &Path) -> io::Result<String> {
     sha256_file_handle(&fs::File::open(path)?)
+}
+
+#[cfg(feature = "bundled-bubblewrap")]
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn sha256_file_handle(file: &File) -> io::Result<String> {

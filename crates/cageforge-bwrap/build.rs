@@ -1,45 +1,76 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#[cfg(feature = "build-from-source")]
 use std::env;
+#[cfg(feature = "build-from-source")]
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "build-from-source")]
 const SOURCES: &[&str] = &["bubblewrap.c", "bind-mount.c", "network.c", "utils.c"];
+#[cfg(feature = "build-from-source")]
 const HEADERS: &[&str] = &["bind-mount.h", "network.h", "utils.h"];
+#[cfg(feature = "build-from-source")]
 const UPSTREAM_VERSION: &str = "0.11.2";
+#[cfg(feature = "build-from-source")]
 const UPSTREAM_COMMIT: &str = "1b80120ef26a28e065e67f89bfef873f13bdd317";
 
 fn main() {
-    println!("cargo:rustc-check-cfg=cfg(cageforge_bwrap_available)");
+    #[cfg(feature = "build-from-source")]
     println!("cargo:rerun-if-env-changed=CAGEFORGE_BWRAP_SOURCE_DIR");
+    #[cfg(feature = "build-from-source")]
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_ALLOW_CROSS");
+    #[cfg(feature = "build-from-source")]
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    #[cfg(feature = "build-from-source")]
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR");
 
-    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
-    let source_dir = source_dir(&manifest_dir);
-    for file in SOURCES.iter().chain(HEADERS) {
-        println!("cargo:rerun-if-changed={}", source_dir.join(file).display());
+    #[cfg(feature = "build-from-source")]
+    {
+        let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
+        let source_dir = source_dir(&manifest_dir);
+        for file in SOURCES.iter().chain(HEADERS) {
+            println!("cargo:rerun-if-changed={}", source_dir.join(file).display());
+        }
     }
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
-        println!("cargo:rustc-env=CAGEFORGE_BUILT_BWRAP=unavailable");
-        return;
+    #[cfg(feature = "embedded")]
+    {
+        for path in [
+            "assets/linux-x86_64/bwrap",
+            "assets/linux-x86_64/bwrap.sha256",
+            "assets/linux-aarch64/bwrap",
+            "assets/linux-aarch64/bwrap.sha256",
+        ] {
+            println!("cargo:rerun-if-changed={path}");
+        }
     }
 
-    if let Err(error) = build_bwrap(&source_dir) {
-        eprintln!(
-            "error: failed to build upstream Bubblewrap {UPSTREAM_VERSION} ({UPSTREAM_COMMIT}): {error}"
-        );
-        std::process::exit(1);
+    #[cfg(feature = "build-from-source")]
+    {
+        let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
+        let source_dir = source_dir(&manifest_dir);
+        if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+            println!("cargo:rustc-env=CAGEFORGE_BUILT_BWRAP=unavailable");
+            return;
+        }
+
+        if let Err(error) = build_bwrap(&source_dir) {
+            eprintln!(
+                "error: failed to build upstream Bubblewrap {UPSTREAM_VERSION} ({UPSTREAM_COMMIT}): {error}"
+            );
+            std::process::exit(1);
+        }
     }
 }
 
+#[cfg(feature = "build-from-source")]
 fn source_dir(manifest_dir: &Path) -> PathBuf {
     env::var_os("CAGEFORGE_BWRAP_SOURCE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest_dir.join("vendor/bubblewrap"))
 }
 
+#[cfg(feature = "build-from-source")]
 fn build_bwrap(source_dir: &Path) -> Result<(), String> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?);
     for file in SOURCES.iter().chain(HEADERS) {

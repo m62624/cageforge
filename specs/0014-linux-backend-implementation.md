@@ -798,11 +798,12 @@ The required native enforcement lane is:
 The public policy and backend contract are architecture-independent, while
 the hardening helper selects the target-specific seccomp audit architecture.
 Portable CI therefore compile-checks the Rust backend and proxy surfaces for
-`aarch64-unknown-linux-gnu`. `cageforge-bwrap` compiles the unchanged
-Bubblewrap source for the selected Linux target, so a native ARM64 build or
-release lane may be added when the project ships ARM64 artifacts. Such a lane
-is compatibility coverage and does not duplicate the required x86_64
-QEMU/KVM enforcement suite by default.
+`aarch64-unknown-linux-gnu`. The `cageforge-bwrap` source-builder compiles the
+unchanged Bubblewrap source only in the native resource-builder lane; the
+dependency-facing `bundled-bubblewrap` feature consumes the matching embedded
+resource for the selected target architecture. A native ARM64 resource build
+is required before shipping ARM64 artifacts and does not duplicate the
+required x86_64 QEMU/KVM enforcement suite.
 
 Each Linux backend job must:
 
@@ -816,9 +817,10 @@ Each Linux backend job must:
 3. verify that `--disable-userns` prevents nested user-namespace creation;
 4. verify as UID 0 that `--cap-drop ALL` clears every Linux capability set
    inside the Bubblewrap user namespace;
-5. build `cageforge-bwrap`, stage its `bwrap` and `bwrap.sha256` resources,
-   build the backend and runtime helper, and run the tests against the staged
-   Bubblewrap;
+5. in the native resource-builder lane, build `cageforge-bwrap` and stage its
+   architecture-labelled `bwrap` and `bwrap.sha256` resources; in the backend
+   lane, build the backend and runtime helper and run tests against the
+   embedded or staged Bubblewrap resource;
 6. run formatting, Clippy with `-D warnings`, and the backend integration
    suite;
 7. preserve `RUST_BACKTRACE=1` and retain the complete Cargo test transcript in

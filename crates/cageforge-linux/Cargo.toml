@@ -13,7 +13,7 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 [features]
 default = []
-bundled-bubblewrap = ["dep:cageforge-bwrap"]
+bundled-bubblewrap = ["dep:cageforge-bwrap", "cageforge-bwrap/embedded"]
 
 [lib]
 name = "cageforge_linux"
@@ -21,7 +21,7 @@ path = "src/lib.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cageforge-backend-api.workspace = true
-cageforge-bwrap = { workspace = true, optional = true }
+cageforge-bwrap = { workspace = true, optional = true, default-features = false }
 cageforge-command.workspace = true
 cageforge-network-proxy = { workspace = true, features = ["runtime"] }
 cageforge-path.workspace = true
