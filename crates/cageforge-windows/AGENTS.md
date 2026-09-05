@@ -66,21 +66,18 @@ simultaneous `WindowsBackend` instances with distinct route policies. The
 cross-target build remains a development check, not a replacement for that
 native boundary.
 
-The remaining work is the completion audit, not a fallback implementation:
+The completion audit for the reviewed revision is recorded in Specification
+0016. It covers the frozen Codex correspondence, cleanup recovery,
+token/HANDLE ownership, Job termination, WFP and firewall read-back, route
+attribution, collection derives, public integration, and native black-box
+evidence. The Windows Server 2025 CI lane passed every crate feature mode and
+the supported ARM64 library surface; the README describes the verified
+library-facing setup and protection contract.
 
-1. Re-read every affected frozen Codex Windows boundary and map it to the
-   independent Cageforge implementation, Specification 0016, and native
-   evidence. Resolve any missing retained invariant with a test and, where
-   required, implementation before declaring the crate complete.
-2. Audit cleanup recovery, token/HANDLE ownership, Job termination, WFP and
-   firewall read-back, route attribution, and all `Eq`/`Hash`/`Clone` derives
-   as security boundaries. Expand native black-box coverage for any uncovered
-   case; do not mistake the current green smoke and end-to-end paths for a
-   complete proof.
-3. Once the audit is green, update `README.md` to the same library-focused
-   standard as `cageforge-linux`: explain setup, public integration sequence,
-   and every actually enforced protection. Do not describe unverified work as
-   available, and do not write the README before this audit is complete.
+Any future change to native Windows behavior reopens this audit. Re-read the
+affected frozen Codex boundary, update Specification 0016, add or adjust the
+native evidence, and do not treat a green cross-target build as a replacement
+for Windows-native verification.
 
 ## Required implementation order
 

@@ -1,6 +1,6 @@
 # Specification 0016: Windows Backend Implementation
 
-Status: accepted for implementation; native verification pending
+Status: implemented; native verification complete for the reviewed revision
 
 ## 1. Purpose
 
