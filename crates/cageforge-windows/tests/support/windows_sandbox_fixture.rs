@@ -473,8 +473,10 @@ fn direct_wininet_denied() -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn direct_powershell_denied() -> Result<(), String> {
     let target = network_target()?;
+    let host = target.ip();
+    let port = target.port();
     let script = format!(
-        "try {{ Invoke-WebRequest -UseBasicParsing -Proxy $null -TimeoutSec 3 -Uri 'http://{target}/' | Out-Null; exit 42 }} catch {{ if ($_.Exception -is [System.Net.WebException]) {{ exit 0 }} else {{ exit 43 }} }}"
+        "$result = Test-NetConnection -ComputerName '{host}' -Port {port} -InformationLevel Quiet -WarningAction SilentlyContinue; if ($result -eq $true) {{ exit 42 }} else {{ exit 0 }}"
     );
     let status = std::process::Command::new("powershell.exe")
         .args([
@@ -491,7 +493,7 @@ fn direct_powershell_denied() -> Result<(), String> {
     match status.code() {
         Some(0) => Ok(()),
         Some(code) => Err(format!(
-            "PowerShell direct request was not denied by the expected WebException (exit code {code})"
+            "PowerShell direct network probe was not denied (exit code {code})"
         )),
         None => Err("PowerShell network probe was terminated without an exit code".to_string()),
     }
