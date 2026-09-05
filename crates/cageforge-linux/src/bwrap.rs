@@ -343,6 +343,7 @@ fn sha256_file(path: &Path) -> io::Result<String> {
     sha256_file_handle(&fs::File::open(path)?)
 }
 
+#[cfg(feature = "bundled-bubblewrap")]
 fn sha256_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
