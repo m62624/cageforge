@@ -121,6 +121,14 @@ pub enum WindowsAccountVerificationError {
         /// Well-known SID of the rejected privileged local group.
         group_sid: String,
     },
+    /// The account belongs to a local group outside the sandbox contract.
+    #[error("sandbox account {account:?} has unexpected local group {group_sid}")]
+    UnexpectedGroupMembership {
+        /// Sandbox account name.
+        account: String,
+        /// Unexpected local-group SID.
+        group_sid: String,
+    },
 }
 
 /// A Windows filesystem policy shape that cannot be enforced without widening.

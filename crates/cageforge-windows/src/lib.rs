@@ -12,6 +12,7 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
+mod account_groups;
 mod account_identity;
 mod backend;
 mod capability;

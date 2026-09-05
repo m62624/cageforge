@@ -4,7 +4,6 @@ use std::ffi::c_void;
 use std::mem::align_of;
 
 use getrandom::fill;
-use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
     ERROR_ALIAS_EXISTS, ERROR_INSUFFICIENT_BUFFER, ERROR_MEMBER_IN_ALIAS, GetLastError, HLOCAL,
     LocalFree,
@@ -21,6 +20,10 @@ use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, Conver
 use windows_sys::Win32::Security::{LookupAccountNameW, LookupAccountSidW, SID_NAME_USE};
 use zeroize::Zeroizing;
 
+use crate::account_groups::{
+    BUILTIN_USERS_SID, is_allowed_sandbox_group_sid, is_privileged_group_sid,
+};
+use crate::account_identity::ManagedAccountNames;
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use crate::native_strings::local_sid_string;
@@ -31,7 +34,6 @@ use crate::net_api_strings::{
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts};
 
 const MANAGED_GROUP_COMMENT: &str = "Cageforge Windows sandbox identities (managed)";
-const BUILTIN_USERS_SID: &str = "S-1-5-32-545";
 
 struct NetApiBuffer(*mut u8);
 
@@ -60,46 +62,44 @@ impl Drop for LocalSid {
 }
 
 pub(super) fn provision(request: &SetupRequest) -> NativeSetupResult<ProvisionedAccounts> {
-    let key = owner_key(&request.owner_sid);
-    let offline_name = format!("CgfOff_{}", &key[..12]);
-    let online_name = format!("CgfOn_{}", &key[..12]);
-    let group_name = format!("CgfGrp_{}", &key[..12]);
-    ensure_group(&group_name)?;
+    let names = ManagedAccountNames::for_owner(&request.owner_sid);
+    ensure_group(&names.group)?;
 
     let offline_password = random_password(SetupStage::OfflineAccount)?;
     let online_password = random_password(SetupStage::OnlineAccount)?;
-    ensure_user(&offline_name, &offline_password, SetupStage::OfflineAccount)?;
-    ensure_user(&online_name, &online_password, SetupStage::OnlineAccount)?;
-    ensure_member(&group_name, &offline_name, SetupStage::OfflineAccount)?;
-    ensure_member(&group_name, &online_name, SetupStage::OnlineAccount)?;
+    ensure_user(
+        &names.offline,
+        &offline_password,
+        SetupStage::OfflineAccount,
+    )?;
+    ensure_user(&names.online, &online_password, SetupStage::OnlineAccount)?;
+    ensure_member(&names.group, &names.offline, SetupStage::OfflineAccount)?;
+    ensure_member(&names.group, &names.online, SetupStage::OnlineAccount)?;
     let users_group = account_name_for_sid(BUILTIN_USERS_SID)?;
-    ensure_member(&users_group, &offline_name, SetupStage::OfflineAccount)?;
-    ensure_member(&users_group, &online_name, SetupStage::OnlineAccount)?;
+    ensure_member(&users_group, &names.offline, SetupStage::OfflineAccount)?;
+    ensure_member(&users_group, &names.online, SetupStage::OnlineAccount)?;
 
-    let offline_sid = account_sid(&offline_name, SetupStage::OfflineAccount)?;
-    let online_sid = account_sid(&online_name, SetupStage::OnlineAccount)?;
-    let group_sid = account_sid(&group_name, SetupStage::ManagedGroup)?;
-    verify_account(&offline_name, &group_sid, SetupStage::OfflineAccount)?;
-    verify_account(&online_name, &group_sid, SetupStage::OnlineAccount)?;
+    let offline_sid = account_sid(&names.offline, SetupStage::OfflineAccount)?;
+    let online_sid = account_sid(&names.online, SetupStage::OnlineAccount)?;
+    let group_sid = account_sid(&names.group, SetupStage::ManagedGroup)?;
+    verify_account(&names.offline, &group_sid, SetupStage::OfflineAccount)?;
+    verify_account(&names.online, &group_sid, SetupStage::OnlineAccount)?;
     Ok(ProvisionedAccounts {
         offline_sid,
         online_sid,
         group_sid,
-        offline_name,
+        offline_name: names.offline,
         offline_password,
-        online_name,
+        online_name: names.online,
         online_password,
-        group_name,
+        group_name: names.group,
     })
 }
 
 #[allow(unsafe_code)]
 pub(super) fn remove(request: &SetupRequest) -> NativeSetupResult<()> {
-    let key = owner_key(&request.owner_sid);
-    let offline_name = format!("CgfOff_{}", &key[..12]);
-    let online_name = format!("CgfOn_{}", &key[..12]);
-    let group_name = format!("CgfGrp_{}", &key[..12]);
-    for account in [&offline_name, &online_name] {
+    let names = ManagedAccountNames::for_owner(&request.owner_sid);
+    for account in [&names.offline, &names.online] {
         let account_wide = wide(account);
         let status = unsafe { NetUserDel(std::ptr::null(), account_wide.as_ptr()) };
         if status != NERR_Success && status != NERR_UserNotFound {
@@ -111,14 +111,14 @@ pub(super) fn remove(request: &SetupRequest) -> NativeSetupResult<()> {
             ));
         }
     }
-    let group_wide = wide(&group_name);
+    let group_wide = wide(&names.group);
     let status = unsafe { NetLocalGroupDel(std::ptr::null(), group_wide.as_ptr()) };
     if status != NERR_Success && status != NERR_GroupNotFound {
         return Err(NativeSetupFailure::new(
             SetupStage::Uninstall,
             SetupFailureCode::Cleanup,
             Some(status),
-            format!("failed to remove managed group {group_name:?}"),
+            format!("failed to remove managed group {:?}", names.group),
         ));
     }
     Ok(())
@@ -274,6 +274,14 @@ fn verify_account(
                 SetupFailureCode::GroupMembership,
                 None,
                 format!("sandbox user {account:?} belongs to privileged local group {sid}"),
+            ));
+        }
+        if !is_allowed_sandbox_group_sid(&sid, managed_group_sid) {
+            return Err(NativeSetupFailure::new(
+                stage,
+                SetupFailureCode::GroupMembership,
+                None,
+                format!("sandbox user {account:?} has unexpected local group {sid}"),
             ));
         }
     }
@@ -581,25 +589,6 @@ fn sid_to_string(sid: *mut c_void, stage: SetupStage) -> NativeSetupResult<Strin
             "Windows returned an invalid provisioned account SID string",
         )
     })
-}
-
-fn owner_key(owner_sid: &str) -> String {
-    let digest = Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn is_privileged_group_sid(sid: &str) -> bool {
-    matches!(
-        sid.to_ascii_uppercase().as_str(),
-        "S-1-5-32-544"
-            | "S-1-5-32-548"
-            | "S-1-5-32-549"
-            | "S-1-5-32-550"
-            | "S-1-5-32-551"
-            | "S-1-5-32-552"
-            | "S-1-5-32-556"
-            | "S-1-5-32-578"
-    )
 }
 
 fn wide(value: &str) -> Vec<u16> {

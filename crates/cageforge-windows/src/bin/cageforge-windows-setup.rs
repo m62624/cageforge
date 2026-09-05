@@ -17,6 +17,12 @@ use setup_protocol::{
 };
 
 #[cfg(target_os = "windows")]
+#[path = "../account_groups.rs"]
+mod account_groups;
+#[cfg(target_os = "windows")]
+#[path = "../account_identity.rs"]
+mod account_identity;
+#[cfg(target_os = "windows")]
 #[path = "../capability/lock.rs"]
 mod capability_lock;
 #[cfg(target_os = "windows")]

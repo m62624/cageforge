@@ -23,6 +23,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+use crate::account_groups::{is_allowed_sandbox_group_sid, is_privileged_group_sid};
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
 use crate::native_strings::local_sid_string;
 use crate::net_api_strings::{
@@ -183,6 +184,15 @@ pub(crate) fn verify_sandbox_account(
     }
     if let Some(group_sid) = group_sids.iter().find(|sid| is_privileged_group_sid(sid)) {
         return Err(WindowsAccountVerificationError::PrivilegedGroupMembership {
+            account: account_name.to_string(),
+            group_sid: group_sid.clone(),
+        });
+    }
+    if let Some(group_sid) = group_sids
+        .iter()
+        .find(|sid| !is_allowed_sandbox_group_sid(sid, &required_group_sid))
+    {
+        return Err(WindowsAccountVerificationError::UnexpectedGroupMembership {
             account: account_name.to_string(),
             group_sid: group_sid.clone(),
         });
@@ -402,20 +412,6 @@ fn aligned_buffer(byte_length: usize) -> io::Result<Vec<usize>> {
         ));
     }
     Ok(vec![0; byte_length.div_ceil(size_of::<usize>())])
-}
-
-fn is_privileged_group_sid(sid: &str) -> bool {
-    matches!(
-        sid.to_ascii_uppercase().as_str(),
-        "S-1-5-32-544"
-            | "S-1-5-32-548"
-            | "S-1-5-32-549"
-            | "S-1-5-32-550"
-            | "S-1-5-32-551"
-            | "S-1-5-32-552"
-            | "S-1-5-32-556"
-            | "S-1-5-32-578"
-    )
 }
 
 pub(crate) fn to_wide(value: &str) -> Vec<u16> {
