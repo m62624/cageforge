@@ -113,9 +113,13 @@ application/
 `WindowsSetupConfig` can instead select the sibling executables or explicit
 absolute paths. Resource selection is not a download: every helper and runner
 is opened through a pinned handle, checked for reparse and final-path changes,
-hashed, and retained through the operation that uses it. The `bundled-helpers`
-feature selects the release resource layout; it does not turn an unverified
-pathname into a trusted executable.
+hashed, and retained through the operation that uses it. When the
+`bundled-helpers` feature is enabled, the default configuration selects the
+release resource layout shown above; without default features, it selects the
+sibling executable layout. The feature does not embed helper binaries or turn
+an unverified pathname into a trusted executable. An application can always
+select `Bundled`, `Sibling`, or an explicit absolute path through
+`WindowsSetupConfig`.
 
 The crate exposes documentation targets for the supported Windows library
 architectures:
