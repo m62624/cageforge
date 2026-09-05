@@ -97,6 +97,7 @@ jobs:
           manual_linux=false
           manual_macos=false
           manual_windows=false
+          root_manifest_change=false
 
           for label in ${PR_LABELS:-}; do
             case "$label" in
@@ -186,12 +187,22 @@ jobs:
                   done
                 fi
                 ;;
-              Cargo.toml|Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|ci/*)
+              Cargo.toml)
+                root_manifest_change=true
+                ;;
+              Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|ci/*)
                 shared_change=true
                 ;;
               *) ;;
             esac
           done
+
+          # The root manifest always affects common components. If a PR also
+          # names an affected native crate, that crate's lane is sufficient;
+          # only a manifest-only change has no narrower native owner.
+          if [[ "$root_manifest_change" == true && "$linux_sandbox" == false && "$macos_sandbox" == false && "$windows_sandbox" == false ]]; then
+            shared_change=true
+          fi
 
           if [[ "$shared_change" == true ]]; then
             linux_sandbox=true
