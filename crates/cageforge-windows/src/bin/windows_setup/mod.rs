@@ -3,7 +3,6 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::mem::size_of;
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 
 use windows_sys::Win32::Foundation::{
@@ -16,6 +15,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use zeroize::Zeroizing;
 
 use crate::capability_lock::{CapabilityLock, CapabilityLockError};
+use crate::native_strings::wide_path;
 use crate::runner_manifest::COMMAND_RUNNER_NAME;
 use crate::setup_protocol::SETUP_HELPER_NAME;
 use crate::setup_protocol::{SetupFailureCode, SetupOperation, SetupRequest, SetupStage};
@@ -428,13 +428,6 @@ fn capability_state_read_failure(
         error.raw_os_error().map(|code| code as u32),
         format!("failed to {operation} {path:?}: {error}"),
     )
-}
-
-fn wide_path(path: &std::path::Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 fn setup_path_exists(path: &std::path::Path) -> NativeSetupResult<bool> {

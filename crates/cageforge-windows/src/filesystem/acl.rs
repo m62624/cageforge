@@ -7,7 +7,6 @@ use std::ffi::c_void;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::mem::{align_of, offset_of, size_of};
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::{Path, PathBuf};
@@ -51,6 +50,7 @@ use crate::capability::store::{
 };
 use crate::filesystem::path::{ValidatedPath, ValidatedPathError};
 use crate::filesystem::plan::{FilesystemPlan, FilesystemPlanAccess, MissingFilesystemTargetKind};
+use crate::native_strings::wide_path;
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
@@ -1978,13 +1978,6 @@ fn verify_materialization(
         evidence,
         retained_paths: [directory, marker],
     })
-}
-
-fn wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 const fn materialization_outcome_label(outcome: MaterializationRecovery) -> &'static str {

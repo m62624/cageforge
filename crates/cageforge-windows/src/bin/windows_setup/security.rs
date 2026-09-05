@@ -33,13 +33,12 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FileDispositionInfo, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     MoveFileExW, READ_CONTROL, SetFileInformationByHandle,
 };
-use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
-use crate::native_strings::local_sid_string;
+use crate::native_strings::{local_sid_string, local_wide_string_with_length, wide, wide_path};
 
 use super::{NativeSetupFailure, NativeSetupResult};
 
@@ -785,7 +784,7 @@ fn verify_descriptor_value(
         ));
     }
     let value = LocalWideString(value);
-    let Some(actual) = wide_string_with_length(value.0, value_length) else {
+    let Some(actual) = local_wide_string_with_length(value.0, value_length) else {
         return Err(NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::DirectoryAcl,
@@ -1019,34 +1018,6 @@ fn last_error(
     detail: impl Into<String>,
 ) -> NativeSetupFailure {
     NativeSetupFailure::new(stage, code, Some(unsafe { GetLastError() }), detail)
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
-#[allow(unsafe_code)]
-fn wide_string_with_length(value: *const u16, length: u32) -> Option<String> {
-    if value.is_null() || length == 0 {
-        return None;
-    }
-    let allocation_bytes = unsafe { LocalSize(value as HLOCAL) };
-    if allocation_bytes == 0
-        || !allocation_bytes.is_multiple_of(size_of::<u16>())
-        || usize::try_from(length).ok()? > allocation_bytes / size_of::<u16>()
-    {
-        return None;
-    }
-    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
-    let units = units.strip_suffix(&[0]).unwrap_or(units);
-    Some(String::from_utf16_lossy(units))
 }
 
 #[cfg(test)]
