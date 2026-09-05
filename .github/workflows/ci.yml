@@ -157,7 +157,36 @@ jobs:
               crates/cageforge-windows/*)
                 windows_sandbox=true
                 ;;
-              Cargo.toml|Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|.github/workflows/*|ci/*)
+              .github/workflows/*)
+                mapfile -t workflow_jobs < <(
+                  git diff --unified=0 "${BASE_SHA}...${HEAD_SHA}" -- "$path" \
+                    | sed -n 's/^+  \([[:alnum:]_-][[:alnum:]_-]*\):$/\1/p'
+                )
+                if ((${#workflow_jobs[@]} == 0)); then
+                  shared_change=true
+                else
+                  for job in "${workflow_jobs[@]}"; do
+                    case "$job" in
+                      native-linux|native-linux-arm64|linux-bwrap-resources)
+                        linux_sandbox=true
+                        ;;
+                      native-macos)
+                        macos_sandbox=true
+                        ;;
+                      native-windows)
+                        windows_sandbox=true
+                        ;;
+                      changes|common-components|ci-pass|coverage-portable)
+                        shared_change=true
+                        ;;
+                      *)
+                        shared_change=true
+                        ;;
+                    esac
+                  done
+                fi
+                ;;
+              Cargo.toml|Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|ci/*)
                 shared_change=true
                 ;;
               *) ;;
