@@ -55,8 +55,8 @@ concurrency:
 #    combinations run on every target, and every sandbox lane is selected.
 # 2. PRs always run common components and their feature combinations on Linux,
 #    macOS, and Windows.
-# 3. A PR selects every sandbox when a common component, workspace input, or CI
-#    input changes. An OS-specific crate selects only its own sandbox.
+# 3. A PR selects each sandbox whose crate or transitive workspace dependency
+#    changed. Workspace-wide inputs and shared CI changes select every sandbox.
 # 4. Manual PR labels sandbox-linux, sandbox-macos, and sandbox-windows force
 #    the requested lane. Labels are never applied automatically by the labeler.
 # 5. Sandbox crates never enter the common-component jobs. The Windows sandbox
@@ -98,6 +98,31 @@ jobs:
           manual_macos=false
           manual_windows=false
           root_manifest_change=false
+
+          # Keep these lists synchronized with the native backend manifests.
+          # A changed workspace crate selects only the sandboxes that consume
+          # it, while common-components still runs for every PR.
+          linux_sandbox_packages=(
+            cageforge-linux
+            cageforge-bwrap
+            cageforge-config
+            cageforge-backend-api
+            cageforge-command
+            cageforge-network-proxy
+            cageforge-path
+            cageforge-policy
+            cageforge-policy-compose
+          )
+          windows_sandbox_packages=(
+            cageforge-windows
+            cageforge-backend-api
+            cageforge-command
+            cageforge-network-proxy
+            cageforge-path
+            cageforge-policy
+            cageforge-policy-compose
+          )
+          macos_sandbox_packages=(cageforge-macos)
 
           for label in ${PR_LABELS:-}; do
             case "$label" in
@@ -144,20 +169,18 @@ jobs:
             fi
           fi
 
+          package_in_list() {
+            local package="$1"
+            shift
+            local candidate
+            for candidate in "$@"; do
+              [[ "$candidate" == "$package" ]] && return 0
+            done
+            return 1
+          }
+
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              crates/cageforge-linux/*|crates/cageforge-bwrap/*)
-                linux_sandbox=true
-                ;;
-              crates/cageforge-backend-api/*|crates/cageforge-command/*|crates/cageforge-config/*|crates/cageforge-core/*|crates/cageforge-network-proxy/*|crates/cageforge-path/*|crates/cageforge-policy/*|crates/cageforge-policy-compose/*)
-                shared_change=true
-                ;;
-              crates/cageforge-macos/*)
-                macos_sandbox=true
-                ;;
-              crates/cageforge-windows/*)
-                windows_sandbox=true
-                ;;
               .github/workflows/*)
                 mapfile -t workflow_jobs < <(
                   git diff --unified=0 "${BASE_SHA}...${HEAD_SHA}" -- "$path" \
@@ -195,6 +218,23 @@ jobs:
                 ;;
               *) ;;
             esac
+
+            package=""
+            case "$path" in
+              crates/*/*)
+                package=${path#crates/}
+                package=${package%%/*}
+                ;;
+              tools/*/*)
+                package=${path#tools/}
+                package=${package%%/*}
+                ;;
+            esac
+            if [[ -n "$package" ]]; then
+              package_in_list "$package" "${linux_sandbox_packages[@]}" && linux_sandbox=true
+              package_in_list "$package" "${windows_sandbox_packages[@]}" && windows_sandbox=true
+              package_in_list "$package" "${macos_sandbox_packages[@]}" && macos_sandbox=true
+            fi
           done
 
           # The root manifest always affects common components. If a PR also
