@@ -16,12 +16,6 @@ use windows_sys::Win32::Foundation::{
     ERROR_PRIVILEGE_NOT_HELD, GetLastError, WAIT_OBJECT_0,
 };
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::NetworkManagement::Dns::{
-    DNS_QUERY_BYPASS_CACHE, DNS_QUERY_NO_HOSTS_FILE, DNS_QUERY_NO_LOCAL_NAME,
-    DNS_QUERY_NO_MULTICAST, DNS_QUERY_NO_NETBT, DNS_QUERY_WIRE_ONLY, DNS_TYPE_A, DnsFree,
-    DnsFreeRecordList, DnsQuery_W,
-};
-#[cfg(target_os = "windows")]
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     ICMP_ECHO_REPLY, IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho,
 };
@@ -499,42 +493,20 @@ fn direct_udp_denied() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
-#[allow(unsafe_code)]
 fn direct_dns_denied() -> Result<(), String> {
-    let name = "example.com\0".encode_utf16().collect::<Vec<_>>();
-    let mut records = std::ptr::null_mut();
-    let options = DNS_QUERY_BYPASS_CACHE
-        | DNS_QUERY_NO_HOSTS_FILE
-        | DNS_QUERY_NO_LOCAL_NAME
-        | DNS_QUERY_NO_MULTICAST
-        | DNS_QUERY_NO_NETBT
-        | DNS_QUERY_WIRE_ONLY;
-    let status = unsafe {
-        DnsQuery_W(
-            name.as_ptr(),
-            DNS_TYPE_A,
-            options,
-            std::ptr::null_mut(),
-            &mut records,
-            std::ptr::null_mut(),
-        )
-    };
-    if status == 0 && !records.is_null() {
-        unsafe { DnsFree(records.cast(), DnsFreeRecordList) };
+    let target = network_target()?;
+    if target.port() != 53 {
+        return Err(format!(
+            "direct DNS probe requires a port-53 target, got {}",
+            target.port()
+        ));
+    }
+    if TcpStream::connect_timeout(&target, Duration::from_secs(2)).is_ok() {
         return Err(
-            "direct DNS query unexpectedly crossed the disabled network boundary".to_string(),
+            "direct DNS connection unexpectedly crossed the disabled network boundary".to_string(),
         );
     }
-    if !records.is_null() {
-        unsafe { DnsFree(records.cast(), DnsFreeRecordList) };
-    }
     Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn direct_dns_denied() -> Result<(), String> {
-    Err("direct DNS probe requires Windows".to_string())
 }
 
 #[cfg(target_os = "windows")]

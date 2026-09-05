@@ -374,6 +374,30 @@ fn start_udp_server() -> (SocketAddr, thread::JoinHandle<io::Result<bool>>) {
     (address, server)
 }
 
+fn start_tcp_probe_server_at(
+    address: SocketAddr,
+) -> (SocketAddr, thread::JoinHandle<io::Result<bool>>) {
+    let listener = TcpListener::bind(address).expect("TCP probe listener");
+    let address = listener.local_addr().expect("TCP probe server address");
+    let server = thread::spawn(move || {
+        listener.set_nonblocking(true)?;
+        let deadline = Instant::now() + FIXTURE_START_DEADLINE;
+        loop {
+            match listener.accept() {
+                Ok(_) => return Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Ok(false);
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    });
+    (address, server)
+}
+
 fn start_http_server_at(address: SocketAddr) -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
     let listener = TcpListener::bind(address).expect("HTTP listener");
     let address = listener.local_addr().expect("HTTP server address");
@@ -1450,8 +1474,25 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         "disabled Windows sandbox delivered a direct UDP loopback datagram"
     );
 
-    for mode in [
+    let (dns_target, dns_server) =
+        start_tcp_probe_server_at(SocketAddr::from((Ipv4Addr::LOCALHOST, 53)));
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::disabled(),
         "direct-dns-denied",
+        dns_target,
+    );
+    assert!(
+        !dns_server
+            .join()
+            .expect("direct DNS fixture thread")
+            .expect("direct DNS network probe"),
+        "disabled Windows sandbox reached the direct DNS port"
+    );
+
+    for mode in [
         "direct-icmp-denied",
         "direct-smb-denied",
         "direct-winhttp-denied",

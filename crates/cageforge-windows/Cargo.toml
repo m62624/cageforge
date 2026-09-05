@@ -44,7 +44,6 @@ zeroize.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
-    "Win32_NetworkManagement_Dns",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_NetManagement",
     "Win32_NetworkManagement_WNet",
