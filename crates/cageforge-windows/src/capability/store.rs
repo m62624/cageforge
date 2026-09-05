@@ -4,7 +4,6 @@
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::{Path, PathBuf};
@@ -36,6 +35,7 @@ use crate::capability::state_runtime::{
 };
 use crate::error::WindowsSetupVerificationError;
 use crate::filesystem::path::{ValidatedPath, ValidatedPathError};
+use crate::native_strings::wide_path;
 
 pub(crate) struct CapabilityStateStore {
     state_path: PathBuf,
@@ -422,13 +422,6 @@ fn verify_existing_regular_replacement(path: &Path) -> Result<(), CapabilityStat
             source,
         }),
     }
-}
-
-fn wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 #[allow(unsafe_code)]

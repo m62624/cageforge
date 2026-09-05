@@ -3,7 +3,6 @@
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of, zeroed};
 
-use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{HANDLE, HLOCAL, LocalFree};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTRL_MATCH_FILTER, FWP_MATCH_EQUAL,
@@ -30,6 +29,8 @@ use crate::error::WindowsSetupVerificationError;
 use crate::firewall_contract::{
     WFP_BASE_FILTERS, WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER,
     WFP_PROVIDER_KEY as PROVIDER_KEY, WFP_SUBLAYER_KEY as SUBLAYER_KEY, WfpBaseCondition,
+    wfp_filter_guid as derived_guid, wfp_guid_equal as guid_eq, wfp_guid_string as guid_string,
+    wfp_owner_key as owner_key, wfp_wide as wide,
 };
 use crate::setup::WindowsSetupDetails;
 
@@ -449,51 +450,6 @@ fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpect
         });
     }
     filters
-}
-
-fn derived_guid(owner_sid: &str, label: &str) -> GUID {
-    let digest = Sha256::digest(format!("cageforge/windows/wfp/{owner_sid}/{label}").as_bytes());
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x50;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    GUID::from_u128(u128::from_be_bytes(bytes))
-}
-
-fn owner_key(owner_sid: &str) -> String {
-    let digest = Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes());
-    digest[..6]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn guid_eq(left: GUID, right: GUID) -> bool {
-    left.data1 == right.data1
-        && left.data2 == right.data2
-        && left.data3 == right.data3
-        && left.data4 == right.data4
-}
-
-fn guid_string(value: GUID) -> String {
-    format!(
-        "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
-        value.data1,
-        value.data2,
-        value.data3,
-        value.data4[0],
-        value.data4[1],
-        value.data4[2],
-        value.data4[3],
-        value.data4[4],
-        value.data4[5],
-        value.data4[6],
-        value.data4[7]
-    )
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 #[cfg(test)]

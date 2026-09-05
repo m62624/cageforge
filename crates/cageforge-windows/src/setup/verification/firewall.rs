@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use sha2::{Digest, Sha256};
 use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::{
     INetFwPolicy2, INetFwRule3, NET_FW_ACTION_BLOCK, NET_FW_IP_PROTOCOL_ANY,
@@ -15,12 +14,12 @@ use windows::core::{BSTR, Interface};
 
 use crate::error::WindowsSetupVerificationError;
 use crate::firewall_contract::{
-    active_firewall_profiles, address_sets_match, local_user_scope_matches, port_sets_match,
+    FIREWALL_LOOPBACK_ADDRESSES as LOOPBACK_ADDRESSES,
+    FIREWALL_NON_LOOPBACK_ADDRESSES as NON_LOOPBACK_ADDRESSES, active_firewall_profiles,
+    address_sets_match, blocked_port_complement, firewall_policy_id, local_user_scope_matches,
+    port_sets_match,
 };
 use crate::setup::WindowsSetupDetails;
-
-const LOOPBACK_ADDRESSES: &str = "127.0.0.0/8,::/127";
-const NON_LOOPBACK_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
 
 struct RuleExpectation {
     name: String,
@@ -44,7 +43,7 @@ impl Drop for ComApartment {
 
 #[allow(unsafe_code)]
 pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVerificationError> {
-    let expected_policy_id = policy_id(details.owner_sid());
+    let expected_policy_id = firewall_policy_id(details.owner_sid());
     if details.firewall_policy_id() != expected_policy_id {
         return Err(
             WindowsSetupVerificationError::FirewallRulePropertyMismatch {
@@ -307,40 +306,4 @@ fn rule_mismatch(
         expected: expected_value.to_string(),
         actual: actual.to_string(),
     }
-}
-
-fn blocked_port_complement(allowed_ports: &[u16]) -> String {
-    let mut allowed = allowed_ports.to_vec();
-    allowed.sort_unstable();
-    allowed.dedup();
-    let mut ranges = Vec::new();
-    let mut start = 1u32;
-    for port in allowed {
-        let port = u32::from(port);
-        if port > start {
-            ranges.push(port_range(start, port - 1));
-        }
-        start = port + 1;
-    }
-    if start <= u32::from(u16::MAX) {
-        ranges.push(port_range(start, u32::from(u16::MAX)));
-    }
-    ranges.join(",")
-}
-
-fn port_range(start: u32, end: u32) -> String {
-    if start == end {
-        start.to_string()
-    } else {
-        format!("{start}-{end}")
-    }
-}
-
-fn policy_id(owner_sid: &str) -> String {
-    let digest = Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes());
-    let key: String = digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("Cageforge.{key}")
 }

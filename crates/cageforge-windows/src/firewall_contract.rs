@@ -2,6 +2,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use sha2::{Digest, Sha256};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
@@ -17,6 +18,100 @@ pub(crate) const WFP_SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8
 
 /// IPv4 loopback in the byte order required by WFP address conditions.
 pub(crate) const WFP_IPV4_LOOPBACK_HOST_ORDER: u32 = u32::from_be_bytes([127, 0, 0, 1]);
+
+/// Windows Firewall address set used for loopback-only rules.
+pub(crate) const FIREWALL_LOOPBACK_ADDRESSES: &str = "127.0.0.0/8,::/127";
+
+/// Windows Firewall address set used to exclude all non-loopback addresses.
+pub(crate) const FIREWALL_NON_LOOPBACK_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+
+/// Derives the owner-scoped Firewall identifier used by setup and read-back.
+pub(crate) fn firewall_policy_id(owner_sid: &str) -> String {
+    let digest = Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes());
+    let key: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("Cageforge.{key}")
+}
+
+/// Returns the complete Firewall port set except the explicitly managed ports.
+pub(crate) fn blocked_port_complement(allowed_ports: &[u16]) -> String {
+    let mut allowed = allowed_ports.to_vec();
+    allowed.sort_unstable();
+    allowed.dedup();
+    let mut ranges = Vec::new();
+    let mut start = 1u32;
+    for port in allowed {
+        let port = u32::from(port);
+        if port > start {
+            ranges.push(firewall_port_range(start, port - 1));
+        }
+        start = port + 1;
+    }
+    if start <= u32::from(u16::MAX) {
+        ranges.push(firewall_port_range(start, u32::from(u16::MAX)));
+    }
+    ranges.join(",")
+}
+
+fn firewall_port_range(start: u32, end: u32) -> String {
+    if start == end {
+        start.to_string()
+    } else {
+        format!("{start}-{end}")
+    }
+}
+
+/// Derives the stable GUID used for one owner-scoped WFP filter.
+pub(crate) fn wfp_filter_guid(owner_sid: &str, label: &str) -> GUID {
+    let digest = Sha256::digest(format!("cageforge/windows/wfp/{owner_sid}/{label}").as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    GUID::from_u128(u128::from_be_bytes(bytes))
+}
+
+/// Derives the short owner key used in WFP display names.
+pub(crate) fn wfp_owner_key(owner_sid: &str) -> String {
+    let digest = Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes());
+    digest[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Compares GUID fields without relying on FFI wrapper trait implementations.
+pub(crate) fn wfp_guid_equal(left: GUID, right: GUID) -> bool {
+    left.data1 == right.data1
+        && left.data2 == right.data2
+        && left.data3 == right.data3
+        && left.data4 == right.data4
+}
+
+/// Formats a GUID in the Windows display form used by read-back diagnostics.
+pub(crate) fn wfp_guid_string(value: GUID) -> String {
+    format!(
+        "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
+        value.data1,
+        value.data2,
+        value.data3,
+        value.data4[0],
+        value.data4[1],
+        value.data4[2],
+        value.data4[3],
+        value.data4[4],
+        value.data4[5],
+        value.data4[6],
+        value.data4[7]
+    )
+}
+
+/// Encodes a NUL-terminated UTF-16 string for Windows FFI calls.
+pub(crate) fn wfp_wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum WfpBaseCondition {
@@ -311,7 +406,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        active_firewall_profiles, address_sets_match, local_user_scope_matches, port_sets_match,
+        active_firewall_profiles, address_sets_match, blocked_port_complement,
+        local_user_scope_matches, port_sets_match,
     };
 
     #[test]
@@ -373,5 +469,13 @@ mod tests {
             "O:LSD:(A;;CC;;;S-1-5-21-1-2-3-10010)",
             sid
         ));
+    }
+
+    #[test]
+    fn firewall_port_complement_is_deterministic_and_deduplicated() {
+        assert_eq!(
+            blocked_port_complement(&[40000, 40002, 40000]),
+            "1-39999,40001,40003-65535"
+        );
     }
 }

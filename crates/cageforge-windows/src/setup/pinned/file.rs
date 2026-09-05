@@ -19,6 +19,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     GetLongPathNameW, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_DOS,
 };
 
+use crate::native_strings::wide_path;
+
 #[derive(Debug, Error)]
 pub(crate) enum SetupPinnedFileError {
     #[error("protected Windows setup requires an absolute file path: {path:?}")]
@@ -247,11 +249,4 @@ fn long_path(path: &Path) -> Result<PathBuf, SetupPinnedFileError> {
     }
     buffer.truncate(length as usize);
     Ok(PathBuf::from(OsString::from_wide(&buffer)))
-}
-
-fn wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
