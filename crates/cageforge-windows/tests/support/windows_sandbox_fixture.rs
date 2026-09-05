@@ -8,8 +8,12 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 #[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
+
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, GetLastError,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
+    ERROR_PRIVILEGE_NOT_HELD, GetLastError, WAIT_OBJECT_0,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Networking::WinHttp::{
@@ -23,14 +27,23 @@ use windows_sys::Win32::Networking::WinInet::{
     InternetCloseHandle, InternetConnectW, InternetOpenW, InternetSetOptionW,
 };
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_QUERY};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, CreateDesktopW, DESKTOP_CREATEWINDOW, GetThreadDesktop,
     GetUserObjectInformationW, UOI_NAME,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Threading::{
-    EVENT_MODIFY_STATE, GetCurrentThreadId, OpenEventW, SetEvent,
+    CREATE_PROCESS_LOGON_FLAGS, CREATE_SUSPENDED, CreateProcessWithTokenW, EVENT_MODIFY_STATE,
+    GetCurrentProcess, GetCurrentThreadId, GetExitCodeProcess, OpenEventW, OpenProcessToken,
+    PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, SetEvent, TerminateProcess,
+    WaitForSingleObject,
 };
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
 
 const MODE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_MODE";
 const DENIED_READ: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ";
@@ -49,7 +62,12 @@ const UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HAND
 const UNRELATED_NAMED_OBJECT: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT";
 
 fn main() -> ExitCode {
-    match run() {
+    let result = match std::env::args_os().nth(1).as_deref() {
+        Some(argument) if argument == "--process-broker-child" => process_broker_child(),
+        Some(argument) if argument == "--shell-activation-child" => shell_activation_child(),
+        _ => run(),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("cageforge-windows-test-fixture: {error}");
@@ -73,6 +91,8 @@ fn run() -> Result<(), String> {
         "socks5" => socks5(false),
         "socks5-denied" => socks5(true),
         "private-desktop" => private_desktop(),
+        "process-broker" => process_broker(),
+        "shell-activation" => shell_activation(),
         "unrelated-handle" => signal_unrelated_handle(),
         "unrelated-named-object" => signal_unrelated_named_object(),
         _ => Err(format!("unsupported fixture mode {mode:?}")),
@@ -155,9 +175,179 @@ fn private_desktop() -> Result<(), String> {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn process_broker() -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("resolve process-broker fixture executable: {error}"))?;
+    let executable = executable
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut command_line = "--process-broker-child\0"
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    let mut token = std::ptr::null_mut();
+    if unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            &mut token,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "process-broker token access failed: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let startup = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let mut process_information = unsafe { std::mem::zeroed::<PROCESS_INFORMATION>() };
+    let created = unsafe {
+        CreateProcessWithTokenW(
+            token,
+            0 as CREATE_PROCESS_LOGON_FLAGS,
+            executable.as_ptr(),
+            command_line.as_mut_ptr(),
+            CREATE_SUSPENDED,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup,
+            &mut process_information,
+        )
+    };
+    let creation_error = (created == 0).then(|| unsafe { GetLastError() });
+    unsafe { CloseHandle(token) };
+    if let Some(error) = creation_error {
+        if error == ERROR_ACCESS_DENIED || error == ERROR_PRIVILEGE_NOT_HELD {
+            return Ok(());
+        }
+        return Err(format!(
+            "CreateProcessWithTokenW failed with an unexpected Windows error {error}"
+        ));
+    }
+    let process = process_information.hProcess;
+    let mut in_job = 0;
+    let job_query = unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) } != 0;
+    if unsafe { ResumeThread(process_information.hThread) } == u32::MAX {
+        unsafe {
+            TerminateProcess(process, 1);
+            CloseHandle(process_information.hThread);
+            CloseHandle(process);
+        }
+        return Err(format!(
+            "resume of CreateProcessWithTokenW child failed: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let wait = unsafe { WaitForSingleObject(process, 10_000) };
+    let mut exit_code = 1;
+    if wait == WAIT_OBJECT_0 {
+        unsafe { GetExitCodeProcess(process, &mut exit_code) };
+    } else {
+        unsafe { TerminateProcess(process, 1) };
+    }
+    unsafe {
+        CloseHandle(process_information.hThread);
+        CloseHandle(process);
+    }
+    if !job_query || in_job == 0 {
+        return Err(
+            "CreateProcessWithTokenW launched a process outside the sandbox Job Object".to_string(),
+        );
+    }
+    if wait != WAIT_OBJECT_0 || exit_code != 0 {
+        return Err(format!(
+            "CreateProcessWithTokenW child did not remain on the private desktop (wait={wait}, exit={exit_code})"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn shell_activation() -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("resolve shell-activation fixture executable: {error}"))?;
+    let executable = executable
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let parameters = "--shell-activation-child\0"
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    let mut execute = unsafe { std::mem::zeroed::<SHELLEXECUTEINFOW>() };
+    execute.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    execute.fMask = SEE_MASK_NOCLOSEPROCESS;
+    execute.lpFile = executable.as_ptr();
+    execute.lpParameters = parameters.as_ptr();
+    execute.nShow = 0;
+    if unsafe { ShellExecuteExW(&mut execute) } == 0 {
+        let error = unsafe { GetLastError() };
+        if error == ERROR_ACCESS_DENIED || error == ERROR_PRIVILEGE_NOT_HELD {
+            return Ok(());
+        }
+        return Err(format!(
+            "ShellExecuteExW failed with an unexpected Windows error {error}"
+        ));
+    }
+    let process = execute.hProcess;
+    if process.is_null() {
+        return Err("ShellExecuteExW reported success without a process handle".to_string());
+    }
+    let mut in_job = 0;
+    let job_query = unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) } != 0;
+    let wait = unsafe { WaitForSingleObject(process, 10_000) };
+    let mut exit_code = 1;
+    if wait == WAIT_OBJECT_0 {
+        unsafe {
+            windows_sys::Win32::System::Threading::GetExitCodeProcess(process, &mut exit_code)
+        };
+    } else {
+        unsafe { TerminateProcess(process, 1) };
+    }
+    unsafe { CloseHandle(process) };
+    if !job_query || in_job == 0 {
+        return Err(
+            "ShellExecuteExW launched a process outside the sandbox Job Object".to_string(),
+        );
+    }
+    if wait != WAIT_OBJECT_0 || exit_code != 0 {
+        return Err(format!(
+            "ShellExecuteExW child did not remain on the private desktop (wait={wait}, exit={exit_code})"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn process_broker_child() -> Result<(), String> {
+    private_desktop()
+}
+
+#[cfg(target_os = "windows")]
+fn shell_activation_child() -> Result<(), String> {
+    private_desktop()
+}
+
 #[cfg(not(target_os = "windows"))]
 fn private_desktop() -> Result<(), String> {
     Err("private desktop probe requires Windows".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn process_broker() -> Result<(), String> {
+    Err("process-broker probe requires Windows".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_activation() -> Result<(), String> {
+    Err("shell-activation probe requires Windows".to_string())
 }
 
 #[cfg(target_os = "windows")]

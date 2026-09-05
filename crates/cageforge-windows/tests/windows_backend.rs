@@ -1360,6 +1360,21 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
             .expect("private desktop fixture mode"),
     );
 
+    for (mode, description) in [
+        ("process-broker", "CreateProcessWithTokenW process broker"),
+        ("shell-activation", "ShellExecuteExW shell activation"),
+    ] {
+        run_access_probe(
+            &backend,
+            workspace.path(),
+            &access_fixture,
+            mode,
+            EnvironmentSpec::inherit_core()
+                .with_var(SANDBOX_FIXTURE_MODE, mode)
+                .unwrap_or_else(|error| panic!("{description} fixture mode: {error}")),
+        );
+    }
+
     let parent_event = unrelated_inheritable_event();
     assert_unrelated_event_is_unsignaled(&parent_event, "before the sandbox launch");
     let mut parent_event_child = start_access_probe(
