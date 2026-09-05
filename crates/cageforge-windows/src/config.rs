@@ -143,8 +143,8 @@ impl Default for WindowsSetupConfig {
     fn default() -> Self {
         Self {
             state_directory: WindowsStateDirectorySource::ProgramData,
-            setup_helper: SetupHelperSource::Bundled,
-            command_runner: CommandRunnerSource::Bundled,
+            setup_helper: default_setup_helper_source(),
+            command_runner: default_command_runner_source(),
         }
     }
 }
@@ -256,6 +256,55 @@ impl WindowsSetupConfig {
         match &self.command_runner {
             CommandRunnerSource::Bundled | CommandRunnerSource::Sibling => None,
             CommandRunnerSource::Explicit(path) => Some(path),
+        }
+    }
+}
+
+fn default_setup_helper_source() -> SetupHelperSource {
+    #[cfg(feature = "bundled-helpers")]
+    {
+        SetupHelperSource::Bundled
+    }
+    #[cfg(not(feature = "bundled-helpers"))]
+    {
+        SetupHelperSource::Sibling
+    }
+}
+
+fn default_command_runner_source() -> CommandRunnerSource {
+    #[cfg(feature = "bundled-helpers")]
+    {
+        CommandRunnerSource::Bundled
+    }
+    #[cfg(not(feature = "bundled-helpers"))]
+    {
+        CommandRunnerSource::Sibling
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandRunnerSource, SetupHelperSource, WindowsSetupConfig};
+
+    #[test]
+    fn default_helper_sources_follow_the_bundled_feature() {
+        let config = WindowsSetupConfig::new();
+
+        #[cfg(feature = "bundled-helpers")]
+        {
+            assert_eq!(config.setup_helper_source(), &SetupHelperSource::Bundled);
+            assert_eq!(
+                config.command_runner_source(),
+                &CommandRunnerSource::Bundled
+            );
+        }
+        #[cfg(not(feature = "bundled-helpers"))]
+        {
+            assert_eq!(config.setup_helper_source(), &SetupHelperSource::Sibling);
+            assert_eq!(
+                config.command_runner_source(),
+                &CommandRunnerSource::Sibling
+            );
         }
     }
 }
