@@ -427,6 +427,24 @@ fn start_http_server_at(address: SocketAddr) -> (SocketAddr, thread::JoinHandle<
     (address, server)
 }
 
+fn start_non_loopback_tcp_target() -> TcpListener {
+    let route_probe =
+        UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).expect("bind non-loopback route probe");
+    route_probe
+        .connect(SocketAddr::from(([192, 0, 2, 1], 9)))
+        .expect("select non-loopback route");
+    let local_address = route_probe
+        .local_addr()
+        .expect("read non-loopback route address");
+    let local_ip = match local_address.ip() {
+        std::net::IpAddr::V4(address) if !address.is_loopback() && !address.is_unspecified() => {
+            address
+        }
+        address => panic!("route probe selected unusable non-loopback address {address}"),
+    };
+    TcpListener::bind((local_ip, 0)).expect("bind non-loopback denied target listener")
+}
+
 fn start_counting_http_server(
     address: SocketAddr,
     complete: mpsc::Receiver<()>,
@@ -1473,6 +1491,23 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     assert_no_connection(
         &disabled_ipv6_target,
         "disabled Windows sandbox IPv6 loopback network",
+    );
+
+    let disabled_non_loopback_target = start_non_loopback_tcp_target();
+    let disabled_non_loopback_address = disabled_non_loopback_target
+        .local_addr()
+        .expect("disabled non-loopback target address");
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::disabled(),
+        "direct-non-loopback-denied",
+        disabled_non_loopback_address,
+    );
+    assert_no_connection(
+        &disabled_non_loopback_target,
+        "disabled Windows sandbox non-loopback network",
     );
 
     let (disabled_udp_target, disabled_udp_server) = start_udp_server();

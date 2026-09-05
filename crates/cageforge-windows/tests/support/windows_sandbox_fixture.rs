@@ -90,6 +90,7 @@ fn run() -> Result<(), String> {
         "denied-read" => denied_read(),
         "direct-denied" => direct_denied(),
         "direct-ipv6-denied" => direct_denied(),
+        "direct-non-loopback-denied" => direct_denied(),
         "direct-udp-denied" => direct_udp_denied(),
         "direct-dns-denied" => direct_dns_denied(),
         "direct-icmp-denied" => direct_icmp_denied(),
