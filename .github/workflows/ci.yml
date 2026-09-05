@@ -310,6 +310,55 @@ jobs:
           cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --lib --all-targets --no-default-features
           cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --bin cageforge-linux-helper --no-default-features
 
+  linux-bwrap-resources:
+    name: "Linux Bubblewrap resource (${{ matrix.arch }})"
+    needs: changes
+    if: ${{ needs.changes.outputs.linux_sandbox == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            expected_machine: X86-64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            expected_machine: AArch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native Bubblewrap build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential pkg-config libcap-dev binutils
+      - name: Build the pinned Bubblewrap resource
+        run: |
+          set -euo pipefail
+          mkdir -p "crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}"
+          cargo run --release -p cageforge-bwrap -- \
+            --output "crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap"
+      - name: Verify resource architecture and embedded mode
+        run: |
+          set -euo pipefail
+          resource="crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap"
+          readelf -h "$resource" | grep -F "${{ matrix.expected_machine }}"
+          test -s "${resource}.sha256"
+          cargo test -p cageforge-bwrap --no-default-features --features embedded
+          cargo check -p cageforge-linux --no-default-features --features bundled-bubblewrap
+      - name: Upload architecture-labelled Bubblewrap resource
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-bwrap-linux-${{ matrix.arch }}
+          path: |
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap.sha256
+          if-no-files-found: error
+
   native-macos:
     name: macOS sandbox
     needs: changes
@@ -502,7 +551,7 @@ jobs:
     name: CI passed
     if: ${{ always() }}
     needs:
-      [changes, common-components, native-linux, native-linux-arm64, native-macos, native-windows, coverage-portable]
+      [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

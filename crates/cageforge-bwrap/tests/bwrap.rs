@@ -2,10 +2,14 @@
 
 #![cfg(target_os = "linux")]
 
+#[cfg(feature = "build-from-source")]
 use std::fs;
+#[cfg(feature = "build-from-source")]
 use std::process::Command;
+#[cfg(feature = "build-from-source")]
 use tempfile::tempdir;
 
+#[cfg(feature = "build-from-source")]
 #[test]
 fn builder_stages_original_bwrap_binary() {
     let directory = tempdir().expect("temporary staging directory");
@@ -36,4 +40,19 @@ fn builder_stages_original_bwrap_binary() {
             .is_file()
     );
     assert!(directory.path().join("bwrap.sha256").is_file());
+}
+
+#[cfg(all(feature = "embedded", target_os = "linux"))]
+#[test]
+fn embedded_bubblewrap_matches_its_architecture_specific_digest() {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(cageforge_bwrap::bundled_bubblewrap());
+    let actual = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    assert_eq!(actual, cageforge_bwrap::bundled_bubblewrap_sha256());
+    assert_eq!(&cageforge_bwrap::bundled_bubblewrap()[..4], b"\x7fELF");
 }

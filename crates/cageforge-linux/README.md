@@ -83,16 +83,16 @@ application/
     └── cageforge-linux-helper
 ```
 
-Build and stage the bundled Bubblewrap with:
+Build and stage an external Bubblewrap resource with:
 
 ```text
 cargo run -p cageforge-bwrap -- --output cageforge-resources/bwrap
 ```
 
-The source build needs a Linux C compiler, `pkg-config`, and `libcap`
+The source-builder needs a Linux C compiler, `pkg-config`, and `libcap`
 development files. The system executable remains the first choice so Linux
-distributions can provide their maintained package; the bundled executable is
-the reproducible fallback for application distributions.
+distributions can provide their maintained package; the staged executable is
+the fallback for application distributions.
 
 Applications that want Cageforge to build and provide the fallback
 automatically can enable the Linux-only `bundled-bubblewrap` feature:
@@ -101,12 +101,14 @@ automatically can enable the Linux-only `bundled-bubblewrap` feature:
 cageforge-linux = { version = "0.1", features = ["bundled-bubblewrap"] }
 ```
 
-With that feature, the pinned Bubblewrap executable is embedded at build time
-and materialized into a private temporary resource directory when the backend
-needs a bundled fallback. Without the feature, Cageforge uses a compatible
-system executable or an explicitly packaged `cageforge-resources/bwrap`; it
-does not download or compile Bubblewrap implicitly. An explicit resource
-directory remains authoritative in both modes.
+With that feature, a prebuilt pinned Bubblewrap executable for the compilation
+target (`x86_64` or `aarch64`) is embedded in the published dependency and
+materialized into a private temporary resource directory when the backend
+needs a bundled fallback. The downstream build does not compile or download
+Bubblewrap. Without the feature, Cageforge uses a compatible system executable
+or an explicitly packaged `cageforge-resources/bwrap`; it does not download or
+compile Bubblewrap implicitly. An explicit resource directory remains
+authoritative in both modes.
 
 The embedded executable remains the unchanged upstream Bubblewrap component
 under LGPL-2.0-or-later; enabling this feature does not relicense it as

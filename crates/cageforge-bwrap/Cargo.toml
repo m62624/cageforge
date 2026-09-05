@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license = "Apache-2.0 AND LGPL-2.0-or-later"
 rust-version.workspace = true
-description = "Builds the upstream Bubblewrap executable for Cageforge Linux packages"
+description = "Builds and provides the upstream Bubblewrap executable for Cageforge Linux"
 repository.workspace = true
 readme = "README.md"
 build = "build.rs"
@@ -12,16 +12,22 @@ build = "build.rs"
 [package.metadata.docs.rs]
 targets = []
 
+[features]
+default = ["build-from-source"]
+build-from-source = ["dep:cc", "dep:pkg-config"]
+embedded = []
+
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
 name = "cageforge-bwrap"
 path = "src/main.rs"
+required-features = ["build-from-source"]
 
 [build-dependencies]
-cc = { workspace = true }
-pkg-config = { workspace = true }
+cc = { workspace = true, optional = true }
+pkg-config = { workspace = true, optional = true }
 
 [dependencies]
 sha2 = { workspace = true }

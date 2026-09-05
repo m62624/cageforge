@@ -31,7 +31,7 @@ all = "warn"
 [workspace.dependencies]
 cageforge-command = { path = "crates/cageforge-command", version = "0.1.0" }
 cageforge-backend-api = { path = "crates/cageforge-backend-api", version = "0.1.0" }
-cageforge-bwrap = { path = "crates/cageforge-bwrap", version = "0.1.0" }
+cageforge-bwrap = { path = "crates/cageforge-bwrap", version = "0.1.0", default-features = false }
 cageforge-config = { path = "crates/cageforge-config", version = "0.1.0" }
 cageforge-linux = { path = "crates/cageforge-linux", version = "0.1.0" }
 cageforge-network-proxy = { path = "crates/cageforge-network-proxy", version = "0.1.0", default-features = false }
