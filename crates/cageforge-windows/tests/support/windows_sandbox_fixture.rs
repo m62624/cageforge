@@ -17,7 +17,9 @@ use windows_sys::Win32::Foundation::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::NetworkManagement::Dns::{
-    DNS_QUERY_STANDARD, DNS_TYPE_A, DnsFree, DnsFreeRecordList, DnsQuery_W,
+    DNS_QUERY_BYPASS_CACHE, DNS_QUERY_NO_HOSTS_FILE, DNS_QUERY_NO_LOCAL_NAME,
+    DNS_QUERY_NO_MULTICAST, DNS_QUERY_NO_NETBT, DNS_QUERY_WIRE_ONLY, DNS_TYPE_A, DnsFree,
+    DnsFreeRecordList, DnsQuery_W,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -502,11 +504,17 @@ fn direct_udp_denied() -> Result<(), String> {
 fn direct_dns_denied() -> Result<(), String> {
     let name = "example.com\0".encode_utf16().collect::<Vec<_>>();
     let mut records = std::ptr::null_mut();
+    let options = DNS_QUERY_BYPASS_CACHE
+        | DNS_QUERY_NO_HOSTS_FILE
+        | DNS_QUERY_NO_LOCAL_NAME
+        | DNS_QUERY_NO_MULTICAST
+        | DNS_QUERY_NO_NETBT
+        | DNS_QUERY_WIRE_ONLY;
     let status = unsafe {
         DnsQuery_W(
             name.as_ptr(),
             DNS_TYPE_A,
-            DNS_QUERY_STANDARD,
+            options,
             std::ptr::null_mut(),
             &mut records,
             std::ptr::null_mut(),
