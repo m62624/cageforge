@@ -12,6 +12,17 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, GetLastError,
 };
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::Networking::WinHttp::{
+    WINHTTP_ACCESS_TYPE_NO_PROXY, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
+    WinHttpOpenRequest, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Networking::WinInet::{
+    HttpOpenRequestW, HttpSendRequestW, INTERNET_FLAG_NO_CACHE_WRITE, INTERNET_FLAG_RELOAD,
+    INTERNET_OPEN_TYPE_DIRECT, INTERNET_OPTION_CONNECT_TIMEOUT, INTERNET_SERVICE_HTTP,
+    InternetCloseHandle, InternetConnectW, InternetOpenW, InternetSetOptionW,
+};
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, CreateDesktopW, DESKTOP_CREATEWINDOW, GetThreadDesktop,
     GetUserObjectInformationW, UOI_NAME,
@@ -54,6 +65,9 @@ fn run() -> Result<(), String> {
         "direct-denied" => direct_denied(),
         "direct-udp-denied" => direct_udp_denied(),
         "direct-http" => direct_http(),
+        "direct-powershell-denied" => direct_powershell_denied(),
+        "direct-winhttp-denied" => direct_winhttp_denied(),
+        "direct-wininet-denied" => direct_wininet_denied(),
         "http-proxy" => http_proxy(false),
         "http-proxy-denied" => http_proxy(true),
         "socks5" => socks5(false),
@@ -266,6 +280,226 @@ fn direct_udp_denied() -> Result<(), String> {
         .map_err(|error| format!("bind direct UDP probe: {error}"))?;
     let _ = socket.send_to(b"cageforge-direct-udp-probe", network_target()?);
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn direct_winhttp_denied() -> Result<(), String> {
+    let target = network_target()?;
+    let host = target
+        .ip()
+        .to_string()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let object = [b'/' as u16, 0];
+    let agent = [b'c' as u16, b'a' as u16, b'g' as u16, b'e' as u16, 0];
+    let session = unsafe {
+        WinHttpOpen(
+            agent.as_ptr(),
+            WINHTTP_ACCESS_TYPE_NO_PROXY,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if session.is_null() {
+        return Err(format!(
+            "WinHTTP session setup failed before the network probe: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let result = (|| {
+        if unsafe { WinHttpSetTimeouts(session, 2_000, 2_000, 2_000, 2_000) } == 0 {
+            return Err(format!(
+                "WinHTTP timeout setup failed: Windows error {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        let connection = unsafe { WinHttpConnect(session, host.as_ptr(), target.port(), 0) };
+        if connection.is_null() {
+            return Err(format!(
+                "WinHTTP connection handle setup failed before the network probe: Windows error {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        let request = unsafe {
+            WinHttpOpenRequest(
+                connection,
+                std::ptr::null(),
+                object.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        if request.is_null() {
+            unsafe { WinHttpCloseHandle(connection) };
+            return Err(format!(
+                "WinHTTP request setup failed before the network probe: Windows error {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        let sent =
+            unsafe { WinHttpSendRequest(request, std::ptr::null(), 0, std::ptr::null(), 0, 0, 0) };
+        let received =
+            sent != 0 && unsafe { WinHttpReceiveResponse(request, std::ptr::null_mut()) } != 0;
+        unsafe {
+            WinHttpCloseHandle(request);
+            WinHttpCloseHandle(connection);
+        }
+        if received {
+            Err(
+                "WinHTTP direct request unexpectedly crossed the disabled network boundary"
+                    .to_string(),
+            )
+        } else {
+            Ok(())
+        }
+    })();
+    unsafe { WinHttpCloseHandle(session) };
+    result
+}
+
+#[cfg(not(target_os = "windows"))]
+fn direct_winhttp_denied() -> Result<(), String> {
+    Err("WinHTTP probe requires Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn direct_wininet_denied() -> Result<(), String> {
+    let target = network_target()?;
+    let host = target
+        .ip()
+        .to_string()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let object = [b'/' as u16, 0];
+    let agent = [b'c' as u16, b'a' as u16, b'g' as u16, b'e' as u16, 0];
+    let session = unsafe {
+        InternetOpenW(
+            agent.as_ptr(),
+            INTERNET_OPEN_TYPE_DIRECT,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if session.is_null() {
+        return Err(format!(
+            "WinINet session setup failed before the network probe: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let timeout = 2_000u32;
+    let result = (|| {
+        if unsafe {
+            InternetSetOptionW(
+                session,
+                INTERNET_OPTION_CONNECT_TIMEOUT,
+                (&timeout as *const u32).cast(),
+                std::mem::size_of_val(&timeout) as u32,
+            )
+        } == 0
+        {
+            return Err(format!(
+                "WinINet timeout setup failed: Windows error {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        let connection = unsafe {
+            InternetConnectW(
+                session,
+                host.as_ptr(),
+                target.port(),
+                std::ptr::null(),
+                std::ptr::null(),
+                INTERNET_SERVICE_HTTP,
+                0,
+                0,
+            )
+        };
+        if connection.is_null() {
+            return Err(format!(
+                "WinINet connection handle setup failed before the network probe: Windows error {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        let request = unsafe {
+            HttpOpenRequestW(
+                connection,
+                std::ptr::null(),
+                object.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD,
+                0,
+            )
+        };
+        if request.is_null() {
+            unsafe { InternetCloseHandle(connection) };
+            return Err(format!(
+                "WinINet request setup failed before the network probe: Windows error {}",
+                unsafe { GetLastError() }
+            ));
+        }
+        let sent = unsafe { HttpSendRequestW(request, std::ptr::null(), 0, std::ptr::null(), 0) };
+        unsafe {
+            InternetCloseHandle(request);
+            InternetCloseHandle(connection);
+        }
+        if sent != 0 {
+            Err(
+                "WinINet direct request unexpectedly crossed the disabled network boundary"
+                    .to_string(),
+            )
+        } else {
+            Ok(())
+        }
+    })();
+    unsafe { InternetCloseHandle(session) };
+    result
+}
+
+#[cfg(not(target_os = "windows"))]
+fn direct_wininet_denied() -> Result<(), String> {
+    Err("WinINet probe requires Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn direct_powershell_denied() -> Result<(), String> {
+    let target = network_target()?;
+    let script = format!(
+        "try {{ $client = New-Object Net.WebClient; $client.Proxy = $null; $client.DownloadString('http://{target}/') | Out-Null; exit 42 }} catch [System.Net.WebException] {{ exit 0 }} catch {{ exit 43 }}"
+    );
+    let status = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .status()
+        .map_err(|error| format!("start PowerShell network probe: {error}"))?;
+    match status.code() {
+        Some(0) => Ok(()),
+        Some(code) => Err(format!(
+            "PowerShell direct request was not denied by the expected WebException (exit code {code})"
+        )),
+        None => Err("PowerShell network probe was terminated without an exit code".to_string()),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn direct_powershell_denied() -> Result<(), String> {
+    Err("PowerShell probe requires Windows".to_string())
 }
 
 fn direct_http() -> Result<(), String> {

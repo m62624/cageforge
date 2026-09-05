@@ -1435,6 +1435,27 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         "disabled Windows sandbox delivered a direct UDP loopback datagram"
     );
 
+    for mode in [
+        "direct-winhttp-denied",
+        "direct-wininet-denied",
+        "direct-powershell-denied",
+    ] {
+        let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .unwrap_or_else(|error| panic!("{mode} target listener: {error}"));
+        let address = target
+            .local_addr()
+            .unwrap_or_else(|error| panic!("{mode} target address: {error}"));
+        run_network_probe(
+            &backend,
+            workspace.path(),
+            &access_fixture,
+            NetworkPolicy::disabled(),
+            mode,
+            address,
+        );
+        assert_no_connection(&target, mode);
+    }
+
     let (direct_target, direct_server) = start_http_server();
     run_network_probe(
         &backend,
