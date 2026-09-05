@@ -474,7 +474,7 @@ fn direct_wininet_denied() -> Result<(), String> {
 fn direct_powershell_denied() -> Result<(), String> {
     let target = network_target()?;
     let script = format!(
-        "try {{ $client = New-Object Net.WebClient; $client.Proxy = $null; $client.DownloadString('http://{target}/') | Out-Null; exit 42 }} catch [System.Net.WebException] {{ exit 0 }} catch {{ exit 43 }}"
+        "try {{ $client = New-Object Net.WebClient; $client.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy(); $client.DownloadString('http://{target}/') | Out-Null; exit 42 }} catch {{ if ($_.Exception -is [System.Net.WebException] -or $_.Exception.GetBaseException() -is [System.Net.WebException]) {{ exit 0 }} else {{ exit 43 }} }}"
     );
     let status = std::process::Command::new("powershell.exe")
         .args([
