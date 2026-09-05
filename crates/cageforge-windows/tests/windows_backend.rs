@@ -1451,6 +1451,9 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     );
 
     for mode in [
+        "direct-dns-denied",
+        "direct-icmp-denied",
+        "direct-smb-denied",
         "direct-winhttp-denied",
         "direct-wininet-denied",
         "direct-powershell-denied",

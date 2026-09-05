@@ -16,6 +16,18 @@ use windows_sys::Win32::Foundation::{
     ERROR_PRIVILEGE_NOT_HELD, GetLastError, WAIT_OBJECT_0,
 };
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::NetworkManagement::Dns::{
+    DNS_QUERY_STANDARD, DNS_TYPE_A, DnsFree, DnsFreeRecordList, DnsQuery_W,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    ICMP_ECHO_REPLY, IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::NetworkManagement::WNet::{
+    NETRESOURCEW, RESOURCETYPE_DISK, WNetAddConnection2W, WNetCancelConnection2W,
+};
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::Networking::WinHttp::{
     WINHTTP_ACCESS_TYPE_NO_PROXY, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
     WinHttpOpenRequest, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
@@ -82,6 +94,9 @@ fn run() -> Result<(), String> {
         "denied-read" => denied_read(),
         "direct-denied" => direct_denied(),
         "direct-udp-denied" => direct_udp_denied(),
+        "direct-dns-denied" => direct_dns_denied(),
+        "direct-icmp-denied" => direct_icmp_denied(),
+        "direct-smb-denied" => direct_smb_denied(),
         "direct-http" => direct_http(),
         "direct-powershell-denied" => direct_powershell_denied(),
         "direct-winhttp-denied" => direct_winhttp_denied(),
@@ -480,6 +495,108 @@ fn direct_udp_denied() -> Result<(), String> {
         .map_err(|error| format!("bind direct UDP probe: {error}"))?;
     let _ = socket.send_to(b"cageforge-direct-udp-probe", network_target()?);
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn direct_dns_denied() -> Result<(), String> {
+    let name = "example.com\0".encode_utf16().collect::<Vec<_>>();
+    let mut records = std::ptr::null_mut();
+    let status = unsafe {
+        DnsQuery_W(
+            name.as_ptr(),
+            DNS_TYPE_A,
+            DNS_QUERY_STANDARD,
+            std::ptr::null_mut(),
+            &mut records,
+            std::ptr::null_mut(),
+        )
+    };
+    if status == 0 && !records.is_null() {
+        unsafe { DnsFree(records.cast(), DnsFreeRecordList) };
+        return Err(
+            "direct DNS query unexpectedly crossed the disabled network boundary".to_string(),
+        );
+    }
+    if !records.is_null() {
+        unsafe { DnsFree(records.cast(), DnsFreeRecordList) };
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn direct_dns_denied() -> Result<(), String> {
+    Err("direct DNS probe requires Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn direct_icmp_denied() -> Result<(), String> {
+    let handle = unsafe { IcmpCreateFile() };
+    if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+        return Err(format!(
+            "ICMP probe handle setup failed: Windows error {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let request = b"cageforge-icmp-probe";
+    let mut reply = vec![0u8; std::mem::size_of::<ICMP_ECHO_REPLY>() + request.len() + 8];
+    let replies = unsafe {
+        IcmpSendEcho(
+            handle,
+            u32::from_be_bytes([127, 0, 0, 1]),
+            request.as_ptr().cast(),
+            request.len() as u16,
+            std::ptr::null(),
+            reply.as_mut_ptr().cast(),
+            reply.len() as u32,
+            2_000,
+        )
+    };
+    unsafe { IcmpCloseHandle(handle) };
+    if replies != 0 {
+        return Err(
+            "direct ICMP query unexpectedly crossed the disabled network boundary".to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn direct_icmp_denied() -> Result<(), String> {
+    Err("direct ICMP probe requires Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn direct_smb_denied() -> Result<(), String> {
+    let remote_name = r"\\127.0.0.1\IPC$"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let resource = NETRESOURCEW {
+        dwScope: 0,
+        dwType: RESOURCETYPE_DISK,
+        dwDisplayType: 0,
+        dwUsage: 0,
+        lpLocalName: std::ptr::null_mut(),
+        lpRemoteName: remote_name.as_ptr().cast_mut(),
+        lpComment: std::ptr::null_mut(),
+        lpProvider: std::ptr::null_mut(),
+    };
+    let status = unsafe { WNetAddConnection2W(&resource, std::ptr::null(), std::ptr::null(), 0) };
+    if status == 0 {
+        unsafe { WNetCancelConnection2W(remote_name.as_ptr(), 0, 1) };
+        return Err(
+            "direct SMB connection unexpectedly crossed the disabled network boundary".to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn direct_smb_denied() -> Result<(), String> {
+    Err("direct SMB probe requires Windows".to_string())
 }
 
 #[cfg(target_os = "windows")]
