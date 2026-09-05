@@ -146,7 +146,15 @@ impl BoundaryTerminator {
     pub(crate) fn terminate(&self, exit_code: u32) -> Result<(), ParentBoundaryError> {
         let job_result = self.terminate_job(exit_code);
         let runner_result = self.terminate_runner(exit_code);
-        job_result.and(runner_result)
+        // The Job Object and the authenticated runner are independent parts
+        // of the boundary.  Always attempt both: a failed Job operation must
+        // not suppress the runner termination attempt and leave the trusted
+        // process alive until a later retry.
+        match (job_result, runner_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+        }
     }
 
     #[allow(unsafe_code)]
