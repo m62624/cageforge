@@ -336,6 +336,16 @@ fn shell_activation_child() -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
+fn process_broker_child() -> Result<(), String> {
+    Err("process-broker child probe requires Windows".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_activation_child() -> Result<(), String> {
+    Err("shell-activation child probe requires Windows".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
 fn private_desktop() -> Result<(), String> {
     Err("private desktop probe requires Windows".to_string())
 }
