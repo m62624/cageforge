@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::mem::offset_of;
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1456,6 +1456,24 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
         disabled_address,
     );
     assert_no_connection(&disabled_target, "disabled Windows sandbox network");
+
+    let disabled_ipv6_target =
+        TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).expect("disabled IPv6 target listener");
+    let disabled_ipv6_address = disabled_ipv6_target
+        .local_addr()
+        .expect("disabled IPv6 target address");
+    run_network_probe(
+        &backend,
+        workspace.path(),
+        &access_fixture,
+        NetworkPolicy::disabled(),
+        "direct-ipv6-denied",
+        disabled_ipv6_address,
+    );
+    assert_no_connection(
+        &disabled_ipv6_target,
+        "disabled Windows sandbox IPv6 loopback network",
+    );
 
     let (disabled_udp_target, disabled_udp_server) = start_udp_server();
     run_network_probe(
