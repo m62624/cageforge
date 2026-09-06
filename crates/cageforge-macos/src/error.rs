@@ -67,6 +67,19 @@ pub enum MacosBackendError {
         #[source]
         source: io::Error,
     },
+    /// The configured Seatbelt executable is a symbolic link and cannot be
+    /// pinned safely by the backend.
+    #[error("Seatbelt executable must not be a symbolic link: {path:?}")]
+    SeatbeltExecutableSymlink {
+        /// Rejected executable path.
+        path: PathBuf,
+    },
+    /// The configured Seatbelt executable is not a regular file.
+    #[error("Seatbelt executable is not a regular file: {path:?}")]
+    SeatbeltExecutableNotRegular {
+        /// Rejected executable path.
+        path: PathBuf,
+    },
     /// Native lowering is not yet available for a requested capability.
     #[error("macOS backend cannot safely lower requested capability: {capability}")]
     UnsupportedCapability {

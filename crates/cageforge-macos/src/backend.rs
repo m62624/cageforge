@@ -43,20 +43,18 @@ impl std::fmt::Debug for MacosBackend {
 impl MacosBackend {
     /// Constructs a backend after validating the fixed Seatbelt executable.
     pub fn new(config: MacosBackendConfig) -> Result<Self, MacosBackendError> {
-        let metadata = fs::metadata(config.seatbelt_executable()).map_err(|source| {
+        let path = config.seatbelt_executable().to_path_buf();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| {
             MacosBackendError::SeatbeltExecutable {
-                path: config.seatbelt_executable().to_path_buf(),
+                path: path.clone(),
                 source,
             }
         })?;
+        if metadata.file_type().is_symlink() {
+            return Err(MacosBackendError::SeatbeltExecutableSymlink { path });
+        }
         if !metadata.is_file() {
-            return Err(MacosBackendError::SeatbeltExecutable {
-                path: config.seatbelt_executable().to_path_buf(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "configured Seatbelt executable is not a regular file",
-                ),
-            });
+            return Err(MacosBackendError::SeatbeltExecutableNotRegular { path });
         }
         Ok(Self {
             config,

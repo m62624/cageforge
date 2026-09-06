@@ -255,3 +255,22 @@ fn missing_seatbelt_executable_is_typed() {
         MacosBackendError::SeatbeltExecutable { .. }
     ));
 }
+
+#[test]
+fn symlinked_seatbelt_executable_is_rejected_before_launch() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = TempDir::new().expect("temporary directory");
+    let link = temporary.path().join("sandbox-exec");
+    symlink("/usr/bin/sandbox-exec", &link).expect("Seatbelt symlink");
+    let error = MacosBackend::new(
+        MacosBackendConfig::new()
+            .with_seatbelt_executable(link.clone())
+            .expect("absolute path"),
+    )
+    .expect_err("symlinked executable");
+    assert!(matches!(
+        error,
+        MacosBackendError::SeatbeltExecutableSymlink { path } if path == link
+    ));
+}
