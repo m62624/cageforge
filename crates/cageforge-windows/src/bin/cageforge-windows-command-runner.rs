@@ -8,6 +8,9 @@ use std::process::ExitCode;
 #[path = "../account_identity.rs"]
 mod account_identity;
 #[cfg(target_os = "windows")]
+#[path = "../acl_contract.rs"]
+mod acl_contract;
+#[cfg(target_os = "windows")]
 #[path = "../native_strings.rs"]
 mod native_strings;
 #[cfg(target_os = "windows")]

@@ -31,14 +31,14 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_DEFAULT;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
-use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::core::GUID;
 
 use crate::firewall_contract::{
     WFP_BASE_FILTERS, WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER,
-    WFP_PROVIDER_KEY as PROVIDER_KEY, WFP_SUBLAYER_KEY as SUBLAYER_KEY, WfpBaseCondition,
-    wfp_filter_guid as derived_guid, wfp_guid_equal as guid_eq, wfp_guid_string as guid_string,
-    wfp_owner_key as owner_key, wfp_wide as wide,
+    WFP_PROVIDER_KEY as PROVIDER_KEY, WFP_SUBLAYER_KEY as SUBLAYER_KEY,
+    WFP_TRANSACTION_WAIT_TIMEOUT_MS, WfpBaseCondition, wfp_filter_guid as derived_guid,
+    wfp_guid_equal as guid_eq, wfp_guid_string as guid_string, wfp_owner_key as owner_key,
+    wfp_wide as wide,
 };
 use crate::setup_protocol::{SetupFailureCode, SetupStage};
 
@@ -85,8 +85,6 @@ struct AclBounds {
     end: usize,
 }
 
-const SID_HEADER_BYTES: usize = 8;
-
 #[allow(unsafe_code)]
 impl Drop for Engine {
     fn drop(&mut self) {
@@ -105,7 +103,7 @@ impl Engine {
             name: session_name.as_ptr().cast_mut(),
             description: std::ptr::null_mut(),
         };
-        session.txnWaitTimeoutInMSec = INFINITE;
+        session.txnWaitTimeoutInMSec = WFP_TRANSACTION_WAIT_TIMEOUT_MS;
         let mut handle = std::ptr::null_mut();
         let status = unsafe {
             FwpmEngineOpen0(
@@ -611,7 +609,13 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
     let Some(ace_size) = ace_size(raw_ace, bounds) else {
         return false;
     };
-    if ace_size < size_of::<ACCESS_ALLOWED_ACE>() || !sid_fits_ace(raw_ace, ace_size) {
+    if ace_size < size_of::<ACCESS_ALLOWED_ACE>()
+        || !crate::acl_contract::sid_fits_ace(
+            raw_ace.cast(),
+            ace_size,
+            offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+        )
+    {
         return false;
     }
     let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
@@ -662,28 +666,6 @@ fn ace_size(raw: *mut c_void, bounds: AclBounds) -> Option<usize> {
         return None;
     }
     Some(size)
-}
-
-#[allow(unsafe_code)]
-fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
-    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
-    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if sid_header_end > ace_size {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
-    let count = usize::from(bytes[sid_offset + 1]);
-    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(length)
-        .is_some_and(|end| end <= bytes.len())
 }
 
 fn filter_specs(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterSpec> {
@@ -840,13 +822,17 @@ mod tests {
     };
     use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
 
-    use super::{ConditionSpec, IPV4_LOOPBACK_HOST_ORDER, filter_specs, guid_string, sid_fits_ace};
+    use super::{ConditionSpec, IPV4_LOOPBACK_HOST_ORDER, filter_specs, guid_string};
 
     #[test]
     fn malformed_wfp_user_ace_sid_is_rejected_before_native_validation() {
         let mut ace = [0u8; 20];
         ace[9] = 3;
-        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+        assert!(!crate::acl_contract::sid_fits_ace(
+            ace.as_mut_ptr().cast(),
+            ace.len(),
+            std::mem::offset_of!(windows_sys::Win32::Security::ACCESS_ALLOWED_ACE, SidStart),
+        ));
     }
 
     #[test]

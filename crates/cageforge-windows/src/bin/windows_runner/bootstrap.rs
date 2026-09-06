@@ -31,6 +31,7 @@ use windows_sys::Win32::System::Threading::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+use super::sid_fits_buffer;
 use crate::runner_protocol::{
     RunnerMessage, WindowsRunnerFailure, WindowsRunnerFailureCode, WindowsRunnerFailureStage,
     write_frame,
@@ -40,7 +41,6 @@ use crate::native_strings::local_sid_string;
 use crate::runner_manifest::CREDENTIALS_VERSION;
 
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
-const SID_HEADER_BYTES: usize = 8;
 
 struct BootstrapArguments {
     report_pipe: String,
@@ -549,35 +549,6 @@ fn decrypt_credential(protected: &[u8]) -> Result<Vec<u8>, BootstrapFailure> {
         unsafe { LocalFree(output.pbData as HLOCAL) };
     }
     Ok(plaintext)
-}
-
-fn range_fits_buffer(buffer: &[u8], pointer: *const u8, length: usize) -> bool {
-    let start = buffer.as_ptr() as usize;
-    let Some(end) = start.checked_add(buffer.len()) else {
-        return false;
-    };
-    let pointer = pointer as usize;
-    let Some(pointer_end) = pointer.checked_add(length) else {
-        return false;
-    };
-    pointer >= start && pointer_end <= end
-}
-
-fn sid_fits_buffer(buffer: &[u8], sid: *mut c_void) -> bool {
-    let Some(offset) = (sid as usize).checked_sub(buffer.as_ptr() as usize) else {
-        return false;
-    };
-    if !range_fits_buffer(buffer, sid.cast(), SID_HEADER_BYTES) {
-        return false;
-    }
-    let count = usize::from(buffer[offset + 1]);
-    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    range_fits_buffer(buffer, sid.cast(), length)
 }
 
 #[allow(unsafe_code)]

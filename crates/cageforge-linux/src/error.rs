@@ -696,6 +696,14 @@ pub enum LinuxBackendError {
         #[source]
         source: std::io::Error,
     },
+    /// The per-user setup lock remained held beyond the bounded wait.
+    #[error("timed out acquiring Linux sandbox setup lock {path:?} after {timeout_ms} ms")]
+    SetupLockTimeout {
+        /// Lock file path.
+        path: PathBuf,
+        /// Maximum lock wait in milliseconds.
+        timeout_ms: u128,
+    },
     /// The setup lock is not a private regular file owned by the current user.
     #[error("Linux sandbox setup lock is unsafe: {path:?}")]
     UnsafeSetupLock {

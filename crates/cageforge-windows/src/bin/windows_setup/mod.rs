@@ -592,6 +592,7 @@ fn uninstall(request: &SetupRequest) -> NativeSetupResult<()> {
 fn capability_lock_native_code(error: &CapabilityLockError) -> Option<u32> {
     match error {
         CapabilityLockError::Acquire { code, .. } => Some(*code),
+        CapabilityLockError::Timeout { .. } => None,
     }
 }
 

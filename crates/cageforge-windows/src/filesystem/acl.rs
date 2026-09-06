@@ -68,8 +68,6 @@ const WRITE_DENY_MASK: u32 = FILE_GENERIC_WRITE
     | WRITE_OWNER;
 const SUBTREE_INHERITANCE: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
 const MATERIALIZATION_MARKER_NAME: &str = ".cageforge-materialized-path";
-const SID_HEADER_BYTES: usize = 8;
-
 pub(crate) struct FilesystemAclEnforcement {
     authorities: FilesystemAuthorities,
     retained_paths: Vec<ValidatedPath>,
@@ -2763,7 +2761,11 @@ fn filter_acl(
                     .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
             }
             .cast();
-            if !sid_fits_ace(raw, ace_size, sid) {
+            if !crate::acl_contract::sid_fits_ace(
+                raw,
+                ace_size,
+                offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+            ) {
                 return Err(FilesystemAclError::MalformedAce {
                     path: path.final_path().to_path_buf(),
                     index,
@@ -2962,7 +2964,12 @@ fn verify_entry(
                 .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
         }
         .cast::<c_void>();
-        if !sid_fits_ace(raw, ace_size, sid) || unsafe { IsValidSid(sid) } == 0 {
+        if !crate::acl_contract::sid_fits_ace(
+            raw,
+            ace_size,
+            offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+        ) || unsafe { IsValidSid(sid) } == 0
+        {
             return Err(FilesystemAclError::MalformedAce {
                 path: path.final_path().to_path_buf(),
                 index,
@@ -3050,7 +3057,12 @@ fn verify_exact_entry(
                 .add(offset_of!(ACCESS_ALLOWED_ACE, SidStart))
         }
         .cast::<c_void>();
-        if !sid_fits_ace(raw, ace_size, sid) || unsafe { IsValidSid(sid) } == 0 {
+        if !crate::acl_contract::sid_fits_ace(
+            raw,
+            ace_size,
+            offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+        ) || unsafe { IsValidSid(sid) } == 0
+        {
             return Err(FilesystemAclError::MalformedAce {
                 path: path.final_path().to_path_buf(),
                 index,
@@ -3189,40 +3201,6 @@ fn checked_ace_size(
 }
 
 #[allow(unsafe_code)]
-fn sid_fits_ace(raw: *mut c_void, ace_size: usize, sid: *mut c_void) -> bool {
-    let raw_start = raw as usize;
-    let sid_offset = (sid as usize).checked_sub(raw_start);
-    let Some(sid_offset) = sid_offset else {
-        return false;
-    };
-    let Some(bytes) = (sid_offset <= ace_size)
-        .then(|| unsafe { std::slice::from_raw_parts(raw.cast::<u8>(), ace_size) })
-    else {
-        return false;
-    };
-    sid_fits_ace_bytes(bytes, sid_offset)
-}
-
-fn sid_fits_ace_bytes(ace: &[u8], sid_offset: usize) -> bool {
-    let Some(header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if header_end > ace.len() {
-        return false;
-    }
-    let subauthority_count = usize::from(ace[sid_offset + 1]);
-    let Some(subauthority_bytes) = subauthority_count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(sid_length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(sid_length)
-        .is_some_and(|end| end <= ace.len())
-}
-
-#[allow(unsafe_code)]
 fn ace(
     path: &ValidatedPath,
     dacl: *mut ACL,
@@ -3275,7 +3253,7 @@ mod tests {
     use super::{
         AclAccessMode, AclEntry, AclInheritance, PendingAclOperation, READ_ALLOW_MASK,
         WRITE_ALLOW_MASK, entries_for_existing_path, materialization_components,
-        nested_acl_boundaries, open_discovered_acl_path, sid_fits_ace_bytes, subtree_paths,
+        nested_acl_boundaries, open_discovered_acl_path, subtree_paths,
     };
 
     #[test]
@@ -3320,9 +3298,9 @@ mod tests {
     fn sid_must_fit_inside_the_ace_before_native_validation() {
         let mut ace = vec![0u8; 16];
         ace[5] = 1;
-        assert!(sid_fits_ace_bytes(&ace, 4));
-        assert!(!sid_fits_ace_bytes(&ace[..15], 4));
-        assert!(!sid_fits_ace_bytes(&ace, 9));
+        assert!(crate::acl_contract::sid_fits_ace_bytes(&ace, 4));
+        assert!(!crate::acl_contract::sid_fits_ace_bytes(&ace[..15], 4));
+        assert!(!crate::acl_contract::sid_fits_ace_bytes(&ace, 9));
     }
 
     #[test]

@@ -41,8 +41,6 @@ const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
-const SID_HEADER_BYTES: usize = 8;
-
 pub(crate) struct RunnerPipeNames {
     pub(crate) request: String,
     pub(crate) response: String,
@@ -495,8 +493,16 @@ fn ace_matches(
     };
     if expected_size < size_of::<ACCESS_ALLOWED_ACE>()
         || actual_size < size_of::<ACCESS_ALLOWED_ACE>()
-        || !sid_fits_ace(expected_raw, expected_size)
-        || !sid_fits_ace(actual_raw, actual_size)
+        || !crate::acl_contract::sid_fits_ace(
+            expected_raw,
+            expected_size,
+            offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+        )
+        || !crate::acl_contract::sid_fits_ace(
+            actual_raw,
+            actual_size,
+            offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+        )
     {
         return false;
     }
@@ -541,28 +547,6 @@ fn ace_size(raw: *mut c_void, bounds: AclBounds) -> Option<usize> {
         return None;
     }
     Some(size)
-}
-
-#[allow(unsafe_code)]
-fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
-    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
-    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if sid_header_end > ace_size {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
-    let count = usize::from(bytes[sid_offset + 1]);
-    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(length)
-        .is_some_and(|end| end <= bytes.len())
 }
 
 const fn client_access_mask(direction: ParentPipeDirection) -> u32 {
@@ -634,7 +618,7 @@ fn connect_and_verify(
 mod tests {
     use super::{
         FILE_APPEND_DATA, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
-        client_access_mask, sid_fits_ace,
+        client_access_mask,
     };
     use crate::runner::pipe::ParentPipeDirection;
 
@@ -658,6 +642,10 @@ mod tests {
     fn malformed_pipe_ace_sid_is_rejected_before_native_sid_validation() {
         let mut ace = [0u8; 20];
         ace[9] = 3;
-        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+        assert!(!crate::acl_contract::sid_fits_ace(
+            ace.as_mut_ptr().cast(),
+            ace.len(),
+            std::mem::offset_of!(windows_sys::Win32::Security::ACCESS_ALLOWED_ACE, SidStart),
+        ));
     }
 }

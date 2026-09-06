@@ -27,14 +27,13 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 
 use crate::runner_protocol::{WindowsRunnerFailureCode, WindowsRunnerFailureStage};
 
+use super::{range_fits_buffer, sid_fits_buffer};
 use crate::native_strings::local_sid_string;
 
 const GENERIC_ALL: u32 = 0x1000_0000;
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 const WRITE_RESTRICTED: u32 = 0x0000_0008;
 const EVERYONE_SID: &str = "S-1-1-0";
-const SID_HEADER_BYTES: usize = 8;
-
 pub(super) struct RestrictedPrimaryToken {
     handle: OwnedHandle,
     user_sid: String,
@@ -637,7 +636,11 @@ fn verify_default_dacl(
             || unsafe { (*ace).Mask } != GENERIC_ALL
             || ace_size < size_of::<ACCESS_ALLOWED_ACE>()
             || ace_end > acl_end
-            || !sid_fits_ace(raw_ace.cast(), ace_size)
+            || !crate::acl_contract::sid_fits_ace(
+                raw_ace.cast(),
+                ace_size,
+                offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+            )
         {
             return Err(TokenHardeningError::DefaultDaclMismatch);
         }
@@ -649,57 +652,6 @@ fn verify_default_dacl(
     } else {
         Err(TokenHardeningError::DefaultDaclMismatch)
     }
-}
-
-fn range_fits_buffer(buffer: &[u8], pointer: *const u8, length: usize) -> bool {
-    let start = buffer.as_ptr() as usize;
-    let Some(end) = start.checked_add(buffer.len()) else {
-        return false;
-    };
-    let pointer = pointer as usize;
-    let Some(pointer_end) = pointer.checked_add(length) else {
-        return false;
-    };
-    pointer >= start && pointer_end <= end
-}
-
-fn sid_fits_buffer(buffer: &[u8], sid: *mut c_void) -> bool {
-    let Some(offset) = (sid as usize).checked_sub(buffer.as_ptr() as usize) else {
-        return false;
-    };
-    if !range_fits_buffer(buffer, sid.cast(), SID_HEADER_BYTES) {
-        return false;
-    }
-    let count = usize::from(buffer[offset + 1]);
-    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    range_fits_buffer(buffer, sid.cast(), length)
-}
-
-#[allow(unsafe_code)]
-fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
-    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
-    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if sid_header_end > ace_size {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
-    let count = usize::from(bytes[sid_offset + 1]);
-    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(length)
-        .is_some_and(|end| end <= bytes.len())
 }
 
 #[allow(unsafe_code)]
@@ -756,7 +708,7 @@ mod tests {
 
     use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
 
-    use super::{sid_fits_ace, sid_fits_buffer};
+    use super::sid_fits_buffer;
 
     #[test]
     fn token_sid_must_fit_the_returned_buffer() {
@@ -781,8 +733,16 @@ mod tests {
         let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
         let mut ace = vec![0u8; sid_offset + 8];
 
-        assert!(sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+        assert!(crate::acl_contract::sid_fits_ace(
+            ace.as_mut_ptr().cast(),
+            ace.len(),
+            sid_offset,
+        ));
         ace[sid_offset + 1] = 1;
-        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+        assert!(!crate::acl_contract::sid_fits_ace(
+            ace.as_mut_ptr().cast(),
+            ace.len(),
+            sid_offset,
+        ));
     }
 }

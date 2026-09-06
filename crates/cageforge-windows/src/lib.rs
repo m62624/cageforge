@@ -14,6 +14,7 @@
 
 mod account_groups;
 mod account_identity;
+mod acl_contract;
 mod backend;
 mod capability;
 mod config;

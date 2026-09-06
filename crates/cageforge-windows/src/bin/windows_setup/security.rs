@@ -54,8 +54,6 @@ struct PendingProtectedFile {
     delete_on_drop: bool,
 }
 
-const SID_HEADER_BYTES: usize = 8;
-
 pub(super) struct ProtectedFileWriteContext {
     stage: SetupStage,
     acl_code: SetupFailureCode,
@@ -943,7 +941,11 @@ fn protected_descriptor_matches(
         if unsafe { (*ace).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
             || ace_size < size_of::<ACCESS_ALLOWED_ACE>()
             || ace_end > acl_end
-            || !sid_fits_ace(raw_ace.cast(), ace_size)
+            || !crate::acl_contract::sid_fits_ace(
+                raw_ace.cast(),
+                ace_size,
+                offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+            )
         {
             return false;
         }
@@ -961,28 +963,6 @@ fn protected_descriptor_matches(
     actual_aces.sort_unstable();
     expected_aces.sort_unstable();
     actual_aces == expected_aces
-}
-
-#[allow(unsafe_code)]
-fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
-    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
-    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if sid_header_end > ace_size {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
-    let Some(subauthority_bytes) = usize::from(bytes[sid_offset + 1]).checked_mul(size_of::<u32>())
-    else {
-        return false;
-    };
-    let Some(sid_length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(sid_length)
-        .is_some_and(|end| end <= bytes.len())
 }
 
 #[allow(unsafe_code)]
@@ -1056,6 +1036,10 @@ mod tests {
         let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
         ace[sid_offset] = 1;
         ace[sid_offset + 1] = 1;
-        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+        assert!(!crate::acl_contract::sid_fits_ace(
+            ace.as_mut_ptr().cast(),
+            ace.len(),
+            sid_offset,
+        ));
     }
 }

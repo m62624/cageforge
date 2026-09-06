@@ -19,6 +19,9 @@ pub(crate) const WFP_SUBLAYER_KEY: GUID = GUID::from_u128(0x199a41a9_8e19_4830_8
 /// IPv4 loopback in the byte order required by WFP address conditions.
 pub(crate) const WFP_IPV4_LOOPBACK_HOST_ORDER: u32 = u32::from_be_bytes([127, 0, 0, 1]);
 
+/// Maximum time WFP setup or read-back waits for another transaction.
+pub(crate) const WFP_TRANSACTION_WAIT_TIMEOUT_MS: u32 = 15_000;
+
 /// Windows Firewall address set used for loopback-only rules.
 pub(crate) const FIREWALL_LOOPBACK_ADDRESSES: &str = "127.0.0.0/8,::/127";
 

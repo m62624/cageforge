@@ -9,11 +9,15 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::error::LinuxBackendError;
 
 static OWNER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SHARED_SETUP_DIRECTORY: &str = "/tmp";
+const SETUP_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const SETUP_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileIdentity {
@@ -55,16 +59,28 @@ impl SetupLock {
                 source,
             })?;
         validate_private_file(&path, &file, uid)?;
+        let deadline = Instant::now() + SETUP_LOCK_WAIT_TIMEOUT;
         loop {
             #[allow(unsafe_code)]
-            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
             if result == 0 {
                 break;
             }
             let source = std::io::Error::last_os_error();
-            if source.kind() != std::io::ErrorKind::Interrupted {
+            if source.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            if !matches!(source.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK)
+            {
                 return Err(LinuxBackendError::SetupLockFailed { path, source });
             }
+            if Instant::now() >= deadline {
+                return Err(LinuxBackendError::SetupLockTimeout {
+                    path,
+                    timeout_ms: SETUP_LOCK_WAIT_TIMEOUT.as_millis(),
+                });
+            }
+            thread::sleep(SETUP_LOCK_POLL_INTERVAL);
         }
         Ok(Self { file })
     }

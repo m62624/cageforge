@@ -304,6 +304,7 @@ impl Drop for LinuxChild {
             // gateway, or unmount synthetic targets while the boundary may
             // still be alive. Leak them deliberately until the process can
             // be recovered; this is fail-closed and preserves enforcement.
+            std::mem::forget(self.child.take());
             std::mem::forget(self.timeout_watchdog.take());
             std::mem::forget(self.gateway_runtime.take());
             std::mem::forget(self.protected_create_monitor.take());
