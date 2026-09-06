@@ -252,9 +252,19 @@ impl EffectiveNetworkPolicy {
                 .any(|policy| denies_all_unix_sockets(policy));
         let local_ipc_rules = enabled
             && !local_ipc_isolation
+            && policies
+                .iter()
+                .any(|policy| policy.unix_socket_mode() == UnixSocketMode::Restricted);
+        let local_ipc_deny_rules = enabled
+            && !local_ipc_isolation
+            && policies
+                .iter()
+                .all(|policy| policy.unix_socket_mode() == UnixSocketMode::Enabled)
             && policies.iter().any(|policy| {
-                !policy.unix_sockets().is_empty()
-                    || policy.unix_socket_mode() == UnixSocketMode::Restricted
+                policy
+                    .unix_sockets()
+                    .iter()
+                    .any(|rule| rule.access() == DomainAccess::Deny)
             });
         EffectiveNetworkRequirements {
             mode,
@@ -263,6 +273,7 @@ impl EffectiveNetworkPolicy {
             resolved_targets: domain_rules || local_address_restrictions,
             local_ipc_isolation,
             local_ipc_rules,
+            local_ipc_deny_rules,
         }
     }
 
@@ -307,6 +318,12 @@ impl EffectiveNetworkRequirements {
     /// Returns whether per-path local-IPC endpoint rules must be enforced.
     pub const fn local_ipc_rules(self) -> bool {
         self.local_ipc_rules
+    }
+
+    /// Returns whether explicit pathname local-IPC deny rules must be
+    /// enforced in an otherwise allow-all socket mode.
+    pub const fn local_ipc_deny_rules(self) -> bool {
+        self.local_ipc_deny_rules
     }
 }
 

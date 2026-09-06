@@ -108,9 +108,11 @@ For network enforcement:
   places the proof in the command environment or argv;
 - the gateway performs one DNS snapshot and authorizes the exact
   `SocketAddr` immediately before connecting; and
-- pathname Unix-socket rules are lowered only when their exact Seatbelt
-  semantics are demonstrated. Otherwise the backend returns the typed
-  unsupported-capability error and never silently permits all sockets.
+- pathname Unix-socket allow rules are lowered only when their exact Seatbelt
+  semantics are demonstrated. Explicit deny rules in an otherwise allow-all
+  socket mode require a separate portable deny capability; macOS does not
+  advertise that capability and therefore rejects that combination during
+  common preflight. The backend never silently permits all sockets.
 
 Each proxy ingress and gateway owns its policy, key, listener, and limits.
 Dropping one child closes and joins only its own runtime. A second instance

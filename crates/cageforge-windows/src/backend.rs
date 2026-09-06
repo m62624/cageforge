@@ -534,6 +534,7 @@ mod tests {
             BackendCapability::NetworkExternal,
             BackendCapability::NetworkLocalIpcIsolation,
             BackendCapability::NetworkLocalIpcRules,
+            BackendCapability::NetworkLocalIpcDenyRules,
         ] {
             assert!(
                 !actual.supports(unsupported),

@@ -13,9 +13,11 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cageforge_backend_api::{BackendRequest, SandboxBackend};
+use cageforge_backend_api::{
+    BackendCapability, BackendContractError, BackendRequest, SandboxBackend,
+};
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
-use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError, MacosNetworkError};
+use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError};
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
     NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
@@ -485,11 +487,46 @@ fn backend_is_send_sync_and_reusable_for_independent_instances() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Arc<MacosBackend>>();
     let backend = backend();
-    assert!(
-        backend
-            .capabilities()
-            .supports(cageforge_backend_api::BackendCapability::CommandExecution)
-    );
+    let actual = backend.capabilities();
+    let expected = [
+        BackendCapability::CommandExecution,
+        BackendCapability::WorkingDirectory,
+        BackendCapability::StdioInherit,
+        BackendCapability::StdioNull,
+        BackendCapability::StdioPipe,
+        BackendCapability::TimeoutDisabled,
+        BackendCapability::TimeoutBackendDefault,
+        BackendCapability::TimeoutLimit,
+        BackendCapability::FilesystemRestricted,
+        BackendCapability::FilesystemUnrestricted,
+        BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemAbsoluteScopes,
+        BackendCapability::FilesystemWorkspaceScopes,
+        BackendCapability::FilesystemRootScopes,
+        BackendCapability::FilesystemMinimalScopes,
+        BackendCapability::FilesystemTmpdirScopes,
+        BackendCapability::FilesystemConventionalTemporaryScopes,
+        BackendCapability::FilesystemReadOnlySubpaths,
+        BackendCapability::FilesystemGlobs,
+        BackendCapability::FilesystemGlobScanDepth,
+        BackendCapability::FilesystemMissingPathBehavior,
+        BackendCapability::FilesystemProtectedPaths,
+        BackendCapability::NetworkDisabled,
+        BackendCapability::NetworkEnabled,
+        BackendCapability::NetworkDomainRules,
+        BackendCapability::NetworkLocalAddressRestrictions,
+        BackendCapability::NetworkResolvedTargets,
+        BackendCapability::NetworkLocalIpcIsolation,
+        BackendCapability::NetworkLocalIpcRules,
+        BackendCapability::EnvironmentAll,
+        BackendCapability::EnvironmentCore,
+        BackendCapability::EnvironmentNone,
+        BackendCapability::EnvironmentFilters,
+        BackendCapability::EnvironmentOverrides,
+    ];
+    assert_eq!(actual.iter().copied().collect::<Vec<_>>(), expected);
+    assert!(!actual.supports(BackendCapability::NetworkLocalIpcDenyRules));
+    assert!(actual.supports(BackendCapability::CommandExecution));
 }
 
 #[test]
@@ -1228,8 +1265,8 @@ fn enabled_unix_socket_policy_rejects_an_explicit_denial() {
         .expect_err("unsupported explicit deny must fail before launch");
     assert!(matches!(
         error,
-        MacosBackendError::Network(MacosNetworkError::UnixSocketPolicy {
-            mode: UnixSocketMode::Enabled
+        MacosBackendError::Contract(BackendContractError::UnsupportedCapability {
+            capability: BackendCapability::NetworkLocalIpcDenyRules
         })
     ));
 }

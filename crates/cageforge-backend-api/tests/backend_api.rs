@@ -171,6 +171,7 @@ fn all_capabilities() -> BackendCapabilities {
         BackendCapability::NetworkDomainRules,
         BackendCapability::NetworkLocalIpcIsolation,
         BackendCapability::NetworkLocalIpcRules,
+        BackendCapability::NetworkLocalIpcDenyRules,
         BackendCapability::EnvironmentCore,
         BackendCapability::EnvironmentFilters,
         BackendCapability::EnvironmentOverrides,
@@ -381,6 +382,7 @@ fn every_capability_has_a_human_readable_description() {
         BackendCapability::NetworkResolvedTargets,
         BackendCapability::NetworkLocalIpcIsolation,
         BackendCapability::NetworkLocalIpcRules,
+        BackendCapability::NetworkLocalIpcDenyRules,
         BackendCapability::EnvironmentAll,
         BackendCapability::EnvironmentCore,
         BackendCapability::EnvironmentNone,
@@ -461,6 +463,7 @@ fn required_capabilities_cover_unrestricted_default_modes() {
     assert!(!required.supports(BackendCapability::NetworkResolvedTargets));
     assert!(!required.supports(BackendCapability::NetworkLocalIpcIsolation));
     assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcDenyRules));
     assert!(required.supports(BackendCapability::EnvironmentAll));
 
     let collected: BackendCapabilities = required.iter().copied().collect();
@@ -485,6 +488,7 @@ fn enabled_network_socket_restrictions_require_socket_capability() {
 
     assert!(required.supports(BackendCapability::NetworkLocalIpcIsolation));
     assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcDenyRules));
 }
 
 #[test]
@@ -508,6 +512,53 @@ fn empty_unix_socket_allowlist_requires_isolation_not_per_path_rules() {
 
     assert!(required.supports(BackendCapability::NetworkLocalIpcIsolation));
     assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcDenyRules));
+}
+
+#[test]
+fn enabled_explicit_socket_denials_require_the_deny_capability() {
+    let requested = cageforge_policy::SandboxPolicy::new(
+        FilesystemPolicy::unrestricted(),
+        NetworkPolicy::enabled()
+            .with_unix_socket_mode(UnixSocketMode::Enabled)
+            .with_unix_socket(native_path("/tmp/denied.sock"), DomainAccess::Deny)
+            .unwrap(),
+    );
+    let environment = EnvironmentSpec::inherit_all();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
+    let command =
+        CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
+    let required = BackendRequest::new(&command, &sandbox).required_capabilities();
+
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
+    assert!(required.supports(BackendCapability::NetworkLocalIpcDenyRules));
+}
+
+#[test]
+fn enabled_explicit_socket_allows_do_not_change_the_default_capability() {
+    let requested = cageforge_policy::SandboxPolicy::new(
+        FilesystemPolicy::unrestricted(),
+        NetworkPolicy::enabled()
+            .with_unix_socket_mode(UnixSocketMode::Enabled)
+            .with_unix_socket(native_path("/tmp/allowed.sock"), DomainAccess::Allow)
+            .unwrap(),
+    );
+    let environment = EnvironmentSpec::inherit_all();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
+    let command =
+        CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
+    let required = BackendRequest::new(&command, &sandbox).required_capabilities();
+
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
+    assert!(!required.supports(BackendCapability::NetworkLocalIpcDenyRules));
 }
 
 #[test]

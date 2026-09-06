@@ -334,8 +334,8 @@ restricted request to an unrestricted process.
 The capability set must be derived from the configured backend and the actual
 implemented lowering. In particular, a backend that only isolates all network
 traffic must not advertise `NetworkDomainRules`,
-`NetworkLocalAddressRestrictions`, `NetworkResolvedTargets`, or
-`NetworkUnixSockets`.
+`NetworkLocalAddressRestrictions`, `NetworkResolvedTargets`,
+`NetworkLocalIpcRules`, or `NetworkLocalIpcDenyRules`.
 
 Linux errors must preserve the stage and security meaning of a failure. The
 minimum taxonomy is:

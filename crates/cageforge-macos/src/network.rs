@@ -260,9 +260,11 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
                     }
                 }
                 NetworkDecision::Deny => {
-                    return Err(MacosNetworkError::UnixSocketPolicy {
-                        mode: layer.unix_socket_mode(),
-                    });
+                    if allow_all {
+                        return Err(MacosNetworkError::UnixSocketPolicy {
+                            mode: layer.unix_socket_mode(),
+                        });
+                    }
                 }
                 NetworkDecision::ExternallyEnforced => {
                     return Err(MacosNetworkError::ExternalOwnership);

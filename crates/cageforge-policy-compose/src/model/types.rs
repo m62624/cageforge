@@ -61,4 +61,5 @@ pub struct EffectiveNetworkRequirements {
     pub(super) resolved_targets: bool,
     pub(super) local_ipc_isolation: bool,
     pub(super) local_ipc_rules: bool,
+    pub(super) local_ipc_deny_rules: bool,
 }
