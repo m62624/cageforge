@@ -68,6 +68,10 @@ pub enum MacosBackendError {
         /// Process identifier returned by the Rust child handle.
         pid: u32,
     },
+    /// The native process-group identifier is zero and cannot be used as a
+    /// sandbox boundary target.
+    #[error("macOS sandbox returned an invalid zero process-group ID")]
+    ProcessGroupIdInvalid,
     /// Selecting the backend environment or applying its transforms failed.
     #[error("failed to prepare the macOS command environment: {source}")]
     EnvironmentPreparation {

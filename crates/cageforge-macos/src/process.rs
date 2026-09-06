@@ -371,6 +371,9 @@ fn terminate_process_group(
 
 #[allow(unsafe_code)]
 fn terminate_process_group_if_present(pid: u32) -> Result<(), MacosBackendError> {
+    if pid == 0 {
+        return Err(MacosBackendError::ProcessGroupIdInvalid);
+    }
     let pid = libc::pid_t::try_from(pid)
         .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
     // SAFETY: a negative PID targets exactly the process group whose leader is
@@ -469,6 +472,9 @@ pub(crate) fn process_group_id(pid: u32) -> Result<u32, MacosBackendError> {
             source: io::Error::last_os_error(),
         });
     }
+    if process_group_id == 0 {
+        return Err(MacosBackendError::ProcessGroupIdInvalid);
+    }
     u32::try_from(process_group_id).map_err(|_| MacosBackendError::ProcessGroup {
         source: io::Error::new(
             io::ErrorKind::InvalidData,
@@ -479,6 +485,9 @@ pub(crate) fn process_group_id(pid: u32) -> Result<u32, MacosBackendError> {
 
 #[allow(unsafe_code)]
 fn confirm_process_group_gone(pid: u32) -> Result<(), MacosBackendError> {
+    if pid == 0 {
+        return Err(MacosBackendError::ProcessGroupIdInvalid);
+    }
     let deadline = Instant::now() + BOUNDARY_WAIT_TIMEOUT;
     loop {
         let pid = libc::pid_t::try_from(pid)
@@ -534,5 +543,17 @@ mod tests {
         let error = signal_process_group_members(0, libc::SIGKILL)
             .expect_err("zero process group must not be signalled");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn process_group_termination_rejects_zero_group_ids() {
+        assert!(matches!(
+            super::terminate_process_group_if_present(0),
+            Err(MacosBackendError::ProcessGroupIdInvalid)
+        ));
+        assert!(matches!(
+            super::confirm_process_group_gone(0),
+            Err(MacosBackendError::ProcessGroupIdInvalid)
+        ));
     }
 }
