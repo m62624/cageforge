@@ -486,6 +486,16 @@ impl ProfileBuilder {
             self.add_definition(format!("DENIED_UNIX_SOCKET_PATH_{index}"), path.clone())?;
         }
 
+        for (index, _) in plan.denied().iter().enumerate() {
+            let name = format!("DENIED_UNIX_SOCKET_PATH_{index}");
+            self.policy.push_str(&format!(
+                "(deny network-bind (local unix-socket (subpath (param \"{name}\"))))\n"
+            ));
+            self.policy.push_str(&format!(
+                "(deny network-outbound (remote unix-socket (subpath (param \"{name}\"))))\n"
+            ));
+        }
+
         if plan.allow_all() {
             if plan.denied().is_empty() {
                 self.policy
@@ -516,15 +526,6 @@ impl ProfileBuilder {
                 &outbound,
                 plan.denied().len(),
             );
-        }
-        for (index, _) in plan.denied().iter().enumerate() {
-            let name = format!("DENIED_UNIX_SOCKET_PATH_{index}");
-            self.policy.push_str(&format!(
-                "(deny network-bind (local unix-socket (subpath (param \"{name}\"))))\n"
-            ));
-            self.policy.push_str(&format!(
-                "(deny network-outbound (remote unix-socket (subpath (param \"{name}\"))))\n"
-            ));
         }
         Ok(())
     }
