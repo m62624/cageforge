@@ -185,3 +185,15 @@ upstream_paths = [
     "codex-rs/network-proxy/tests/windows_stable_ingress.rs",
 ]
 local_paths = ["crates/cageforge-windows/"]
+
+[[scope]]
+name = "cageforge-macos"
+upstream_paths = [
+    "codex-rs/sandboxing/src/seatbelt.rs",
+    "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl",
+    "codex-rs/sandboxing/src/seatbelt_network_policy.sbpl",
+    "codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl",
+    "codex-rs/sandboxing/src/manager.rs",
+    "codex-rs/sandboxing/src/spawn.rs",
+]
+local_paths = ["crates/cageforge-macos/"]
