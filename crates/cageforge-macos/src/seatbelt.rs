@@ -158,17 +158,37 @@ impl ProfileBuilder {
     }
 
     fn add_filesystem(&mut self, plan: &MacosFilesystemPlan) {
-        if plan.unrestricted() {
-            self.policy.push_str("\n(allow file-read*)\n");
-            self.policy
-                .push_str("(allow file-write* (regex #\"^/\"))\n");
-        } else {
-            self.add_roots("file-read*", "READ_ROOT", plan.read_roots());
-            self.add_roots("file-write*", "WRITE_ROOT", plan.write_roots());
-        }
         for (index, path) in plan.denied_paths().iter().enumerate() {
+            self.add_definition(format!("DENIED_PATH_{index}"), path.clone());
+        }
+        for (index, path) in plan.write_denied_paths().iter().enumerate() {
+            self.add_definition(format!("WRITE_DENIED_PATH_{index}"), path.clone());
+        }
+        if plan.unrestricted() {
+            self.add_full_root("file-read*", plan.denied_paths(), &[]);
+            self.add_full_root(
+                "file-write*",
+                plan.denied_paths(),
+                plan.write_denied_paths(),
+            );
+        } else {
+            self.add_roots(
+                "file-read*",
+                "READ_ROOT",
+                plan.read_roots(),
+                plan.denied_paths(),
+                &[],
+            );
+            self.add_roots(
+                "file-write*",
+                "WRITE_ROOT",
+                plan.write_roots(),
+                plan.denied_paths(),
+                plan.write_denied_paths(),
+            );
+        }
+        for (index, _path) in plan.denied_paths().iter().enumerate() {
             let name = format!("DENIED_PATH_{index}");
-            self.add_definition(name.clone(), path.clone());
             self.policy
                 .push_str(&format!("(deny file-read* (subpath (param \"{name}\")))\n"));
             self.policy.push_str(&format!(
@@ -186,9 +206,22 @@ impl ProfileBuilder {
                 escape_profile_string(&regex)
             ));
         }
+        for (index, _) in plan.write_denied_paths().iter().enumerate() {
+            let name = format!("WRITE_DENIED_PATH_{index}");
+            self.policy.push_str(&format!(
+                "(deny file-write* (subpath (param \"{name}\")))\n"
+            ));
+        }
     }
 
-    fn add_roots(&mut self, action: &str, prefix: &str, roots: &[PathBuf]) {
+    fn add_roots(
+        &mut self,
+        action: &str,
+        prefix: &str,
+        roots: &[PathBuf],
+        denied_paths: &[PathBuf],
+        write_denied_paths: &[PathBuf],
+    ) {
         if roots.is_empty() {
             return;
         }
@@ -196,10 +229,54 @@ impl ProfileBuilder {
         for (index, path) in roots.iter().enumerate() {
             let name = format!("{prefix}_{index}");
             self.add_definition(name.clone(), path.clone());
+            let mut requirements = vec![format!("(subpath (param \"{name}\"))")];
+            for (excluded_index, excluded) in denied_paths.iter().enumerate() {
+                if excluded.starts_with(path) {
+                    self.push_path_exclusion(&mut requirements, "DENIED_PATH", excluded_index);
+                }
+            }
+            if action == "file-write*" {
+                for (excluded_index, excluded) in write_denied_paths.iter().enumerate() {
+                    if excluded.starts_with(path) {
+                        self.push_path_exclusion(
+                            &mut requirements,
+                            "WRITE_DENIED_PATH",
+                            excluded_index,
+                        );
+                    }
+                }
+            }
             self.policy
-                .push_str(&format!("  (subpath (param \"{name}\"))\n"));
+                .push_str(&format!("  (require-all {})\n", requirements.join(" ")));
         }
         self.policy.push_str(")\n");
+    }
+
+    fn add_full_root(
+        &mut self,
+        action: &str,
+        denied_paths: &[PathBuf],
+        write_denied_paths: &[PathBuf],
+    ) {
+        let mut requirements = vec!["(subpath \"/\")".to_owned()];
+        for (index, _) in denied_paths.iter().enumerate() {
+            self.push_path_exclusion(&mut requirements, "DENIED_PATH", index);
+        }
+        if action == "file-write*" {
+            for (index, _) in write_denied_paths.iter().enumerate() {
+                self.push_path_exclusion(&mut requirements, "WRITE_DENIED_PATH", index);
+            }
+        }
+        self.policy.push_str(&format!(
+            "\n(allow {action} (require-all {}))\n",
+            requirements.join(" ")
+        ));
+    }
+
+    fn push_path_exclusion(&self, requirements: &mut Vec<String>, prefix: &str, index: usize) {
+        let name = format!("{prefix}_{index}");
+        requirements.push(format!("(require-not (literal (param \"{name}\")))"));
+        requirements.push(format!("(require-not (subpath (param \"{name}\")))"));
     }
 
     fn add_network(&mut self, network: &MacosNetworkPlan) -> Result<(), SeatbeltProfileError> {

@@ -19,6 +19,7 @@ pub(crate) struct MacosFilesystemPlan {
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     denied_paths: Vec<PathBuf>,
+    write_denied_paths: Vec<PathBuf>,
     denied_globs: Vec<String>,
     unrestricted: bool,
 }
@@ -31,6 +32,7 @@ struct FilesystemCollector<'scope, 'request, B: SandboxBackend> {
     read_roots: BTreeSet<NativePathKey>,
     write_roots: BTreeSet<NativePathKey>,
     denied_paths: BTreeSet<NativePathKey>,
+    write_denied_paths: BTreeSet<NativePathKey>,
     paths: Vec<PathBuf>,
     denied_globs: BTreeSet<String>,
     protected_relative_paths: Vec<PathBuf>,
@@ -73,6 +75,10 @@ impl MacosFilesystemPlan {
         &self.denied_paths
     }
 
+    pub(crate) fn write_denied_paths(&self) -> &[PathBuf] {
+        &self.write_denied_paths
+    }
+
     pub(crate) fn denied_globs(&self) -> &[String] {
         &self.denied_globs
     }
@@ -95,6 +101,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
             read_roots: BTreeSet::new(),
             write_roots: BTreeSet::new(),
             denied_paths: BTreeSet::new(),
+            write_denied_paths: BTreeSet::new(),
             paths: Vec::new(),
             denied_globs: BTreeSet::new(),
             protected_relative_paths: Vec::new(),
@@ -179,7 +186,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
                 if self.contains_symlink(&path)? {
                     return Err(MacosFilesystemError::Symlink { path });
                 }
-                self.insert_denied(path);
+                self.insert_write_denied(path);
             }
         }
         Ok(())
@@ -297,6 +304,11 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         self.paths.push(path);
     }
 
+    fn insert_write_denied(&mut self, path: PathBuf) {
+        self.write_denied_paths.insert(NativePathKey::new(&path));
+        self.paths.push(path);
+    }
+
     fn finish(self) -> MacosFilesystemPlan {
         let mut paths = self.paths;
         paths.sort_by(|left, right| NativePathKey::new(left).cmp(&NativePathKey::new(right)));
@@ -311,6 +323,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
             read_roots: to_paths(self.read_roots),
             write_roots: to_paths(self.write_roots),
             denied_paths: to_paths(self.denied_paths),
+            write_denied_paths: to_paths(self.write_denied_paths),
             denied_globs: self.denied_globs.into_iter().collect(),
             unrestricted: false,
         }
