@@ -139,8 +139,11 @@ pub enum MacosFilesystemError {
         path: PathBuf,
     },
     /// A filesystem glob had an access mode other than deny.
-    #[error("macOS filesystem globs must use deny access")]
-    NonDenyGlob,
+    #[error("macOS filesystem glob {pattern:?} must use deny access")]
+    NonDenyGlob {
+        /// Rejected policy glob.
+        pattern: String,
+    },
 }
 
 /// Network failures raised while constructing a macOS launch.

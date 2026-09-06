@@ -95,8 +95,17 @@ pub enum WindowsNetworkAttributionError {
         code: u32,
     },
     /// The process object was created after the TCP context attributed to its reused PID.
-    #[error("attributed Windows proxy client PID was reused after the TCP context was created")]
-    ProcessIdentityMismatch,
+    #[error(
+        "attributed Windows proxy client PID {process_id} was reused: process creation time {process_created} is newer than TCP context {connection_created}"
+    )]
+    ProcessIdentityMismatch {
+        /// PID selected from the TCP owner table.
+        process_id: u32,
+        /// Creation time read from the current process object.
+        process_created: u64,
+        /// Creation time recorded in the attributed TCP row.
+        connection_created: i64,
+    },
     /// The attributed client process could not be opened.
     #[error("failed to open attributed Windows proxy client process {process_id}: error {code}")]
     ProcessOpen {
@@ -352,10 +361,19 @@ fn validate_process_identity(
     owner: ConnectionOwner,
     process_created: u64,
 ) -> Result<(), WindowsNetworkAttributionError> {
-    let connection_created = u64::try_from(owner.connection_created)
-        .map_err(|_| WindowsNetworkAttributionError::ProcessIdentityMismatch)?;
+    let connection_created = u64::try_from(owner.connection_created).map_err(|_| {
+        WindowsNetworkAttributionError::ProcessIdentityMismatch {
+            process_id: owner.process_id,
+            process_created,
+            connection_created: owner.connection_created,
+        }
+    })?;
     if process_created > connection_created {
-        Err(WindowsNetworkAttributionError::ProcessIdentityMismatch)
+        Err(WindowsNetworkAttributionError::ProcessIdentityMismatch {
+            process_id: owner.process_id,
+            process_created,
+            connection_created: owner.connection_created,
+        })
     } else {
         Ok(())
     }
@@ -556,7 +574,7 @@ mod tests {
         validate_process_identity(owner, 100).expect("original process identity");
         assert!(matches!(
             validate_process_identity(owner, 101),
-            Err(WindowsNetworkAttributionError::ProcessIdentityMismatch)
+            Err(WindowsNetworkAttributionError::ProcessIdentityMismatch { .. })
         ));
         assert!(matches!(
             validate_process_identity(
@@ -566,7 +584,7 @@ mod tests {
                 },
                 0,
             ),
-            Err(WindowsNetworkAttributionError::ProcessIdentityMismatch)
+            Err(WindowsNetworkAttributionError::ProcessIdentityMismatch { .. })
         ));
     }
 

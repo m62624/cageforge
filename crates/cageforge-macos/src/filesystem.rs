@@ -143,7 +143,9 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
                 }
                 FilesystemTarget::Glob(pattern) => {
                     if rule.access() != AccessMode::Deny {
-                        return Err(MacosFilesystemError::NonDenyGlob);
+                        return Err(MacosFilesystemError::NonDenyGlob {
+                            pattern: pattern.as_str().to_owned(),
+                        });
                     }
                     self.collect_glob(pattern.as_str(), pattern.is_absolute());
                 }

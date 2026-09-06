@@ -595,10 +595,17 @@ fn start_gateway_bridge(
     if !socket.is_absolute() {
         return Err(LinuxHardeningError::RelativeGatewaySocket { path: socket });
     }
-    let max_connections = std::env::var(GATEWAY_CONNECTION_LIMIT_ENV)
-        .map_err(|_| LinuxHardeningError::MissingGatewayConnectionLimit)?
-        .parse::<usize>()
-        .map_err(|source| LinuxHardeningError::InvalidGatewayConnectionLimit { source })?;
+    let max_connections = match std::env::var(GATEWAY_CONNECTION_LIMIT_ENV) {
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|source| LinuxHardeningError::InvalidGatewayConnectionLimit { source })?,
+        Err(std::env::VarError::NotPresent) => {
+            return Err(LinuxHardeningError::MissingGatewayConnectionLimit);
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(LinuxHardeningError::InvalidGatewayConnectionLimitEncoding);
+        }
+    };
     if max_connections == 0 {
         return Err(LinuxHardeningError::ZeroGatewayConnectionLimit);
     }
@@ -620,13 +627,20 @@ fn start_gateway_bridge(
 }
 
 fn verify_helper_authentication() -> Result<File, LinuxHardeningError> {
-    let fd: libc::c_int = std::env::var(AUTH_FD_ENV)
-        .map_err(|_| LinuxHardeningError::MissingEnvironment { name: AUTH_FD_ENV })?
-        .parse()
-        .map_err(|source| LinuxHardeningError::InvalidEnvironment {
-            name: AUTH_FD_ENV,
-            source,
-        })?;
+    let fd: libc::c_int = match std::env::var(AUTH_FD_ENV) {
+        Ok(value) => value
+            .parse()
+            .map_err(|source| LinuxHardeningError::InvalidEnvironment {
+                name: AUTH_FD_ENV,
+                source,
+            })?,
+        Err(std::env::VarError::NotPresent) => {
+            return Err(LinuxHardeningError::MissingEnvironment { name: AUTH_FD_ENV });
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(LinuxHardeningError::InvalidEnvironmentEncoding { name: AUTH_FD_ENV });
+        }
+    };
     if fd <= libc::STDERR_FILENO {
         return Err(LinuxHardeningError::AuthenticationDescriptorTooLow { fd });
     }
