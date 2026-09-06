@@ -9,7 +9,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cageforge_backend_api::{BackendRequest, SandboxBackend};
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
@@ -125,10 +125,29 @@ fn network_request(
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("HTTP listener");
     let address = listener.local_addr().expect("HTTP address");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking HTTP listener");
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let server = thread::spawn(move || -> io::Result<()> {
         ready_sender.send(()).expect("HTTP readiness receiver");
-        let (mut stream, _) = listener.accept()?;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "HTTP fixture did not receive a connection",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(source) => return Err(source),
+            }
+        };
+        stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(3)))?;
         stream.set_write_timeout(Some(Duration::from_secs(3)))?;
         let mut request = Vec::new();
@@ -613,8 +632,14 @@ fn restricted_network_reaches_only_the_authorized_loopback_target() {
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
     let status = child.wait().expect("wait");
+    let mut error = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut error)
+        .expect("read stderr");
     let server_result = server.join().expect("HTTP server");
-    assert_eq!(status.code(), Some(0));
+    assert_eq!(status.code(), Some(0), "sandbox stderr: {error}");
     server_result.expect("HTTP server I/O");
 }
 
