@@ -226,6 +226,9 @@ impl ProfileBuilder {
             self.policy.push_str(&format!(
                 "(deny file-write* (subpath (param \"{name}\")))\n"
             ));
+            self.policy.push_str(&format!(
+                "(deny file-write-unlink (subpath (param \"{name}\")))\n"
+            ));
         }
         for pattern in plan.denied_globs() {
             let regex = glob_to_seatbelt_regex(pattern);
@@ -237,11 +240,18 @@ impl ProfileBuilder {
                 "(deny file-write* (regex #\"{}\"))\n",
                 escape_profile_string(&regex)
             ));
+            self.policy.push_str(&format!(
+                "(deny file-write-unlink (regex #\"{}\"))\n",
+                escape_profile_string(&regex)
+            ));
         }
         for (index, _) in plan.write_denied_paths().iter().enumerate() {
             let name = format!("WRITE_DENIED_PATH_{index}");
             self.policy.push_str(&format!(
                 "(deny file-write* (subpath (param \"{name}\")))\n"
+            ));
+            self.policy.push_str(&format!(
+                "(deny file-write-unlink (subpath (param \"{name}\")))\n"
             ));
         }
     }
