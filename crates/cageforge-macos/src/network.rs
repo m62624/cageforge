@@ -7,6 +7,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use cageforge_backend_api::{PreparedBackendRequest, SandboxBackend};
 use cageforge_network_proxy::{GatewayConfig, GatewayIngressKey, NetworkGateway, SystemResolver};
@@ -21,6 +22,7 @@ use crate::error::MacosNetworkError;
 
 const NETWORK_GATEWAY_THREAD_NAME: &str = "cageforge-macos-network-gateway";
 const GATEWAY_RELAY_BUFFER_BYTES: usize = 64 * 1024;
+const GATEWAY_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Native network rules for one Seatbelt launch.
 #[derive(Debug)]
@@ -146,7 +148,7 @@ impl GatewayRuntime {
                 )
             })
             .map_err(|source| MacosNetworkError::ThreadSpawn { source })?;
-        match ready_receiver.recv() {
+        match ready_receiver.recv_timeout(GATEWAY_STARTUP_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
                 port,
                 shutdown: Some(shutdown),
@@ -156,7 +158,14 @@ impl GatewayRuntime {
                 let _ = thread.join();
                 Err(source)
             }
-            Err(_) => {
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = shutdown.send(());
+                drop(thread);
+                Err(MacosNetworkError::StartupTimeout {
+                    timeout_ms: GATEWAY_STARTUP_TIMEOUT.as_millis(),
+                })
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = thread.join();
                 Err(MacosNetworkError::StartupChannelClosed)
             }
@@ -262,13 +271,24 @@ fn run_gateway(
     shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<(), MacosNetworkError>>,
 ) -> Result<(), MacosNetworkError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|source| MacosNetworkError::RuntimeConstruction { source })?;
+    {
+        Ok(runtime) => runtime,
+        Err(source) => {
+            let _ = ready.send(Err(MacosNetworkError::RuntimeConstruction { source }));
+            return Ok(());
+        }
+    };
     runtime.block_on(async move {
-        let listener = TokioTcpListener::from_std(listener)
-            .map_err(|source| MacosNetworkError::ListenerRegistration { source })?;
+        let listener = match TokioTcpListener::from_std(listener) {
+            Ok(listener) => listener,
+            Err(source) => {
+                let _ = ready.send(Err(MacosNetworkError::ListenerRegistration { source }));
+                return Ok(());
+            }
+        };
         ready
             .send(Ok(()))
             .map_err(|_| MacosNetworkError::StartupChannelClosed)?;

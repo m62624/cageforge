@@ -112,6 +112,10 @@ For network enforcement:
 Each proxy ingress and gateway owns its policy, key, listener, and limits.
 Dropping one child closes and joins only its own runtime. A second instance
 cannot reuse the first instance's policy merely because both are on loopback.
+Gateway startup uses a bounded readiness handshake. Runtime-construction and
+listener-registration failures are sent through that handshake as typed
+errors; a gateway that produces no readiness result is rejected after its
+startup deadline rather than blocking the caller indefinitely.
 
 ## 5. Process and lifecycle contract
 

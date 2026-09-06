@@ -187,6 +187,12 @@ pub enum MacosNetworkError {
     /// The gateway stopped before reporting readiness.
     #[error("macOS network gateway startup channel closed")]
     StartupChannelClosed,
+    /// The gateway did not report readiness within its startup deadline.
+    #[error("macOS network gateway did not report readiness within {timeout_ms} ms")]
+    StartupTimeout {
+        /// Maximum time allowed for gateway runtime startup.
+        timeout_ms: u128,
+    },
     /// The gateway stopped unexpectedly while its child was active.
     #[error("macOS network gateway stopped unexpectedly")]
     RuntimeStopped,
