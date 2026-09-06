@@ -34,35 +34,93 @@ pub(crate) struct FilesystemObjectIdentity {
     file_id: [u8; 16],
 }
 
+/// Exact failure while validating a Windows path before native enforcement.
 #[derive(Debug, Error)]
-pub(crate) enum ValidatedPathError {
+pub enum ValidatedPathError {
+    /// The requested path was not absolute.
     #[error("Windows filesystem enforcement requires an absolute path: {path:?}")]
-    Relative { path: PathBuf },
+    Relative {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// The requested path contains parent traversal.
     #[error("Windows filesystem enforcement rejects parent traversal in {path:?}")]
-    ParentTraversal { path: PathBuf },
+    ParentTraversal {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// The requested path contains an embedded NUL.
     #[error("Windows filesystem path contains NUL: {path:?}")]
-    Nul { path: PathBuf },
+    Nul {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// Windows could not open the requested path.
     #[error("failed to open Windows filesystem path {path:?}: Windows error {code}")]
-    Open { path: PathBuf, code: u32 },
+    Open {
+        /// Rejected path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// Windows could not inspect reparse metadata.
     #[error("failed to inspect reparse metadata for {path:?}: Windows error {code}")]
-    AttributeRead { path: PathBuf, code: u32 },
+    AttributeRead {
+        /// Rejected path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// Windows could not read stable file identity.
     #[error("failed to read the stable filesystem identity for {path:?}: Windows error {code}")]
-    ObjectIdentityRead { path: PathBuf, code: u32 },
+    ObjectIdentityRead {
+        /// Rejected path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// The requested path is a reparse point.
     #[error("Windows filesystem path is a reparse point and cannot anchor enforcement: {path:?}")]
-    ReparsePoint { path: PathBuf },
+    ReparsePoint {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// Windows could not resolve the final path through the opened handle.
     #[error("failed to resolve the final handle path for {path:?}: Windows error {code}")]
-    FinalPathRead { path: PathBuf, code: u32 },
+    FinalPathRead {
+        /// Requested path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// Windows returned an invalid final-path length.
     #[error("Windows returned an invalid final handle-path length for {path:?}")]
-    FinalPathLength { path: PathBuf },
+    FinalPathLength {
+        /// Requested path.
+        path: PathBuf,
+    },
+    /// Windows could not expand short-name components.
     #[error("failed to expand Windows short names in {path:?}: Windows error {code}")]
-    LongPathRead { path: PathBuf, code: u32 },
+    LongPathRead {
+        /// Requested path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// Windows returned an invalid expanded-path length.
     #[error("Windows returned an invalid expanded path length for {path:?}")]
-    LongPathLength { path: PathBuf },
+    LongPathLength {
+        /// Requested path.
+        path: PathBuf,
+    },
+    /// The opened handle resolved to an object other than the requested path.
     #[error(
         "Windows final handle path differs from the requested enforcement path: requested {requested:?}, final {final_path:?}"
     )]
     FinalPathMismatch {
+        /// Path supplied by the caller.
         requested: PathBuf,
+        /// Path resolved through the opened handle.
         final_path: PathBuf,
     },
 }

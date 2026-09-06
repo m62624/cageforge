@@ -146,7 +146,7 @@ fn verify_shared_runner_resource(
         map_runner_resource_error(
             crate::runner::resource_security::RunnerResourceSecurityError::Unsafe {
                 path: path.to_path_buf(),
-                detail: error.to_string(),
+                source: error,
             },
         )
     })?;
@@ -174,8 +174,8 @@ fn map_runner_resource_error(
     error: crate::runner::resource_security::RunnerResourceSecurityError,
 ) -> WindowsSetupVerificationError {
     match error {
-        crate::runner::resource_security::RunnerResourceSecurityError::Unsafe { path, detail } => {
-            WindowsSetupVerificationError::ProtectedPathUnsafe { path, detail }
+        crate::runner::resource_security::RunnerResourceSecurityError::Unsafe { path, source } => {
+            WindowsSetupVerificationError::ProtectedPathUnsafe { path, source }
         }
         crate::runner::resource_security::RunnerResourceSecurityError::Read { path, code } => {
             WindowsSetupVerificationError::ProtectedAclRead { path, code }
@@ -201,10 +201,12 @@ fn verify_dacl(
     } else {
         crate::setup::pinned::file::open_for_readback(path, true)
     }
-    .map_err(|error| WindowsSetupVerificationError::ProtectedPathUnsafe {
-        path: path.to_path_buf(),
-        detail: error.to_string(),
-    })?;
+    .map_err(
+        |source| WindowsSetupVerificationError::ProtectedPathUnsafe {
+            path: path.to_path_buf(),
+            source,
+        },
+    )?;
     verify_open_dacl(file, path, owner_sid, descriptor_kind)
 }
 

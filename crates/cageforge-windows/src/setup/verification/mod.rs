@@ -138,9 +138,9 @@ fn verify_capability_state(
     crate::capability::store::CapabilityStateStore::new(state_directory, owner_sid)
         .verify()
         .map_err(
-            |error| WindowsSetupVerificationError::CapabilityStateInvalid {
+            |source| WindowsSetupVerificationError::CapabilityStateInvalid {
                 path: state_directory.join(crate::capability::state::CAPABILITY_STATE_NAME),
-                detail: error.to_string(),
+                source: Box::new(source),
             },
         )
 }

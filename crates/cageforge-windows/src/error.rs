@@ -18,6 +18,7 @@ use crate::runner::protocol::{
 };
 use crate::runner::session::RunnerSessionError;
 use crate::runner::stdio::WindowsStandardStreamError;
+use crate::setup::pinned::file::SetupPinnedFileError;
 use crate::setup::protocol::{SetupFailureCode, SetupStage};
 
 /// Failure while resolving one Windows account or group SID.
@@ -180,12 +181,13 @@ pub enum WindowsSetupVerificationError {
         source: io::Error,
     },
     /// The protected capability-SID record was malformed or internally inconsistent.
-    #[error("invalid protected Windows capability-SID state {path:?}: {detail}")]
+    #[error("invalid protected Windows capability-SID state {path:?}: {source}")]
     CapabilityStateInvalid {
         /// Capability-SID state path.
         path: PathBuf,
-        /// Exact validation failure.
-        detail: String,
+        /// Exact state-model or transition failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// The marker does not contain exactly two usable ingress ports.
     #[error("Windows setup marker has invalid proxy ingress ports: {ports:?}")]
@@ -236,12 +238,13 @@ pub enum WindowsSetupVerificationError {
         code: u32,
     },
     /// A protected setup path is relative, a reparse point, or resolves to another object.
-    #[error("protected Windows setup path is unsafe at {path:?}: {detail}")]
+    #[error("protected Windows setup path is unsafe at {path:?}: {source}")]
     ProtectedPathUnsafe {
         /// Rejected state, credential, marker, or helper path.
         path: PathBuf,
         /// Exact lexical, reparse-point, or final-path failure.
-        detail: String,
+        #[source]
+        source: SetupPinnedFileError,
     },
     /// A protected setup path has the wrong object owner or effective DACL.
     #[error("protected Windows setup security descriptor mismatch at {path:?}: {actual}")]
@@ -445,12 +448,13 @@ pub enum WindowsSetupError {
         source: io::Error,
     },
     /// The setup marker is a reparse point or resolves outside its expected path.
-    #[error("Windows setup state path is unsafe at {path:?}: {detail}")]
+    #[error("Windows setup state path is unsafe at {path:?}: {source}")]
     StatePathUnsafe {
         /// Rejected setup marker path.
         path: PathBuf,
         /// Exact lexical, reparse-point, or final-path failure.
-        detail: String,
+        #[source]
+        source: SetupPinnedFileError,
     },
     /// Setup state was not valid JSON.
     #[error("failed to decode Windows setup state {path:?}: {source}")]
@@ -495,11 +499,32 @@ pub enum WindowsSetupError {
     /// A setup account failed its unprivileged-membership contract.
     #[error(transparent)]
     AccountVerification(#[from] WindowsAccountVerificationError),
-    /// A setup-helper source is unavailable.
-    #[error("Windows setup helper is unavailable: {detail}")]
-    HelperUnavailable {
-        /// Resolution diagnostic.
-        detail: String,
+    /// The current executable path could not be resolved while locating a bundled resource.
+    #[error(
+        "failed to resolve the current executable while locating a Windows setup resource: {source}"
+    )]
+    CurrentExecutable {
+        /// Filesystem failure returned by Windows.
+        #[source]
+        source: io::Error,
+    },
+    /// A bundled helper or runner was not present in the supported resource layout.
+    #[error(
+        "bundled Windows setup resource {resource:?} was not found beside executable {executable:?}"
+    )]
+    BundledResourceMissing {
+        /// Resource filename that was requested.
+        resource: &'static str,
+        /// Executable whose supported resource layouts were searched.
+        executable: PathBuf,
+    },
+    /// The current executable did not have a parent directory for a sibling resource.
+    #[error(
+        "current executable {executable:?} has no parent directory for a Windows setup resource"
+    )]
+    ExecutableDirectoryMissing {
+        /// Executable whose sibling resource was requested.
+        executable: PathBuf,
     },
     /// A helper resource could not be read for digest pinning.
     #[error("failed to read Windows setup resource {path:?}: {source}")]
@@ -511,20 +536,52 @@ pub enum WindowsSetupError {
         source: io::Error,
     },
     /// A setup executable source was not one stable non-reparse file.
-    #[error("Windows setup resource {path:?} is not safe to execute or stage: {detail}")]
+    #[error("Windows setup resource {path:?} is not safe to execute or stage: {source}")]
     HelperResourceUnsafe {
         /// Rejected setup helper or command-runner path.
         path: PathBuf,
-        /// Exact lexical, reparse-point, identity, or final-path mismatch.
-        detail: String,
+        /// Exact lexical, reparse-point, identity, or final-path failure.
+        #[source]
+        source: crate::filesystem::path::ValidatedPathError,
     },
-    /// The versioned setup request could not be written.
-    #[error("failed to write Windows setup request {path:?}: {detail}")]
+    /// The temporary directory for a versioned setup request could not be created.
+    #[error(
+        "failed to create the temporary directory for Windows setup request under {parent:?}: {source}"
+    )]
+    RequestTemporaryDirectory {
+        /// Parent directory selected for the request transport.
+        parent: PathBuf,
+        /// Filesystem failure returned by Windows.
+        #[source]
+        source: io::Error,
+    },
+    /// The versioned setup request could not be serialized.
+    #[error("failed to serialize Windows setup request {path:?}: {source}")]
+    RequestSerialize {
+        /// Request file path that would have received the serialized message.
+        path: PathBuf,
+        /// JSON serialization failure.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The serialized setup request exceeded the bounded helper protocol.
+    #[error("Windows setup request {path:?} is too large: {actual} bytes exceeds {maximum}")]
+    RequestTooLarge {
+        /// Request file path.
+        path: PathBuf,
+        /// Encoded request size.
+        actual: usize,
+        /// Maximum accepted request size.
+        maximum: usize,
+    },
+    /// The serialized setup request could not be written durably.
+    #[error("failed to write Windows setup request {path:?}: {source}")]
     RequestWrite {
         /// Request file path.
         path: PathBuf,
-        /// Filesystem or serialization failure rendered as stable text.
-        detail: String,
+        /// Filesystem failure returned by Windows.
+        #[source]
+        source: io::Error,
     },
     /// The elevated helper could not be launched or waited for.
     #[error("failed to run elevated Windows setup helper {path:?}: {source}")]

@@ -42,6 +42,7 @@ pub use error::{
     WindowsFilesystemShapeError, WindowsNetworkCombinationError, WindowsSetupError,
     WindowsSetupVerificationError,
 };
+pub use filesystem::path::ValidatedPathError;
 pub use network::attribution::WindowsNetworkAttributionError;
 pub use network::{
     WindowsNetworkGatewayError, WindowsNetworkRuntimeError, WindowsNetworkRuntimeFailure,
@@ -52,6 +53,7 @@ pub use runner::protocol::{
     WindowsRunnerProtocolError,
 };
 pub use runner::stdio::WindowsStandardStreamError;
+pub use setup::pinned::file::SetupPinnedFileError;
 pub use setup::protocol::{
     SetupFailureCode as WindowsSetupFailureCode, SetupStage as WindowsSetupStage,
 };

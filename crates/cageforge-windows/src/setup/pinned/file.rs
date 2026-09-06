@@ -21,37 +21,93 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use crate::native_strings::wide_path;
 
+/// Exact failure while validating a setup-owned Windows file or directory.
 #[derive(Debug, Error)]
-pub(crate) enum SetupPinnedFileError {
+pub enum SetupPinnedFileError {
+    /// The requested path was not absolute.
     #[error("protected Windows setup requires an absolute file path: {path:?}")]
-    Relative { path: PathBuf },
+    Relative {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// The requested path contains parent traversal.
     #[error("protected Windows setup rejects parent traversal in file path {path:?}")]
-    ParentTraversal { path: PathBuf },
+    ParentTraversal {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// The requested path contains an embedded NUL.
     #[error("protected Windows setup file path contains NUL: {path:?}")]
-    Nul { path: PathBuf },
+    Nul {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// Windows could not open the requested object.
     #[error("failed to open protected Windows setup file {path:?}: Windows error {code}")]
-    Open { path: PathBuf, code: u32 },
+    Open {
+        /// Rejected path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// Windows could not read the object's attributes.
     #[error(
         "failed to inspect protected Windows setup file attributes {path:?}: Windows error {code}"
     )]
-    AttributeRead { path: PathBuf, code: u32 },
+    AttributeRead {
+        /// Rejected path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// The requested object is a reparse point.
     #[error("protected Windows setup path is a reparse point: {path:?}")]
-    ReparsePoint { path: PathBuf },
+    ReparsePoint {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// A directory was required but the object was not a directory.
     #[error("protected Windows setup directory path is not a directory: {path:?}")]
-    NotDirectory { path: PathBuf },
+    NotDirectory {
+        /// Rejected path.
+        path: PathBuf,
+    },
+    /// Windows could not resolve the final path through the opened handle.
     #[error("failed to resolve protected Windows setup file handle {path:?}: Windows error {code}")]
-    FinalPathRead { path: PathBuf, code: u32 },
+    FinalPathRead {
+        /// Requested path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// Windows returned an invalid final-path length.
     #[error("Windows returned an invalid final protected setup file path length for {path:?}")]
-    FinalPathLength { path: PathBuf },
+    FinalPathLength {
+        /// Requested path.
+        path: PathBuf,
+    },
+    /// Windows could not expand the requested path's short-name components.
     #[error("failed to expand a protected Windows setup file path {path:?}: Windows error {code}")]
-    LongPathRead { path: PathBuf, code: u32 },
+    LongPathRead {
+        /// Requested path.
+        path: PathBuf,
+        /// Native Windows error code.
+        code: u32,
+    },
+    /// Windows returned an invalid expanded-path length.
     #[error("Windows returned an invalid expanded protected setup path length for {path:?}")]
-    LongPathLength { path: PathBuf },
+    LongPathLength {
+        /// Requested path.
+        path: PathBuf,
+    },
+    /// The opened handle resolved to an object other than the requested path.
     #[error(
         "protected Windows setup file handle resolves outside its requested path: requested {requested:?}, final {final_path:?}"
     )]
     FinalPathMismatch {
+        /// Requested path.
         requested: PathBuf,
+        /// Path resolved through the opened handle.
         final_path: PathBuf,
     },
 }

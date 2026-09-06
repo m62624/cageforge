@@ -854,6 +854,7 @@ pub enum LinuxBackendError {
     #[error("failed to spawn sandboxed process: {source}")]
     ProcessSpawnFailed {
         /// Operating-system error returned by process creation.
+        #[source]
         source: std::io::Error,
     },
     /// Controlled descriptors for a sandbox launch could not be assigned distinct targets.
@@ -899,6 +900,7 @@ pub enum LinuxBackendError {
     #[error("failed while waiting for sandboxed process: {source}")]
     ProcessWaitFailed {
         /// Operating-system error returned while waiting or terminating.
+        #[source]
         source: std::io::Error,
     },
 }
