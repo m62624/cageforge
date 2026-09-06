@@ -3,7 +3,7 @@
 #![cfg(target_os = "macos")]
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -260,7 +260,11 @@ fn delayed_marker_child(
         .expect("shell")
         .with_arg("-c")
         .expect("shell option")
-        .with_arg("printf 'ready\\n'; (sleep 1; touch \"$1\") & wait")
+        .with_arg(
+            "(sleep 1; touch \"$1\") & descendant=$!; ".to_owned()
+                + "printf 'ready:%s:%s\\n' \"$descendant\" "
+                + "\"$(ps -o pgid= -p \"$descendant\")\"; wait",
+        )
         .expect("shell script")
         .with_arg("cageforge-marker")
         .expect("shell name")
@@ -273,6 +277,27 @@ fn delayed_marker_child(
         .expect("prepare");
     let child = backend.spawn(prepared).expect("spawn");
     (child, marker)
+}
+
+fn read_descendant_process_group(child: &mut cageforge_macos::MacosChild) -> (u32, u32) {
+    let mut line = String::new();
+    BufReader::new(child.stdout().expect("stdout pipe"))
+        .read_line(&mut line)
+        .expect("ready marker");
+    let mut fields = line.trim().split(':');
+    assert_eq!(fields.next(), Some("ready"));
+    let descendant = fields
+        .next()
+        .expect("descendant PID")
+        .parse()
+        .expect("numeric descendant PID");
+    let process_group = fields
+        .next()
+        .expect("descendant process group")
+        .trim()
+        .parse()
+        .expect("numeric descendant process group");
+    (descendant, process_group)
 }
 
 #[test]
@@ -512,16 +537,19 @@ fn explicit_kill_terminates_the_complete_seatbelt_process_group() {
     let workspace = TempDir::new().expect("workspace");
     let backend = backend();
     let (mut child, marker) = delayed_marker_child(workspace.path(), &backend);
-    let mut ready = [0; 6];
-    child
-        .stdout()
-        .expect("stdout pipe")
-        .read_exact(&mut ready)
-        .expect("ready marker");
-    assert_eq!(&ready, b"ready\n");
+    let (descendant, descendant_group) = read_descendant_process_group(&mut child);
+    assert_eq!(
+        descendant_group,
+        child.id(),
+        "descendant {descendant} escaped boundary group {}",
+        child.id()
+    );
     child.kill().expect("kill");
     thread::sleep(Duration::from_secs(2));
-    assert!(!marker.exists(), "a descendant survived explicit kill");
+    assert!(
+        !marker.exists(),
+        "descendant {descendant} survived explicit kill"
+    );
 }
 
 #[test]
@@ -529,16 +557,19 @@ fn dropping_child_terminates_the_complete_seatbelt_process_group() {
     let workspace = TempDir::new().expect("workspace");
     let backend = backend();
     let (mut child, marker) = delayed_marker_child(workspace.path(), &backend);
-    let mut ready = [0; 6];
-    child
-        .stdout()
-        .expect("stdout pipe")
-        .read_exact(&mut ready)
-        .expect("ready marker");
-    assert_eq!(&ready, b"ready\n");
+    let (descendant, descendant_group) = read_descendant_process_group(&mut child);
+    assert_eq!(
+        descendant_group,
+        child.id(),
+        "descendant {descendant} escaped boundary group {}",
+        child.id()
+    );
     drop(child);
     thread::sleep(Duration::from_secs(2));
-    assert!(!marker.exists(), "a descendant survived child drop");
+    assert!(
+        !marker.exists(),
+        "descendant {descendant} survived child drop"
+    );
 }
 
 #[test]
