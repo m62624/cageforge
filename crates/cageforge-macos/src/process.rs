@@ -3,6 +3,8 @@
 //! macOS process-group lifecycle for one Seatbelt child.
 
 use std::io;
+#[cfg(target_os = "macos")]
+use std::os::unix::io::RawFd;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,12 +18,6 @@ const BOUNDARY_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const BOUNDARY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-boundary-recovery";
-
-#[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
-unsafe extern "C" {
-    fn closefrom(lowfd: libc::c_int);
-}
 
 /// A command running inside one macOS Seatbelt boundary.
 pub struct MacosChild {
@@ -192,14 +188,78 @@ pub(crate) fn configure_process_group(command: &mut std::process::Command) {
                     Err(io::Error::last_os_error())
                 } else {
                     // SAFETY: stdio has already been configured by
-                    // `Command`; closing every descriptor above stderr keeps
-                    // unrelated parent handles out of the Seatbelt boundary.
-                    closefrom(3);
+                    // `Command`; this closes unrelated inheritable parent
+                    // descriptors while preserving Rust's CLOEXEC spawn-error
+                    // pipe.
+                    close_inherited_fds_except(&[])?;
                     Ok(())
                 }
             });
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn close_inherited_fds_except(preserved_fds: &[RawFd]) -> io::Result<()> {
+    let mut descriptors = [libc::proc_fdinfo {
+        proc_fd: 0,
+        proc_fdtype: 0,
+    }; 1024];
+    // SAFETY: proc_pidinfo writes descriptor records into the stack-owned
+    // buffer and does not retain the pointer after returning.
+    let bytes = unsafe {
+        libc::proc_pidinfo(
+            libc::getpid(),
+            libc::PROC_PIDLISTFDS,
+            0,
+            descriptors.as_mut_ptr().cast(),
+            std::mem::size_of_val(&descriptors) as libc::c_int,
+        )
+    };
+    if bytes < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let close_inheritable = |fd: RawFd| {
+        if fd <= libc::STDERR_FILENO || preserved_fds.contains(&fd) {
+            return;
+        }
+        // `std::process` keeps its CLOEXEC pipe open until exec so it can
+        // report a pre-exec failure to the parent.
+        // SAFETY: fcntl and close operate only on descriptors owned by this
+        // post-fork child process.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                libc::close(fd);
+            }
+        }
+    };
+
+    if (bytes as usize) < std::mem::size_of_val(&descriptors) {
+        let count = bytes as usize / std::mem::size_of::<libc::proc_fdinfo>();
+        for descriptor in descriptors.iter().take(count) {
+            close_inheritable(descriptor.proc_fd);
+        }
+        return Ok(());
+    }
+
+    // The fixed stack buffer was not sufficient. Scan the complete descriptor
+    // range from the process limit; descriptor numbers are not required to be
+    // dense, so the number of records returned above is not an upper fd value.
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit writes into the stack-owned resource-limit structure.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let upper_bound = limit.rlim_cur.min(RawFd::MAX as _) as RawFd;
+    for fd in libc::STDERR_FILENO + 1..upper_bound {
+        close_inheritable(fd);
+    }
+    Ok(())
 }
 
 pub(crate) fn stream(mode: StdioMode) -> std::process::Stdio {
