@@ -313,6 +313,7 @@ impl ProfileBuilder {
                 "READ_ROOT",
                 plan.read_roots(),
                 plan.denied_paths(),
+                plan.denied_globs(),
                 &[],
             )?;
             self.add_roots(
@@ -320,6 +321,7 @@ impl ProfileBuilder {
                 "WRITE_ROOT",
                 plan.write_roots(),
                 plan.denied_paths(),
+                plan.denied_globs(),
                 plan.write_denied_paths(),
             )?;
         }
@@ -372,6 +374,7 @@ impl ProfileBuilder {
         prefix: &str,
         roots: &[PathBuf],
         denied_paths: &[PathBuf],
+        denied_globs: &[String],
         write_denied_paths: &[PathBuf],
     ) -> Result<(), SeatbeltProfileError> {
         if roots.is_empty() {
@@ -386,6 +389,13 @@ impl ProfileBuilder {
                 if is_within(excluded, path) {
                     self.push_path_exclusion(&mut requirements, "DENIED_PATH", excluded_index);
                 }
+            }
+            for pattern in denied_globs {
+                let regex = glob_to_seatbelt_regex(pattern);
+                requirements.push(format!(
+                    r#"(require-not (regex #"{}"))"#,
+                    escape_profile_string(&regex)
+                ));
             }
             if action == "file-write*" {
                 for (excluded_index, excluded) in write_denied_paths.iter().enumerate() {
@@ -451,7 +461,7 @@ impl ProfileBuilder {
                     });
                 };
                 self.policy.push_str(&format!(
-                    "\n(allow network-outbound (remote ip \"127.0.0.1:{ingress_port}\"))\n"
+                    "\n(allow network-outbound (remote ip \"localhost:{ingress_port}\"))\n"
                 ));
                 self.policy.push_str(SEATBELT_NETWORK_SERVICE_POLICY);
                 self.add_unix_socket_rules(unix, true)?;
