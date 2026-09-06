@@ -1232,7 +1232,6 @@ fn enabled_unix_socket_policy_denies_the_exact_denied_path() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
-    let status = child.wait().expect("wait");
     let mut output = String::new();
     child
         .stdout()
@@ -1245,6 +1244,7 @@ fn enabled_unix_socket_policy_denies_the_exact_denied_path() {
         .expect("stderr pipe")
         .read_to_string(&mut error)
         .expect("read stderr");
+    let status = child.wait().expect("wait");
     assert_eq!(
         status.code(),
         Some(0),
