@@ -111,10 +111,11 @@ impl MacosBackend {
         let mut command = std::process::Command::new(self.config.seatbelt_executable());
         command.arg("-p").arg(profile.policy());
         for definition in profile.definitions() {
-            let mut value = OsString::from(definition.name());
-            value.push("=");
-            value.push(definition.value());
-            command.arg("-D").arg(value);
+            let mut definition_argument = OsString::from("-D");
+            definition_argument.push(definition.name());
+            definition_argument.push("=");
+            definition_argument.push(definition.value());
+            command.arg(definition_argument);
         }
         command.arg("--").arg(command_spec.program());
         command.args(command_spec.args());
