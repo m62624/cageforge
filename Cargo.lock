@@ -247,6 +247,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cageforge-macos"
+version = "0.1.0"
+dependencies = [
+ "cageforge-backend-api",
+ "cageforge-command",
+ "cageforge-network-proxy",
+ "cageforge-path",
+ "cageforge-policy",
+ "cageforge-policy-compose",
+ "libc",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "cageforge-network-proxy"
 version = "0.1.0"
 dependencies = [

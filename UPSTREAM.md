@@ -59,6 +59,11 @@ repository. The external checkout is updated manually before review.
 | `codex-rs/windows-sandbox-rs` | `crates/cageforge-windows` | Elevated native behavior tracked for Specification 0016; independent implementation, not imported |
 | `codex-rs/network-proxy/src/windows_tcp_attribution.rs` | `crates/cageforge-windows` | Windows TCP owner and restricting-SID route behavior tracked; independent implementation, not imported |
 | `codex-rs/network-proxy/src/windows_proxy_ingress.rs` | `crates/cageforge-windows` | Per-execution Windows proxy route isolation tracked; independent implementation, not imported |
+| `codex-rs/sandboxing/src/seatbelt.rs` | `crates/cageforge-macos` | Seatbelt policy construction and per-command boundary behavior tracked for Specification 0017; independent implementation, not imported |
+| `codex-rs/sandboxing/src/seatbelt_base_policy.sbpl` | `crates/cageforge-macos` | Closed-by-default macOS baseline behavior tracked; policy text is independently re-authored |
+| `codex-rs/sandboxing/src/seatbelt_network_policy.sbpl` | `crates/cageforge-macos` | Required macOS network-service allowances tracked; policy text is independently re-authored |
+| `codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl` | `crates/cageforge-macos` | Minimal platform visibility tracked; policy text is independently re-authored |
+| `codex-rs/sandboxing/src/manager.rs`, `src/spawn.rs` | `crates/cageforge-macos` | Process handoff and lifecycle responsibilities tracked; Codex product and PTY protocols excluded |
 | `codex-rs/vendor/bubblewrap` | `crates/cageforge-bwrap/vendor/bubblewrap` | Behavior comparison only; not the source of the bundled component |
 
 ## Bundled third-party source
