@@ -300,6 +300,26 @@ impl ProfileBuilder {
         for (index, path) in plan.write_denied_paths().iter().enumerate() {
             self.add_definition(format!("WRITE_DENIED_PATH_{index}"), path.clone())?;
         }
+        for pattern in plan.denied_globs() {
+            if pattern.as_bytes().contains(&0) {
+                return Err(SeatbeltProfileError::GlobContainsNul {
+                    pattern: pattern.clone(),
+                });
+            }
+            let regex = glob_to_seatbelt_regex(pattern);
+            self.policy.push_str(&format!(
+                "(deny file-read* (regex #\"{}\"))\n",
+                escape_profile_string(&regex)
+            ));
+            self.policy.push_str(&format!(
+                "(deny file-write* (regex #\"{}\"))\n",
+                escape_profile_string(&regex)
+            ));
+            self.policy.push_str(&format!(
+                "(deny file-write-unlink (regex #\"{}\"))\n",
+                escape_profile_string(&regex)
+            ));
+        }
         if plan.unrestricted() {
             self.add_full_root("file-read*", plan.denied_paths(), &[])?;
             self.add_full_root(
@@ -334,26 +354,6 @@ impl ProfileBuilder {
             ));
             self.policy.push_str(&format!(
                 "(deny file-write-unlink (subpath (param \"{name}\")))\n"
-            ));
-        }
-        for pattern in plan.denied_globs() {
-            if pattern.as_bytes().contains(&0) {
-                return Err(SeatbeltProfileError::GlobContainsNul {
-                    pattern: pattern.clone(),
-                });
-            }
-            let regex = glob_to_seatbelt_regex(pattern);
-            self.policy.push_str(&format!(
-                "(deny file-read* (regex #\"{}\"))\n",
-                escape_profile_string(&regex)
-            ));
-            self.policy.push_str(&format!(
-                "(deny file-write* (regex #\"{}\"))\n",
-                escape_profile_string(&regex)
-            ));
-            self.policy.push_str(&format!(
-                "(deny file-write-unlink (regex #\"{}\"))\n",
-                escape_profile_string(&regex)
             ));
         }
         for (index, _) in plan.write_denied_paths().iter().enumerate() {

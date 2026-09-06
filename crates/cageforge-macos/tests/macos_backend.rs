@@ -252,28 +252,20 @@ fn shell_command(script: &str) -> CommandSpec {
 }
 
 #[test]
-fn host_accepts_a_minimal_seatbelt_profile() {
-    let output = std::process::Command::new("/usr/bin/sandbox-exec")
-        .args([
-            "-p",
-            concat!(
-                "(version 1)\n",
-                "(deny default)\n",
-                "(allow process-exec)\n",
-                "(allow file-read* (subpath \"/usr/bin\"))\n",
-                "(allow file-read* (subpath \"/usr/lib\"))\n",
-                "(allow file-map-executable (subpath \"/usr/lib\"))\n",
-            ),
-            "--",
-            "/usr/bin/true",
-        ])
-        .output()
-        .expect("start minimal sandbox-exec probe");
+fn host_accepts_the_backend_seatbelt_profile() {
+    let workspace = TempDir::new().expect("workspace");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), NetworkPolicy::disabled());
+    let command = CommandSpec::new("/usr/bin/true").expect("true");
+    let (command, effective, context) = request_for(workspace.path(), &policy, command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
     assert!(
-        output.status.success(),
-        "minimal sandbox-exec probe failed: {status:?}; stderr: {stderr}",
-        status = output.status,
-        stderr = String::from_utf8_lossy(&output.stderr),
+        status.success(),
+        "backend Seatbelt probe failed: {status:?}"
     );
 }
 
@@ -437,7 +429,14 @@ fn deny_glob_blocks_writes_inside_a_writable_workspace() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
-    assert!(!child.wait().expect("wait").success());
+    let mut error = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut error)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    assert!(!status.success(), "deny glob was bypassed; stderr: {error}");
     assert!(!secret.exists(), "deny glob was bypassed");
 }
 
