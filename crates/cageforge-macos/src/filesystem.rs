@@ -219,7 +219,12 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
             return Err(MacosFilesystemError::InvalidScope { path });
         }
         let Some(existing) = self.first_missing_component(&path)? else {
-            return Ok(Some(normalize_lexical_path(&path).into_owned()));
+            let canonical =
+                fs::canonicalize(&path).map_err(|source| MacosFilesystemError::Metadata {
+                    path: path.clone(),
+                    source,
+                })?;
+            return Ok(Some(normalize_lexical_path(&canonical).into_owned()));
         };
         if existing == path {
             return match missing {

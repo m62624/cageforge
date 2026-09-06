@@ -451,7 +451,7 @@ impl ProfileBuilder {
                     });
                 };
                 self.policy.push_str(&format!(
-                    "\n(allow network-outbound (remote ip \"localhost:{ingress_port}\"))\n"
+                    "\n(allow network-outbound (remote ip \"127.0.0.1:{ingress_port}\"))\n"
                 ));
                 self.policy.push_str(SEATBELT_NETWORK_SERVICE_POLICY);
                 self.add_unix_socket_rules(unix, true)?;

@@ -227,7 +227,13 @@ fn host_accepts_a_minimal_seatbelt_profile() {
     let output = std::process::Command::new("/usr/bin/sandbox-exec")
         .args([
             "-p",
-            "(version 1)\n(deny default)\n(allow process-exec)\n(allow file-read* (subpath \"/usr\"))\n",
+            concat!(
+                "(version 1)\n",
+                "(deny default)\n",
+                "(allow process-exec)\n",
+                "(allow file-read* (subpath \"/usr\"))\n",
+                "(allow file-map-executable (subpath \"/usr/lib\"))\n",
+            ),
             "--",
             "/usr/bin/true",
         ])
@@ -285,10 +291,12 @@ fn restricted_command_reads_its_workspace() {
 #[test]
 fn restricted_command_cannot_read_outside_its_workspace() {
     let workspace = TempDir::new().expect("workspace");
-    let outside = Path::new("/etc/hosts");
+    let outside_directory = TempDir::new().expect("outside directory");
+    let outside = outside_directory.path().join("outside.txt");
+    fs::write(&outside, "outside-data").expect("outside fixture");
     let policy = restricted_policy(workspace.path());
     let (command, effective, context) =
-        request_for(workspace.path(), &policy, cat_command(outside));
+        request_for(workspace.path(), &policy, cat_command(&outside));
     let backend = backend();
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
