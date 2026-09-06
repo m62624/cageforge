@@ -447,6 +447,45 @@ fn restricted_command_reads_its_workspace() {
 }
 
 #[test]
+fn parent_watcher_does_not_retain_closed_stdin() {
+    let workspace = TempDir::new().expect("workspace");
+    let marker = workspace.path().join("stdin-closed");
+    let command = shell_command("exec 0<&-; touch \"$1\"; sleep 5")
+        .with_arg("cageforge-stdin")
+        .expect("shell name")
+        .with_arg(marker.as_os_str())
+        .expect("marker argument");
+    let policy = restricted_policy(workspace.path());
+    let (mut request, effective, context) = request_for(workspace.path(), &policy, command);
+    request = request.with_stdio(
+        StdioSpec::inherited()
+            .with_stdin(StdioMode::Pipe)
+            .with_stdout(StdioMode::Pipe)
+            .with_stderr(StdioMode::Pipe),
+    );
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&request, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "stdin close fixture did not start"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let error = child
+        .stdin()
+        .expect("stdin pipe")
+        .write(&[1])
+        .expect_err("parent watcher retained the closed stdin read end");
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    child.kill().expect("terminate fixture");
+}
+
+#[test]
 fn restricted_command_cannot_read_outside_its_workspace() {
     let workspace = TempDir::new().expect("workspace");
     let outside_directory = TempDir::new().expect("outside directory");

@@ -23,7 +23,7 @@ pub(crate) const PARENT_DEATH_WRAPPER: &str = "(
         :
     done
     kill -KILL -$$ 2>/dev/null
-) 3<&3 >/dev/null 2>&1 &
+) 3<&3 </dev/null >/dev/null 2>&1 &
 exec 3<&-
 exec \"$@\"
 ";
