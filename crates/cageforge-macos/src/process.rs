@@ -99,12 +99,7 @@ impl MacosChild {
     fn child_mut(&mut self) -> Result<&mut Child, MacosBackendError> {
         self.child
             .as_mut()
-            .ok_or_else(|| MacosBackendError::ProcessWait {
-                source: io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "macOS sandbox boundary is no longer owned by this child",
-                ),
-            })
+            .ok_or(MacosBackendError::BoundaryOwnedByRecovery)
     }
 
     fn check_gateway_health(&mut self) -> Result<(), MacosBackendError> {
@@ -285,5 +280,26 @@ fn confirm_process_group_gone(pid: u32) -> Result<(), MacosBackendError> {
             return Err(MacosBackendError::BoundaryTerminationUnconfirmed);
         }
         thread::sleep(BOUNDARY_POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MacosChild;
+    use crate::error::MacosBackendError;
+
+    #[test]
+    fn recovery_owned_boundary_is_reported_as_a_typed_state() {
+        let mut child = MacosChild {
+            child: None,
+            gateway: None,
+            deadline: None,
+            recovery_attempted: true,
+        };
+
+        assert!(matches!(
+            child.try_wait(),
+            Err(MacosBackendError::BoundaryOwnedByRecovery)
+        ));
     }
 }

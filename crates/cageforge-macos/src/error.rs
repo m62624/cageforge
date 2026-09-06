@@ -38,6 +38,10 @@ pub enum MacosBackendError {
         #[source]
         source: io::Error,
     },
+    /// The boundary was transferred to the detached recovery owner after a
+    /// failed cleanup attempt and is no longer accessible through this child.
+    #[error("macOS sandbox boundary is owned by its recovery owner")]
+    BoundaryOwnedByRecovery,
     /// The command exceeded its prepared timeout.
     #[error("the macOS sandboxed command exceeded its prepared timeout")]
     ProcessTimedOut,
