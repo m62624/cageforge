@@ -1028,6 +1028,42 @@ fn simultaneous_instances_keep_separate_filesystem_scopes() {
 }
 
 #[test]
+fn shared_backend_spawns_independent_instances_concurrently() {
+    let backend = Arc::new(backend());
+    let workers = ["first", "second"]
+        .into_iter()
+        .map(|expected| {
+            let backend = Arc::clone(&backend);
+            thread::spawn(move || {
+                let workspace = TempDir::new().expect("workspace");
+                let file = workspace.path().join("value");
+                fs::write(&file, expected).expect("fixture");
+                let policy = restricted_policy(workspace.path());
+                let (command, effective, context) =
+                    request_for(workspace.path(), &policy, cat_command(&file));
+                let prepared = backend
+                    .prepare(BackendRequest::new(&command, &effective), &context)
+                    .expect("prepare");
+                let mut child = backend.spawn(prepared).expect("spawn");
+                let mut output = String::new();
+                child
+                    .stdout()
+                    .expect("stdout")
+                    .read_to_string(&mut output)
+                    .expect("output");
+                let status = child.wait().expect("wait");
+                assert!(status.success(), "{status:?}");
+                assert_eq!(output, expected);
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for worker in workers {
+        worker.join().expect("concurrent sandbox worker");
+    }
+}
+
+#[test]
 fn missing_seatbelt_executable_is_typed() {
     let error = MacosBackend::new(
         MacosBackendConfig::new()

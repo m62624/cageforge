@@ -44,6 +44,14 @@ pub struct MacosChild {
     recovery_attempted: bool,
 }
 
+struct MacosBoundaryRecovery {
+    child: Option<Child>,
+    process_group_id: u32,
+    parent_death: Option<OwnedFd>,
+    gateway: Option<GatewayRuntime>,
+    completed: bool,
+}
+
 impl MacosChild {
     pub(crate) fn new(
         child: Child,
@@ -144,15 +152,15 @@ impl MacosChild {
             terminate_process_group_if_present(self.process_group_id)?;
             confirm_process_group_gone(self.process_group_id)?;
         }
-        self.child.take();
         self.cleanup_boundaries()?;
         Ok(status)
     }
 
     fn cleanup_boundaries(&mut self) -> Result<(), MacosBackendError> {
-        if let Some(mut gateway) = self.gateway.take() {
+        if let Some(gateway) = self.gateway.as_mut() {
             gateway.shutdown().map_err(MacosBackendError::Network)?;
         }
+        self.gateway = None;
         self.child = None;
         self.parent_death = None;
         Ok(())
@@ -163,28 +171,54 @@ impl MacosChild {
             return;
         }
         self.recovery_attempted = true;
-        let Some(mut child) = self.child.take() else {
+        let Some(child) = self.child.take() else {
             return;
         };
-        let gateway = self.gateway.take();
-        let process_group_id = self.process_group_id;
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        let recovery = thread::Builder::new()
+        let recovery = MacosBoundaryRecovery {
+            child: Some(child),
+            process_group_id: self.process_group_id,
+            parent_death: self.parent_death.take(),
+            gateway: self.gateway.take(),
+            completed: false,
+        };
+        let _ = thread::Builder::new()
             .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
-            .spawn(move || {
-                if let Ok((mut child, gateway)) = receiver.recv() {
-                    recover_boundary(&mut child, process_group_id, gateway);
+            .spawn(move || recovery.recover_until_terminated());
+    }
+}
+
+impl MacosBoundaryRecovery {
+    fn recover_until_terminated(mut self) {
+        loop {
+            let terminated = self
+                .child
+                .as_mut()
+                .is_some_and(|child| terminate_process_group(child, self.process_group_id).is_ok());
+            if terminated {
+                if let Some(gateway) = self.gateway.as_mut() {
+                    let _ = gateway.shutdown();
                 }
-            });
-        if recovery.is_err() {
-            // Drop cannot safely release an unconfirmed boundary. If the
-            // detached owner itself cannot be created, keep ownership here
-            // and retry until process-group termination is confirmed.
-            recover_boundary(&mut child, process_group_id, gateway);
-        } else if let Err(error) = sender.send((child, gateway)) {
-            let (child, gateway) = error.0;
-            let mut child = child;
-            recover_boundary(&mut child, process_group_id, gateway);
+                self.child = None;
+                self.parent_death = None;
+                self.gateway = None;
+                self.completed = true;
+                return;
+            }
+            thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
+        }
+    }
+}
+
+impl Drop for MacosBoundaryRecovery {
+    fn drop(&mut self) {
+        if !self.completed {
+            // Dropping an unconfirmed boundary would release its parent-death
+            // and gateway ownership while the process group may still live.
+            // Keep every enforcement resource alive if the recovery thread
+            // itself cannot be created or terminates unexpectedly.
+            std::mem::forget(self.child.take());
+            std::mem::forget(self.parent_death.take());
+            std::mem::forget(self.gateway.take());
         }
     }
 }
@@ -357,27 +391,20 @@ pub(crate) fn stream(mode: StdioMode) -> std::process::Stdio {
     }
 }
 
-fn recover_boundary(child: &mut Child, process_group_id: u32, mut gateway: Option<GatewayRuntime>) {
-    loop {
-        if terminate_process_group(child, process_group_id).is_ok() {
-            if let Some(mut gateway) = gateway.take() {
-                let _ = gateway.shutdown();
-            }
-            return;
-        }
-        thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
-    }
-}
-
 fn terminate_process_group(
     child: &mut Child,
     process_group_id: u32,
 ) -> Result<(), MacosBackendError> {
     terminate_process_group_if_present(process_group_id)?;
-    child
-        .wait()
-        .map_err(|source| MacosBackendError::ProcessWait { source })?;
-    confirm_process_group_gone(process_group_id)
+    let deadline = Instant::now() + BOUNDARY_WAIT_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return confirm_process_group_gone(process_group_id),
+            Ok(None) if Instant::now() < deadline => thread::sleep(BOUNDARY_POLL_INTERVAL),
+            Ok(None) => return Err(MacosBackendError::BoundaryTerminationUnconfirmed),
+            Err(source) => return Err(MacosBackendError::ProcessWait { source }),
+        }
+    }
 }
 
 #[allow(unsafe_code)]
