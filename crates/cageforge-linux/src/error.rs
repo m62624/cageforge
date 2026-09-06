@@ -445,6 +445,12 @@ pub enum NetworkGatewayRuntimeError {
     /// The startup readiness channel closed before reporting a result.
     #[error("gateway startup channel closed")]
     StartupChannelClosed,
+    /// The gateway did not report readiness within its startup deadline.
+    #[error("gateway did not report readiness within {timeout_ms} ms")]
+    StartupTimeout {
+        /// Maximum time allowed for gateway runtime startup.
+        timeout_ms: u128,
+    },
     /// The gateway thread terminated by panic.
     #[error("gateway runtime thread panicked")]
     Panicked,

@@ -23,6 +23,7 @@ use tokio::time::timeout;
 use crate::error::MacosNetworkError;
 
 const NETWORK_GATEWAY_THREAD_NAME: &str = "cageforge-macos-network-gateway";
+const NETWORK_GATEWAY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-network-gateway-recovery";
 const GATEWAY_RELAY_BUFFER_BYTES: usize = 64 * 1024;
 const GATEWAY_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -161,7 +162,7 @@ impl GatewayRuntime {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let _ = shutdown.send(());
-                drop(thread);
+                retain_startup_thread(thread);
                 Err(MacosNetworkError::StartupTimeout {
                     timeout_ms: GATEWAY_STARTUP_TIMEOUT.as_millis(),
                 })
@@ -214,6 +215,18 @@ impl Drop for GatewayRuntime {
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
+}
+
+fn retain_startup_thread(thread: JoinHandle<Result<(), MacosNetworkError>>) {
+    // The startup thread is already detached if the recovery owner cannot be
+    // created. It owns no sandbox boundary and its listener remains
+    // authenticated, so retaining it is safer than joining indefinitely in
+    // the caller while still reporting the bounded startup failure.
+    let _ = thread::Builder::new()
+        .name(NETWORK_GATEWAY_RECOVERY_THREAD_NAME.to_owned())
+        .spawn(move || {
+            let _ = thread.join();
+        });
 }
 
 fn lower_unix_socket_plan<'request, B: SandboxBackend>(
