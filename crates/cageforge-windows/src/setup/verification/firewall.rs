@@ -104,10 +104,12 @@ pub(super) fn verify(details: &WindowsSetupDetails) -> Result<(), WindowsSetupVe
     ];
     for spec in &specs {
         let rule = unsafe { rules.Item(&BSTR::from(spec.name.as_str())) }
-            .map_err(|error| WindowsSetupVerificationError::FirewallRuleMissing {
-                name: spec.name.clone(),
-                code: error.code().0,
-            })?
+            .map_err(
+                |error| WindowsSetupVerificationError::FirewallRuleLookupFailed {
+                    name: spec.name.clone(),
+                    code: error.code().0,
+                },
+            )?
             .cast::<INetFwRule3>()
             .map_err(
                 |error| WindowsSetupVerificationError::FirewallRuleInterface {
