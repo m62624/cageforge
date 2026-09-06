@@ -426,12 +426,15 @@ impl WindowsSetup {
                 .args(&arguments)
                 .status()
                 .map(|status| status.code().map_or(125, |code| code as u32))
+                .map_err(|source| crate::error::WindowsElevationError::DirectLaunch { source })
         } else {
             crate::win::run_elevated(&helper_path, &arguments)
         };
         let exit_code = match launched {
             Ok(code) => code,
-            Err(source) if source.raw_os_error() == Some(1223) => {
+            Err(crate::error::WindowsElevationError::ShellExecute { source })
+                if source.raw_os_error() == Some(1223) =>
+            {
                 return Err(WindowsSetupError::ElevationCanceled);
             }
             Err(source) => {

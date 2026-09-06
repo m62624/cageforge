@@ -39,8 +39,8 @@ pub use config::{
 };
 pub use error::{
     WindowsAccountLookupError, WindowsAccountVerificationError, WindowsBackendError,
-    WindowsFilesystemShapeError, WindowsNetworkCombinationError, WindowsSetupError,
-    WindowsSetupVerificationError,
+    WindowsElevationError, WindowsFilesystemShapeError, WindowsNetworkCombinationError,
+    WindowsSetupError, WindowsSetupVerificationError,
 };
 pub use filesystem::path::ValidatedPathError;
 pub use network::attribution::WindowsNetworkAttributionError;

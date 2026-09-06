@@ -442,6 +442,72 @@ pub enum WindowsSetupVerificationError {
     },
 }
 
+/// Failure while querying elevation or launching the elevated setup helper.
+#[derive(Debug, Error)]
+pub enum WindowsElevationError {
+    /// Windows could not open the current process token.
+    #[error("failed to open the current Windows process token: {source}")]
+    CurrentProcessToken {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Windows could not read the token elevation record.
+    #[error("failed to read the Windows token elevation record: {source}")]
+    TokenElevation {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Windows returned a truncated token elevation record.
+    #[error(
+        "Windows returned a truncated token elevation record: expected {expected} bytes, received {actual}"
+    )]
+    TokenElevationRecordTruncated {
+        /// Minimum record size required by the API contract.
+        expected: u32,
+        /// Number of bytes reported by Windows.
+        actual: u32,
+    },
+    /// ShellExecuteExW could not start the elevated helper.
+    #[error("failed to request Windows elevation for the setup helper: {source}")]
+    ShellExecute {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The already-elevated process could not start or wait for the helper.
+    #[error("failed to run the Windows setup helper directly: {source}")]
+    DirectLaunch {
+        /// Native process creation or wait failure.
+        #[source]
+        source: io::Error,
+    },
+    /// ShellExecuteExW reported success without returning a process handle.
+    #[error("Windows elevation returned no setup-helper process handle")]
+    MissingProcessHandle,
+    /// Waiting for the elevated helper failed.
+    #[error("failed while waiting for the elevated Windows setup helper: {source}")]
+    Wait {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Windows returned an unexpected wait result.
+    #[error("Windows elevation returned unexpected wait result {result:#x}")]
+    UnexpectedWaitResult {
+        /// Native wait result.
+        result: u32,
+    },
+    /// Windows could not read the elevated helper's exit code.
+    #[error("failed to read the elevated Windows setup helper exit code: {source}")]
+    ExitCode {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
 /// Provisioning, marker, account, firewall, or WFP verification failure.
 #[derive(Debug, Error)]
 pub enum WindowsSetupError {
@@ -616,7 +682,7 @@ pub enum WindowsSetupError {
         path: PathBuf,
         /// Shell elevation or process wait failure.
         #[source]
-        source: io::Error,
+        source: WindowsElevationError,
     },
     /// The helper exited before creating its mandatory structured response.
     #[error(

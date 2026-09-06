@@ -23,7 +23,9 @@ use windows_sys::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, 
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::account_groups::{is_allowed_sandbox_group_sid, is_privileged_group_sid};
-use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
+use crate::error::{
+    WindowsAccountLookupError, WindowsAccountVerificationError, WindowsElevationError,
+};
 pub(crate) use crate::native_strings::wide as to_wide;
 use crate::native_strings::{local_sid_string, wide_path};
 use crate::net_api_strings::{
@@ -83,10 +85,12 @@ pub(crate) fn current_user_sid() -> io::Result<String> {
 }
 
 #[allow(unsafe_code)]
-pub(crate) fn current_process_is_elevated() -> io::Result<bool> {
+pub(crate) fn current_process_is_elevated() -> Result<bool, WindowsElevationError> {
     let mut token = std::ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return Err(io::Error::last_os_error());
+        return Err(WindowsElevationError::CurrentProcessToken {
+            source: io::Error::last_os_error(),
+        });
     }
     let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
@@ -101,13 +105,15 @@ pub(crate) fn current_process_is_elevated() -> io::Result<bool> {
         )
     } == 0
     {
-        return Err(io::Error::last_os_error());
+        return Err(WindowsElevationError::TokenElevation {
+            source: io::Error::last_os_error(),
+        });
     }
     if returned < size_of::<TOKEN_ELEVATION>() as u32 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Windows returned a truncated token-elevation record",
-        ));
+        return Err(WindowsElevationError::TokenElevationRecordTruncated {
+            expected: size_of::<TOKEN_ELEVATION>() as u32,
+            actual: returned,
+        });
     }
     Ok(elevation.TokenIsElevated != 0)
 }
@@ -201,7 +207,10 @@ pub(crate) fn verify_sandbox_account(
 }
 
 #[allow(unsafe_code)]
-pub(crate) fn run_elevated(executable: &std::path::Path, arguments: &[String]) -> io::Result<u32> {
+pub(crate) fn run_elevated(
+    executable: &std::path::Path,
+    arguments: &[String],
+) -> Result<u32, WindowsElevationError> {
     use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, INFINITE, WaitForSingleObject,
@@ -234,28 +243,28 @@ pub(crate) fn run_elevated(executable: &std::path::Path, arguments: &[String]) -
         hProcess: std::ptr::null_mut(),
     };
     if unsafe { ShellExecuteExW(&mut execute) } == 0 {
-        return Err(io::Error::last_os_error());
+        return Err(WindowsElevationError::ShellExecute {
+            source: io::Error::last_os_error(),
+        });
     }
     if execute.hProcess.is_null() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "elevated setup returned no process handle",
-        ));
+        return Err(WindowsElevationError::MissingProcessHandle);
     }
     let process = unsafe { OwnedHandle::from_raw_handle(execute.hProcess as RawHandle) };
     let wait = unsafe { WaitForSingleObject(process.as_raw_handle() as _, INFINITE) };
     if wait == WAIT_FAILED {
-        return Err(io::Error::last_os_error());
+        return Err(WindowsElevationError::Wait {
+            source: io::Error::last_os_error(),
+        });
     }
     if wait != WAIT_OBJECT_0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unexpected elevated setup wait result {wait:#x}"),
-        ));
+        return Err(WindowsElevationError::UnexpectedWaitResult { result: wait });
     }
     let mut exit_code = 0u32;
     if unsafe { GetExitCodeProcess(process.as_raw_handle() as _, &mut exit_code) } == 0 {
-        return Err(io::Error::last_os_error());
+        return Err(WindowsElevationError::ExitCode {
+            source: io::Error::last_os_error(),
+        });
     }
     Ok(exit_code)
 }
