@@ -20,6 +20,9 @@ mod network;
 mod process;
 mod seatbelt;
 
+#[cfg(test)]
+mod seatbelt_tests;
+
 pub use backend::MacosBackend;
 pub use config::{MacosBackendConfig, MacosBackendConfigError};
 pub use error::{MacosBackendError, MacosFilesystemError, MacosNetworkError, SeatbeltProfileError};

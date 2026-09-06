@@ -6,17 +6,19 @@ use std::path::PathBuf;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::MacosNetworkPlan;
 
-use super::{SeatbeltProfile, glob_to_seatbelt_regex};
+use crate::seatbelt::{SeatbeltProfile, glob_to_seatbelt_regex};
 
-fn filesystem_plan() -> MacosFilesystemPlan {
+fn filesystem_plan(denied_path: &str) -> MacosFilesystemPlan {
     MacosFilesystemPlan {
         read_roots: vec![PathBuf::from("/workspace")],
         write_roots: vec![PathBuf::from("/workspace")],
-        denied_paths: vec![PathBuf::from("/workspace/private")],
+        denied_paths: vec![PathBuf::from(denied_path)],
         write_denied_paths: vec![PathBuf::from("/workspace/readonly")],
-        denied_globs: vec![PathBuf::from("/workspace/**/*.secret")
-            .to_string_lossy()
-            .into_owned()],
+        denied_globs: vec![
+            PathBuf::from("/workspace/**/*.secret")
+                .to_string_lossy()
+                .into_owned(),
+        ],
         unrestricted: false,
     }
 }
@@ -24,7 +26,7 @@ fn filesystem_plan() -> MacosFilesystemPlan {
 #[test]
 fn write_only_carveouts_remain_readable_in_the_profile() {
     let profile = SeatbeltProfile::build(
-        &filesystem_plan(),
+        &filesystem_plan("/workspace/private"),
         &MacosNetworkPlan::Disabled {
             unix: Default::default(),
         },
@@ -32,21 +34,15 @@ fn write_only_carveouts_remain_readable_in_the_profile() {
     .expect("profile");
     let policy = profile.policy();
 
-    assert!(policy.contains(
-        "(require-not (subpath (param \"WRITE_DENIED_PATH_0\")))"
-    ));
-    assert!(!policy.contains(
-        "(deny file-read* (subpath (param \"WRITE_DENIED_PATH_0\")))"
-    ));
-    assert!(policy.contains(
-        "(deny file-read* (subpath (param \"DENIED_PATH_0\")))"
-    ));
+    assert!(policy.contains("(require-not (subpath (param \"WRITE_DENIED_PATH_0\")))"));
+    assert!(!policy.contains("(deny file-read* (subpath (param \"WRITE_DENIED_PATH_0\")))"));
+    assert!(policy.contains("(deny file-read* (subpath (param \"DENIED_PATH_0\")))"));
 }
 
 #[test]
 fn definitions_are_unique_when_a_path_is_used_by_multiple_rules() {
     let profile = SeatbeltProfile::build(
-        &filesystem_plan(),
+        &filesystem_plan("/workspace/private"),
         &MacosNetworkPlan::Direct {
             unix: Default::default(),
         },
@@ -59,6 +55,29 @@ fn definitions_are_unique_when_a_path_is_used_by_multiple_rules() {
         .collect::<Vec<_>>();
     let unique = names.iter().cloned().collect::<BTreeSet<_>>();
     assert_eq!(names.len(), unique.len());
+}
+
+#[test]
+fn path_exclusions_use_component_boundaries() {
+    let plan = filesystem_plan("/workspace-escape");
+    let profile = SeatbeltProfile::build(
+        &plan,
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+
+    assert!(
+        !profile
+            .policy()
+            .contains("(require-not (literal (param \"DENIED_PATH_0\")))")
+    );
+    assert!(
+        profile
+            .policy()
+            .contains("(deny file-read* (subpath (param \"DENIED_PATH_0\")))")
+    );
 }
 
 #[test]

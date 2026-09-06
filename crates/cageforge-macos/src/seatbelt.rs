@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use cageforge_path::is_within;
+
 use crate::error::SeatbeltProfileError;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::{MacosNetworkPlan, MacosUnixSocketPlan};
@@ -231,13 +233,13 @@ impl ProfileBuilder {
             self.add_definition(name.clone(), path.clone());
             let mut requirements = vec![format!("(subpath (param \"{name}\"))")];
             for (excluded_index, excluded) in denied_paths.iter().enumerate() {
-                if excluded.starts_with(path) {
+                if is_within(excluded, path) {
                     self.push_path_exclusion(&mut requirements, "DENIED_PATH", excluded_index);
                 }
             }
             if action == "file-write*" {
                 for (excluded_index, excluded) in write_denied_paths.iter().enumerate() {
-                    if excluded.starts_with(path) {
+                    if is_within(excluded, path) {
                         self.push_path_exclusion(
                             &mut requirements,
                             "WRITE_DENIED_PATH",
@@ -352,7 +354,7 @@ impl ProfileBuilder {
     }
 }
 
-fn glob_to_seatbelt_regex(pattern: &str) -> String {
+pub(crate) fn glob_to_seatbelt_regex(pattern: &str) -> String {
     let mut regex = String::from("^");
     let mut chars = pattern.chars().peekable();
     while let Some(character) = chars.next() {

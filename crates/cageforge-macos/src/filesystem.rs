@@ -16,12 +16,12 @@ use crate::error::MacosFilesystemError;
 /// Filesystem rules lowered into one immutable Seatbelt launch plan.
 #[derive(Debug, Default)]
 pub(crate) struct MacosFilesystemPlan {
-    read_roots: Vec<PathBuf>,
-    write_roots: Vec<PathBuf>,
-    denied_paths: Vec<PathBuf>,
-    write_denied_paths: Vec<PathBuf>,
-    denied_globs: Vec<String>,
-    unrestricted: bool,
+    pub(crate) read_roots: Vec<PathBuf>,
+    pub(crate) write_roots: Vec<PathBuf>,
+    pub(crate) denied_paths: Vec<PathBuf>,
+    pub(crate) write_denied_paths: Vec<PathBuf>,
+    pub(crate) denied_globs: Vec<String>,
+    pub(crate) unrestricted: bool,
 }
 
 /// Collects both policy layers before the native profile is rendered.
