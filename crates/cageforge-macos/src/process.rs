@@ -3,7 +3,6 @@
 //! macOS process-group lifecycle for one Seatbelt child.
 
 use std::io;
-#[cfg(target_os = "macos")]
 use std::os::unix::io::RawFd;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
 use std::thread;
@@ -177,29 +176,25 @@ impl Drop for MacosChild {
 
 #[allow(unsafe_code)]
 pub(crate) fn configure_process_group(command: &mut std::process::Command) {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: pre_exec runs in the child between fork and exec; setpgid
-        // only changes the child process's own process-group membership.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) == -1 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    // SAFETY: stdio has already been configured by
-                    // `Command`; this closes unrelated inheritable parent
-                    // descriptors while preserving Rust's CLOEXEC spawn-error
-                    // pipe.
-                    close_inherited_fds_except(&[])?;
-                    Ok(())
-                }
-            });
-        }
+    use std::os::unix::process::CommandExt;
+    // SAFETY: pre_exec runs in the child between fork and exec; setpgid
+    // only changes the child process's own process-group membership.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                // SAFETY: stdio has already been configured by
+                // `Command`; this closes unrelated inheritable parent
+                // descriptors while preserving Rust's CLOEXEC spawn-error
+                // pipe.
+                close_inherited_fds_except(&[])?;
+                Ok(())
+            }
+        });
     }
 }
 
-#[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn close_inherited_fds_except(preserved_fds: &[RawFd]) -> io::Result<()> {
     let mut descriptors = [libc::proc_fdinfo {
