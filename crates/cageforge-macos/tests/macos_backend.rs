@@ -486,6 +486,91 @@ fn parent_watcher_does_not_retain_closed_stdin() {
 }
 
 #[test]
+fn parent_watcher_does_not_retain_closed_stdout_or_stderr() {
+    let workspace = TempDir::new().expect("workspace");
+    let marker = workspace.path().join("standard-streams-closed");
+    let command = shell_command("exec 1>&- 2>&-; touch \"$1\"; sleep 5")
+        .with_arg("cageforge-stdio")
+        .expect("shell name")
+        .with_arg(marker.as_os_str())
+        .expect("marker argument");
+    let policy = writable_policy(workspace.path());
+    let (mut request, effective, context) = request_for(workspace.path(), &policy, command);
+    request = request.with_stdio(
+        StdioSpec::inherited()
+            .with_stdin(StdioMode::Null)
+            .with_stdout(StdioMode::Pipe)
+            .with_stderr(StdioMode::Pipe),
+    );
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&request, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "standard-stream close fixture did not start"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let stdout_result = wait_for_pipe_eof(child.stdout().expect("stdout pipe"));
+    let stderr_result = wait_for_pipe_eof(child.stderr().expect("stderr pipe"));
+    child.kill().expect("terminate fixture");
+
+    stdout_result.expect("parent watcher retained the closed stdout write end");
+    stderr_result.expect("parent watcher retained the closed stderr write end");
+}
+
+#[allow(unsafe_code)]
+fn wait_for_pipe_eof<T: Read + AsRawFd>(stream: &mut T) -> io::Result<()> {
+    let mut poll = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: libc::POLLIN | libc::POLLHUP,
+        revents: 0,
+    };
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut byte = [0; 1];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "standard stream did not reach EOF",
+            ));
+        }
+        let timeout = remaining.as_millis().min(i32::MAX as u128) as i32;
+        let result = unsafe { libc::poll(&mut poll, 1, timeout) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if result == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "standard stream did not reach EOF",
+            ));
+        }
+        match stream.read(&mut byte) {
+            Ok(0) => return Ok(()),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "closed standard-stream fixture produced output",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[test]
 fn restricted_command_cannot_read_outside_its_workspace() {
     let workspace = TempDir::new().expect("workspace");
     let outside_directory = TempDir::new().expect("outside directory");
