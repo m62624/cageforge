@@ -903,6 +903,10 @@ pub enum LinuxBackendError {
         #[source]
         source: std::io::Error,
     },
+    /// The complete process boundary is owned by the detached recovery owner
+    /// and is no longer controllable through this child handle.
+    #[error("Linux sandbox boundary is owned by its recovery owner")]
+    BoundaryOwnedByRecovery,
 }
 
 impl BubblewrapFlag {
