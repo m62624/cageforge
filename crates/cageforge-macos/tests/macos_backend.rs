@@ -251,7 +251,7 @@ fn host_accepts_a_minimal_seatbelt_profile() {
                 "(deny default)\n",
                 "(allow process-exec)\n",
                 "(allow file-read* (subpath \"/usr\"))\n",
-                "(allow file-map-executable (subpath \"/usr/lib\"))\n",
+                "(allow file-map-executable (subpath \"/\"))\n",
             ),
             "--",
             "/usr/bin/true",

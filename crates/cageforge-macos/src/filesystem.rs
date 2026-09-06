@@ -214,29 +214,29 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         path: PathBuf,
         missing: cageforge_policy::MissingPathBehavior,
     ) -> Result<Option<PathBuf>, MacosFilesystemError> {
-        let path = normalize_macos_system_alias(path);
-        if !path.is_absolute() || contains_parent_component(&path) {
-            return Err(MacosFilesystemError::InvalidScope { path });
+        let policy_path = normalize_lexical_path(&path).into_owned();
+        let lookup_path = normalize_macos_system_alias(path);
+        if !lookup_path.is_absolute() || contains_parent_component(&lookup_path) {
+            return Err(MacosFilesystemError::InvalidScope { path: lookup_path });
         }
-        let Some(existing) = self.first_missing_component(&path)? else {
-            let canonical =
-                fs::canonicalize(&path).map_err(|source| MacosFilesystemError::Metadata {
-                    path: path.clone(),
-                    source,
-                })?;
-            return Ok(Some(normalize_lexical_path(&canonical).into_owned()));
+        let Some(existing) = self.first_missing_component(&lookup_path)? else {
+            fs::canonicalize(&lookup_path).map_err(|source| MacosFilesystemError::Metadata {
+                path: lookup_path.clone(),
+                source,
+            })?;
+            return Ok(Some(policy_path));
         };
-        if existing == path {
+        if existing == lookup_path {
             return match missing {
                 cageforge_policy::MissingPathBehavior::Error => {
-                    Err(MacosFilesystemError::RequiredPathMissing { path })
+                    Err(MacosFilesystemError::RequiredPathMissing { path: lookup_path })
                 }
                 cageforge_policy::MissingPathBehavior::Skip => Ok(None),
             };
         }
         match missing {
             cageforge_policy::MissingPathBehavior::Error => {
-                Err(MacosFilesystemError::RequiredPathMissing { path })
+                Err(MacosFilesystemError::RequiredPathMissing { path: lookup_path })
             }
             cageforge_policy::MissingPathBehavior::Skip => Ok(None),
         }
