@@ -96,6 +96,12 @@ pub(crate) enum CapabilityStateTransitionError {
     InvalidMaterialization,
     #[error("materialized filesystem object at {path:?} failed identity or marker verification")]
     MaterializationDrift { path: PathBuf },
+    #[error("materialized filesystem state at {path:?} failed validation: {source}")]
+    MaterializationValidation {
+        path: PathBuf,
+        #[source]
+        source: CapabilityStateError,
+    },
     #[error("a filesystem materialization removal is already pending for {path:?}")]
     PendingMaterializationRemoval { path: PathBuf },
     #[error("no filesystem materialization removal is pending")]
@@ -496,9 +502,10 @@ impl CapabilityState {
                 let mut next = self.materialized_objects.clone();
                 next.push(candidate);
                 next.sort_by_key(materialized_object_key);
-                validate_materialized_objects(&next).map_err(|_| {
-                    CapabilityStateTransitionError::MaterializationDrift {
+                validate_materialized_objects(&next).map_err(|source| {
+                    CapabilityStateTransitionError::MaterializationValidation {
                         path: pending.path.clone(),
+                        source,
                     }
                 })?;
                 self.materialized_objects = next;
