@@ -119,22 +119,25 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         for rule in layer.entries() {
             match rule.target() {
                 FilesystemTarget::Scope(selector) => {
-                    for path in self.context.resolve(selector) {
-                        let path =
-                            self.validate_concrete_path(path, rule.missing_path_behavior())?;
-                        let Some(path) = path else {
-                            continue;
-                        };
+                    for policy_path in self.context.resolve(selector) {
                         let decision = self
                             .prepared
-                            .filesystem_access_for_path(self.backend, &path)?;
+                            .filesystem_access_for_path(self.backend, &policy_path)?;
+                        let native_path =
+                            self.validate_concrete_path(policy_path, rule.missing_path_behavior())?;
+                        let Some(native_path) = native_path else {
+                            continue;
+                        };
                         match decision {
-                            FilesystemDecision::Read => self.insert_read(path.clone()),
+                            FilesystemDecision::Read => self.insert_read(native_path.clone()),
                             FilesystemDecision::Write => {
-                                self.insert_write(path.clone());
-                                self.collect_read_only_subpaths(&path, rule.read_only_subpaths())?;
+                                self.insert_write(native_path.clone());
+                                self.collect_read_only_subpaths(
+                                    &native_path,
+                                    rule.read_only_subpaths(),
+                                )?;
                             }
-                            FilesystemDecision::Deny => self.insert_denied(path),
+                            FilesystemDecision::Deny => self.insert_denied(native_path),
                             FilesystemDecision::ExternallyEnforced => {
                                 return Err(MacosFilesystemError::ExternalOwnership);
                             }

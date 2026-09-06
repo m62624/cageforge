@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cageforge_backend_api::{BackendRequest, SandboxBackend};
-use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
+use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
 use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError};
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, NetworkPolicy,
@@ -89,6 +89,11 @@ fn request_for(
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
+        .with_stdio(
+            StdioSpec::inherited()
+                .with_stdout(StdioMode::Pipe)
+                .with_stderr(StdioMode::Pipe),
+        )
         .with_environment(environment);
     (command, effective, context(workspace))
 }
@@ -118,6 +123,11 @@ fn network_request(
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
+        .with_stdio(
+            StdioSpec::inherited()
+                .with_stdout(StdioMode::Pipe)
+                .with_stderr(StdioMode::Pipe),
+        )
         .with_environment(environment);
     (command, effective, context(workspace))
 }
@@ -659,7 +669,14 @@ fn restricted_network_denies_an_unlisted_domain_target() {
         .prepare(BackendRequest::new(&command, &effective), &runtime)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
-    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    let status = child.wait().expect("wait");
+    let mut error = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut error)
+        .expect("read stderr");
+    assert_eq!(status.code(), Some(0), "sandbox stderr: {error}");
     listener
         .set_nonblocking(true)
         .expect("nonblocking listener");
