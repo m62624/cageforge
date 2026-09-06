@@ -17,6 +17,12 @@ const BOUNDARY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-boundary-recovery";
 
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+unsafe extern "C" {
+    fn closefrom(lowfd: libc::c_int);
+}
+
 /// A command running inside one macOS Seatbelt boundary.
 pub struct MacosChild {
     child: Option<Child>,
@@ -185,6 +191,10 @@ pub(crate) fn configure_process_group(command: &mut std::process::Command) {
                 if libc::setpgid(0, 0) == -1 {
                     Err(io::Error::last_os_error())
                 } else {
+                    // SAFETY: stdio has already been configured by
+                    // `Command`; closing every descriptor above stderr keeps
+                    // unrelated parent handles out of the Seatbelt boundary.
+                    closefrom(3);
                     Ok(())
                 }
             });

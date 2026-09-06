@@ -2,9 +2,10 @@
 
 #![cfg(target_os = "macos")]
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -52,6 +53,19 @@ fn restricted_policy(workspace: &Path) -> SandboxPolicy {
             FilesystemRule::new(
                 PathSelector::absolute(workspace.to_path_buf()).expect("workspace selector"),
                 AccessMode::Read,
+            ),
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+        ]),
+        NetworkPolicy::disabled(),
+    )
+}
+
+fn writable_policy(workspace: &Path) -> SandboxPolicy {
+    SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(
+                PathSelector::absolute(workspace.to_path_buf()).expect("workspace selector"),
+                AccessMode::Write,
             ),
             FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
         ]),
@@ -201,6 +215,13 @@ fn cat_command(path: &Path) -> CommandSpec {
         .expect("cat argument")
 }
 
+fn shell_command(script: &str) -> CommandSpec {
+    CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args(["-c", script])
+        .expect("shell arguments")
+}
+
 #[test]
 fn host_accepts_a_minimal_seatbelt_profile() {
     let output = std::process::Command::new("/usr/bin/sandbox-exec")
@@ -283,6 +304,174 @@ fn restricted_command_cannot_read_outside_its_workspace() {
     assert!(
         !status.success(),
         "outside read unexpectedly succeeded: {status:?}; stderr: {error}"
+    );
+}
+
+#[test]
+fn restricted_command_cannot_write_outside_its_workspace() {
+    let workspace = TempDir::new().expect("workspace");
+    let outside = workspace.path().join("..").join("outside-write");
+    let policy = writable_policy(workspace.path());
+    let script = format!("printf denied > '{}'", outside.display());
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command(&script));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert!(!status.success(), "outside write unexpectedly succeeded");
+    assert!(!outside.exists(), "outside file was created");
+}
+
+#[test]
+fn writable_workspace_preserves_read_only_and_protected_descendants() {
+    let workspace = TempDir::new().expect("workspace");
+    let readonly = workspace.path().join("readonly");
+    let protected = workspace.path().join(".git");
+    fs::create_dir(&readonly).expect("readonly directory");
+    fs::create_dir(&protected).expect("protected directory");
+    let readonly_file = readonly.join("value");
+    let protected_file = protected.join("value");
+    fs::write(&readonly_file, "readonly").expect("readonly fixture");
+    fs::write(&protected_file, "protected").expect("protected fixture");
+    let writable = FilesystemRule::new(
+        PathSelector::absolute(workspace.path().to_path_buf()).expect("workspace selector"),
+        AccessMode::Write,
+    )
+    .with_read_only_subpath(PathSelector::absolute(readonly.clone()).expect("readonly selector"))
+    .expect("readonly carve-out");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            writable,
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let script = format!(
+        "printf changed > '{}' && printf changed > '{}'",
+        readonly_file.display(),
+        protected_file.display()
+    );
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command(&script));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert!(!status.success(), "protected write unexpectedly succeeded");
+    assert_eq!(
+        fs::read_to_string(&readonly_file).expect("readonly result"),
+        "readonly"
+    );
+    assert_eq!(
+        fs::read_to_string(&protected_file).expect("protected result"),
+        "protected"
+    );
+}
+
+#[test]
+fn deny_glob_blocks_writes_inside_a_writable_workspace() {
+    let workspace = TempDir::new().expect("workspace");
+    let secret = workspace.path().join("nested").join("value.secret");
+    fs::create_dir(workspace.path().join("nested")).expect("nested directory");
+    let glob =
+        FilesystemRule::workspace_glob("**/*.secret", AccessMode::Deny).expect("secret glob");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(
+                PathSelector::absolute(workspace.path().to_path_buf()).expect("workspace"),
+                AccessMode::Write,
+            ),
+            glob,
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let script = format!("printf secret > '{}'", secret.display());
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command(&script));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert!(!child.wait().expect("wait").success());
+    assert!(!secret.exists(), "deny glob was bypassed");
+}
+
+#[test]
+fn writable_workspace_cannot_escape_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = TempDir::new().expect("workspace");
+    let outside = TempDir::new().expect("outside");
+    let outside_file = outside.path().join("secret");
+    fs::write(&outside_file, "outside").expect("outside fixture");
+    symlink(outside.path(), workspace.path().join("link")).expect("workspace symlink");
+    let policy = writable_policy(workspace.path());
+    let (command, effective, context) = request_for(
+        workspace.path(),
+        &policy,
+        cat_command(&workspace.path().join("link").join("secret")),
+    );
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert!(!child.wait().expect("wait").success());
+}
+
+#[test]
+fn timeout_terminates_the_complete_seatbelt_process_group() {
+    let workspace = TempDir::new().expect("workspace");
+    let policy = restricted_policy(workspace.path());
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command("sleep 30 & wait"));
+    let backend = MacosBackend::new(
+        MacosBackendConfig::new()
+            .with_default_timeout(Duration::from_millis(100))
+            .expect("timeout"),
+    )
+    .expect("backend");
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let error = child.wait().expect_err("timeout");
+    assert!(matches!(error, MacosBackendError::ProcessTimedOut));
+}
+
+#[test]
+fn unrelated_inheritable_file_descriptors_do_not_cross_the_boundary() {
+    let workspace = TempDir::new().expect("workspace");
+    let inherited = File::open("/dev/null").expect("inheritable fixture");
+    let descriptor = inherited.as_raw_fd();
+    #[allow(unsafe_code)]
+    unsafe {
+        // Make the fixture genuinely inheritable so the test proves the
+        // backend closes it instead of relying on the default file flags.
+        libc::fcntl(descriptor, libc::F_SETFD, 0);
+    }
+    let script = format!(
+        "test ! -e /dev/fd/{descriptor}",
+        descriptor = descriptor as RawFd
+    );
+    let policy = restricted_policy(workspace.path());
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command(&script));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert!(
+        child.wait().expect("wait").success(),
+        "unrelated descriptor crossed the Seatbelt boundary"
     );
 }
 
