@@ -299,6 +299,19 @@ pub enum WindowsSetupVerificationError {
     /// A decrypted credential record names a different sandbox account.
     #[error("protected Windows credential identity does not match the setup marker")]
     CredentialIdentityMismatch,
+    /// A protected credential component cannot be represented by DPAPI's
+    /// length field.
+    #[error(
+        "protected Windows credential component {component} is too large: {actual} bytes exceeds {maximum}"
+    )]
+    CredentialPayloadTooLarge {
+        /// Offline or online encrypted credential component.
+        component: &'static str,
+        /// Number of bytes in the stored component.
+        actual: usize,
+        /// Maximum number of bytes representable by the native API.
+        maximum: usize,
+    },
     /// A staged helper resource could not be read.
     #[error("failed to read staged Windows setup resource {path:?}: {source}")]
     ResourceRead {
