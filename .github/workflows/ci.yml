@@ -516,6 +516,8 @@ jobs:
       - name: Lint macOS backend
         run: cargo clippy -p cageforge-macos --all-targets -- -D warnings
       - name: Test macOS backend
+        env:
+          CAGEFORGE_DEBUG_SEATBELT_PROFILE: "1"
         run: cargo test -p cageforge-macos --all-targets
       - name: Check macOS backend documentation
         env:
