@@ -55,6 +55,12 @@ pub enum MacosBackendError {
         #[source]
         source: io::Error,
     },
+    /// The process identifier cannot be represented by the native `pid_t`.
+    #[error("macOS sandbox process ID {pid} is outside the native pid_t range")]
+    ProcessGroupPidOutOfRange {
+        /// Process identifier returned by the Rust child handle.
+        pid: u32,
+    },
     /// Selecting the backend environment or applying its transforms failed.
     #[error("failed to prepare the macOS command environment: {source}")]
     EnvironmentPreparation {

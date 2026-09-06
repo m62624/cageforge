@@ -243,9 +243,8 @@ fn terminate_process_group(child: &mut Child) -> Result<(), MacosBackendError> {
 fn terminate_process_group_if_present(pid: u32) -> Result<(), MacosBackendError> {
     #[cfg(target_os = "macos")]
     {
-        let pid = libc::pid_t::try_from(pid).map_err(|_| MacosBackendError::ProcessGroup {
-            source: io::Error::new(io::ErrorKind::InvalidInput, "process ID is out of range"),
-        })?;
+        let pid = libc::pid_t::try_from(pid)
+            .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
         // SAFETY: a negative PID targets exactly the process group whose
         // leader is the Seatbelt boundary; SIGKILL cannot be caught by it.
         let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
@@ -265,9 +264,8 @@ fn confirm_process_group_gone(pid: u32) -> Result<(), MacosBackendError> {
     loop {
         #[cfg(target_os = "macos")]
         let state = {
-            let pid = libc::pid_t::try_from(pid).map_err(|_| MacosBackendError::ProcessGroup {
-                source: io::Error::new(io::ErrorKind::InvalidInput, "process ID is out of range"),
-            })?;
+            let pid = libc::pid_t::try_from(pid)
+                .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
             // SAFETY: signal 0 performs an existence check without changing
             // process state; the negative PID addresses this exact group.
             unsafe { libc::kill(-pid, 0) }
