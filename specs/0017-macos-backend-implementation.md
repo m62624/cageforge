@@ -59,7 +59,9 @@ supported runner is not advertised as a capability.
 
 `MacosBackend::new` validates the fixed `/usr/bin/sandbox-exec` executable (or
 an explicitly selected absolute executable) before any command launch. The
-backend never searches `PATH` for the enforcement executable. Each launch
+selected path must be a regular non-symlink file; a symlink is rejected with a
+typed error. The backend never searches `PATH` for the enforcement executable.
+Each launch
 passes a complete closed-by-default profile through `-p`, with policy values
 supplied as separate `-D` parameters; untrusted paths are never interpolated
 into executable arguments or shell text.
