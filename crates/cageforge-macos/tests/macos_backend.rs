@@ -297,6 +297,33 @@ fn read_descendant_process_group(child: &mut cageforge_macos::MacosChild) -> (u3
     (descendant, process_group as u32)
 }
 
+fn exiting_marker_child(
+    workspace: &Path,
+    backend: &MacosBackend,
+) -> (cageforge_macos::MacosChild, PathBuf) {
+    let marker = workspace.join("marker-after-leader-exit");
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_arg("-c")
+        .expect("shell option")
+        .with_arg(
+            "(sleep 1; touch \"$1\") & descendant=$!; ".to_owned()
+                + "printf 'ready:%s\\n' \"$descendant\"; exit 0",
+        )
+        .expect("shell script")
+        .with_arg("cageforge-marker")
+        .expect("shell name")
+        .with_arg(marker.as_os_str())
+        .expect("marker argument");
+    let policy = writable_policy(workspace);
+    let (command, effective, context) = request_for(workspace, &policy, command);
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let child = backend.spawn(prepared).expect("spawn");
+    (child, marker)
+}
+
 #[test]
 fn host_accepts_the_backend_seatbelt_profile() {
     let workspace = TempDir::new().expect("workspace");
@@ -566,6 +593,26 @@ fn dropping_child_terminates_the_complete_seatbelt_process_group() {
     assert!(
         !marker.exists(),
         "descendant {descendant} survived child drop"
+    );
+}
+
+#[test]
+fn reaped_leader_does_not_leave_a_running_descendant() {
+    let workspace = TempDir::new().expect("workspace");
+    let backend = backend();
+    let (mut child, marker) = exiting_marker_child(workspace.path(), &backend);
+    let (descendant, descendant_group) = read_descendant_process_group(&mut child);
+    assert_eq!(
+        descendant_group,
+        child.id(),
+        "descendant {descendant} escaped boundary group {}",
+        child.id()
+    );
+    assert!(child.wait().expect("wait").success());
+    thread::sleep(Duration::from_secs(2));
+    assert!(
+        !marker.exists(),
+        "descendant {descendant} survived leader exit"
     );
 }
 

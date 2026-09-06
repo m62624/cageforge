@@ -123,6 +123,7 @@ impl MacosChild {
     fn finish(&mut self, status: ExitStatus) -> Result<ExitStatus, MacosBackendError> {
         if self.process_group_id != 0 {
             terminate_process_group_if_present(self.process_group_id)?;
+            confirm_process_group_gone(self.process_group_id)?;
         }
         self.child.take();
         self.cleanup_boundaries()?;
