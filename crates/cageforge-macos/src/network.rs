@@ -14,9 +14,11 @@ use cageforge_network_proxy::{GatewayConfig, GatewayIngressKey, NetworkGateway, 
 use cageforge_path::NativePathKey;
 use cageforge_policy::{NetworkDecision, NetworkMode, UnixSocketMode};
 use cageforge_policy_compose::EffectiveNetworkLowering;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 
 use crate::error::MacosNetworkError;
 
@@ -122,6 +124,7 @@ impl GatewayRuntime {
         policy: cageforge_policy_compose::EffectiveNetworkPolicy,
         config: GatewayConfig,
     ) -> Result<Self, MacosNetworkError> {
+        let relay_idle_timeout = config.relay_idle_timeout();
         let gateway = NetworkGateway::with_system_resolver(policy, config)
             .map_err(|source| MacosNetworkError::Gateway { source })?;
         let ingress_key = gateway.ingress_key();
@@ -143,6 +146,7 @@ impl GatewayRuntime {
                     listener,
                     gateway,
                     ingress_key,
+                    relay_idle_timeout,
                     shutdown_receiver,
                     ready_sender,
                 )
@@ -268,6 +272,7 @@ fn run_gateway(
     listener: TcpListener,
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
+    relay_idle_timeout: Duration,
     shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<(), MacosNetworkError>>,
 ) -> Result<(), MacosNetworkError> {
@@ -292,7 +297,7 @@ fn run_gateway(
         ready
             .send(Ok(()))
             .map_err(|_| MacosNetworkError::StartupChannelClosed)?;
-        serve_gateway(listener, gateway, ingress_key, shutdown).await
+        serve_gateway(listener, gateway, ingress_key, relay_idle_timeout, shutdown).await
     })
 }
 
@@ -300,6 +305,7 @@ async fn serve_gateway(
     listener: TokioTcpListener,
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
+    relay_idle_timeout: Duration,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<(), MacosNetworkError> {
     let mut connections = JoinSet::new();
@@ -308,7 +314,12 @@ async fn serve_gateway(
             _ = &mut shutdown => break,
             accepted = listener.accept() => {
                 let (stream, _) = accepted.map_err(|source| MacosNetworkError::RuntimeListener { source })?;
-                connections.spawn(serve_private_stream(stream, gateway.clone(), ingress_key.clone()));
+                connections.spawn(serve_private_stream(
+                    stream,
+                    gateway.clone(),
+                    ingress_key.clone(),
+                    relay_idle_timeout,
+                ));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
@@ -319,18 +330,22 @@ async fn serve_gateway(
 }
 
 async fn serve_private_stream(
-    mut client: TcpStream,
+    client: TcpStream,
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
+    relay_idle_timeout: Duration,
 ) {
     let (mut client_side, gateway_side) = tokio::io::duplex(GATEWAY_RELAY_BUFFER_BYTES);
     if ingress_key.authenticate(&mut client_side).await.is_err() {
         return;
     }
+    let (private_reader, private_writer) = tokio::io::split(client);
+    let (trusted_reader, trusted_writer) = tokio::io::split(client_side);
     let gateway_task = gateway.serve_connection(gateway_side);
-    let relay = tokio::io::copy_bidirectional(&mut client, &mut client_side);
+    let to_gateway = relay_direction(private_reader, trusted_writer);
+    let to_client = relay_direction(trusted_reader, private_writer);
     tokio::pin!(gateway_task);
-    tokio::pin!(relay);
+    tokio::pin!(to_gateway, to_client);
     tokio::select! {
         result = &mut gateway_task => {
             if let Err(error) = result
@@ -339,12 +354,29 @@ async fn serve_private_stream(
                 eprintln!("Cageforge macOS gateway connection failed: {error}");
             }
         }
-        result = &mut relay => {
-            if let Err(error) = result
-                && std::env::var_os("CAGEFORGE_DEBUG_SEATBELT_PROFILE").is_some()
-            {
-                eprintln!("Cageforge macOS gateway relay failed: {error}");
+        _ = &mut to_client => return,
+        _ = &mut to_gateway => {
+            tokio::select! {
+                result = &mut gateway_task => {
+                    if let Err(error) = result
+                        && std::env::var_os("CAGEFORGE_DEBUG_SEATBELT_PROFILE").is_some()
+                    {
+                        eprintln!("Cageforge macOS gateway connection failed: {error}");
+                    }
+                }
+                _ = &mut to_client => return,
             }
         }
     }
+    let _ = timeout(relay_idle_timeout, &mut to_client).await;
+}
+
+async fn relay_direction<R, W>(mut reader: R, mut writer: W) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let copied = tokio::io::copy(&mut reader, &mut writer).await;
+    let shutdown = writer.shutdown().await;
+    copied.and(shutdown).map(|_| ())
 }
