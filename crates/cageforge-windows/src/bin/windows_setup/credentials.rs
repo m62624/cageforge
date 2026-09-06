@@ -9,11 +9,11 @@ use windows_sys::Win32::System::Memory::LocalSize;
 
 use serde::Serialize;
 
+use crate::runner_manifest::CREDENTIALS_VERSION;
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult, ProvisionedAccounts, security};
 
-const CREDENTIALS_VERSION: u32 = 1;
 const CREDENTIALS_NAME: &str = "credentials.json.dpapi";
 
 #[derive(Serialize)]

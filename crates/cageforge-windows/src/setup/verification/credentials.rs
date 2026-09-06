@@ -13,9 +13,8 @@ use windows_sys::Win32::System::Memory::LocalSize;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::WindowsSetupVerificationError;
+use crate::runner::manifest::CREDENTIALS_VERSION;
 use crate::setup::WindowsSetupDetails;
-
-const CREDENTIALS_VERSION: u32 = 1;
 
 #[derive(Deserialize)]
 struct ProtectedCredentials {

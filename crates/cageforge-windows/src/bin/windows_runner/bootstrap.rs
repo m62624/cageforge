@@ -37,8 +37,8 @@ use crate::runner_protocol::{
 };
 
 use crate::native_strings::local_sid_string;
+use crate::runner_manifest::CREDENTIALS_VERSION;
 
-const CREDENTIALS_VERSION: u32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 const SID_HEADER_BYTES: usize = 8;
 
