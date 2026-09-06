@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error as StdError;
 use std::ffi::OsString;
+use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
@@ -58,6 +59,28 @@ struct TraceSupervisor {
 struct CommandSeccompFilter {
     clone3_compatibility: BpfProgram,
     policy: BpfProgram,
+}
+
+#[derive(Debug)]
+struct SeccompApplyError {
+    operation: &'static str,
+    source: seccompiler::Error,
+}
+
+impl fmt::Display for SeccompApplyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "installing the {} seccomp filter failed: {}",
+            self.operation, self.source
+        )
+    }
+}
+
+impl StdError for SeccompApplyError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&self.source)
+    }
 }
 
 const LINUX_SOCKET_TYPE_MASK: u64 = 0x0f;
@@ -381,9 +404,24 @@ fn write_runtime_failure(
 
 fn prepare_traced_command(filter: &CommandSeccompFilter) -> io::Result<()> {
     set_command_parent_death_signal()?;
-    apply_filter(&filter.clone3_compatibility)
-        .and_then(|()| apply_filter(&filter.policy))
-        .map_err(|_| io::Error::from_raw_os_error(libc::EPERM))?;
+    apply_filter(&filter.clone3_compatibility).map_err(|source| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            SeccompApplyError {
+                operation: "clone3 compatibility",
+                source,
+            },
+        )
+    })?;
+    apply_filter(&filter.policy).map_err(|source| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            SeccompApplyError {
+                operation: "command policy",
+                source,
+            },
+        )
+    })?;
     request_parent_tracing()
 }
 

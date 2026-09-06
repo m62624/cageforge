@@ -319,6 +319,9 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
 
 fn normalize_macos_system_alias(path: PathBuf) -> PathBuf {
     for (alias, canonical) in [
+        ("/bin", "/usr/bin"),
+        ("/sbin", "/usr/sbin"),
+        ("/lib", "/usr/lib"),
         ("/var", "/private/var"),
         ("/tmp", "/private/tmp"),
         ("/etc", "/private/etc"),
