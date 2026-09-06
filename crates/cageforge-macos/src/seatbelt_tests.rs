@@ -38,7 +38,26 @@ fn write_only_carveouts_remain_readable_in_the_profile() {
     assert!(!policy.contains("(deny file-read* (subpath (param \"WRITE_DENIED_PATH_0\")))"));
     assert!(policy.contains("(deny file-read* (subpath (param \"DENIED_PATH_0\")))"));
     assert!(policy.contains("(deny file-write-unlink (regex #\"^/workspace/"));
+    assert!(policy.contains("(deny file-write-create (regex #\"^/workspace/"));
     assert!(policy.contains("(deny file-write-unlink (subpath (param \"DENIED_PATH_0\")))"));
+}
+
+#[test]
+fn glob_denials_follow_write_allows_in_the_profile() {
+    let profile = SeatbeltProfile::build(
+        &filesystem_plan("/workspace/private"),
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+    let policy = profile.policy();
+
+    let write_allow = policy.find("(allow file-write*\n").expect("write allow");
+    let glob_deny = policy
+        .find("(deny file-write-create (regex #\"^/workspace/")
+        .expect("glob create denial");
+    assert!(glob_deny > write_allow);
 }
 
 #[test]
