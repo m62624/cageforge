@@ -45,7 +45,6 @@ pub(crate) enum MacosNetworkPlan {
 pub(crate) struct MacosUnixSocketPlan {
     allow_all: bool,
     allowed: Vec<PathBuf>,
-    denied: Vec<PathBuf>,
 }
 
 /// One host gateway owned by one macOS sandbox instance.
@@ -114,10 +113,6 @@ impl MacosUnixSocketPlan {
 
     pub(crate) fn allowed(&self) -> &[PathBuf] {
         &self.allowed
-    }
-
-    pub(crate) fn denied(&self) -> &[PathBuf] {
-        &self.denied
     }
 }
 
@@ -238,9 +233,7 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
         .layers()
         .all(|layer| layer.unix_socket_mode() == UnixSocketMode::Enabled);
     let mut allowed = Vec::new();
-    let mut denied = Vec::new();
     let mut allowed_keys = BTreeSet::new();
-    let mut denied_keys = BTreeSet::new();
     for layer in lowering.layers() {
         if layer.mode() == NetworkMode::External {
             return Err(MacosNetworkError::ExternalOwnership);
@@ -254,9 +247,9 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
                     }
                 }
                 NetworkDecision::Deny => {
-                    if denied_keys.insert(NativePathKey::new(&path)) {
-                        denied.push(path);
-                    }
+                    return Err(MacosNetworkError::UnixSocketPolicy {
+                        mode: layer.unix_socket_mode(),
+                    });
                 }
                 NetworkDecision::ExternallyEnforced => {
                     return Err(MacosNetworkError::ExternalOwnership);
@@ -265,12 +258,7 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
         }
     }
     allowed.sort_by_key(|path| NativePathKey::new(path));
-    denied.sort_by_key(|path| NativePathKey::new(path));
-    Ok(MacosUnixSocketPlan {
-        allow_all,
-        allowed,
-        denied,
-    })
+    Ok(MacosUnixSocketPlan { allow_all, allowed })
 }
 
 fn run_gateway(

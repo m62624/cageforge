@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use cageforge_backend_api::{BackendRequest, SandboxBackend};
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
-use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError};
+use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError, MacosNetworkError};
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
     NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
@@ -1166,17 +1166,16 @@ fn unrestricted_network_preserves_direct_loopback_connections() {
 }
 
 #[test]
-fn enabled_unix_socket_policy_allows_unlisted_paths_except_explicit_denials() {
+fn restricted_unix_socket_policy_allows_an_explicit_path() {
     let socket_directory = TempDir::new().expect("Unix socket directory");
     let allowed = socket_directory.path().join("allowed.sock");
-    let denied = socket_directory.path().join("denied.sock");
     let server = start_unix_server(&allowed);
     let workspace = TempDir::new().expect("workspace");
     let network = NetworkPolicy::enabled()
         .with_local_network_access(LocalNetworkAccess::Allow)
-        .with_unix_socket_mode(UnixSocketMode::Enabled)
-        .with_unix_socket(&denied, DomainAccess::Deny)
-        .expect("denied Unix socket rule");
+        .with_unix_socket_mode(UnixSocketMode::Restricted)
+        .with_unix_socket(&allowed, DomainAccess::Allow)
+        .expect("allowed Unix socket rule");
     let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
     let (command, effective, context) =
         unix_network_request(workspace.path(), &policy, "unix", &allowed);
@@ -1211,13 +1210,9 @@ fn enabled_unix_socket_policy_allows_unlisted_paths_except_explicit_denials() {
 }
 
 #[test]
-fn enabled_unix_socket_policy_denies_the_exact_denied_path() {
+fn enabled_unix_socket_policy_rejects_an_explicit_denial() {
     let socket_directory = TempDir::new().expect("Unix socket directory");
     let denied = socket_directory.path().join("denied.sock");
-    let listener = UnixListener::bind(&denied).expect("denied Unix listener");
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking denied Unix listener");
     let workspace = TempDir::new().expect("workspace");
     let network = NetworkPolicy::enabled()
         .with_local_network_access(LocalNetworkAccess::Allow)
@@ -1228,32 +1223,15 @@ fn enabled_unix_socket_policy_denies_the_exact_denied_path() {
     let (command, effective, context) =
         unix_network_request(workspace.path(), &policy, "unix-denied", &denied);
     let backend = backend();
-    let prepared = backend
+    let error = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
-        .expect("prepare");
-    let mut child = backend.spawn(prepared).expect("spawn");
-    let mut output = String::new();
-    child
-        .stdout()
-        .expect("stdout pipe")
-        .read_to_string(&mut output)
-        .expect("read stdout");
-    let mut error = String::new();
-    child
-        .stderr()
-        .expect("stderr pipe")
-        .read_to_string(&mut error)
-        .expect("read stderr");
-    let status = child.wait().expect("wait");
-    assert_eq!(
-        status.code(),
-        Some(0),
-        "sandbox stdout: {output}; stderr: {error}"
-    );
-    assert!(
-        listener.accept().is_err(),
-        "denied Unix socket received a connection"
-    );
+        .expect_err("unsupported explicit deny must fail before launch");
+    assert!(matches!(
+        error,
+        MacosBackendError::Network(MacosNetworkError::UnixSocketPolicy {
+            mode: UnixSocketMode::Enabled
+        })
+    ));
 }
 
 #[test]
