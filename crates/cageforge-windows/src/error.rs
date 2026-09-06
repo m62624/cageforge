@@ -370,7 +370,7 @@ pub enum WindowsSetupVerificationError {
     },
     /// Windows Firewall could not look up one mandatory rule.
     #[error("failed to look up mandatory Windows Firewall rule {name:?}: HRESULT {code:#x}")]
-    FirewallRuleMissing {
+    FirewallRuleLookupFailed {
         /// Stable owner-scoped rule name.
         name: String,
         /// HRESULT returned by the firewall rule collection.
