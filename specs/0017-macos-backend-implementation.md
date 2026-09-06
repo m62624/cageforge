@@ -50,6 +50,7 @@ The behavior review is against commit
 | `codex-rs/sandboxing/src/seatbelt_network_policy.sbpl` | Minimal network service allowances needed by macOS clients | Re-authored and composed only with the selected effective network mode |
 | `codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl` | Minimal system/framework visibility for restricted commands | Re-authored as a Cageforge platform-default policy; it is never used to grant workspace access |
 | `codex-rs/sandboxing/src/manager.rs` and `src/spawn.rs` | Platform selection and process handoff | Replaced by `SandboxBackend`, backend-bound preparation, and `MacosChild`; PTY remains outside the portable API |
+| `codex-rs/utils/pty/src/process_group.rs` | macOS process-group member enumeration and per-member fallback after `EPERM` | Retained for Cageforge's `SIGKILL` cleanup; the fallback validates each member's current group before signalling it |
 
 Every retained behavior must have an allowed and denied black-box test on a
 macOS runner. Any Seatbelt rule whose effect cannot be demonstrated on the

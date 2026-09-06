@@ -17,6 +17,7 @@ const BOUNDARY_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const BOUNDARY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-boundary-recovery";
+const PROCESS_GROUP_MEMBER_INITIAL_CAPACITY: usize = 16;
 const PARENT_DEATH_FD: RawFd = libc::STDERR_FILENO + 1;
 pub(crate) const PARENT_DEATH_WRAPPER: &str = "(
     while read _ <&3; do
@@ -357,11 +358,83 @@ fn terminate_process_group_if_present(pid: u32) -> Result<(), MacosBackendError>
     let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
     if result == -1 {
         let source = io::Error::last_os_error();
-        if source.raw_os_error() != Some(libc::ESRCH) {
-            return Err(MacosBackendError::ProcessGroup { source });
+        match source.raw_os_error() {
+            Some(libc::ESRCH) => return Ok(()),
+            Some(libc::EPERM) => {
+                signal_process_group_members(pid, libc::SIGKILL)
+                    .map_err(|source| MacosBackendError::ProcessGroup { source })?;
+            }
+            _ => return Err(MacosBackendError::ProcessGroup { source }),
         }
     }
     Ok(())
+}
+
+#[allow(unsafe_code)]
+fn signal_process_group_members(
+    process_group_id: libc::pid_t,
+    signal: libc::c_int,
+) -> io::Result<bool> {
+    if process_group_id <= 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid macOS process group ID",
+        ));
+    }
+    let mut process_ids = vec![0; PROCESS_GROUP_MEMBER_INITIAL_CAPACITY];
+    loop {
+        let buffer_size = libc::c_int::try_from(std::mem::size_of_val(process_ids.as_slice()))
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "process group is too large")
+            })?;
+        let count = unsafe {
+            libc::proc_listpgrppids(
+                process_group_id,
+                process_ids.as_mut_ptr().cast(),
+                buffer_size,
+            )
+        };
+        if count < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let count = usize::try_from(count)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid process count"))?;
+        if count < process_ids.len() {
+            process_ids.truncate(count);
+            break;
+        }
+        let capacity = process_ids.len().checked_mul(2).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "process group is too large")
+        })?;
+        process_ids.resize(capacity, 0);
+    }
+
+    let mut signalled = false;
+    for process_id in process_ids {
+        if process_id <= 0 {
+            continue;
+        }
+        let current_group_id = unsafe { libc::getpgid(process_id) };
+        if current_group_id == -1 {
+            let source = io::Error::last_os_error();
+            if source.raw_os_error() != Some(libc::ESRCH) {
+                return Err(source);
+            }
+            continue;
+        }
+        if current_group_id != process_group_id {
+            continue;
+        }
+        if unsafe { libc::kill(process_id, signal) } == 0 {
+            signalled = true;
+            continue;
+        }
+        let source = io::Error::last_os_error();
+        if source.raw_os_error() != Some(libc::ESRCH) {
+            return Err(source);
+        }
+    }
+    Ok(signalled)
 }
 
 #[allow(unsafe_code)]
@@ -414,7 +487,9 @@ fn confirm_process_group_gone(pid: u32) -> Result<(), MacosBackendError> {
 
 #[cfg(test)]
 mod tests {
-    use super::MacosChild;
+    use std::io;
+
+    use super::{MacosChild, signal_process_group_members};
     use crate::error::MacosBackendError;
 
     #[test]
@@ -432,5 +507,12 @@ mod tests {
             child.try_wait(),
             Err(MacosBackendError::BoundaryOwnedByRecovery)
         ));
+    }
+
+    #[test]
+    fn process_group_member_fallback_rejects_zero_group_ids() {
+        let error = signal_process_group_members(0, libc::SIGKILL)
+            .expect_err("zero process group must not be signalled");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }
