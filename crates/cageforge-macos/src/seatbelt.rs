@@ -481,25 +481,44 @@ impl ProfileBuilder {
         }
         self.policy
             .push_str("\n(allow system-socket (socket-domain AF_UNIX))\n");
+
+        for (index, path) in plan.denied().iter().enumerate() {
+            self.add_definition(format!("DENIED_UNIX_SOCKET_PATH_{index}"), path.clone())?;
+        }
+
         if plan.allow_all() {
-            self.policy
-                .push_str("(allow network-bind (local unix-socket))\n");
-            self.policy
-                .push_str("(allow network-outbound (remote unix-socket))\n");
+            if plan.denied().is_empty() {
+                self.policy
+                    .push_str("(allow network-bind (local unix-socket))\n");
+                self.policy
+                    .push_str("(allow network-outbound (remote unix-socket))\n");
+            } else {
+                self.add_unix_socket_allow_with_exclusions(
+                    "network-bind",
+                    "(local unix-socket)",
+                    plan.denied().len(),
+                );
+                self.add_unix_socket_allow_with_exclusions(
+                    "network-outbound",
+                    "(remote unix-socket)",
+                    plan.denied().len(),
+                );
+            }
         }
         for (index, path) in plan.allowed().iter().enumerate() {
             let name = format!("UNIX_SOCKET_PATH_{index}");
             self.add_definition(name.clone(), path.clone())?;
-            self.policy.push_str(&format!(
-                "(allow network-bind (local unix-socket (subpath (param \"{name}\"))))\n"
-            ));
-            self.policy.push_str(&format!(
-                "(allow network-outbound (remote unix-socket (subpath (param \"{name}\"))))\n"
-            ));
+            let local = format!("(local unix-socket (subpath (param \"{name}\")))");
+            let outbound = format!("(remote unix-socket (subpath (param \"{name}\")))");
+            self.add_unix_socket_allow_with_exclusions("network-bind", &local, plan.denied().len());
+            self.add_unix_socket_allow_with_exclusions(
+                "network-outbound",
+                &outbound,
+                plan.denied().len(),
+            );
         }
-        for (index, path) in plan.denied().iter().enumerate() {
+        for (index, _) in plan.denied().iter().enumerate() {
             let name = format!("DENIED_UNIX_SOCKET_PATH_{index}");
-            self.add_definition(name.clone(), path.clone())?;
             self.policy.push_str(&format!(
                 "(deny network-bind (local unix-socket (subpath (param \"{name}\"))))\n"
             ));
@@ -508,6 +527,29 @@ impl ProfileBuilder {
             ));
         }
         Ok(())
+    }
+
+    fn add_unix_socket_allow_with_exclusions(
+        &mut self,
+        action: &str,
+        socket_filter: &str,
+        denied_count: usize,
+    ) {
+        if denied_count == 0 {
+            self.policy
+                .push_str(&format!("(allow {action} {socket_filter})\n"));
+            return;
+        }
+        let mut requirements = vec![socket_filter.to_owned()];
+        for index in 0..denied_count {
+            let name = format!("DENIED_UNIX_SOCKET_PATH_{index}");
+            requirements.push(format!("(require-not (literal (param \"{name}\")))"));
+            requirements.push(format!("(require-not (subpath (param \"{name}\")))"));
+        }
+        self.policy.push_str(&format!(
+            "(allow {action} (require-all {}))\n",
+            requirements.join(" ")
+        ));
     }
 
     fn add_definition(&mut self, name: String, value: PathBuf) -> Result<(), SeatbeltProfileError> {
