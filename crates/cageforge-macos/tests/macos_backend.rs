@@ -1233,7 +1233,23 @@ fn enabled_unix_socket_policy_denies_the_exact_denied_path() {
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
     let status = child.wait().expect("wait");
-    assert_eq!(status.code(), Some(0));
+    let mut output = String::new();
+    child
+        .stdout()
+        .expect("stdout pipe")
+        .read_to_string(&mut output)
+        .expect("read stdout");
+    let mut error = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut error)
+        .expect("read stderr");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "sandbox stdout: {output}; stderr: {error}"
+    );
     assert!(
         listener.accept().is_err(),
         "denied Unix socket received a connection"

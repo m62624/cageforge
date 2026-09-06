@@ -245,14 +245,11 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
         if layer.mode() == NetworkMode::External {
             return Err(MacosNetworkError::ExternalOwnership);
         }
-        if layer.unix_socket_mode() == UnixSocketMode::Enabled && allow_all {
-            continue;
-        }
         for rule in layer.unix_sockets() {
             let path = rule.path().to_path_buf();
             match prepared.network_decision_for_unix_socket(backend, &path)? {
                 NetworkDecision::Allow => {
-                    if allowed_keys.insert(NativePathKey::new(&path)) {
+                    if !allow_all && allowed_keys.insert(NativePathKey::new(&path)) {
                         allowed.push(path);
                     }
                 }
