@@ -489,7 +489,7 @@ impl BootstrapFailure {
             Self::ReportWrite { source } => (
                 WindowsRunnerFailureStage::Process,
                 WindowsRunnerFailureCode::ResponseFrame,
-                None,
+                native_code(source),
                 "bootstrap could not report suspended-runner metadata",
                 Some(source as &(dyn Error + 'static)),
             ),
