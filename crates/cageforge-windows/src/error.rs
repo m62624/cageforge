@@ -368,11 +368,24 @@ pub enum WindowsSetupVerificationError {
         /// One `NET_FW_PROFILE_TYPE2` bit.
         profile: i32,
     },
-    /// One mandatory firewall rule is absent.
-    #[error("mandatory Windows Firewall rule is missing: {name}")]
+    /// Windows Firewall could not look up one mandatory rule.
+    #[error("failed to look up mandatory Windows Firewall rule {name:?}: HRESULT {code:#x}")]
     FirewallRuleMissing {
         /// Stable owner-scoped rule name.
         name: String,
+        /// HRESULT returned by the firewall rule collection.
+        code: i32,
+    },
+    /// A firewall rule was found, but Windows could not expose the interface
+    /// required for complete read-back.
+    #[error(
+        "Windows Firewall rule {name:?} does not expose the required COM interface: HRESULT {code:#x}"
+    )]
+    FirewallRuleInterface {
+        /// Stable owner-scoped rule name.
+        name: String,
+        /// HRESULT returned by the COM interface conversion.
+        code: i32,
     },
     /// One property of a mandatory firewall rule differs from its expected state.
     #[error(
