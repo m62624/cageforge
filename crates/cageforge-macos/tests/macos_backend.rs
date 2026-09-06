@@ -3,16 +3,19 @@
 #![cfg(target_os = "macos")]
 
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read, Write};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::Duration;
 
 use cageforge_backend_api::{BackendRequest, SandboxBackend};
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
 use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError};
 use cageforge_policy::{
-    AccessMode, FilesystemPolicy, FilesystemRule, NetworkPolicy, PathResolutionContext,
-    PathSelector, SandboxPolicy,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, NetworkPolicy,
+    PathResolutionContext, PathSelector, SandboxPolicy,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use tempfile::TempDir;
@@ -74,6 +77,121 @@ fn request_for(
         .expect("working directory")
         .with_environment(environment);
     (command, effective, context(workspace))
+}
+
+fn network_request(
+    workspace: &Path,
+    policy: &SandboxPolicy,
+    mode: &str,
+    target: SocketAddr,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
+    let environment = EnvironmentSpec::inherit_all()
+        .with_var("CAGEFORGE_NETWORK_TEST_MODE", mode)
+        .expect("mode")
+        .with_var("CAGEFORGE_NETWORK_TEST_TARGET", target.to_string())
+        .expect("target");
+    let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+        .expect("test executable command")
+        .with_args(["--exact", "network_client_fixture", "--nocapture"])
+        .expect("fixture arguments");
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective =
+        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+    let command = CommandRequest::new(command)
+        .with_working_directory(workspace.to_path_buf())
+        .expect("working directory")
+        .with_environment(environment);
+    (command, effective, context(workspace))
+}
+
+fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("HTTP listener");
+    let address = listener.local_addr().expect("HTTP address");
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let server = thread::spawn(move || -> io::Result<()> {
+        ready_sender.send(()).expect("HTTP readiness receiver");
+        let (mut stream, _) = listener.accept()?;
+        stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+        let mut request = Vec::new();
+        let mut chunk = [0; 1024];
+        loop {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "HTTP client closed before request headers",
+                ));
+            }
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+            if request.len() > 16 * 1024 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HTTP request headers exceeded fixture limit",
+                ));
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")?;
+        stream.shutdown(Shutdown::Write)?;
+        let mut close = [0; 1];
+        while stream.read(&mut close)? != 0 {}
+        Ok(())
+    });
+    ready_receiver.recv().expect("HTTP readiness signal");
+    (address, server)
+}
+
+fn proxy_endpoint(value: &str) -> SocketAddr {
+    value
+        .split_once("://")
+        .map(|(_, authority)| authority)
+        .unwrap_or(value)
+        .trim_end_matches('/')
+        .parse()
+        .expect("loopback proxy address")
+}
+
+fn send_http_proxy_request(target: SocketAddr) -> io::Result<Vec<u8>> {
+    let mut stream = TcpStream::connect(proxy_endpoint(
+        &std::env::var("HTTP_PROXY").expect("HTTP proxy"),
+    ))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    write!(
+        stream,
+        "GET http://{target}/ HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    Ok(response)
+}
+
+fn send_direct_request(target: SocketAddr) -> io::Result<Vec<u8>> {
+    let mut stream = TcpStream::connect_timeout(&target, Duration::from_millis(250))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    write!(
+        stream,
+        "GET / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    Ok(response)
+}
+
+fn network_policy() -> SandboxPolicy {
+    let network = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_domain("127.0.0.1", DomainAccess::Allow)
+        .expect("loopback domain rule");
+    SandboxPolicy::new(FilesystemPolicy::unrestricted(), network)
 }
 
 fn cat_command(path: &Path) -> CommandSpec {
@@ -254,6 +372,121 @@ fn missing_seatbelt_executable_is_typed() {
         error,
         MacosBackendError::SeatbeltExecutable { .. }
     ));
+}
+
+#[test]
+fn network_client_fixture() {
+    let Ok(mode) = std::env::var("CAGEFORGE_NETWORK_TEST_MODE") else {
+        return;
+    };
+    let target: SocketAddr = std::env::var("CAGEFORGE_NETWORK_TEST_TARGET")
+        .expect("target")
+        .parse()
+        .expect("socket address");
+    match mode.as_str() {
+        "http" => assert!(
+            send_http_proxy_request(target)
+                .expect("HTTP proxy response")
+                .starts_with(b"HTTP/1.1 200")
+        ),
+        "http-denied" => assert!(
+            !send_http_proxy_request(target)
+                .expect("denied HTTP response")
+                .starts_with(b"HTTP/1.1 200")
+        ),
+        "direct" => assert!(
+            send_direct_request(target)
+                .expect("direct response")
+                .starts_with(b"HTTP/1.1 200")
+        ),
+        "direct-denied" => assert!(send_direct_request(target).is_err()),
+        other => panic!("unknown network fixture mode: {other}"),
+    }
+}
+
+#[test]
+fn restricted_network_reaches_only_the_authorized_loopback_target() {
+    let (target, server) = start_http_server();
+    let workspace = TempDir::new().expect("workspace");
+    let policy = network_policy();
+    let (command, effective, runtime) = network_request(workspace.path(), &policy, "http", target);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    let server_result = server.join().expect("HTTP server");
+    assert_eq!(status.code(), Some(0));
+    server_result.expect("HTTP server I/O");
+}
+
+#[test]
+fn restricted_network_denies_an_unlisted_domain_target() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("target listener");
+    let target = listener.local_addr().expect("target address");
+    let workspace = TempDir::new().expect("workspace");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::unrestricted(),
+        NetworkPolicy::enabled().with_domain_mode(DomainMode::Restricted),
+    );
+    let (command, effective, runtime) =
+        network_request(workspace.path(), &policy, "http-denied", target);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    assert!(
+        listener.accept().is_err(),
+        "denied target received a connection"
+    );
+}
+
+#[test]
+fn disabled_network_denies_direct_loopback_connections() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("target listener");
+    let target = listener.local_addr().expect("target address");
+    let workspace = TempDir::new().expect("workspace");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), NetworkPolicy::disabled());
+    let (command, effective, runtime) =
+        network_request(workspace.path(), &policy, "direct-denied", target);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    assert!(
+        listener.accept().is_err(),
+        "disabled network reached target"
+    );
+}
+
+#[test]
+fn unrestricted_network_preserves_direct_loopback_connections() {
+    let (target, server) = start_http_server();
+    let workspace = TempDir::new().expect("workspace");
+    let policy = SandboxPolicy::full_access();
+    let (command, effective, runtime) =
+        network_request(workspace.path(), &policy, "direct", target);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    server
+        .join()
+        .expect("HTTP server")
+        .expect("HTTP server I/O");
 }
 
 #[test]
