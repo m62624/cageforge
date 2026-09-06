@@ -323,12 +323,11 @@ async fn serve_private_stream(
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
 ) {
-    let (mut client_side, mut gateway_side) = tokio::io::duplex(GATEWAY_RELAY_BUFFER_BYTES);
-    let gateway_task = async {
-        if ingress_key.authenticate(&mut gateway_side).await.is_ok() {
-            let _ = gateway.serve_connection(gateway_side).await;
-        }
-    };
+    let (mut client_side, gateway_side) = tokio::io::duplex(GATEWAY_RELAY_BUFFER_BYTES);
+    if ingress_key.authenticate(&mut client_side).await.is_err() {
+        return;
+    }
+    let gateway_task = gateway.serve_connection(gateway_side);
     let relay = tokio::io::copy_bidirectional(&mut client, &mut client_side);
     tokio::pin!(gateway_task);
     tokio::pin!(relay);
