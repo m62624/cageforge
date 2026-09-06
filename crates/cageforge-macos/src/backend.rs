@@ -17,7 +17,9 @@ use crate::config::MacosBackendConfig;
 use crate::error::MacosBackendError;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::{GatewayRuntime, MacosNetworkPlan};
-use crate::process::{MacosChild, configure_process_group, process_group_id, stream};
+use crate::process::{
+    MacosChild, ParentDeathChannel, configure_process_group, process_group_id, stream,
+};
 use crate::seatbelt::SeatbeltProfile;
 
 /// A macOS-native backend bound to one validated Seatbelt executable.
@@ -115,7 +117,12 @@ impl MacosBackend {
             definition_argument.push(definition.value());
             command.arg(definition_argument);
         }
-        command.arg("--").arg(command_spec.program());
+        let parent_death = ParentDeathChannel::new()
+            .map_err(|source| MacosBackendError::ParentDeathChannel { source })?;
+        command.arg("--").arg("/bin/sh");
+        command.arg("-c").arg(crate::process::PARENT_DEATH_WRAPPER);
+        command.arg("cageforge-macos-boundary");
+        command.arg(command_spec.program());
         command.args(command_spec.args());
         command.current_dir(prepared.working_directory(self)?);
         command.env_clear();
@@ -124,7 +131,7 @@ impl MacosBackend {
         command.stdin(stream(stdio.stdin()));
         command.stdout(stream(stdio.stdout()));
         command.stderr(stream(stdio.stderr()));
-        configure_process_group(&mut command);
+        configure_process_group(&mut command, parent_death.read_fd());
         let timeout = match prepared.timeout_policy(self)? {
             cageforge_command::TimeoutPolicy::BackendDefault => Some(self.config.default_timeout()),
             cageforge_command::TimeoutPolicy::Limit(timeout) => Some(timeout),
@@ -145,6 +152,7 @@ impl MacosBackend {
         Ok(MacosChild::new(
             child,
             process_group_id,
+            parent_death.into_writer(),
             gateway.take(),
             timeout,
         ))

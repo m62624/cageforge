@@ -31,6 +31,13 @@ pub enum MacosBackendError {
         #[source]
         source: io::Error,
     },
+    /// The parent-death notification channel could not be created.
+    #[error("failed to create macOS sandbox parent-death channel: {source}")]
+    ParentDeathChannel {
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
     /// Waiting for the sandbox boundary failed.
     #[error("failed to wait for macOS sandbox boundary: {source}")]
     ProcessWait {

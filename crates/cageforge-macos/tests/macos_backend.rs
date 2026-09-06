@@ -7,6 +7,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +21,9 @@ use cageforge_policy::{
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use tempfile::TempDir;
+
+const PARENT_DEATH_ROOT: &str = "CAGEFORGE_MACOS_PARENT_DEATH_ROOT";
+const PARENT_DEATH_CHILD: &str = "CAGEFORGE_MACOS_PARENT_DEATH_CHILD";
 
 fn context(workspace: &Path) -> PathResolutionContext {
     PathResolutionContext::new()
@@ -322,6 +326,65 @@ fn exiting_marker_child(
         .expect("prepare");
     let child = backend.spawn(prepared).expect("spawn");
     (child, marker)
+}
+
+#[test]
+fn parent_death_child_harness() {
+    let Some(root) = std::env::var_os(PARENT_DEATH_ROOT) else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    fs::create_dir_all(&root).expect("parent-death workspace");
+    let backend = backend();
+    let (child, marker) = delayed_marker_child(&root, &backend);
+    fs::write(
+        std::env::var_os(PARENT_DEATH_CHILD).expect("parent-death child path"),
+        child.id().to_string(),
+    )
+    .expect("publish parent-death child PID");
+    let _ = marker;
+    std::process::exit(0);
+}
+
+#[test]
+fn parent_process_death_terminates_the_complete_seatbelt_process_group() {
+    let temporary = TempDir::new().expect("parent-death temporary root");
+    let workspace = temporary.path().join("workspace");
+    let child_pid = temporary.path().join("child.pid");
+    let marker = workspace.join("marker-after-boundary");
+    let parent = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "parent_death_child_harness", "--nocapture"])
+        .env(PARENT_DEATH_ROOT, &workspace)
+        .env(PARENT_DEATH_CHILD, &child_pid)
+        .spawn()
+        .expect("spawn parent-death harness");
+    let status = parent
+        .wait_with_output()
+        .expect("wait parent-death harness");
+    assert!(
+        status.status.success(),
+        "parent-death harness failed: {status:?}"
+    );
+    let pid = fs::read_to_string(&child_pid)
+        .expect("read parent-death child PID")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("parse parent-death child PID");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        #[allow(unsafe_code)]
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "parent death left the sandbox boundary active: {pid}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    thread::sleep(Duration::from_secs(2));
+    assert!(!marker.exists(), "parent death left a descendant running");
 }
 
 #[test]

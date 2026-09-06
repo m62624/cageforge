@@ -3,7 +3,7 @@
 //! macOS process-group lifecycle for one Seatbelt child.
 
 use std::io;
-use std::os::unix::io::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,11 +17,27 @@ const BOUNDARY_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const BOUNDARY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-boundary-recovery";
+const PARENT_DEATH_FD: RawFd = libc::STDERR_FILENO + 1;
+pub(crate) const PARENT_DEATH_WRAPPER: &str = "(
+    while read _ <&3; do
+        :
+    done
+    kill -KILL -$$ 2>/dev/null
+) &
+exec 3<&-
+exec \"$@\"
+";
+
+pub(crate) struct ParentDeathChannel {
+    read: OwnedFd,
+    write: OwnedFd,
+}
 
 /// A command running inside one macOS Seatbelt boundary.
 pub struct MacosChild {
     child: Option<Child>,
     process_group_id: u32,
+    parent_death: Option<OwnedFd>,
     gateway: Option<GatewayRuntime>,
     deadline: Option<Instant>,
     recovery_attempted: bool,
@@ -31,12 +47,14 @@ impl MacosChild {
     pub(crate) fn new(
         child: Child,
         process_group_id: u32,
+        parent_death: OwnedFd,
         gateway: Option<GatewayRuntime>,
         timeout: Option<Duration>,
     ) -> Self {
         Self {
             child: Some(child),
             process_group_id,
+            parent_death: Some(parent_death),
             gateway,
             deadline: timeout.map(|timeout| Instant::now() + timeout),
             recovery_attempted: false,
@@ -135,6 +153,7 @@ impl MacosChild {
             gateway.shutdown().map_err(MacosBackendError::Network)?;
         }
         self.child = None;
+        self.parent_death = None;
         Ok(())
     }
 
@@ -183,23 +202,56 @@ impl Drop for MacosChild {
 }
 
 #[allow(unsafe_code)]
-pub(crate) fn configure_process_group(command: &mut std::process::Command) {
+pub(crate) fn configure_process_group(command: &mut std::process::Command, parent_death_fd: RawFd) {
     use std::os::unix::process::CommandExt;
     // SAFETY: pre_exec runs in the child between fork and exec; setpgid
     // only changes the child process's own process-group membership.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setpgid(0, 0) == -1 {
                 Err(io::Error::last_os_error())
             } else {
+                if parent_death_fd != PARENT_DEATH_FD {
+                    if libc::dup2(parent_death_fd, PARENT_DEATH_FD) == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    libc::close(parent_death_fd);
+                }
                 // SAFETY: stdio has already been configured by
                 // `Command`; this closes unrelated inheritable parent
                 // descriptors while preserving Rust's CLOEXEC spawn-error
                 // pipe.
-                close_inherited_fds_except(&[])?;
+                close_inherited_fds_except(&[PARENT_DEATH_FD])?;
                 Ok(())
             }
         });
+    }
+}
+
+impl ParentDeathChannel {
+    #[allow(unsafe_code)]
+    pub(crate) fn new() -> io::Result<Self> {
+        let mut descriptors = [0; 2];
+        // SAFETY: pipe writes two owned descriptors into the stack buffer.
+        if unsafe { libc::pipe(descriptors.as_mut_ptr()) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: pipe returned two distinct valid descriptors now owned by
+        // this value.
+        Ok(Self {
+            read: unsafe { OwnedFd::from_raw_fd(descriptors[0]) },
+            write: unsafe { OwnedFd::from_raw_fd(descriptors[1]) },
+        })
+    }
+
+    pub(crate) fn read_fd(&self) -> RawFd {
+        self.read.as_raw_fd()
+    }
+
+    pub(crate) fn into_writer(self) -> OwnedFd {
+        let Self { read, write } = self;
+        drop(read);
+        write
     }
 }
 
@@ -370,6 +422,7 @@ mod tests {
         let mut child = MacosChild {
             child: None,
             process_group_id: 1,
+            parent_death: None,
             gateway: None,
             deadline: None,
             recovery_attempted: true,
