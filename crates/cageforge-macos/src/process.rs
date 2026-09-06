@@ -21,6 +21,7 @@ const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-boundary-recovery";
 /// A command running inside one macOS Seatbelt boundary.
 pub struct MacosChild {
     child: Option<Child>,
+    process_group_id: u32,
     gateway: Option<GatewayRuntime>,
     deadline: Option<Instant>,
     recovery_attempted: bool,
@@ -29,11 +30,13 @@ pub struct MacosChild {
 impl MacosChild {
     pub(crate) fn new(
         child: Child,
+        process_group_id: u32,
         gateway: Option<GatewayRuntime>,
         timeout: Option<Duration>,
     ) -> Self {
         Self {
             child: Some(child),
+            process_group_id,
             gateway,
             deadline: timeout.map(|timeout| Instant::now() + timeout),
             recovery_attempted: false,
@@ -114,13 +117,12 @@ impl MacosChild {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
-        terminate_process_group(child)
+        terminate_process_group(child, self.process_group_id)
     }
 
     fn finish(&mut self, status: ExitStatus) -> Result<ExitStatus, MacosBackendError> {
-        let pid = self.id();
-        if pid != 0 {
-            terminate_process_group_if_present(pid)?;
+        if self.process_group_id != 0 {
+            terminate_process_group_if_present(self.process_group_id)?;
         }
         self.child.take();
         self.cleanup_boundaries()?;
@@ -144,23 +146,24 @@ impl MacosChild {
             return;
         };
         let gateway = self.gateway.take();
+        let process_group_id = self.process_group_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let recovery = thread::Builder::new()
             .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
             .spawn(move || {
                 if let Ok((mut child, gateway)) = receiver.recv() {
-                    recover_boundary(&mut child, gateway);
+                    recover_boundary(&mut child, process_group_id, gateway);
                 }
             });
         if recovery.is_err() {
             // Drop cannot safely release an unconfirmed boundary. If the
             // detached owner itself cannot be created, keep ownership here
             // and retry until process-group termination is confirmed.
-            recover_boundary(&mut child, gateway);
+            recover_boundary(&mut child, process_group_id, gateway);
         } else if let Err(error) = sender.send((child, gateway)) {
             let (child, gateway) = error.0;
             let mut child = child;
-            recover_boundary(&mut child, gateway);
+            recover_boundary(&mut child, process_group_id, gateway);
         }
     }
 }
@@ -269,9 +272,9 @@ pub(crate) fn stream(mode: StdioMode) -> std::process::Stdio {
     }
 }
 
-fn recover_boundary(child: &mut Child, mut gateway: Option<GatewayRuntime>) {
+fn recover_boundary(child: &mut Child, process_group_id: u32, mut gateway: Option<GatewayRuntime>) {
     loop {
-        if terminate_process_group(child).is_ok() {
+        if terminate_process_group(child, process_group_id).is_ok() {
             if let Some(mut gateway) = gateway.take() {
                 let _ = gateway.shutdown();
             }
@@ -281,13 +284,15 @@ fn recover_boundary(child: &mut Child, mut gateway: Option<GatewayRuntime>) {
     }
 }
 
-fn terminate_process_group(child: &mut Child) -> Result<(), MacosBackendError> {
-    let pid = child.id();
-    terminate_process_group_if_present(pid)?;
+fn terminate_process_group(
+    child: &mut Child,
+    process_group_id: u32,
+) -> Result<(), MacosBackendError> {
+    terminate_process_group_if_present(process_group_id)?;
     child
         .wait()
         .map_err(|source| MacosBackendError::ProcessWait { source })?;
-    confirm_process_group_gone(pid)
+    confirm_process_group_gone(process_group_id)
 }
 
 #[allow(unsafe_code)]
@@ -304,6 +309,26 @@ fn terminate_process_group_if_present(pid: u32) -> Result<(), MacosBackendError>
         }
     }
     Ok(())
+}
+
+#[allow(unsafe_code)]
+pub(crate) fn process_group_id(pid: u32) -> Result<u32, MacosBackendError> {
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
+    // SAFETY: getpgid only reads process-group state for the freshly spawned
+    // boundary process and does not retain any pointer.
+    let process_group_id = unsafe { libc::getpgid(pid) };
+    if process_group_id == -1 {
+        return Err(MacosBackendError::ProcessGroup {
+            source: io::Error::last_os_error(),
+        });
+    }
+    u32::try_from(process_group_id).map_err(|_| MacosBackendError::ProcessGroup {
+        source: io::Error::new(
+            io::ErrorKind::InvalidData,
+            "macOS sandbox process group ID is outside the public range",
+        ),
+    })
 }
 
 #[allow(unsafe_code)]
@@ -343,6 +368,7 @@ mod tests {
     fn recovery_owned_boundary_is_reported_as_a_typed_state() {
         let mut child = MacosChild {
             child: None,
+            process_group_id: 1,
             gateway: None,
             deadline: None,
             recovery_attempted: true,

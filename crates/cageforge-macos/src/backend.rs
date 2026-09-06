@@ -17,7 +17,7 @@ use crate::config::MacosBackendConfig;
 use crate::error::MacosBackendError;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::{GatewayRuntime, MacosNetworkPlan};
-use crate::process::{MacosChild, configure_process_group, stream};
+use crate::process::{MacosChild, configure_process_group, process_group_id, stream};
 use crate::seatbelt::SeatbeltProfile;
 
 /// A macOS-native backend bound to one validated Seatbelt executable.
@@ -133,7 +133,21 @@ impl MacosBackend {
         let child = command
             .spawn()
             .map_err(|source| MacosBackendError::ProcessStart { source })?;
-        Ok(MacosChild::new(child, gateway.take(), timeout))
+        let process_group_id = match process_group_id(child.id()) {
+            Ok(process_group_id) => process_group_id,
+            Err(error) => {
+                let mut child = child;
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        Ok(MacosChild::new(
+            child,
+            process_group_id,
+            gateway.take(),
+            timeout,
+        ))
     }
 
     fn environment_input(
