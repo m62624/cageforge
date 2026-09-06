@@ -356,7 +356,7 @@ impl ProfileBuilder {
                     pattern: pattern.clone(),
                 });
             }
-            let regex = escape_profile_string(&glob_to_seatbelt_regex(pattern));
+            let regex = escape_regex_literal(&glob_to_seatbelt_regex(pattern));
             self.policy
                 .push_str(&format!("(deny file-read* (regex #\"{regex}\"))\n"));
             self.policy
@@ -395,7 +395,7 @@ impl ProfileBuilder {
                 let regex = glob_to_seatbelt_regex(pattern);
                 requirements.push(format!(
                     r#"(require-not (regex #"{}"))"#,
-                    escape_profile_string(&regex)
+                    escape_regex_literal(&regex)
                 ));
             }
             if action == "file-write*" {
@@ -584,11 +584,10 @@ fn push_regex_literal(regex: &mut String, character: char) {
     regex.push(character);
 }
 
-fn escape_profile_string(value: &str) -> String {
+fn escape_regex_literal(value: &str) -> String {
     value
         .chars()
         .flat_map(|character| match character {
-            '\\' => ['\\', '\\'].into_iter().collect::<Vec<_>>(),
             '"' => ['\\', '"'].into_iter().collect::<Vec<_>>(),
             character => [character].into_iter().collect::<Vec<_>>(),
         })

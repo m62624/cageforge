@@ -39,6 +39,8 @@ fn write_only_carveouts_remain_readable_in_the_profile() {
     assert!(policy.contains("(deny file-read* (subpath (param \"DENIED_PATH_0\")))"));
     assert!(policy.contains("(deny file-write-unlink (regex #\"^/workspace/"));
     assert!(policy.contains("(deny file-write-create (regex #\"^/workspace/"));
+    assert!(policy.contains(r#"[^/]*\.secret$"#));
+    assert!(!policy.contains(r#"[^/]*\\.secret$"#));
     assert!(policy.contains("(deny file-write-unlink (subpath (param \"DENIED_PATH_0\")))"));
 }
 
