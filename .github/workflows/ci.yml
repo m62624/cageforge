@@ -35,7 +35,7 @@ concurrency:
 # Current runners for common-component checks:
 #   ubuntu-24.04
 #   windows-latest
-#   macos-latest
+#   macos-15-xlarge — native macOS Seatbelt
 #
 # Current native sandbox runners:
 #   Linux x64       — disposable QEMU/KVM guest on ubuntu-24.04
@@ -504,7 +504,7 @@ jobs:
     name: macOS sandbox
     needs: changes
     if: ${{ needs.changes.outputs.macos_sandbox == 'true' }}
-    runs-on: macos-latest
+    runs-on: macos-15-xlarge
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
