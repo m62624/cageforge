@@ -121,7 +121,7 @@ fn path_exclusions_use_component_boundaries() {
 fn glob_translation_is_anchored_and_keeps_path_components_bounded() {
     assert_eq!(
         glob_to_seatbelt_regex("/workspace/**/*.secret"),
-        r"^/workspace/(?:.*/)?[^/]*\.secret$"
+        r"^/workspace/(.*/)?[^/]*\.secret$"
     );
     assert_eq!(
         glob_to_seatbelt_regex("/workspace/private"),

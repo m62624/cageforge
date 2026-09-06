@@ -611,11 +611,14 @@ fn network_client_fixture() {
         .parse()
         .expect("socket address");
     match mode.as_str() {
-        "http" => assert!(
-            send_http_proxy_request(target)
-                .expect("HTTP proxy response")
-                .starts_with(b"HTTP/1.1 200")
-        ),
+        "http" => {
+            let response = send_http_proxy_request(target).expect("HTTP proxy response");
+            assert!(
+                response.starts_with(b"HTTP/1.1 200"),
+                "unexpected HTTP proxy response: {}",
+                String::from_utf8_lossy(&response)
+            );
+        }
         "http-denied" => assert!(
             !send_http_proxy_request(target)
                 .expect("denied HTTP response")
@@ -642,6 +645,12 @@ fn restricted_network_reaches_only_the_authorized_loopback_target() {
         .prepare(BackendRequest::new(&command, &effective), &runtime)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
+    let mut output = Vec::new();
+    child
+        .stdout()
+        .expect("stdout pipe")
+        .read_to_end(&mut output)
+        .expect("read stdout");
     let mut error = String::new();
     child
         .stderr()
@@ -650,7 +659,12 @@ fn restricted_network_reaches_only_the_authorized_loopback_target() {
         .expect("read stderr");
     let status = child.wait().expect("wait");
     let server_result = server.join().expect("HTTP server");
-    assert_eq!(status.code(), Some(0), "sandbox stderr: {error}");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "sandbox stdout: {}; stderr: {error}",
+        String::from_utf8_lossy(&output)
+    );
     server_result.expect("HTTP server I/O");
 }
 

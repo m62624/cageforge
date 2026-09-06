@@ -537,7 +537,7 @@ pub(crate) fn glob_to_seatbelt_regex(pattern: &str) -> String {
                 chars.next();
                 if chars.peek() == Some(&'/') {
                     chars.next();
-                    regex.push_str("(?:.*/)?");
+                    regex.push_str("(.*/)?");
                 } else {
                     regex.push_str(".*");
                 }
