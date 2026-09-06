@@ -257,6 +257,7 @@ dependencies = [
  "cageforge-policy",
  "cageforge-policy-compose",
  "libc",
+ "tempfile",
  "thiserror",
  "tokio",
 ]

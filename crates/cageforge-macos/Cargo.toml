@@ -24,7 +24,10 @@ cageforge-policy.workspace = true
 cageforge-policy-compose.workspace = true
 libc.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
