@@ -2,6 +2,7 @@
 
 //! Clean current-user bridge for `CreateProcessWithLogonW`.
 
+use std::error::Error;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -78,19 +79,48 @@ enum BootstrapFailure {
     PipeOpen(u32),
     PipeServerPid(u32),
     PipeServerMismatch,
-    CredentialRead,
+    CredentialRead {
+        operation: &'static str,
+        source: BootstrapCredentialReadError,
+    },
     CredentialDigest,
-    CredentialDecode,
+    CredentialDecode {
+        source: serde_json::Error,
+    },
+    CredentialVersionMismatch {
+        actual: u32,
+        expected: u32,
+    },
+    CredentialOutputInvalid {
+        declared: usize,
+        allocated: usize,
+    },
+    CredentialInputTooLarge {
+        actual: usize,
+    },
     CredentialAccount,
     CredentialDecrypt(u32),
     CredentialEncoding,
-    RunnerPath,
+    RunnerPath {
+        source: std::io::Error,
+    },
+    RunnerPathEncoding,
     RunnerStart(u32),
     RunnerInformation,
     RunnerToken(u32),
     RunnerLogonSid,
     RunnerHandleDuplicate(u32),
-    ReportWrite,
+    ReportWrite {
+        source: crate::runner_protocol::WindowsRunnerProtocolError,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+enum BootstrapCredentialReadError {
+    #[error("pinned credential validation failed: {0}")]
+    Pinned(#[source] crate::setup_pinned_file::SetupPinnedFileError),
+    #[error("credential record I/O failed: {0}")]
+    Io(#[source] std::io::Error),
 }
 
 enum BootstrapRunError {
@@ -150,8 +180,11 @@ impl SuspendedRunner {
             &arguments.credential_sha256,
             &arguments.account_name,
         )?;
-        let runner = std::env::current_exe().map_err(|_| BootstrapFailure::RunnerPath)?;
-        let runner = runner.to_str().ok_or(BootstrapFailure::RunnerPath)?;
+        let runner =
+            std::env::current_exe().map_err(|source| BootstrapFailure::RunnerPath { source })?;
+        let runner = runner
+            .to_str()
+            .ok_or(BootstrapFailure::RunnerPathEncoding)?;
         let command_line = [runner, &arguments.request_pipe, &arguments.response_pipe]
             .into_iter()
             .map(quote_argument)
@@ -289,7 +322,7 @@ fn run_inner(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), 
                 logon_sid,
             },
         )
-        .map_err(|_| BootstrapFailure::ReportWrite)?;
+        .map_err(|source| BootstrapFailure::ReportWrite { source })?;
         runner.released = true;
         Ok(())
     })();
@@ -302,7 +335,9 @@ fn run_inner(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), 
                     failure: error.typed_failure(),
                 },
             )
-            .map_err(|_| BootstrapRunError::Unreported(BootstrapFailure::ReportWrite))?;
+            .map_err(|source| {
+                BootstrapRunError::Unreported(BootstrapFailure::ReportWrite { source })
+            })?;
             Err(BootstrapRunError::Reported)
         }
     }
@@ -310,105 +345,189 @@ fn run_inner(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), 
 
 impl BootstrapFailure {
     fn typed_failure(&self) -> WindowsRunnerFailure {
-        let (stage, code, native_code, detail) = match self {
+        let (stage, code, native_code, label, source) = match self {
             Self::Arguments => (
                 WindowsRunnerFailureStage::Request,
                 WindowsRunnerFailureCode::RequestField,
                 None,
                 "bootstrap arguments were invalid",
+                None,
             ),
             Self::ParentProcess => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::ParentIdentityHandle,
                 None,
                 "bootstrap parent process handle was invalid",
+                None,
             ),
-            Self::CredentialRead => (
+            Self::CredentialRead { operation, source } => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::BootstrapCredentialRead,
-                None,
-                "bootstrap could not read the pinned credential record",
+                native_code(source),
+                *operation,
+                Some(source as &(dyn Error + 'static)),
             ),
             Self::PipeOpen(code) => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::PipeOpen,
                 Some(*code),
                 "bootstrap report pipe could not be opened",
+                None,
             ),
             Self::PipeServerPid(code) => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::PipeServerMismatch,
                 Some(*code),
                 "bootstrap report pipe server PID could not be read",
+                None,
             ),
             Self::PipeServerMismatch => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::PipeServerMismatch,
                 None,
                 "bootstrap report pipe server did not match its parent process",
+                None,
             ),
             Self::CredentialDigest => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::BootstrapCredentialDigest,
                 None,
                 "bootstrap credential digest differed from verified setup state",
+                None,
             ),
-            Self::CredentialDecode | Self::CredentialAccount | Self::CredentialEncoding => (
+            Self::CredentialDecode { source } => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::BootstrapCredentialDecode,
                 None,
                 "bootstrap rejected the pinned credential record",
+                Some(source as &(dyn Error + 'static)),
+            ),
+            Self::CredentialVersionMismatch { .. } => (
+                WindowsRunnerFailureStage::Authentication,
+                WindowsRunnerFailureCode::BootstrapCredentialDecode,
+                None,
+                "bootstrap credential record version mismatch",
+                None,
+            ),
+            Self::CredentialOutputInvalid { .. } => (
+                WindowsRunnerFailureStage::Authentication,
+                WindowsRunnerFailureCode::BootstrapCredentialDecode,
+                None,
+                "bootstrap DPAPI output length exceeded its allocated buffer",
+                None,
+            ),
+            Self::CredentialInputTooLarge { .. } => (
+                WindowsRunnerFailureStage::Authentication,
+                WindowsRunnerFailureCode::BootstrapCredentialDecode,
+                None,
+                "bootstrap credential exceeds the DPAPI input limit",
+                None,
+            ),
+            Self::CredentialAccount => (
+                WindowsRunnerFailureStage::Authentication,
+                WindowsRunnerFailureCode::BootstrapCredentialDecode,
+                None,
+                "bootstrap credential record has no matching sandbox account",
+                None,
+            ),
+            Self::CredentialEncoding => (
+                WindowsRunnerFailureStage::Authentication,
+                WindowsRunnerFailureCode::BootstrapCredentialDecode,
+                None,
+                "bootstrap credential plaintext has invalid encoding",
+                None,
             ),
             Self::CredentialDecrypt(code) => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::BootstrapCredentialDecrypt,
                 Some(*code),
                 "Windows DPAPI could not decrypt the pinned credential record",
+                None,
             ),
-            Self::RunnerPath => (
+            Self::RunnerPath { source } => (
+                WindowsRunnerFailureStage::Authentication,
+                WindowsRunnerFailureCode::ManifestPath,
+                native_code(source),
+                "bootstrap could not resolve the installed runner path",
+                Some(source as &(dyn Error + 'static)),
+            ),
+            Self::RunnerPathEncoding => (
                 WindowsRunnerFailureStage::Authentication,
                 WindowsRunnerFailureCode::ManifestPath,
                 None,
-                "bootstrap could not resolve the installed runner path",
+                "installed runner path is not valid Unicode",
+                None,
             ),
             Self::RunnerStart(code) => (
                 WindowsRunnerFailureStage::Process,
                 WindowsRunnerFailureCode::BootstrapRunnerStart,
                 Some(*code),
                 "bootstrap could not start the suspended sandbox runner",
+                None,
             ),
             Self::RunnerInformation | Self::RunnerLogonSid => (
                 WindowsRunnerFailureStage::Process,
                 WindowsRunnerFailureCode::BootstrapRunnerMetadata,
                 None,
                 "bootstrap received invalid suspended-runner metadata",
+                None,
             ),
             Self::RunnerToken(code) => (
                 WindowsRunnerFailureStage::Process,
                 WindowsRunnerFailureCode::BootstrapRunnerMetadata,
                 Some(*code),
                 "bootstrap could not inspect the suspended runner token",
+                None,
             ),
             Self::RunnerHandleDuplicate(code) => (
                 WindowsRunnerFailureStage::Process,
                 WindowsRunnerFailureCode::BootstrapHandleTransfer,
                 Some(*code),
                 "bootstrap could not transfer suspended-runner authority",
+                None,
             ),
-            Self::ReportWrite => (
+            Self::ReportWrite { source } => (
                 WindowsRunnerFailureStage::Process,
                 WindowsRunnerFailureCode::ResponseFrame,
                 None,
                 "bootstrap could not report suspended-runner metadata",
+                Some(source as &(dyn Error + 'static)),
             ),
+        };
+        let detail = match self {
+            Self::CredentialVersionMismatch { actual, expected } => {
+                format!("{label}: expected version {expected}, found {actual}")
+            }
+            Self::CredentialOutputInvalid {
+                declared,
+                allocated,
+            } => format!("{label}: declared {declared} bytes, allocated {allocated} bytes"),
+            Self::CredentialInputTooLarge { actual } => {
+                format!("{label}: {actual} bytes")
+            }
+            _ => source.map_or_else(|| label.to_string(), |source| format!("{label}: {source}")),
         };
         WindowsRunnerFailure {
             stage,
             code,
             native_code,
-            detail: detail.to_string(),
+            detail,
         }
     }
+}
+
+fn native_code(error: &(dyn Error + 'static)) -> Option<u32> {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            return error
+                .raw_os_error()
+                .filter(|code| *code >= 0)
+                .map(|code| code as u32);
+        }
+        current = error.source();
+    }
+    None
 }
 
 #[allow(unsafe_code)]
@@ -460,14 +579,23 @@ fn credential_password(
     account_name: &str,
 ) -> Result<Zeroizing<Vec<u16>>, BootstrapFailure> {
     let mut credential = crate::setup_pinned_file::open_for_readback(credential_path, true)
-        .map_err(|_| BootstrapFailure::CredentialRead)?;
+        .map_err(|source| BootstrapFailure::CredentialRead {
+            operation: "open pinned credential record",
+            source: BootstrapCredentialReadError::Pinned(source),
+        })?;
     credential
         .seek(SeekFrom::Start(0))
-        .map_err(|_| BootstrapFailure::CredentialRead)?;
+        .map_err(|source| BootstrapFailure::CredentialRead {
+            operation: "rewind pinned credential record",
+            source: BootstrapCredentialReadError::Io(source),
+        })?;
     let mut encoded = Vec::new();
     credential
         .read_to_end(&mut encoded)
-        .map_err(|_| BootstrapFailure::CredentialRead)?;
+        .map_err(|source| BootstrapFailure::CredentialRead {
+            operation: "read pinned credential record",
+            source: BootstrapCredentialReadError::Io(source),
+        })?;
     let digest = Sha256::digest(&encoded)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -475,10 +603,13 @@ fn credential_password(
     if !digest.eq_ignore_ascii_case(expected_sha256) {
         return Err(BootstrapFailure::CredentialDigest);
     }
-    let credentials: ProtectedCredentials =
-        serde_json::from_slice(&encoded).map_err(|_| BootstrapFailure::CredentialDecode)?;
+    let credentials: ProtectedCredentials = serde_json::from_slice(&encoded)
+        .map_err(|source| BootstrapFailure::CredentialDecode { source })?;
     if credentials.version != CREDENTIALS_VERSION {
-        return Err(BootstrapFailure::CredentialDecode);
+        return Err(BootstrapFailure::CredentialVersionMismatch {
+            actual: credentials.version,
+            expected: CREDENTIALS_VERSION,
+        });
     }
     let protected = if credentials.offline_name == account_name {
         credentials.offline_password
@@ -500,7 +631,10 @@ fn credential_password(
 
 #[allow(unsafe_code)]
 fn decrypt_credential(protected: &[u8]) -> Result<Vec<u8>, BootstrapFailure> {
-    let length = u32::try_from(protected.len()).map_err(|_| BootstrapFailure::CredentialDecode)?;
+    let length =
+        u32::try_from(protected.len()).map_err(|_| BootstrapFailure::CredentialInputTooLarge {
+            actual: protected.len(),
+        })?;
     let input = CRYPT_INTEGER_BLOB {
         cbData: length,
         pbData: protected.as_ptr().cast_mut(),
@@ -538,7 +672,10 @@ fn decrypt_credential(protected: &[u8]) -> Result<Vec<u8>, BootstrapFailure> {
         if !output.pbData.is_null() {
             unsafe { LocalFree(output.pbData as HLOCAL) };
         }
-        return Err(BootstrapFailure::CredentialDecode);
+        return Err(BootstrapFailure::CredentialOutputInvalid {
+            declared: length,
+            allocated: allocated_bytes,
+        });
     }
     let plaintext = if length == 0 {
         Vec::new()
@@ -661,7 +798,7 @@ fn quote_argument(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sid_fits_buffer;
+    use super::{BootstrapCredentialReadError, BootstrapFailure, sid_fits_buffer};
 
     #[test]
     fn bootstrap_sid_must_fit_the_token_groups_buffer() {
@@ -671,5 +808,36 @@ mod tests {
 
         assert!(sid_fits_buffer(&buffer, sid));
         assert!(!sid_fits_buffer(&buffer[..15], sid));
+    }
+
+    #[test]
+    fn bootstrap_credential_read_preserves_native_diagnostic() {
+        let error = BootstrapFailure::CredentialRead {
+            operation: "read pinned credential record",
+            source: BootstrapCredentialReadError::Io(std::io::Error::from_raw_os_error(5)),
+        };
+
+        let failure = error.typed_failure();
+
+        assert_eq!(failure.native_code, Some(5));
+        assert!(failure.detail.contains("read pinned credential record"));
+        assert!(
+            failure
+                .detail
+                .contains(&std::io::Error::from_raw_os_error(5).to_string())
+        );
+    }
+
+    #[test]
+    fn bootstrap_credential_version_diagnostic_preserves_both_versions() {
+        let error = BootstrapFailure::CredentialVersionMismatch {
+            actual: 2,
+            expected: 1,
+        };
+
+        let failure = error.typed_failure();
+
+        assert!(failure.detail.contains("expected version 1"));
+        assert!(failure.detail.contains("found 2"));
     }
 }
