@@ -347,23 +347,11 @@ async fn serve_private_stream(
     tokio::pin!(gateway_task);
     tokio::pin!(to_gateway, to_client);
     tokio::select! {
-        result = &mut gateway_task => {
-            if let Err(error) = result
-                && std::env::var_os("CAGEFORGE_DEBUG_SEATBELT_PROFILE").is_some()
-            {
-                eprintln!("Cageforge macOS gateway connection failed: {error}");
-            }
-        }
+        result = &mut gateway_task => { let _ = result; }
         _ = &mut to_client => return,
         _ = &mut to_gateway => {
             tokio::select! {
-                result = &mut gateway_task => {
-                    if let Err(error) = result
-                        && std::env::var_os("CAGEFORGE_DEBUG_SEATBELT_PROFILE").is_some()
-                    {
-                        eprintln!("Cageforge macOS gateway connection failed: {error}");
-                    }
-                }
+                result = &mut gateway_task => { let _ = result; }
                 _ = &mut to_client => return,
             }
         }

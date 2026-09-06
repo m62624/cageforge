@@ -99,13 +99,6 @@ impl MacosBackend {
             network = network.with_ingress_port(runtime.port());
         }
         let profile = SeatbeltProfile::build(&filesystem, &network)?;
-        if std::env::var_os("CAGEFORGE_DEBUG_SEATBELT_PROFILE").is_some() {
-            eprintln!(
-                "Cageforge Seatbelt profile:\n{}\nCageforge Seatbelt definitions: {:?}",
-                profile.policy(),
-                profile.definitions()
-            );
-        }
         let command_spec = prepared.command_spec(self)?;
         let mut environment = prepared
             .apply_environment(self, self.environment_input(sandbox.environment().base())?)?;
