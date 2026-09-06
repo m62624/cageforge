@@ -182,16 +182,17 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
     ) -> Result<(), MacosFilesystemError> {
         for selector in selectors {
             for path in self.context.resolve(selector) {
-                if !is_within(&path, write_root) {
+                let native_path = normalize_macos_system_alias(path);
+                if !is_within(&native_path, write_root) {
                     return Err(MacosFilesystemError::ReadOnlyOutsideRoot {
-                        path,
+                        path: native_path,
                         root: write_root.to_path_buf(),
                     });
                 }
-                if self.contains_symlink(&path)? {
-                    return Err(MacosFilesystemError::Symlink { path });
+                if self.contains_symlink(&native_path)? {
+                    return Err(MacosFilesystemError::Symlink { path: native_path });
                 }
-                self.insert_write_denied(path);
+                self.insert_write_denied(native_path);
             }
         }
         Ok(())
@@ -199,9 +200,14 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
 
     fn collect_glob(&mut self, pattern: &str, absolute: bool) {
         if absolute {
-            self.denied_globs.insert(pattern.to_owned());
+            self.denied_globs.insert(
+                normalize_macos_system_alias(PathBuf::from(pattern))
+                    .to_string_lossy()
+                    .into_owned(),
+            );
         } else {
             for root in self.context.workspace_roots() {
+                let root = normalize_macos_system_alias(root.clone());
                 let joined = if pattern.is_empty() {
                     root.to_string_lossy().into_owned()
                 } else {

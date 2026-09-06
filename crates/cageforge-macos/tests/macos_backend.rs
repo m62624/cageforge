@@ -641,13 +641,13 @@ fn restricted_network_reaches_only_the_authorized_loopback_target() {
         .prepare(BackendRequest::new(&command, &effective), &runtime)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
-    let status = child.wait().expect("wait");
     let mut error = String::new();
     child
         .stderr()
         .expect("stderr pipe")
         .read_to_string(&mut error)
         .expect("read stderr");
+    let status = child.wait().expect("wait");
     let server_result = server.join().expect("HTTP server");
     assert_eq!(status.code(), Some(0), "sandbox stderr: {error}");
     server_result.expect("HTTP server I/O");
@@ -669,13 +669,13 @@ fn restricted_network_denies_an_unlisted_domain_target() {
         .prepare(BackendRequest::new(&command, &effective), &runtime)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
-    let status = child.wait().expect("wait");
     let mut error = String::new();
     child
         .stderr()
         .expect("stderr pipe")
         .read_to_string(&mut error)
         .expect("read stderr");
+    let status = child.wait().expect("wait");
     assert_eq!(status.code(), Some(0), "sandbox stderr: {error}");
     listener
         .set_nonblocking(true)
