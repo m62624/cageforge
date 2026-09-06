@@ -737,6 +737,28 @@ fn restricted_command_cannot_write_outside_its_workspace() {
 }
 
 #[test]
+fn restricted_filesystem_does_not_grant_unlisted_conventional_tmp() {
+    let workspace = TempDir::new().expect("workspace");
+    let unlisted_tmp = tempfile::tempdir_in("/private/tmp").expect("unlisted temp directory");
+    let marker = unlisted_tmp.path().join("marker");
+    let command = shell_command("touch \"$1\"")
+        .with_arg("cageforge-unlisted-tmp")
+        .expect("shell name")
+        .with_arg(marker.as_os_str())
+        .expect("marker argument");
+    let policy = writable_policy(workspace.path());
+    let (command, effective, context) = request_for(workspace.path(), &policy, command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert!(!status.success(), "unlisted /private/tmp write succeeded");
+    assert!(!marker.exists(), "unlisted /private/tmp marker was created");
+}
+
+#[test]
 fn writable_workspace_preserves_read_only_and_protected_descendants() {
     let workspace = TempDir::new().expect("workspace");
     let readonly = workspace.path().join("readonly");

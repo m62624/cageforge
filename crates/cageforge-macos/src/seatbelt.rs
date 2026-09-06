@@ -21,12 +21,30 @@ const SEATBELT_BASE_POLICY: &str = r#"
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
 
-; Minimal runtime access needed by ordinary command-line programs.
-(allow file-read* (subpath "/usr"))
-(allow file-read* (subpath "/System"))
-(allow file-read* (subpath "/Library/Apple/System/Library/Frameworks"))
-(allow file-read* (subpath "/Library/Apple/System/Library/PrivateFrameworks"))
-(allow file-read* (subpath "/Library/Apple/usr/lib"))
+; Minimal runtime access needed by ordinary command-line programs. Keep this
+; list explicit: caller filesystem scopes are added below and must not inherit
+; an accidental read/write grant from the fixed profile.
+(allow file-read* file-test-existence
+  (subpath "/usr/lib")
+  (subpath "/usr/share")
+  (subpath "/Library/Apple")
+  (subpath "/Library/Filesystems/NetFSPlugins")
+  (subpath "/Library/Preferences/Logging")
+  (subpath "/private/var/db/DarwinDirectory/local/recordStore.data")
+  (subpath "/private/var/db/timezone")
+  (subpath "/var/db")
+  (subpath "/private/var/db"))
+(allow file-read* file-test-existence
+  (subpath "/Library/Apple/System/Library/Frameworks")
+  (subpath "/Library/Apple/System/Library/PrivateFrameworks")
+  (subpath "/Library/Apple/usr/lib")
+  (subpath "/System/Library/Frameworks")
+  (subpath "/System/Library/PrivateFrameworks")
+  (subpath "/System/Library/SubFrameworks")
+  (subpath "/System/iOSSupport/System/Library/Frameworks")
+  (subpath "/System/iOSSupport/System/Library/PrivateFrameworks")
+  (subpath "/System/iOSSupport/System/Library/SubFrameworks")
+  (subpath "/usr/lib"))
 (allow file-read* (subpath "/opt/homebrew/lib"))
 (allow file-read* (subpath "/usr/local/lib"))
 (allow file-map-executable
@@ -57,10 +75,6 @@ const SEATBELT_BASE_POLICY: &str = r#"
 (allow file-read* file-test-existence (subpath "/private/var/db"))
 (allow file-read-metadata (subpath "/private/var"))
 (allow file-read-metadata (subpath "/var"))
-(allow file-read* file-test-existence file-write* (subpath "/tmp"))
-(allow file-read* file-test-existence file-write* (subpath "/private/tmp"))
-(allow file-read* file-test-existence file-write* (subpath "/var/tmp"))
-(allow file-read* file-test-existence file-write* (subpath "/private/var/tmp"))
 (allow file-read-metadata file-test-existence
   (literal "/etc")
   (literal "/tmp")
@@ -86,7 +100,10 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (literal "/dev/stderr"))
 (allow file-read-metadata (regex "^/dev/tty[^/]*$"))
 (allow file-read-metadata (regex "^/dev/pty[^/]*$"))
-(allow file-read* file-write* (regex "^/dev/ttys[0-9]+$"))
+(allow file-read* file-write*
+  (require-all
+    (regex "^/dev/ttys[0-9]+$")
+    (extension "com.apple.sandbox.pty")))
 (allow file-ioctl (regex "^/dev/ttys[0-9]+$"))
 (allow pseudo-tty)
 

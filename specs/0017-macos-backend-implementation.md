@@ -91,6 +91,14 @@ The filesystem lowering must:
 - keep platform-default reads separate from caller workspace and write
   scopes.
 
+The fixed profile may grant only the explicit read-only system paths required
+for process startup and ordinary runtime loading. It must not grant write
+access to conventional temporary directories: `/tmp`, `/private/tmp`,
+`/var/tmp`, or `/private/var/tmp`. Temporary write access is added only by an
+effective `tmpdir` or `slash_tmp` scope. Native tests must prove that an
+unlisted conventional temporary path remains unavailable to a restricted
+command.
+
 Unrestricted filesystem access is supported only when Seatbelt's explicit
 unrestricted profile is selected and the effective policy is unrestricted.
 An external filesystem owner is never treated as unrestricted local access.

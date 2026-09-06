@@ -76,6 +76,7 @@ fn base_profile_keeps_dynamic_loader_and_standard_stdio_explicit() {
     assert!(policy.contains("(allow file-map-executable"));
     assert!(policy.contains("(regex \"^/dev/fd/(0|1|2)$\")"));
     assert!(policy.contains("(regex \"^/dev/ttys[0-9]+$\")"));
+    assert!(policy.contains("(extension \"com.apple.sandbox.pty\")"));
 }
 
 #[test]
@@ -95,6 +96,29 @@ fn base_profile_keeps_required_platform_runtime_rules_explicit() {
     assert!(policy.contains("/__KMP_REGISTERED_LIB_[0-9]+"));
     assert!(policy.contains("com.apple.runningboard"));
     assert!(policy.contains("/private/var/run/syslog"));
+}
+
+#[test]
+fn base_profile_does_not_widen_restricted_filesystem_scopes() {
+    let profile = SeatbeltProfile::build(
+        &MacosFilesystemPlan {
+            read_roots: vec![PathBuf::from("/workspace")],
+            ..MacosFilesystemPlan::default()
+        },
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+    let policy = profile.policy();
+
+    assert!(!policy.contains("(allow file-read* (subpath \"/usr\"))"));
+    assert!(!policy.contains("(allow file-read* (subpath \"/System\"))"));
+    assert!(!policy.contains("file-write* (subpath \"/tmp\")"));
+    assert!(!policy.contains("file-write* (subpath \"/private/tmp\")"));
+    assert!(policy.contains("(subpath \"/usr/lib\")"));
+    assert!(policy.contains("(subpath \"/System/Library/Frameworks\")"));
+    assert!(policy.contains("(subpath (param \"READ_ROOT_0\"))"));
 }
 
 #[test]
