@@ -205,6 +205,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         path: PathBuf,
         missing: cageforge_policy::MissingPathBehavior,
     ) -> Result<Option<PathBuf>, MacosFilesystemError> {
+        let path = normalize_macos_system_alias(path);
         if !path.is_absolute() || contains_parent_component(&path) {
             return Err(MacosFilesystemError::InvalidScope { path });
         }
@@ -314,6 +315,22 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
             unrestricted: false,
         }
     }
+}
+
+fn normalize_macos_system_alias(path: PathBuf) -> PathBuf {
+    for (alias, canonical) in [
+        ("/var", "/private/var"),
+        ("/tmp", "/private/tmp"),
+        ("/etc", "/private/etc"),
+    ] {
+        if path == Path::new(alias) {
+            return PathBuf::from(canonical);
+        }
+        if let Ok(relative) = path.strip_prefix(alias) {
+            return Path::new(canonical).join(relative);
+        }
+    }
+    path
 }
 
 fn contains_parent_component(path: &Path) -> bool {
