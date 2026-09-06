@@ -13,7 +13,7 @@ use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -58,6 +58,13 @@ const KEYRING_SECRET: &[u8] = b"host-keyring-secret";
 const KEY_SPEC_SESSION_KEYRING: libc::c_long = -3;
 const KEYCTL_UNLINK: libc::c_long = 9;
 const KEYCTL_READ: libc::c_long = 11;
+
+fn assert_send_sync<T: Send + Sync>() {}
+
+#[test]
+fn backend_can_be_shared_through_arc_between_threads() {
+    assert_send_sync::<Arc<LinuxBackend>>();
+}
 
 struct SysvSharedMemory {
     identifier: libc::c_int,

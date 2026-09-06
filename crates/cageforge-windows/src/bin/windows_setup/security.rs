@@ -33,13 +33,12 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FileDispositionInfo, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     MoveFileExW, READ_CONTROL, SetFileInformationByHandle,
 };
-use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
 
-use crate::native_strings::local_sid_string;
+use crate::native_strings::{local_sid_string, local_wide_string_with_length, wide, wide_path};
 
 use super::{NativeSetupFailure, NativeSetupResult};
 
@@ -54,8 +53,6 @@ struct PendingProtectedFile {
     path: PathBuf,
     delete_on_drop: bool,
 }
-
-const SID_HEADER_BYTES: usize = 8;
 
 pub(super) struct ProtectedFileWriteContext {
     stage: SetupStage,
@@ -785,7 +782,7 @@ fn verify_descriptor_value(
         ));
     }
     let value = LocalWideString(value);
-    let Some(actual) = wide_string_with_length(value.0, value_length) else {
+    let Some(actual) = local_wide_string_with_length(value.0, value_length) else {
         return Err(NativeSetupFailure::new(
             SetupStage::StateDirectory,
             SetupFailureCode::DirectoryAcl,
@@ -944,7 +941,11 @@ fn protected_descriptor_matches(
         if unsafe { (*ace).Header.AceType } != ACCESS_ALLOWED_ACE_TYPE as u8
             || ace_size < size_of::<ACCESS_ALLOWED_ACE>()
             || ace_end > acl_end
-            || !sid_fits_ace(raw_ace.cast(), ace_size)
+            || !crate::acl_contract::sid_fits_ace(
+                raw_ace.cast(),
+                ace_size,
+                offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+            )
         {
             return false;
         }
@@ -962,28 +963,6 @@ fn protected_descriptor_matches(
     actual_aces.sort_unstable();
     expected_aces.sort_unstable();
     actual_aces == expected_aces
-}
-
-#[allow(unsafe_code)]
-fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
-    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
-    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if sid_header_end > ace_size {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
-    let Some(subauthority_bytes) = usize::from(bytes[sid_offset + 1]).checked_mul(size_of::<u32>())
-    else {
-        return false;
-    };
-    let Some(sid_length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(sid_length)
-        .is_some_and(|end| end <= bytes.len())
 }
 
 #[allow(unsafe_code)]
@@ -1019,34 +998,6 @@ fn last_error(
     detail: impl Into<String>,
 ) -> NativeSetupFailure {
     NativeSetupFailure::new(stage, code, Some(unsafe { GetLastError() }), detail)
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
-#[allow(unsafe_code)]
-fn wide_string_with_length(value: *const u16, length: u32) -> Option<String> {
-    if value.is_null() || length == 0 {
-        return None;
-    }
-    let allocation_bytes = unsafe { LocalSize(value as HLOCAL) };
-    if allocation_bytes == 0
-        || !allocation_bytes.is_multiple_of(size_of::<u16>())
-        || usize::try_from(length).ok()? > allocation_bytes / size_of::<u16>()
-    {
-        return None;
-    }
-    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
-    let units = units.strip_suffix(&[0]).unwrap_or(units);
-    Some(String::from_utf16_lossy(units))
 }
 
 #[cfg(test)]
@@ -1085,6 +1036,10 @@ mod tests {
         let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
         ace[sid_offset] = 1;
         ace[sid_offset + 1] = 1;
-        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+        assert!(!crate::acl_contract::sid_fits_ace(
+            ace.as_mut_ptr().cast(),
+            ace.len(),
+            sid_offset,
+        ));
     }
 }

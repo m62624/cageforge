@@ -53,6 +53,7 @@ Choose the smallest entry point that matches your application:
 | Check a request against a backend contract | [`cageforge-backend-api`](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/) | Typed capability negotiation and side-effect-free preflight for a native backend |
 | Build the bundled Linux Bubblewrap resource | `cageforge-bwrap` | Builds the pinned upstream Bubblewrap source and stages `bwrap` plus its digest manifest |
 | Integrate a native Linux process sandbox | [`cageforge-linux`](https://docs.rs/cageforge-linux/latest/cageforge_linux/) | Bubblewrap namespaces, filesystem lowering, process hardening, and network enforcement |
+| Integrate a native Windows process sandbox | [`cageforge-windows`](https://docs.rs/cageforge-windows/latest/cageforge_windows/) | Managed setup, restricted process trees, ACL, Job Object, firewall/WFP, and network-route enforcement |
 
 Most applications use the crates in this order:
 
@@ -173,7 +174,7 @@ The legal, provenance, and upstream-review rules are maintained in:
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - [`UPSTREAM.md`](UPSTREAM.md)
 
-The current workspace contains the portable layers and the Linux backend
-described above. The macOS and Windows backends and the ergonomic facade are
-separate architectural layers and should consume these APIs rather than move
-platform enforcement into the portable crates.
+The current workspace contains the portable layers and the Linux and Windows
+backends described above. The macOS backend and ergonomic facade are future
+architectural layers; they should consume these APIs rather than move platform
+enforcement into the portable crates.

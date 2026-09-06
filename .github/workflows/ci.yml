@@ -99,9 +99,13 @@ jobs:
           manual_windows=false
           root_manifest_change=false
 
-          # Keep these lists synchronized with the native backend manifests.
-          # A changed workspace crate selects only the sandboxes that consume
-          # it, while common-components still runs for every PR.
+          # Explicit workspace-package -> native-lane map. Keep this table
+          # synchronized with each backend manifest, including its test-only
+          # workspace dependencies. A changed package selects only the native
+          # sandboxes that consume it; common-components still runs everywhere.
+          #
+          # Linux: cageforge-linux and cageforge-bwrap, plus the portable
+          # crates used by Linux's runtime and integration tests.
           linux_sandbox_packages=(
             cageforge-linux
             cageforge-bwrap
@@ -113,6 +117,9 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
+          # Windows: cageforge-windows and the portable crates used by its
+          # runtime and integration tests. cageforge-config is not a Windows
+          # dependency and therefore does not select this lane.
           windows_sandbox_packages=(
             cageforge-windows
             cageforge-backend-api
@@ -122,7 +129,18 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
-          macos_sandbox_packages=(cageforge-macos)
+          # macOS: the native crate when it is added, plus the portable
+          # backend-facing crates shared by every native backend. Until the
+          # crate exists, the lane reports its unavailable backend explicitly.
+          macos_sandbox_packages=(
+            cageforge-macos
+            cageforge-backend-api
+            cageforge-command
+            cageforge-network-proxy
+            cageforge-path
+            cageforge-policy
+            cageforge-policy-compose
+          )
 
           for label in ${PR_LABELS:-}; do
             case "$label" in
@@ -237,10 +255,10 @@ jobs:
             fi
           done
 
-          # The root manifest always affects common components. If a PR also
-          # names an affected native crate, that crate's lane is sufficient;
-          # only a manifest-only change has no narrower native owner.
-          if [[ "$root_manifest_change" == true && "$linux_sandbox" == false && "$macos_sandbox" == false && "$windows_sandbox" == false ]]; then
+          # The root manifest controls workspace-wide dependency resolution.
+          # It therefore selects every native lane even when another changed
+          # path already selected one narrower lane.
+          if [[ "$root_manifest_change" == true ]]; then
             shared_change=true
           fi
 
@@ -410,13 +428,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Restore verified Bubblewrap resource
+        id: bwrap-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap.sha256
+          key: >-
+            cageforge-bwrap-${{ matrix.arch }}-${{ matrix.runner }}-
+            ${{ hashFiles(
+              'Cargo.toml',
+              'Cargo.lock',
+              'rust-toolchain',
+              'rust-toolchain.toml',
+              '.cargo/**',
+              '.github/workflows/ci.yml',
+              'crates/cageforge-bwrap/Cargo.toml',
+              'crates/cageforge-bwrap/build.rs',
+              'crates/cageforge-bwrap/src/**',
+              'crates/cageforge-bwrap/vendor/bubblewrap/**'
+            ) }}
       - uses: Swatinem/rust-cache@v2
       - name: Install native Bubblewrap build dependencies
+        if: steps.bwrap-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends build-essential pkg-config libcap-dev binutils
       - name: Build the pinned Bubblewrap resource
+        if: steps.bwrap-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p "crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}"
@@ -430,6 +471,27 @@ jobs:
           test -s "${resource}.sha256"
           cargo test -p cageforge-bwrap --no-default-features --features embedded
           cargo check -p cageforge-linux --no-default-features --features bundled-bubblewrap
+      - name: Cache verified Bubblewrap resource
+        if: steps.bwrap-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap.sha256
+          key: >-
+            cageforge-bwrap-${{ matrix.arch }}-${{ matrix.runner }}-
+            ${{ hashFiles(
+              'Cargo.toml',
+              'Cargo.lock',
+              'rust-toolchain',
+              'rust-toolchain.toml',
+              '.cargo/**',
+              '.github/workflows/ci.yml',
+              'crates/cageforge-bwrap/Cargo.toml',
+              'crates/cageforge-bwrap/build.rs',
+              'crates/cageforge-bwrap/src/**',
+              'crates/cageforge-bwrap/vendor/bubblewrap/**'
+            ) }}
       - name: Upload architecture-labelled Bubblewrap resource
         uses: actions/upload-artifact@v4
         with:

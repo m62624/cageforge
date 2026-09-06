@@ -151,6 +151,9 @@ Runtime and elevated setup open existing lock and state files with
 `FILE_FLAG_OPEN_REPARSE_POINT`, reject reparse points and final-handle path
 mismatches, retain the checked handle without delete sharing, and acquire range
 locks or read state through that pinned object rather than reopening its name.
+Mutation-lock acquisition is bounded and reports a typed timeout; WFP setup and
+verification likewise use a finite transaction wait bound rather than waiting
+indefinitely on another native transaction.
 Uninstall marks the pinned lock object for deletion by handle while it still
 owns the exclusive lifecycle range.
 An active child or concurrent setup lifecycle produces a typed fail-closed

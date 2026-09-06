@@ -3,7 +3,6 @@
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of, zeroed};
 
-use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{HANDLE, HLOCAL, LocalFree};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTRL_MATCH_FILTER, FWP_MATCH_EQUAL,
@@ -23,13 +22,15 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_DEFAULT;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
-use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::core::GUID;
 
 use crate::error::WindowsSetupVerificationError;
 use crate::firewall_contract::{
     WFP_BASE_FILTERS, WFP_IPV4_LOOPBACK_HOST_ORDER as IPV4_LOOPBACK_HOST_ORDER,
-    WFP_PROVIDER_KEY as PROVIDER_KEY, WFP_SUBLAYER_KEY as SUBLAYER_KEY, WfpBaseCondition,
+    WFP_PROVIDER_KEY as PROVIDER_KEY, WFP_SUBLAYER_KEY as SUBLAYER_KEY,
+    WFP_TRANSACTION_WAIT_TIMEOUT_MS, WfpBaseCondition, wfp_filter_guid as derived_guid,
+    wfp_guid_equal as guid_eq, wfp_guid_string as guid_string, wfp_owner_key as owner_key,
+    wfp_wide as wide,
 };
 use crate::setup::WindowsSetupDetails;
 
@@ -61,8 +62,6 @@ struct AclBounds {
     end: usize,
 }
 
-const SID_HEADER_BYTES: usize = 8;
-
 #[allow(unsafe_code)]
 impl Drop for Engine {
     fn drop(&mut self) {
@@ -78,7 +77,7 @@ impl Engine {
         let name = wide("Cageforge Windows sandbox WFP verification");
         let mut session: FWPM_SESSION0 = unsafe { zeroed() };
         session.displayData.name = name.as_ptr().cast_mut();
-        session.txnWaitTimeoutInMSec = INFINITE;
+        session.txnWaitTimeoutInMSec = WFP_TRANSACTION_WAIT_TIMEOUT_MS;
         let mut handle = std::ptr::null_mut();
         let status = unsafe {
             FwpmEngineOpen0(
@@ -323,7 +322,13 @@ fn user_condition_matches(actual: &FWPM_FILTER_CONDITION0, offline_sid: &str) ->
     let Some(ace_size) = ace_size(raw_ace, bounds) else {
         return false;
     };
-    if ace_size < size_of::<ACCESS_ALLOWED_ACE>() || !sid_fits_ace(raw_ace, ace_size) {
+    if ace_size < size_of::<ACCESS_ALLOWED_ACE>()
+        || !crate::acl_contract::sid_fits_ace(
+            raw_ace.cast(),
+            ace_size,
+            offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+        )
+    {
         return false;
     }
     let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
@@ -374,28 +379,6 @@ fn ace_size(raw: *mut c_void, bounds: AclBounds) -> Option<usize> {
         return None;
     }
     Some(size)
-}
-
-#[allow(unsafe_code)]
-fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
-    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
-    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if sid_header_end > ace_size {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
-    let count = usize::from(bytes[sid_offset + 1]);
-    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(length)
-        .is_some_and(|end| end <= bytes.len())
 }
 
 fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpectation> {
@@ -451,51 +434,6 @@ fn filter_expectations(owner_sid: &str, proxy_ports: &[u16]) -> Vec<FilterExpect
     filters
 }
 
-fn derived_guid(owner_sid: &str, label: &str) -> GUID {
-    let digest = Sha256::digest(format!("cageforge/windows/wfp/{owner_sid}/{label}").as_bytes());
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x50;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    GUID::from_u128(u128::from_be_bytes(bytes))
-}
-
-fn owner_key(owner_sid: &str) -> String {
-    let digest = Sha256::digest(owner_sid.to_ascii_uppercase().as_bytes());
-    digest[..6]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn guid_eq(left: GUID, right: GUID) -> bool {
-    left.data1 == right.data1
-        && left.data2 == right.data2
-        && left.data3 == right.data3
-        && left.data4 == right.data4
-}
-
-fn guid_string(value: GUID) -> String {
-    format!(
-        "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
-        value.data1,
-        value.data2,
-        value.data3,
-        value.data4[0],
-        value.data4[1],
-        value.data4[2],
-        value.data4[3],
-        value.data4[4],
-        value.data4[5],
-        value.data4[6],
-        value.data4[7]
-    )
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
@@ -503,15 +441,17 @@ mod tests {
     };
     use windows_sys::Win32::Networking::WinSock::IPPROTO_TCP;
 
-    use super::{
-        ConditionExpectation, IPV4_LOOPBACK_HOST_ORDER, filter_expectations, sid_fits_ace,
-    };
+    use super::{ConditionExpectation, IPV4_LOOPBACK_HOST_ORDER, filter_expectations};
 
     #[test]
     fn malformed_wfp_user_ace_sid_is_rejected_before_native_validation() {
         let mut ace = [0u8; 20];
         ace[9] = 3;
-        assert!(!sid_fits_ace(ace.as_mut_ptr().cast(), ace.len()));
+        assert!(!crate::acl_contract::sid_fits_ace(
+            ace.as_mut_ptr().cast(),
+            ace.len(),
+            std::mem::offset_of!(windows_sys::Win32::Security::ACCESS_ALLOWED_ACE, SidStart),
+        ));
     }
 
     #[test]

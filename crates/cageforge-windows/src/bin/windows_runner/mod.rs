@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::error::Error;
-use std::ffi::OsString;
+use std::ffi::{OsString, c_void};
 use std::fs::File;
 use std::process::ExitCode;
 
@@ -16,6 +16,31 @@ mod desktop;
 mod identity;
 mod process;
 mod token;
+
+fn range_fits_buffer(buffer: &[u8], pointer: *const u8, length: usize) -> bool {
+    let start = buffer.as_ptr() as usize;
+    let Some(end) = start.checked_add(buffer.len()) else {
+        return false;
+    };
+    let pointer = pointer as usize;
+    let Some(pointer_end) = pointer.checked_add(length) else {
+        return false;
+    };
+    pointer >= start && pointer_end <= end
+}
+
+fn sid_fits_buffer(buffer: &[u8], sid: *const c_void) -> bool {
+    let Some(offset) = (sid as usize).checked_sub(buffer.as_ptr() as usize) else {
+        return false;
+    };
+    if !range_fits_buffer(buffer, sid.cast(), crate::acl_contract::SID_HEADER_BYTES) {
+        return false;
+    }
+    let Some(length) = crate::acl_contract::sid_length_from_count(buffer[offset + 1]) else {
+        return false;
+    };
+    range_fits_buffer(buffer, sid.cast(), length)
+}
 
 struct RunnerArguments {
     request_pipe: String,

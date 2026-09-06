@@ -24,13 +24,13 @@ use windows_sys::Win32::Security::{
     OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
     TOKEN_QUERY,
 };
-use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
     PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread, THREAD_ALL_ACCESS, TerminateProcess,
     WaitForSingleObject,
 };
 
+use crate::native_strings::local_wide_string_with_length;
 use crate::runner::bootstrap::{BootstrapError, BootstrapResult};
 use crate::runner::parent::{BoundaryTerminator, ParentBoundaryError, ParentJob, ParentJobError};
 use crate::runner::pipe::{
@@ -588,26 +588,11 @@ fn descriptor_string(descriptor: PSECURITY_DESCRIPTOR) -> Result<String, RunnerL
         });
     }
     let value = LocalWideString(value);
-    wide_string(value.0, value_length).ok_or(RunnerLaunchError::ProcessDescriptorInspect {
-        code: ERROR_INVALID_DATA,
-    })
-}
-
-#[allow(unsafe_code)]
-fn wide_string(value: *const u16, length: u32) -> Option<String> {
-    if value.is_null() || length == 0 {
-        return None;
-    }
-    let allocation_bytes = unsafe { LocalSize(value as HLOCAL) };
-    if allocation_bytes == 0
-        || !allocation_bytes.is_multiple_of(std::mem::size_of::<u16>())
-        || usize::try_from(length).ok()? > allocation_bytes / std::mem::size_of::<u16>()
-    {
-        return None;
-    }
-    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
-    let units = units.strip_suffix(&[0]).unwrap_or(units);
-    Some(String::from_utf16_lossy(units))
+    local_wide_string_with_length(value.0, value_length).ok_or(
+        RunnerLaunchError::ProcessDescriptorInspect {
+            code: ERROR_INVALID_DATA,
+        },
+    )
 }
 
 #[cfg(test)]

@@ -23,12 +23,9 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
 };
-use windows_sys::Win32::System::Memory::LocalSize;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
-use crate::native_strings::local_sid_string;
-
-const SID_HEADER_BYTES: usize = 8;
+use crate::native_strings::{local_sid_string, local_wide_string_with_length, wide};
 
 pub(crate) enum RunnerResourceKind {
     Executable,
@@ -151,7 +148,7 @@ fn descriptor_snapshot(
         });
     }
     let value = LocalWideString(value);
-    let Some(descriptor) = wide_string_with_length(value.0, value_length) else {
+    let Some(descriptor) = local_wide_string_with_length(value.0, value_length) else {
         return Err(RunnerResourceSecurityError::Read {
             path: path.to_path_buf(),
             code: ERROR_INVALID_DATA,
@@ -260,7 +257,11 @@ fn descriptor_matches(
             || unsafe { (*ace).Header.AceFlags } != 0
             || ace_size < size_of::<ACCESS_ALLOWED_ACE>()
             || ace_end > acl_end
-            || !sid_fits_ace(raw_ace.cast(), ace_size)
+            || !crate::acl_contract::sid_fits_ace(
+                raw_ace.cast(),
+                ace_size,
+                offset_of!(ACCESS_ALLOWED_ACE, SidStart),
+            )
         {
             return false;
         }
@@ -287,33 +288,8 @@ fn range_fits(start: usize, end: usize, pointer: *const c_void, length: usize) -
 }
 
 #[allow(unsafe_code)]
-fn sid_fits_ace(raw_ace: *mut c_void, ace_size: usize) -> bool {
-    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
-    let Some(sid_header_end) = sid_offset.checked_add(SID_HEADER_BYTES) else {
-        return false;
-    };
-    if sid_header_end > ace_size {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(raw_ace.cast::<u8>(), ace_size) };
-    let count = usize::from(bytes[sid_offset + 1]);
-    let Some(subauthority_bytes) = count.checked_mul(size_of::<u32>()) else {
-        return false;
-    };
-    let Some(length) = SID_HEADER_BYTES.checked_add(subauthority_bytes) else {
-        return false;
-    };
-    sid_offset
-        .checked_add(length)
-        .is_some_and(|end| end <= bytes.len())
-}
-
-#[allow(unsafe_code)]
 fn local_sid(sid: &str) -> Option<LocalSid> {
-    let value = sid
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+    let value = wide(sid);
     let mut parsed = std::ptr::null_mut();
     if unsafe { ConvertStringSidToSidW(value.as_ptr(), &mut parsed) } == 0 {
         None
@@ -329,21 +305,4 @@ fn sid_string(sid: *mut c_void) -> Option<String> {
         return None;
     }
     local_sid_string(value)
-}
-
-#[allow(unsafe_code)]
-fn wide_string_with_length(value: *const u16, length: u32) -> Option<String> {
-    if value.is_null() || length == 0 {
-        return None;
-    }
-    let allocation_bytes = unsafe { LocalSize(value as HLOCAL) };
-    if allocation_bytes == 0
-        || !allocation_bytes.is_multiple_of(size_of::<u16>())
-        || usize::try_from(length).ok()? > allocation_bytes / size_of::<u16>()
-    {
-        return None;
-    }
-    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
-    let units = units.strip_suffix(&[0]).unwrap_or(units);
-    Some(String::from_utf16_lossy(units))
 }

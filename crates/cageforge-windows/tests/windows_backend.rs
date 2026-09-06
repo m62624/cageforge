@@ -10,7 +10,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream,
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -75,6 +75,13 @@ const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 const FIXTURE_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 static SETUP_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn assert_send_sync<T: Send + Sync>() {}
+
+#[test]
+fn backend_can_be_shared_through_arc_between_threads() {
+    assert_send_sync::<Arc<WindowsBackend>>();
+}
 
 struct SetupCleanup<'a> {
     setup: &'a WindowsSetup,

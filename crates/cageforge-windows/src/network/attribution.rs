@@ -25,12 +25,12 @@ use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
+use crate::acl_contract::{SID_HEADER_BYTES, sid_length_from_count};
 use crate::native_strings::local_sid_string;
 
 const MAX_TCP_TABLE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TCP_TABLE_READ_ATTEMPTS: usize = 8;
 const MAX_RESTRICTED_SID_BYTES: usize = 1024 * 1024;
-const SID_HEADER_BYTES: usize = 8;
 
 /// Failure while attributing one accepted Windows loopback TCP connection.
 #[derive(Debug, Error)]
@@ -471,13 +471,7 @@ fn sid_string(
         .filter(|end| *end <= byte_length)
         .ok_or(WindowsNetworkAttributionError::RestrictedSidMalformed)?;
     let bytes = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), byte_length) };
-    let subauthority_count = bytes[sid_offset + 1] as usize;
-    let sid_length = SID_HEADER_BYTES
-        .checked_add(
-            subauthority_count
-                .checked_mul(size_of::<u32>())
-                .ok_or(WindowsNetworkAttributionError::RestrictedSidMalformed)?,
-        )
+    let sid_length = sid_length_from_count(bytes[sid_offset + 1])
         .ok_or(WindowsNetworkAttributionError::RestrictedSidMalformed)?;
     let sid_end = sid_start
         .checked_add(sid_length)

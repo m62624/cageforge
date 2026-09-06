@@ -21,6 +21,8 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     DESKTOP_WRITE_OWNER, DESKTOP_WRITEOBJECTS, HDESK,
 };
 
+use crate::native_strings::wide as to_wide;
+
 use super::token::RestrictedPrimaryToken;
 
 const PRIVATE_DESKTOP_ACCESS: u32 = DESKTOP_READOBJECTS
@@ -243,10 +245,6 @@ fn wide_string(value: *const u16, length: u32) -> Option<String> {
     let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
     let units = units.strip_suffix(&[0]).unwrap_or(units);
     Some(String::from_utf16_lossy(units))
-}
-
-fn to_wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn startup_desktop_name(name: &str) -> Vec<u16> {

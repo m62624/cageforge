@@ -5,7 +5,6 @@
 use std::ffi::c_void;
 use std::io;
 use std::mem::{align_of, offset_of, size_of};
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_DATA, GetLastError};
@@ -25,7 +24,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::account_groups::{is_allowed_sandbox_group_sid, is_privileged_group_sid};
 use crate::error::{WindowsAccountLookupError, WindowsAccountVerificationError};
-use crate::native_strings::local_sid_string;
+pub(crate) use crate::native_strings::wide as to_wide;
+use crate::native_strings::{local_sid_string, wide_path};
 use crate::net_api_strings::{
     net_api_array_len, net_api_buffer_size, net_api_struct_fits, net_api_wide_string,
 };
@@ -208,11 +208,7 @@ pub(crate) fn run_elevated(executable: &std::path::Path, arguments: &[String]) -
     };
 
     let verb = to_wide("runas");
-    let executable = executable
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+    let executable = wide_path(executable);
     let parameters = to_wide(
         &arguments
             .iter()
@@ -412,10 +408,6 @@ fn aligned_buffer(byte_length: usize) -> io::Result<Vec<usize>> {
         ));
     }
     Ok(vec![0; byte_length.div_ceil(size_of::<usize>())])
-}
-
-pub(crate) fn to_wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 pub(crate) fn quote_argument(value: &str) -> String {
