@@ -113,8 +113,14 @@ fn restricted_command_reads_its_workspace() {
         .expect("stdout pipe")
         .read_to_string(&mut output)
         .expect("read stdout");
+    let mut error = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut error)
+        .expect("read stderr");
     let status = child.wait().expect("wait");
-    assert!(status.success(), "{status:?}");
+    assert!(status.success(), "{status:?}; stderr: {error}");
     assert_eq!(output, "workspace-data");
 }
 
@@ -130,10 +136,16 @@ fn restricted_command_cannot_read_outside_its_workspace() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
+    let mut error = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut error)
+        .expect("read stderr");
     let status = child.wait().expect("wait");
     assert!(
         !status.success(),
-        "outside read unexpectedly succeeded: {status:?}"
+        "outside read unexpectedly succeeded: {status:?}; stderr: {error}"
     );
 }
 
@@ -185,8 +197,28 @@ fn simultaneous_instances_keep_separate_filesystem_scopes() {
         .expect("second stdout")
         .read_to_string(&mut second_output)
         .expect("second output");
-    assert!(first.wait().expect("first wait").success());
-    assert!(second.wait().expect("second wait").success());
+    let mut first_error = String::new();
+    first
+        .stderr()
+        .expect("first stderr")
+        .read_to_string(&mut first_error)
+        .expect("first error");
+    let mut second_error = String::new();
+    second
+        .stderr()
+        .expect("second stderr")
+        .read_to_string(&mut second_error)
+        .expect("second error");
+    let first_status = first.wait().expect("first wait");
+    let second_status = second.wait().expect("second wait");
+    assert!(
+        first_status.success(),
+        "{first_status:?}; stderr: {first_error}"
+    );
+    assert!(
+        second_status.success(),
+        "{second_status:?}; stderr: {second_error}"
+    );
     assert_eq!(first_output, "first");
     assert_eq!(second_output, "second");
 }
