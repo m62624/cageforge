@@ -1183,8 +1183,8 @@ mod tests {
                 marker_descriptor,
                 nonce,
             ))),
-            Err(CapabilityStateTransitionError::MaterializationValidation { source, .. })
-                if matches!(source, CapabilityStateError::DuplicateMaterializedObject)
+                Err(CapabilityStateTransitionError::MaterializationValidation { source, .. })
+                    if matches!(source, CapabilityStateError::InvalidMaterialization)
         ));
         assert!(state.pending_materialization().is_some());
         assert!(state.materialized_objects.is_empty());
