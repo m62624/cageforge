@@ -84,6 +84,25 @@ fn cat_command(path: &Path) -> CommandSpec {
 }
 
 #[test]
+fn host_accepts_a_minimal_seatbelt_profile() {
+    let output = std::process::Command::new("/usr/bin/sandbox-exec")
+        .args([
+            "-p",
+            "(version 1)\n(deny default)\n(allow process-exec)\n(allow file-read* (subpath \"/usr\"))\n",
+            "--",
+            "/usr/bin/true",
+        ])
+        .output()
+        .expect("start minimal sandbox-exec probe");
+    assert!(
+        output.status.success(),
+        "minimal sandbox-exec probe failed: {status:?}; stderr: {stderr}",
+        status = output.status,
+        stderr = String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
 fn backend_is_send_sync_and_reusable_for_independent_instances() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Arc<MacosBackend>>();
