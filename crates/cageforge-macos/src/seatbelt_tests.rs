@@ -58,6 +58,25 @@ fn base_profile_keeps_dynamic_loader_and_standard_stdio_explicit() {
 }
 
 #[test]
+fn base_profile_keeps_required_platform_runtime_rules_explicit() {
+    let profile = SeatbeltProfile::build(
+        &MacosFilesystemPlan::default(),
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+    let policy = profile.policy();
+
+    assert!(policy.contains("(iokit-registry-entry-class \"RootDomainUserClient\")"));
+    assert!(policy.contains("(mac-policy-name \"vnguard\")"));
+    assert!(policy.contains("(fsctl-command FSIOC_CAS_BSDFLAGS)"));
+    assert!(policy.contains("/__KMP_REGISTERED_LIB_[0-9]+"));
+    assert!(policy.contains("com.apple.runningboard"));
+    assert!(policy.contains("/private/var/run/syslog"));
+}
+
+#[test]
 fn definitions_are_unique_when_a_path_is_used_by_multiple_rules() {
     let profile = SeatbeltProfile::build(
         &filesystem_plan("/workspace/private"),
@@ -125,5 +144,40 @@ fn missing_proxy_port_is_a_typed_profile_error() {
         crate::error::SeatbeltProfileError::InvalidFragment {
             fragment: "proxy ingress port is missing"
         }
+    ));
+}
+
+#[test]
+fn nul_path_and_glob_are_rejected_before_profile_rendering() {
+    let mut path_plan = MacosFilesystemPlan::default();
+    path_plan
+        .read_roots
+        .push(PathBuf::from("/workspace\0escape"));
+    let path_error = SeatbeltProfile::build(
+        &path_plan,
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect_err("NUL path");
+    assert!(matches!(
+        path_error,
+        crate::error::SeatbeltProfileError::PathContainsNul { .. }
+    ));
+
+    let mut glob_plan = MacosFilesystemPlan::default();
+    glob_plan
+        .denied_globs
+        .push("/workspace/secret\0*".to_owned());
+    let glob_error = SeatbeltProfile::build(
+        &glob_plan,
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect_err("NUL glob");
+    assert!(matches!(
+        glob_error,
+        crate::error::SeatbeltProfileError::GlobContainsNul { .. }
     ));
 }
