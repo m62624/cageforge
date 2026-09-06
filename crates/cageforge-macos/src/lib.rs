@@ -15,7 +15,12 @@
 mod backend;
 mod config;
 mod error;
+mod filesystem;
+mod network;
+mod process;
+mod seatbelt;
 
 pub use backend::MacosBackend;
 pub use config::{MacosBackendConfig, MacosBackendConfigError};
-pub use error::MacosBackendError;
+pub use error::{MacosBackendError, MacosFilesystemError, MacosNetworkError, SeatbeltProfileError};
+pub use process::MacosChild;

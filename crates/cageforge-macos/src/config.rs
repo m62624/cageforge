@@ -20,7 +20,10 @@ pub enum MacosBackendConfigError {
     ZeroDefaultTimeout,
     /// The selected Seatbelt executable must be an absolute path.
     #[error("Seatbelt executable path must be absolute: {path:?}")]
-    SeatbeltExecutableNotAbsolute { path: PathBuf },
+    SeatbeltExecutableNotAbsolute {
+        /// Rejected Seatbelt executable path.
+        path: PathBuf,
+    },
 }
 
 /// Configuration for one reusable macOS enforcement backend.

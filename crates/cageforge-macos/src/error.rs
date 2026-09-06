@@ -6,6 +6,7 @@ use std::io;
 use std::path::PathBuf;
 
 use cageforge_backend_api::{BackendCapability, BackendContractError};
+use cageforge_command::CommandError;
 use thiserror::Error;
 
 /// Errors returned by the macOS backend.
@@ -49,6 +50,13 @@ pub enum MacosBackendError {
         /// The operating-system failure.
         #[source]
         source: io::Error,
+    },
+    /// Selecting the backend environment or applying its transforms failed.
+    #[error("failed to prepare the macOS command environment: {source}")]
+    EnvironmentPreparation {
+        /// Portable environment construction failure.
+        #[source]
+        source: CommandError,
     },
     /// The configured Seatbelt executable could not be inspected.
     #[error("failed to inspect Seatbelt executable {path:?}: {source}")]
@@ -94,14 +102,25 @@ pub enum MacosFilesystemError {
     },
     /// A scope or carve-out traversed a symbolic link.
     #[error("filesystem scope contains a symbolic link: {path:?}")]
-    Symlink { path: PathBuf },
+    Symlink {
+        /// Symbolic link encountered while inspecting the scope.
+        path: PathBuf,
+    },
     /// A read-only carve-out escaped its writable root.
     #[error("read-only path {path:?} is outside writable root {root:?}")]
-    ReadOnlyOutsideRoot { path: PathBuf, root: PathBuf },
+    ReadOnlyOutsideRoot {
+        /// Read-only path requested by the policy.
+        path: PathBuf,
+        /// Writable root that was expected to contain the path.
+        root: PathBuf,
+    },
     /// A filesystem scope was not an absolute normalized path after context
     /// resolution.
     #[error("macOS filesystem scope is not an absolute normalized path: {path:?}")]
-    InvalidScope { path: PathBuf },
+    InvalidScope {
+        /// Rejected scope path.
+        path: PathBuf,
+    },
     /// A filesystem glob had an access mode other than deny.
     #[error("macOS filesystem globs must use deny access")]
     NonDenyGlob,
@@ -137,6 +156,43 @@ pub enum MacosNetworkError {
         #[source]
         source: io::Error,
     },
+    /// The gateway runtime could not create its async runtime.
+    #[error("failed to construct the macOS network gateway runtime: {source}")]
+    RuntimeConstruction {
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The gateway listener could not be registered with its runtime.
+    #[error("failed to register the macOS network gateway listener: {source}")]
+    ListenerRegistration {
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The gateway thread could not be created.
+    #[error("failed to start the macOS network gateway thread: {source}")]
+    ThreadSpawn {
+        /// Thread creation failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The gateway listener failed after startup.
+    #[error("macOS network gateway listener failed: {source}")]
+    RuntimeListener {
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The gateway stopped before reporting readiness.
+    #[error("macOS network gateway startup channel closed")]
+    StartupChannelClosed,
+    /// The gateway stopped unexpectedly while its child was active.
+    #[error("macOS network gateway stopped unexpectedly")]
+    RuntimeStopped,
+    /// The gateway thread panicked.
+    #[error("macOS network gateway runtime panicked")]
+    RuntimePanicked,
 }
 
 /// Failures while rendering a Seatbelt profile.
@@ -144,7 +200,10 @@ pub enum MacosNetworkError {
 pub enum SeatbeltProfileError {
     /// A path could not be represented as a valid Seatbelt definition.
     #[error("path contains an unsupported NUL character: {path:?}")]
-    PathContainsNul { path: PathBuf },
+    PathContainsNul {
+        /// Path that could not be represented in a Seatbelt definition.
+        path: PathBuf,
+    },
     /// A generated Seatbelt definition name was not a valid parameter name.
     #[error("generated Seatbelt definition name is invalid: {name:?}")]
     InvalidDefinitionName {
