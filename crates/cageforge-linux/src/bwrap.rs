@@ -323,10 +323,22 @@ fn discover_and_probe_one(
 
 fn verify_bundled_digest(path: &Path) -> Result<(), LinuxBackendError> {
     let manifest = path.with_file_name("bwrap.sha256");
-    let expected = fs::read_to_string(&manifest)
-        .map_err(|_| LinuxBackendError::BubblewrapDigestUnavailable {
-            path: path.to_path_buf(),
-        })?
+    let contents = match fs::read_to_string(&manifest) {
+        Ok(contents) => contents,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(LinuxBackendError::BubblewrapDigestUnavailable {
+                path: path.to_path_buf(),
+            });
+        }
+        Err(source) => {
+            return Err(LinuxBackendError::BubblewrapDigestReadFailed {
+                path: path.to_path_buf(),
+                manifest,
+                source,
+            });
+        }
+    };
+    let expected = contents
         .split_whitespace()
         .next()
         .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -350,10 +362,22 @@ fn verify_bundled_digest(path: &Path) -> Result<(), LinuxBackendError> {
 
 fn verify_bundled_digest_file(file: &File, path: &Path) -> Result<(), LinuxBackendError> {
     let manifest = path.with_file_name("bwrap.sha256");
-    let expected = fs::read_to_string(&manifest)
-        .map_err(|_| LinuxBackendError::BubblewrapDigestUnavailable {
-            path: path.to_path_buf(),
-        })?
+    let contents = match fs::read_to_string(&manifest) {
+        Ok(contents) => contents,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(LinuxBackendError::BubblewrapDigestUnavailable {
+                path: path.to_path_buf(),
+            });
+        }
+        Err(source) => {
+            return Err(LinuxBackendError::BubblewrapDigestReadFailed {
+                path: path.to_path_buf(),
+                manifest,
+                source,
+            });
+        }
+    };
+    let expected = contents
         .split_whitespace()
         .next()
         .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))

@@ -503,6 +503,17 @@ pub enum LinuxBackendError {
         /// Bundled executable whose digest manifest is missing.
         path: PathBuf,
     },
+    /// Reading the digest manifest failed for a reason other than absence.
+    #[error("failed to read the bundled Bubblewrap digest manifest {manifest:?}: {source}")]
+    BubblewrapDigestReadFailed {
+        /// Bundled executable whose digest manifest was being read.
+        path: PathBuf,
+        /// Digest manifest path.
+        manifest: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
     /// A bundled Bubblewrap resource did not match its digest manifest.
     #[error("bundled Bubblewrap digest mismatch for {path:?}: expected {expected}, got {actual}")]
     BubblewrapDigestMismatch {
