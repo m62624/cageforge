@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, mpsc};
@@ -16,14 +17,15 @@ use cageforge_backend_api::{BackendRequest, SandboxBackend};
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
 use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError};
 use cageforge_policy::{
-    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, NetworkPolicy,
-    PathResolutionContext, PathSelector, SandboxPolicy,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
+    NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use tempfile::TempDir;
 
 const PARENT_DEATH_ROOT: &str = "CAGEFORGE_MACOS_PARENT_DEATH_ROOT";
 const PARENT_DEATH_CHILD: &str = "CAGEFORGE_MACOS_PARENT_DEATH_CHILD";
+const UNIX_SOCKET_TEST_PATH: &str = "CAGEFORGE_MACOS_UNIX_SOCKET_TEST_PATH";
 
 fn context(workspace: &Path) -> PathResolutionContext {
     PathResolutionContext::new()
@@ -193,6 +195,79 @@ fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
     });
     ready_receiver.recv().expect("HTTP readiness signal");
     (address, server)
+}
+
+fn start_unix_server(path: &Path) -> thread::JoinHandle<io::Result<()>> {
+    let listener = UnixListener::bind(path).expect("Unix listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking Unix listener");
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let server = thread::spawn(move || -> io::Result<()> {
+        ready_sender.send(()).expect("Unix readiness receiver");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Unix fixture did not receive a connection",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(source) => return Err(source),
+            }
+        };
+        stream.set_nonblocking(false)?;
+        let mut request = [0; 4];
+        stream.read_exact(&mut request)?;
+        if request != *b"ping" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unix fixture received an unexpected request",
+            ));
+        }
+        stream.write_all(b"pong")
+    });
+    ready_receiver.recv().expect("Unix readiness signal");
+    server
+}
+
+fn unix_network_request(
+    workspace: &Path,
+    policy: &SandboxPolicy,
+    mode: &str,
+    socket_path: &Path,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
+    let environment = EnvironmentSpec::inherit_all()
+        .with_var("CAGEFORGE_NETWORK_TEST_MODE", mode)
+        .expect("mode")
+        .with_var(UNIX_SOCKET_TEST_PATH, socket_path.as_os_str())
+        .expect("Unix socket path");
+    let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+        .expect("test executable command")
+        .with_args(["--exact", "network_client_fixture", "--nocapture"])
+        .expect("fixture arguments");
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective =
+        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+    let command = CommandRequest::new(command)
+        .with_working_directory(workspace.to_path_buf())
+        .expect("working directory")
+        .with_stdio(
+            StdioSpec::inherited()
+                .with_stdout(StdioMode::Pipe)
+                .with_stderr(StdioMode::Pipe),
+        )
+        .with_environment(environment);
+    (command, effective, context(workspace))
 }
 
 fn proxy_endpoint(value: &str) -> SocketAddr {
@@ -584,6 +659,12 @@ fn restricted_command_cannot_read_outside_its_workspace() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
+    let mut output = String::new();
+    child
+        .stdout()
+        .expect("stdout pipe")
+        .read_to_string(&mut output)
+        .expect("read stdout");
     let mut error = String::new();
     child
         .stderr()
@@ -925,30 +1006,52 @@ fn network_client_fixture() {
     let Ok(mode) = std::env::var("CAGEFORGE_NETWORK_TEST_MODE") else {
         return;
     };
-    let target: SocketAddr = std::env::var("CAGEFORGE_NETWORK_TEST_TARGET")
-        .expect("target")
-        .parse()
-        .expect("socket address");
     match mode.as_str() {
-        "http" => {
-            let response = send_http_proxy_request(target).expect("HTTP proxy response");
+        "unix" => {
+            let path = std::env::var_os(UNIX_SOCKET_TEST_PATH).expect("Unix socket path");
+            let mut stream = UnixStream::connect(path).expect("Unix socket response");
+            stream.write_all(b"ping").expect("Unix socket request");
+            let mut response = [0; 4];
+            stream
+                .read_exact(&mut response)
+                .expect("Unix socket response");
+            assert_eq!(&response, b"pong");
+        }
+        "unix-denied" => {
+            let path = std::env::var_os(UNIX_SOCKET_TEST_PATH).expect("Unix socket path");
             assert!(
-                response.starts_with(b"HTTP/1.1 200"),
-                "unexpected HTTP proxy response: {}",
-                String::from_utf8_lossy(&response)
+                UnixStream::connect(path).is_err(),
+                "sandbox connected to a denied Unix socket"
             );
         }
-        "http-denied" => assert!(
-            !send_http_proxy_request(target)
-                .expect("denied HTTP response")
-                .starts_with(b"HTTP/1.1 200")
-        ),
-        "direct" => assert!(
-            send_direct_request(target)
-                .expect("direct response")
-                .starts_with(b"HTTP/1.1 200")
-        ),
-        "direct-denied" => assert!(send_direct_request(target).is_err()),
+        "http" | "http-denied" | "direct" | "direct-denied" => {
+            let target: SocketAddr = std::env::var("CAGEFORGE_NETWORK_TEST_TARGET")
+                .expect("target")
+                .parse()
+                .expect("socket address");
+            match mode.as_str() {
+                "http" => {
+                    let response = send_http_proxy_request(target).expect("HTTP proxy response");
+                    assert!(
+                        response.starts_with(b"HTTP/1.1 200"),
+                        "unexpected HTTP proxy response: {}",
+                        String::from_utf8_lossy(&response)
+                    );
+                }
+                "http-denied" => assert!(
+                    !send_http_proxy_request(target)
+                        .expect("denied HTTP response")
+                        .starts_with(b"HTTP/1.1 200")
+                ),
+                "direct" => assert!(
+                    send_direct_request(target)
+                        .expect("direct response")
+                        .starts_with(b"HTTP/1.1 200")
+                ),
+                "direct-denied" => assert!(send_direct_request(target).is_err()),
+                _ => unreachable!(),
+            }
+        }
         other => panic!("unknown network fixture mode: {other}"),
     }
 }
@@ -1060,6 +1163,81 @@ fn unrestricted_network_preserves_direct_loopback_connections() {
         .join()
         .expect("HTTP server")
         .expect("HTTP server I/O");
+}
+
+#[test]
+fn enabled_unix_socket_policy_allows_unlisted_paths_except_explicit_denials() {
+    let socket_directory = TempDir::new().expect("Unix socket directory");
+    let allowed = socket_directory.path().join("allowed.sock");
+    let denied = socket_directory.path().join("denied.sock");
+    let server = start_unix_server(&allowed);
+    let workspace = TempDir::new().expect("workspace");
+    let network = NetworkPolicy::enabled()
+        .with_local_network_access(LocalNetworkAccess::Allow)
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
+        .with_unix_socket(&denied, DomainAccess::Deny)
+        .expect("denied Unix socket rule");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
+    let (command, effective, context) =
+        unix_network_request(workspace.path(), &policy, "unix", &allowed);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let mut output = String::new();
+    child
+        .stdout()
+        .expect("stdout pipe")
+        .read_to_string(&mut output)
+        .expect("read stdout");
+    let mut error = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut error)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "sandbox stdout: {output}; stderr: {error}"
+    );
+    server
+        .join()
+        .expect("Unix server")
+        .expect("Unix server I/O");
+    fs::remove_file(&allowed).expect("remove allowed Unix socket");
+}
+
+#[test]
+fn enabled_unix_socket_policy_denies_the_exact_denied_path() {
+    let socket_directory = TempDir::new().expect("Unix socket directory");
+    let denied = socket_directory.path().join("denied.sock");
+    let listener = UnixListener::bind(&denied).expect("denied Unix listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking denied Unix listener");
+    let workspace = TempDir::new().expect("workspace");
+    let network = NetworkPolicy::enabled()
+        .with_local_network_access(LocalNetworkAccess::Allow)
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
+        .with_unix_socket(&denied, DomainAccess::Deny)
+        .expect("denied Unix socket rule");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
+    let (command, effective, context) =
+        unix_network_request(workspace.path(), &policy, "unix-denied", &denied);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0));
+    assert!(
+        listener.accept().is_err(),
+        "denied Unix socket received a connection"
+    );
 }
 
 #[test]

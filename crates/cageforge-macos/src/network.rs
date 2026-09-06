@@ -230,7 +230,13 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
     if requirements.local_ipc_isolation() {
         return Ok(MacosUnixSocketPlan::default());
     }
-    let allow_all = !requirements.local_ipc_rules();
+    // A rule does not itself change the default mode. Two `Enabled` layers
+    // still mean "allow all except matching deny rules"; only a `Restricted`
+    // layer changes the default to deny. Derive this from both immutable
+    // lowering layers instead of from the presence of rules.
+    let allow_all = lowering
+        .layers()
+        .all(|layer| layer.unix_socket_mode() == UnixSocketMode::Enabled);
     let mut allowed = Vec::new();
     let mut denied = Vec::new();
     let mut allowed_keys = BTreeSet::new();
