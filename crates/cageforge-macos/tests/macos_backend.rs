@@ -455,7 +455,7 @@ fn parent_watcher_does_not_retain_closed_stdin() {
         .expect("shell name")
         .with_arg(marker.as_os_str())
         .expect("marker argument");
-    let policy = restricted_policy(workspace.path());
+    let policy = writable_policy(workspace.path());
     let (mut request, effective, context) = request_for(workspace.path(), &policy, command);
     request = request.with_stdio(
         StdioSpec::inherited()
