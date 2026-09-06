@@ -10,6 +10,33 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
 use windows_sys::Win32::Networking::WinSock::{IPPROTO_ICMP, IPPROTO_ICMPV6};
 use windows_sys::core::GUID;
 
+#[derive(Clone, Copy)]
+pub(crate) struct WfpBaseFilter {
+    pub(crate) label: &'static str,
+    pub(crate) layer: WfpLayer,
+    pub(crate) condition: WfpBaseCondition,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum WfpLayer {
+    AuthConnectV4,
+    AuthConnectV6,
+    ResourceAssignmentV4,
+    ResourceAssignmentV6,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum WfpBaseCondition {
+    Protocol(u8),
+    RemotePort(u16),
+}
+
+#[derive(Eq, PartialEq)]
+struct AddressSet {
+    ipv4: Vec<(u32, u32)>,
+    ipv6: Vec<(u128, u128)>,
+}
+
 /// Stable WFP provider identity shared by setup and read-back verification.
 pub(crate) const WFP_PROVIDER_KEY: GUID = GUID::from_u128(0x6d27a6ef_979d_42bf_97e7_6c7a61c86281);
 
@@ -116,20 +143,6 @@ pub(crate) fn wfp_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum WfpBaseCondition {
-    Protocol(u8),
-    RemotePort(u16),
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum WfpLayer {
-    AuthConnectV4,
-    AuthConnectV6,
-    ResourceAssignmentV4,
-    ResourceAssignmentV6,
-}
-
 impl WfpLayer {
     pub(crate) const fn key(self) -> GUID {
         match self {
@@ -139,13 +152,6 @@ impl WfpLayer {
             Self::ResourceAssignmentV6 => FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct WfpBaseFilter {
-    pub(crate) label: &'static str,
-    pub(crate) layer: WfpLayer,
-    pub(crate) condition: WfpBaseCondition,
 }
 
 pub(crate) const WFP_BASE_FILTERS: [WfpBaseFilter; 12] = [
@@ -210,12 +216,6 @@ pub(crate) const WFP_BASE_FILTERS: [WfpBaseFilter; 12] = [
         condition: WfpBaseCondition::RemotePort(139),
     },
 ];
-
-#[derive(Eq, PartialEq)]
-struct AddressSet {
-    ipv4: Vec<(u32, u32)>,
-    ipv6: Vec<(u128, u128)>,
-}
 
 const DOMAIN_PROFILE: i32 = 1;
 const PRIVATE_PROFILE: i32 = 2;
