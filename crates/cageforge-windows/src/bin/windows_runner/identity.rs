@@ -156,7 +156,7 @@ impl InstalledRunnerIdentity {
                 |error| RunnerAuthenticationError::InstalledResourceSecurity {
                     source: RunnerResourceSecurityError::Unsafe {
                         path: manifest_path.clone(),
-                        detail: error.to_string(),
+                        source: error,
                     },
                 },
             )?;
@@ -168,7 +168,7 @@ impl InstalledRunnerIdentity {
             |error| RunnerAuthenticationError::InstalledResourceSecurity {
                 source: RunnerResourceSecurityError::Unsafe {
                     path: manifest_path.clone(),
-                    detail: error.to_string(),
+                    source: error,
                 },
             },
         )?;
@@ -177,7 +177,7 @@ impl InstalledRunnerIdentity {
             RunnerAuthenticationError::InstalledResourceSecurity {
                 source: RunnerResourceSecurityError::Unsafe {
                     path: executable.clone(),
-                    detail: error.to_string(),
+                    source: error,
                 },
             }
         })?;
@@ -189,7 +189,7 @@ impl InstalledRunnerIdentity {
             |error| RunnerAuthenticationError::InstalledResourceSecurity {
                 source: RunnerResourceSecurityError::Unsafe {
                     path: executable.clone(),
-                    detail: error.to_string(),
+                    source: error,
                 },
             },
         )?;

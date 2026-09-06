@@ -45,8 +45,12 @@ struct LocalSid(*mut c_void);
 
 #[derive(Debug, Error)]
 pub(crate) enum RunnerResourceSecurityError {
-    #[error("installed Windows resource path is unsafe at {path:?}: {detail}")]
-    Unsafe { path: PathBuf, detail: String },
+    #[error("installed Windows resource path is unsafe at {path:?}: {source}")]
+    Unsafe {
+        path: PathBuf,
+        #[source]
+        source: crate::setup_pinned_file::SetupPinnedFileError,
+    },
     #[error("failed to read Windows security descriptor for {path:?}: error {code}")]
     Read { path: PathBuf, code: u32 },
     #[error("protected Windows security descriptor mismatch for {path:?}: {descriptor}")]

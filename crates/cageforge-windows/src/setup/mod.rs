@@ -235,9 +235,9 @@ impl WindowsSetup {
             Ok(_) => {}
         }
         let mut marker_file = crate::setup::pinned::file::open_for_readback(&marker_path, true)
-            .map_err(|error| WindowsSetupError::StatePathUnsafe {
+            .map_err(|source| WindowsSetupError::StatePathUnsafe {
                 path: marker_path.clone(),
-                detail: error.to_string(),
+                source,
             })?;
         let mut marker_bytes = Vec::new();
         marker_file
@@ -390,25 +390,22 @@ impl WindowsSetup {
         let transport = tempfile::Builder::new()
             .prefix("cageforge-windows-setup-")
             .tempdir()
-            .map_err(|error| WindowsSetupError::RequestWrite {
-                path: std::env::temp_dir(),
-                detail: error.to_string(),
+            .map_err(|source| WindowsSetupError::RequestTemporaryDirectory {
+                parent: std::env::temp_dir(),
+                source,
             })?;
         let request_path = transport.path().join("request.json");
         let response_path = transport.path().join("response.json");
         let encoded =
-            serde_json::to_vec(&request).map_err(|error| WindowsSetupError::RequestWrite {
+            serde_json::to_vec(&request).map_err(|source| WindowsSetupError::RequestSerialize {
                 path: request_path.clone(),
-                detail: error.to_string(),
+                source,
             })?;
         if encoded.len() > MAX_SETUP_MESSAGE_BYTES {
-            return Err(WindowsSetupError::RequestWrite {
+            return Err(WindowsSetupError::RequestTooLarge {
                 path: request_path,
-                detail: format!(
-                    "encoded setup request is too large: {} bytes exceeds {}",
-                    encoded.len(),
-                    MAX_SETUP_MESSAGE_BYTES
-                ),
+                actual: encoded.len(),
+                maximum: MAX_SETUP_MESSAGE_BYTES,
             });
         }
         let _request_file = write_pinned_setup_request(&request_path, &encoded)?;
@@ -528,19 +525,12 @@ impl WindowsSetup {
     }
 
     fn resolve_setup_helper(&self) -> Result<PathBuf, WindowsSetupError> {
-        resolve_resource(
-            self.config.setup_helper_source(),
-            SETUP_HELPER_NAME,
-            "bundled Windows setup helper is not present in the application resource layout",
-        )
+        resolve_resource(self.config.setup_helper_source(), SETUP_HELPER_NAME)
     }
 
     fn resolve_command_runner(&self) -> Result<PathBuf, WindowsSetupError> {
         match self.config.command_runner_source() {
-            CommandRunnerSource::Bundled => bundled_resource(
-                COMMAND_RUNNER_NAME,
-                "bundled Windows command runner is not present in the application resource layout",
-            ),
+            CommandRunnerSource::Bundled => bundled_resource(COMMAND_RUNNER_NAME),
             CommandRunnerSource::Sibling => sibling_resource(COMMAND_RUNNER_NAME),
             CommandRunnerSource::Explicit(path) => Ok(path.clone()),
         }
@@ -635,28 +625,24 @@ fn stale_error(reason: WindowsSetupStaleReason) -> WindowsSetupError {
 
 fn resolve_resource(
     source: &SetupHelperSource,
-    sibling_name: &str,
-    bundled_error: &str,
+    resource: &'static str,
 ) -> Result<PathBuf, WindowsSetupError> {
     match source {
-        SetupHelperSource::Bundled => bundled_resource(sibling_name, bundled_error),
-        SetupHelperSource::Sibling => sibling_resource(sibling_name),
+        SetupHelperSource::Bundled => bundled_resource(resource),
+        SetupHelperSource::Sibling => sibling_resource(resource),
         SetupHelperSource::Explicit(path) => Ok(path.clone()),
     }
 }
 
-fn bundled_resource(name: &str, missing_detail: &str) -> Result<PathBuf, WindowsSetupError> {
-    let executable =
-        std::env::current_exe().map_err(|error| WindowsSetupError::HelperUnavailable {
-            detail: format!("failed to resolve current executable: {error}"),
-        })?;
-    bundled_resource_path_for_exe(&executable, name).ok_or_else(|| {
-        WindowsSetupError::HelperUnavailable {
-            detail: format!(
-                "{missing_detail}; searched beside {executable:?} and in {RESOURCES_DIRNAME}"
-            ),
-        }
-    })
+fn bundled_resource(resource: &'static str) -> Result<PathBuf, WindowsSetupError> {
+    let executable = std::env::current_exe()
+        .map_err(|source| WindowsSetupError::CurrentExecutable { source })?;
+    bundled_resource_path_for_exe(&executable, resource).ok_or(
+        WindowsSetupError::BundledResourceMissing {
+            resource,
+            executable,
+        },
+    )
 }
 
 fn bundled_resource_path_for_exe(executable: &Path, name: &str) -> Option<PathBuf> {
@@ -682,14 +668,12 @@ fn bundled_resource_path_for_exe(executable: &Path, name: &str) -> Option<PathBu
 }
 
 fn sibling_resource(name: &str) -> Result<PathBuf, WindowsSetupError> {
-    let executable =
-        std::env::current_exe().map_err(|error| WindowsSetupError::HelperUnavailable {
-            detail: format!("failed to resolve current executable: {error}"),
-        })?;
+    let executable = std::env::current_exe()
+        .map_err(|source| WindowsSetupError::CurrentExecutable { source })?;
     let parent = executable
         .parent()
-        .ok_or_else(|| WindowsSetupError::HelperUnavailable {
-            detail: format!("current executable has no parent directory: {executable:?}"),
+        .ok_or(WindowsSetupError::ExecutableDirectoryMissing {
+            executable: executable.clone(),
         })?;
     Ok(parent.join(name))
 }
@@ -698,7 +682,7 @@ fn pin_setup_resource(path: &Path) -> Result<ValidatedPath, WindowsSetupError> {
     ValidatedPath::open_file_for_execution(path).map_err(|error| {
         WindowsSetupError::HelperResourceUnsafe {
             path: path.to_path_buf(),
-            detail: error.to_string(),
+            source: error,
         }
     })
 }
@@ -709,16 +693,16 @@ fn write_pinned_setup_request(path: &Path, encoded: &[u8]) -> Result<fs::File, W
         .create_new(true)
         .share_mode(FILE_SHARE_READ)
         .open(path)
-        .map_err(|error| WindowsSetupError::RequestWrite {
+        .map_err(|source| WindowsSetupError::RequestWrite {
             path: path.to_path_buf(),
-            detail: error.to_string(),
+            source,
         })?;
     request_file
         .write_all(encoded)
         .and_then(|()| request_file.sync_all())
-        .map_err(|error| WindowsSetupError::RequestWrite {
+        .map_err(|source| WindowsSetupError::RequestWrite {
             path: path.to_path_buf(),
-            detail: error.to_string(),
+            source,
         })?;
     Ok(request_file)
 }
