@@ -296,18 +296,15 @@ fn terminate_process_group(child: &mut Child) -> Result<(), MacosBackendError> {
 
 #[allow(unsafe_code)]
 fn terminate_process_group_if_present(pid: u32) -> Result<(), MacosBackendError> {
-    #[cfg(target_os = "macos")]
-    {
-        let pid = libc::pid_t::try_from(pid)
-            .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
-        // SAFETY: a negative PID targets exactly the process group whose
-        // leader is the Seatbelt boundary; SIGKILL cannot be caught by it.
-        let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
-        if result == -1 {
-            let source = io::Error::last_os_error();
-            if source.raw_os_error() != Some(libc::ESRCH) {
-                return Err(MacosBackendError::ProcessGroup { source });
-            }
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
+    // SAFETY: a negative PID targets exactly the process group whose leader is
+    // the Seatbelt boundary; SIGKILL cannot be caught by it.
+    let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
+    if result == -1 {
+        let source = io::Error::last_os_error();
+        if source.raw_os_error() != Some(libc::ESRCH) {
+            return Err(MacosBackendError::ProcessGroup { source });
         }
     }
     Ok(())
@@ -317,16 +314,11 @@ fn terminate_process_group_if_present(pid: u32) -> Result<(), MacosBackendError>
 fn confirm_process_group_gone(pid: u32) -> Result<(), MacosBackendError> {
     let deadline = Instant::now() + BOUNDARY_WAIT_TIMEOUT;
     loop {
-        #[cfg(target_os = "macos")]
-        let state = {
-            let pid = libc::pid_t::try_from(pid)
-                .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
-            // SAFETY: signal 0 performs an existence check without changing
-            // process state; the negative PID addresses this exact group.
-            unsafe { libc::kill(-pid, 0) }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let state = -1;
+        let pid = libc::pid_t::try_from(pid)
+            .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
+        // SAFETY: signal 0 performs an existence check without changing
+        // process state; the negative PID addresses this exact group.
+        let state = unsafe { libc::kill(-pid, 0) };
         if state == -1 {
             let source = io::Error::last_os_error();
             if source.raw_os_error() == Some(libc::ESRCH) {
