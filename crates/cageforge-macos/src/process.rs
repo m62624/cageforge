@@ -217,6 +217,17 @@ pub(crate) fn configure_process_group(command: &mut std::process::Command, paren
                         return Err(io::Error::last_os_error());
                     }
                     libc::close(parent_death_fd);
+                } else {
+                    let flags = libc::fcntl(PARENT_DEATH_FD, libc::F_GETFD);
+                    if flags == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if flags & libc::FD_CLOEXEC != 0
+                        && libc::fcntl(PARENT_DEATH_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC)
+                            == -1
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
                 }
                 // SAFETY: stdio has already been configured by
                 // `Command`; this closes unrelated inheritable parent
