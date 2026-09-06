@@ -815,7 +815,7 @@ mod tests {
     use pretty_assertions::{assert_eq, assert_ne};
     use windows_sys::Win32::Security::{ACL, ACL_REVISION, ACL_REVISION_DS, InitializeAcl};
 
-    use crate::capability::state::CAPABILITY_STATE_VERSION;
+    use crate::capability::state::{CAPABILITY_STATE_VERSION, CapabilityStateError};
 
     use super::{
         AclMutationRecovery, CapabilityRole, CapabilityState, CapabilityStateTransitionError,
@@ -1162,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_materialization_identity_fails_without_mutating_state() {
+    fn duplicate_materialization_identity_fails_validation_without_mutating_state() {
         let mut state = fresh_state();
         let descriptor = empty_dacl(ACL_REVISION, true);
         let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
@@ -1183,7 +1183,8 @@ mod tests {
                 marker_descriptor,
                 nonce,
             ))),
-            Err(CapabilityStateTransitionError::MaterializationDrift { .. })
+            Err(CapabilityStateTransitionError::MaterializationValidation { source, .. })
+                if matches!(source, CapabilityStateError::DuplicateMaterializedObject)
         ));
         assert!(state.pending_materialization().is_some());
         assert!(state.materialized_objects.is_empty());
