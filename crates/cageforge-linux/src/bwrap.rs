@@ -160,7 +160,7 @@ pub(crate) fn discover_hardening_helper(
         .find_map(|path| {
             let path = fs::canonicalize(path).ok()?;
             let file = File::open(&path).ok()?;
-            validate_executable_file(&file)
+            validate_executable_file(&path, &file)
                 .ok()
                 .map(|()| PinnedExecutable { path, file })
         })
@@ -212,15 +212,21 @@ fn can_fall_back_to_bundled(error: &LinuxBackendError) -> bool {
 }
 
 pub(crate) fn open_pinned(selection: &BubblewrapSelection) -> Result<File, LinuxBackendError> {
-    let file = File::open(&selection.path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
-    if file_identity(&file).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?
-        != selection.identity
+    let file =
+        File::open(&selection.path).map_err(|source| LinuxBackendError::BubblewrapOpenFailed {
+            path: selection.path.clone(),
+            source,
+        })?;
+    if file_identity(&file).map_err(|source| LinuxBackendError::BubblewrapIdentityFailed {
+        path: selection.path.clone(),
+        source,
+    })? != selection.identity
     {
         return Err(LinuxBackendError::BubblewrapChanged {
             path: selection.path.clone(),
         });
     }
-    validate_executable_file(&file)?;
+    validate_executable_file(&selection.path, &file)?;
     if selection.bundled {
         verify_bundled_digest_file(&file, &selection.path)?;
     }
@@ -253,8 +259,16 @@ pub(crate) fn resource_directory(
         }
         ResourceDirectorySource::Explicit(path) => path.clone(),
     };
-    let path =
-        fs::canonicalize(path).map_err(|_| LinuxBackendError::ResourceDirectoryUnavailable)?;
+    let path = fs::canonicalize(&path).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            LinuxBackendError::ResourceDirectoryUnavailable
+        } else {
+            LinuxBackendError::ResourceDirectoryCanonicalizeFailed {
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })?;
     if !path.is_dir() {
         return Err(LinuxBackendError::ResourceDirectoryUnavailable);
     }
@@ -272,10 +286,26 @@ fn discover_and_probe_one(
     proc_mount: ProcMountPolicy,
     bundled: bool,
 ) -> Result<BubblewrapSelection, LinuxBackendError> {
-    let path = fs::canonicalize(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
-    let file = File::open(&path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
-    validate_executable_file(&file)?;
-    let identity = file_identity(&file).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    let path = fs::canonicalize(path).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            LinuxBackendError::BubblewrapUnavailable
+        } else {
+            LinuxBackendError::BubblewrapCanonicalizeFailed {
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })?;
+    let file = File::open(&path).map_err(|source| LinuxBackendError::BubblewrapOpenFailed {
+        path: path.clone(),
+        source,
+    })?;
+    validate_executable_file(&path, &file)?;
+    let identity =
+        file_identity(&file).map_err(|source| LinuxBackendError::BubblewrapIdentityFailed {
+            path: path.clone(),
+            source,
+        })?;
     if bundled {
         verify_bundled_digest(&path)?;
     }
@@ -304,7 +334,10 @@ fn verify_bundled_digest(path: &Path) -> Result<(), LinuxBackendError> {
         .ok_or_else(|| LinuxBackendError::BubblewrapDigestUnavailable {
             path: path.to_path_buf(),
         })?;
-    let actual = sha256_file(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    let actual = sha256_file(path).map_err(|source| LinuxBackendError::BubblewrapHashFailed {
+        path: path.to_path_buf(),
+        source,
+    })?;
     if actual != expected {
         return Err(LinuxBackendError::BubblewrapDigestMismatch {
             path: path.to_path_buf(),
@@ -328,7 +361,11 @@ fn verify_bundled_digest_file(file: &File, path: &Path) -> Result<(), LinuxBacke
         .ok_or_else(|| LinuxBackendError::BubblewrapDigestUnavailable {
             path: path.to_path_buf(),
         })?;
-    let actual = sha256_file_handle(file).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+    let actual =
+        sha256_file_handle(file).map_err(|source| LinuxBackendError::BubblewrapHashFailed {
+            path: path.to_path_buf(),
+            source,
+        })?;
     if actual != expected {
         return Err(LinuxBackendError::BubblewrapDigestMismatch {
             path: path.to_path_buf(),
@@ -482,14 +519,26 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 }
 
 fn validate_executable(path: &Path) -> Result<(), LinuxBackendError> {
-    let file = File::open(path).map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
-    validate_executable_file(&file)
+    let file = File::open(path).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            LinuxBackendError::BubblewrapUnavailable
+        } else {
+            LinuxBackendError::BubblewrapOpenFailed {
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })?;
+    validate_executable_file(path, &file)
 }
 
-fn validate_executable_file(file: &File) -> Result<(), LinuxBackendError> {
-    let metadata = file
-        .metadata()
-        .map_err(|_| LinuxBackendError::BubblewrapUnavailable)?;
+fn validate_executable_file(path: &Path, file: &File) -> Result<(), LinuxBackendError> {
+    let metadata =
+        file.metadata()
+            .map_err(|source| LinuxBackendError::BubblewrapMetadataFailed {
+                path: path.to_path_buf(),
+                source,
+            })?;
     if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
         return Err(LinuxBackendError::BubblewrapUnavailable);
     }

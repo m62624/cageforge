@@ -5,18 +5,50 @@
 use std::io;
 use std::path::PathBuf;
 
-use cageforge_backend_api::BackendContractError;
+use cageforge_backend_api::{BackendCapability, BackendContractError};
 use thiserror::Error;
 
 /// Errors returned by the macOS backend.
 #[derive(Debug, Error)]
 pub enum MacosBackendError {
     /// Portable capability or prepared-handoff validation failed.
-    #[error("macOS backend request validation failed: {source}")]
-    Contract {
-        /// The portable contract failure.
+    #[error(transparent)]
+    Contract(#[from] BackendContractError),
+    /// The effective filesystem policy could not be lowered safely.
+    #[error(transparent)]
+    Filesystem(#[from] MacosFilesystemError),
+    /// The effective network policy could not be lowered safely.
+    #[error(transparent)]
+    Network(#[from] MacosNetworkError),
+    /// Seatbelt profile construction failed before process launch.
+    #[error(transparent)]
+    SeatbeltProfile(#[from] SeatbeltProfileError),
+    /// The Seatbelt process could not be started.
+    #[error("failed to start macOS Seatbelt process: {source}")]
+    ProcessStart {
+        /// The operating-system failure.
         #[source]
-        source: BackendContractError,
+        source: io::Error,
+    },
+    /// Waiting for the sandbox boundary failed.
+    #[error("failed to wait for macOS sandbox boundary: {source}")]
+    ProcessWait {
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The command exceeded its prepared timeout.
+    #[error("the macOS sandboxed command exceeded its prepared timeout")]
+    ProcessTimedOut,
+    /// The process boundary could not be terminated and confirmed.
+    #[error("could not confirm termination of the complete macOS sandbox process group")]
+    BoundaryTerminationUnconfirmed,
+    /// A process-group operation failed.
+    #[error("macOS sandbox process-group operation failed: {source}")]
+    ProcessGroup {
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
     },
     /// The configured Seatbelt executable could not be inspected.
     #[error("failed to inspect Seatbelt executable {path:?}: {source}")]
@@ -31,6 +63,98 @@ pub enum MacosBackendError {
     #[error("macOS backend cannot safely lower requested capability: {capability}")]
     UnsupportedCapability {
         /// The unsupported portable capability.
-        capability: cageforge_backend_api::BackendCapability,
+        capability: BackendCapability,
+    },
+}
+
+/// Filesystem failures raised while constructing a Seatbelt policy.
+#[derive(Debug, Error)]
+pub enum MacosFilesystemError {
+    /// The prepared request no longer belongs to the backend instance that
+    /// performed preflight, or its capability snapshot changed.
+    #[error(transparent)]
+    BackendContract(#[from] BackendContractError),
+    /// The effective policy delegates enforcement to another owner.
+    #[error("external filesystem ownership is not a local macOS backend mode")]
+    ExternalOwnership,
+    /// A required concrete path was not present.
+    #[error("required filesystem scope is missing: {path:?}")]
+    RequiredPathMissing {
+        /// The missing path.
+        path: PathBuf,
+    },
+    /// The backend could not inspect a path.
+    #[error("failed to inspect filesystem scope {path:?}: {source}")]
+    Metadata {
+        /// The inspected path.
+        path: PathBuf,
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// A scope or carve-out traversed a symbolic link.
+    #[error("filesystem scope contains a symbolic link: {path:?}")]
+    Symlink { path: PathBuf },
+    /// A read-only carve-out escaped its writable root.
+    #[error("read-only path {path:?} is outside writable root {root:?}")]
+    ReadOnlyOutsideRoot { path: PathBuf, root: PathBuf },
+    /// A filesystem scope was not an absolute normalized path after context
+    /// resolution.
+    #[error("macOS filesystem scope is not an absolute normalized path: {path:?}")]
+    InvalidScope { path: PathBuf },
+    /// A filesystem glob had an access mode other than deny.
+    #[error("macOS filesystem globs must use deny access")]
+    NonDenyGlob,
+}
+
+/// Network failures raised while constructing a macOS launch.
+#[derive(Debug, Error)]
+pub enum MacosNetworkError {
+    /// The prepared request failed the portable backend contract.
+    #[error(transparent)]
+    BackendContract(#[from] BackendContractError),
+    /// The effective policy delegates network enforcement to another owner.
+    #[error("external network ownership is not a local macOS backend mode")]
+    ExternalOwnership,
+    /// The requested pathname Unix-socket mode is not representable by the
+    /// native policy being constructed.
+    #[error("macOS pathname Unix-socket policy is not representable: {mode:?}")]
+    UnixSocketPolicy {
+        /// The exact portable mode that could not be lowered.
+        mode: cageforge_policy::UnixSocketMode,
+    },
+    /// The per-instance gateway could not be created.
+    #[error("failed to create the per-instance macOS network gateway: {source}")]
+    Gateway {
+        /// The gateway failure.
+        #[source]
+        source: cageforge_network_proxy::GatewayError,
+    },
+    /// The gateway listener could not be created.
+    #[error("failed to bind the per-instance macOS gateway ingress: {source}")]
+    Listener {
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// Failures while rendering a Seatbelt profile.
+#[derive(Debug, Error)]
+pub enum SeatbeltProfileError {
+    /// A path could not be represented as a valid Seatbelt definition.
+    #[error("path contains an unsupported NUL character: {path:?}")]
+    PathContainsNul { path: PathBuf },
+    /// A generated Seatbelt definition name was not a valid parameter name.
+    #[error("generated Seatbelt definition name is invalid: {name:?}")]
+    InvalidDefinitionName {
+        /// Invalid generated definition name.
+        name: String,
+    },
+    /// A generated Seatbelt profile fragment contained an invalid value.
+    #[error("generated Seatbelt profile fragment is invalid: {fragment}")]
+    InvalidFragment {
+        /// Bounded fragment description for diagnostics.
+        fragment: &'static str,
     },
 }
