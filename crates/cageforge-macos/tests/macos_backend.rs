@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cageforge_backend_api::{
-    BackendCapability, BackendContractError, BackendRequest, SandboxBackend,
+    BackendCapabilities, BackendCapability, BackendContractError, BackendRequest, SandboxBackend,
 };
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
 use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError};
@@ -488,7 +488,7 @@ fn backend_is_send_sync_and_reusable_for_independent_instances() {
     assert_send_sync::<Arc<MacosBackend>>();
     let backend = backend();
     let actual = backend.capabilities();
-    let expected = [
+    let expected = BackendCapabilities::from_capabilities([
         BackendCapability::CommandExecution,
         BackendCapability::WorkingDirectory,
         BackendCapability::StdioInherit,
@@ -523,8 +523,11 @@ fn backend_is_send_sync_and_reusable_for_independent_instances() {
         BackendCapability::EnvironmentNone,
         BackendCapability::EnvironmentFilters,
         BackendCapability::EnvironmentOverrides,
-    ];
-    assert_eq!(actual.iter().copied().collect::<Vec<_>>(), expected);
+    ]);
+    assert_eq!(
+        actual.iter().copied().collect::<Vec<_>>(),
+        expected.iter().copied().collect::<Vec<_>>()
+    );
     assert!(!actual.supports(BackendCapability::NetworkLocalIpcDenyRules));
     assert!(actual.supports(BackendCapability::CommandExecution));
 }
