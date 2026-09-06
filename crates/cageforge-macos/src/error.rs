@@ -230,6 +230,12 @@ pub enum SeatbeltProfileError {
         /// Path that could not be represented in a Seatbelt definition.
         path: PathBuf,
     },
+    /// A filesystem glob could not be represented in a Seatbelt regex.
+    #[error("filesystem glob contains an unsupported NUL character: {pattern:?}")]
+    GlobContainsNul {
+        /// Glob that could not be represented in a Seatbelt definition.
+        pattern: String,
+    },
     /// A generated Seatbelt definition name was not a valid parameter name.
     #[error("generated Seatbelt definition name is invalid: {name:?}")]
     InvalidDefinitionName {
