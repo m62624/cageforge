@@ -238,11 +238,12 @@ impl ParentDeathChannel {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: pipe returned two distinct valid descriptors now owned by
-        // this value.
-        Ok(Self {
-            read: unsafe { OwnedFd::from_raw_fd(descriptors[0]) },
-            write: unsafe { OwnedFd::from_raw_fd(descriptors[1]) },
-        })
+        // these OwnedFd values.
+        let read = unsafe { OwnedFd::from_raw_fd(descriptors[0]) };
+        let write = unsafe { OwnedFd::from_raw_fd(descriptors[1]) };
+        let read = move_fd_above_standard_streams(read)?;
+        let write = move_fd_above_standard_streams(write)?;
+        Ok(Self { read, write })
     }
 
     pub(crate) fn read_fd(&self) -> RawFd {
@@ -254,6 +255,25 @@ impl ParentDeathChannel {
         drop(read);
         write
     }
+}
+
+#[allow(unsafe_code)]
+fn move_fd_above_standard_streams(fd: OwnedFd) -> io::Result<OwnedFd> {
+    if fd.as_raw_fd() > libc::STDERR_FILENO {
+        return Ok(fd);
+    }
+    let relocated = unsafe {
+        libc::fcntl(
+            fd.as_raw_fd(),
+            libc::F_DUPFD_CLOEXEC,
+            libc::STDERR_FILENO + 1,
+        )
+    };
+    if relocated < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    drop(fd);
+    Ok(unsafe { OwnedFd::from_raw_fd(relocated) })
 }
 
 #[allow(unsafe_code)]

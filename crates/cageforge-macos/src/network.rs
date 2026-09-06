@@ -71,7 +71,9 @@ impl MacosNetworkPlan {
         match requirements.mode() {
             NetworkMode::Disabled => Ok(Self::Disabled { unix }),
             NetworkMode::Enabled
-                if requirements.domain_rules() || requirements.local_address_restrictions() =>
+                if requirements.domain_rules()
+                    || requirements.local_address_restrictions()
+                    || requirements.resolved_targets() =>
             {
                 Ok(Self::Proxy {
                     unix,
