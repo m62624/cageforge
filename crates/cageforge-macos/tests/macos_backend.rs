@@ -262,8 +262,7 @@ fn delayed_marker_child(
         .expect("shell option")
         .with_arg(
             "(sleep 1; touch \"$1\") & descendant=$!; ".to_owned()
-                + "printf 'ready:%s:%s\\n' \"$descendant\" "
-                + "\"$(ps -o pgid= -p \"$descendant\")\"; wait",
+                + "printf 'ready:%s\\n' \"$descendant\"; wait",
         )
         .expect("shell script")
         .with_arg("cageforge-marker")
@@ -291,13 +290,11 @@ fn read_descendant_process_group(child: &mut cageforge_macos::MacosChild) -> (u3
         .expect("descendant PID")
         .parse()
         .expect("numeric descendant PID");
-    let process_group = fields
-        .next()
-        .expect("descendant process group")
-        .trim()
-        .parse()
-        .expect("numeric descendant process group");
-    (descendant, process_group)
+    assert_eq!(fields.next(), None);
+    #[allow(unsafe_code)]
+    let process_group = unsafe { libc::getpgid(descendant as libc::pid_t) };
+    assert!(process_group > 0, "descendant process group lookup failed");
+    (descendant, process_group as u32)
 }
 
 #[test]
