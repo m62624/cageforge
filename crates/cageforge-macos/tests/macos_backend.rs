@@ -251,6 +251,30 @@ fn shell_command(script: &str) -> CommandSpec {
         .expect("shell arguments")
 }
 
+fn delayed_marker_child(
+    workspace: &Path,
+    backend: &MacosBackend,
+) -> (cageforge_macos::MacosChild, PathBuf) {
+    let marker = workspace.join("marker-after-boundary");
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_arg("-c")
+        .expect("shell option")
+        .with_arg("printf 'ready\\n'; (sleep 1; touch \"$1\") & wait")
+        .expect("shell script")
+        .with_arg("cageforge-marker")
+        .expect("shell name")
+        .with_arg(marker.as_os_str())
+        .expect("marker argument");
+    let policy = writable_policy(workspace);
+    let (command, effective, context) = request_for(workspace, &policy, command);
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let child = backend.spawn(prepared).expect("spawn");
+    (child, marker)
+}
+
 #[test]
 fn host_accepts_the_backend_seatbelt_profile() {
     let workspace = TempDir::new().expect("workspace");
@@ -481,6 +505,40 @@ fn timeout_terminates_the_complete_seatbelt_process_group() {
     let mut child = backend.spawn(prepared).expect("spawn");
     let error = child.wait().expect_err("timeout");
     assert!(matches!(error, MacosBackendError::ProcessTimedOut));
+}
+
+#[test]
+fn explicit_kill_terminates_the_complete_seatbelt_process_group() {
+    let workspace = TempDir::new().expect("workspace");
+    let backend = backend();
+    let (mut child, marker) = delayed_marker_child(workspace.path(), &backend);
+    let mut ready = [0; 6];
+    child
+        .stdout()
+        .expect("stdout pipe")
+        .read_exact(&mut ready)
+        .expect("ready marker");
+    assert_eq!(&ready, b"ready\n");
+    child.kill().expect("kill");
+    thread::sleep(Duration::from_secs(2));
+    assert!(!marker.exists(), "a descendant survived explicit kill");
+}
+
+#[test]
+fn dropping_child_terminates_the_complete_seatbelt_process_group() {
+    let workspace = TempDir::new().expect("workspace");
+    let backend = backend();
+    let (mut child, marker) = delayed_marker_child(workspace.path(), &backend);
+    let mut ready = [0; 6];
+    child
+        .stdout()
+        .expect("stdout pipe")
+        .read_exact(&mut ready)
+        .expect("ready marker");
+    assert_eq!(&ready, b"ready\n");
+    drop(child);
+    thread::sleep(Duration::from_secs(2));
+    assert!(!marker.exists(), "a descendant survived child drop");
 }
 
 #[test]

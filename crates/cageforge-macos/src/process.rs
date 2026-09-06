@@ -140,7 +140,7 @@ impl MacosChild {
             return;
         }
         self.recovery_attempted = true;
-        let Some(child) = self.child.take() else {
+        let Some(mut child) = self.child.take() else {
             return;
         };
         let gateway = self.gateway.take();
@@ -153,10 +153,14 @@ impl MacosChild {
                 }
             });
         if recovery.is_err() {
-            forget_recovery_payload(child, gateway);
+            // Drop cannot safely release an unconfirmed boundary. If the
+            // detached owner itself cannot be created, keep ownership here
+            // and retry until process-group termination is confirmed.
+            recover_boundary(&mut child, gateway);
         } else if let Err(error) = sender.send((child, gateway)) {
             let (child, gateway) = error.0;
-            forget_recovery_payload(child, gateway);
+            let mut child = child;
+            recover_boundary(&mut child, gateway);
         }
     }
 }
@@ -274,14 +278,6 @@ fn recover_boundary(child: &mut Child, mut gateway: Option<GatewayRuntime>) {
             return;
         }
         thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
-    }
-}
-
-fn forget_recovery_payload(mut child: Child, gateway: Option<GatewayRuntime>) {
-    let _ = terminate_process_group(&mut child);
-    std::mem::forget(child);
-    if let Some(gateway) = gateway {
-        std::mem::forget(gateway);
     }
 }
 
