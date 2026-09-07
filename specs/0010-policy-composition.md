@@ -6,7 +6,7 @@ Status: accepted; `cageforge-policy-compose` implemented
 
 `cageforge-config` resolves a requested profile. It is not the final security
 authority. `cageforge-policy-compose` narrows that request against a neutral
-portable `PolicyCeiling`. A future `cageforge-backend-api` then checks native
+portable `PolicyCeiling`. `cageforge-backend-api` then checks native
 capabilities and lowers the effective constraints for a selected backend.
 
 ```text
@@ -114,8 +114,8 @@ It does not own:
 - trust, approvals, telemetry, managed configuration, or Codex protocol types.
 
 Those responsibilities remain in `cageforge-config`,
-`cageforge-command`, the future `cageforge-backend-api`, or native backend
-crates as appropriate.
+`cageforge-command`, `cageforge-backend-api`, or native backend crates as
+appropriate.
 
 ## Required tests
 

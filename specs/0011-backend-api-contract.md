@@ -1,6 +1,6 @@
 # Specification 0011: Backend API Contract
 
-Status: accepted; required before native backend implementation
+Status: accepted; consumed by the native backend implementations
 
 ## Purpose
 
@@ -11,8 +11,8 @@ filesystem I/O, DNS, network I/O, PTY handling, or operating-system
 enforcement.
 
 The crate is intentionally smaller than `cageforge`. Native backends
-implement this contract, while `cageforge` provides an ergonomic
-facade and backend selection after native backends exist.
+implement this contract, while `cageforge` provides the ergonomic facade and
+target-specific backend selection.
 
 ## Required input boundary
 

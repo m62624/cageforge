@@ -1,6 +1,6 @@
 # Specification 0012: Native Backend Safety Contract
 
-Status: accepted; required before native backend implementation
+Status: accepted; required by native backend implementations
 
 ## Purpose
 

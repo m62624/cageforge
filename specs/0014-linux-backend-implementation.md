@@ -55,8 +55,9 @@ cageforge-backend-api
 portable Cageforge crates
 ```
 
-In the first implementation, `cageforge` may remain a placeholder while
-the Linux backend is tested directly through its public API.
+The `cageforge` facade now selects the target-native backend through its
+feature and target guards; direct Linux backend tests remain authoritative for
+Linux enforcement.
 
 ## 3. Upstream reference and deliberate exclusions
 
@@ -103,7 +104,7 @@ participate in Linux sandbox behavior:
 | Codex API or area | Responsibility | Cageforge decision |
 |---|---|---|
 | `SandboxType` and `SandboxablePreference` | Select or forbid a platform sandbox | Replaced by `SandboxBackend` capabilities and typed preflight errors |
-| `SandboxManager::select_initial` | Choose an initial platform implementation | Backend selection belongs to a future facade or caller |
+| `SandboxManager::select_initial` | Choose an initial platform implementation | Backend selection belongs to the facade or caller; Linux lowering remains backend-specific |
 | `SandboxManager::transform` | Lower a product execution request to a sandbox command | Replaced by Linux-specific lowering from `PreparedBackendRequest` |
 | `SandboxManager::transform_for_direct_spawn` | Alternate direct-spawn lowering | Not copied; Linux backend owns one verified launch path |
 | `SandboxCommand`, `SandboxExecRequest`, and transform request structs | Product process handoff | Replaced by `CommandRequest`, `EffectiveSandbox`, and Linux prepared state |
@@ -270,7 +271,7 @@ chosen mechanism actually enforces. If a Linux implementation can enforce
 workspace filesystem rules with Bubblewrap but cannot enforce Unix-socket
 rules, a request requiring Unix-socket rules is rejected; it is never launched
 with only the workspace restriction. This is the single capability contract
-shared by all future backends.
+shared by all native backends.
 
 ## 5. Portable handoff contract
 
@@ -895,11 +896,11 @@ Implementation must proceed in these stages:
 6. add filesystem escape and protected-path integration tests;
 7. add only the network modes whose exact enforcement is implemented;
 8. update Linux CI and label routing to run the real crate; and
-9. run the complete workspace and native Linux test matrix before considering
-   `cageforge` facade work.
+9. run the complete workspace and native Linux test matrix before changing the
+   `cageforge` facade or another native backend.
 
-No later backend crate should be started until the Linux backend's required
-tests, Clippy, documentation, and Linux CI gate pass.
+Any later backend or facade change must preserve the Linux backend's required
+tests, Clippy, documentation, and Linux CI gate.
 
 ## 12. Readiness criteria
 

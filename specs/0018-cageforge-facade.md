@@ -1,6 +1,6 @@
 # Specification 0018: Cageforge Facade Crate
 
-Status: accepted
+Status: accepted; implemented on `main`
 
 ## Purpose
 

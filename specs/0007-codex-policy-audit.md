@@ -89,8 +89,8 @@ product-specific `.agents` and `.codex` names are not copied into the public
 API; callers can add generic protected relative paths when they need them.
 
 These are design inputs for the current `cageforge-config`,
-`cageforge-command`, and `cageforge-policy-compose` crates, and for the future
-`cageforge-backend-api` and native backend crates. The portable command intent
+`cageforge-command`, `cageforge-policy-compose`, `cageforge-backend-api`, and
+native backend crates. The portable command intent
 boundary is now implemented in `cageforge-command`; it remains free of
 operating-system and process-launch dependencies. None of these details
 justify adding operating-system or process-launch dependencies to
@@ -104,7 +104,7 @@ canonical model is a generalized policy plus named user-defined profiles.
 
 The old Codex workspace mode is not a compatibility alias and is not a second
 policy system. Its useful semantics belong in a user-defined profile composed
-from filesystem entries, network settings, and future backend capabilities.
+from filesystem entries, network settings, and backend capabilities.
 The profile resolver may provide an ergonomic Cageforge preset, but it must
 resolve to the same canonical policy model and must not preserve Codex field
 names or legacy serialization.
@@ -123,18 +123,18 @@ The following Codex-specific concerns remain outside the policy crate:
 - telemetry, rollout formats, and agent protocol types;
 - Codex metadata names such as `.codex`.
 
-## Future boundaries
+## Follow-up boundaries
 
 1. Maintain the completed `cageforge-config` and `cageforge-command`
    integration coverage when the portable policy API changes. Their current
    profile, environment, host-normalization, and cwd-validation behavior is
    implemented and tested; it is not a deferred feature.
 2. Use `cageforge-policy-compose` for pure intersection against a neutral
-   `PolicyCeiling`. Define native capability negotiation and typed unsupported
+   `PolicyCeiling`. Keep native capability negotiation and typed unsupported
    policy errors in `cageforge-backend-api`; the composer deliberately does not
-   know which OS backend will consume the result.
-3. Implement and integration-test Linux, macOS, and Windows backends on their
-   native CI runners.
+   know which OS backend consumes the result.
+3. Maintain and extend the Linux, macOS, and Windows backends on their native
+   CI runners whenever their capability contracts change.
 
 Every follow-up must retain the black-box integration-test rule and the hard
 90% coverage floor for portable policy/config logic. Native enforcement tests

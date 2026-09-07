@@ -149,7 +149,7 @@ never represent bundled bubblewrap as wholly Apache-2.0 code.
 
 ## 7. Architecture boundary
 
-The workspace is planned as:
+The current workspace is organized as:
 
 ```text
 cageforge-policy      platform-independent policy values and invariants

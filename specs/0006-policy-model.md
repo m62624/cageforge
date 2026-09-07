@@ -23,16 +23,16 @@ cageforge-policy
     pure policy semantics and validation; consumes cageforge-path
 
 cageforge-config
-    future TOML loader and named-profile composition
+    TOML loader and named-profile composition
 
 cageforge-command
-    future command, environment, cwd, and stdio description
+    command, environment, cwd, and stdio description
 
 cageforge-backend-api
-    future backend capability and preparation contract
+    backend capability and preparation contract
 
 cageforge-linux / cageforge-macos / cageforge-windows
-    future native enforcement implementations
+    native enforcement implementations
 ```
 
 `cageforge-policy` must not depend on TOML, Starlark, Codex, network proxy,
@@ -57,9 +57,8 @@ The first crate exposes:
 
 The crate provides built-in constructors named `read_only`, `workspace`, and
 `full_access`; `NetworkPolicy` also provides the explicit `unrestricted` network
-preset. These are Cageforge concepts, not Codex compatibility aliases. They are
-initial policy presets; future named TOML profiles will resolve to the same
-policy types.
+preset. These are Cageforge concepts, not Codex compatibility aliases. Named
+TOML profiles resolve to the same policy types.
 
 Restricted filesystem policies also carry protected metadata paths by default.
 The initial default is the relative path `.git`, applied below every writable

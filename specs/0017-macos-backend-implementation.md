@@ -1,6 +1,6 @@
 # Specification 0017: macOS Backend Implementation
 
-Status: draft; implementation starts on `feat/macos-sandbox`
+Status: implemented; native verification complete for the reviewed revision
 
 ## 1. Purpose
 
@@ -29,8 +29,8 @@ The native implementation and native integration tests use the exact guard:
 
 The crate remains a workspace member and cross-target build surface on other
 hosts, but it must not report a successful macOS sandbox there. A non-macOS
-caller receives an explicit unsupported-platform result from a future
-cross-platform facade rather than silently launching an ordinary process.
+caller receives an explicit unsupported-platform result from the facade rather
+than silently launching an ordinary process.
 
 The crate may depend on `cageforge-backend-api`, `cageforge-command`,
 `cageforge-network-proxy`, `cageforge-path`, `cageforge-policy`, and

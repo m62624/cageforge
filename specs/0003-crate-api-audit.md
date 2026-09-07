@@ -37,14 +37,14 @@ for these two crates and are not pulled or merged automatically.
 Every public item has one of three jobs:
 
 1. construct a validated request or policy;
-2. expose a read-only value needed by a future config or backend boundary;
+2. expose a read-only value needed by the config or backend boundary;
 3. evaluate the portable semantics that a backend must enforce.
 
 The current repository uses the public API from black-box integration tests.
-The current `cageforge-config`, future `cageforge-backend-api`, and native
-backend crates are the intended production consumers. An item not referenced by
-the current repository is not automatically dead code: these crates are
-libraries, and their backend boundary does not exist yet.
+The current `cageforge-config`, `cageforge-backend-api`, facade, and native
+backend crates are the intended consumers. An item not referenced by the
+current repository is not automatically dead code: these crates are libraries,
+and public read-only accessors may be consumed by downstream applications.
 
 The shared path contract, configuration model, and policy-composition contract
 are specified separately in `0005`, `0009`, and `0010`. They are included in

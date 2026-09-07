@@ -127,7 +127,7 @@ the execution context and policy are available.
 ## Dependency boundary
 
 `cageforge-command` has no runtime dependency on `cageforge-policy` or any OS
-crate. The future graph is:
+crate. The current graph is:
 
 ```text
 cageforge-policy       cageforge-command
@@ -140,7 +140,7 @@ cageforge-policy       cageforge-command
 This avoids putting enforcement or process-launch assumptions into the
 portable request type. `cageforge-config` parses user profiles and produces
 both a `CommandRequest` and a `SandboxPolicy`; `cageforge-policy-compose`
-narrows the policy and environment against a `PolicyCeiling`, while the future
+narrows the policy and environment against a `PolicyCeiling`, while the
 backend API combines the resulting constraints with command execution and
 native capability checks.
 

@@ -71,7 +71,7 @@ private, link-local, multicast, or other non-public addresses. The portable
 network model therefore exposes `LocalNetworkAccess` and the resolved-target
 API (`ResolvedNetworkTarget` plus `authorize_connection`). The older
 slice-based query remains available for inspection, but it does not bind the
-result to a future socket connection.
+result to the exact socket connection performed by a native backend.
 
 Non-public includes special-purpose IPv4 and IPv6 ranges that are not globally
 reachable, not only private and loopback scopes. IPv6 classification therefore
@@ -107,7 +107,7 @@ composer does not resolve DNS, select a proxy, or implement firewall rules.
 
 This boundary captures the portable safety decision while leaving DNS
 configuration, resolver choice, connection races, socket enforcement, and
-platform capability errors to the future network backend.
+platform capability errors to the native network backend.
 
 ## Configuration
 

@@ -161,7 +161,7 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   proxy-crate builders so TOML and direct Rust callers share one invariant.
 - The upstream runtime state that combines profile roots with harness/runtime
   roots is tracked separately from TOML parsing; Cageforge keeps that merge at
-  the future backend/context boundary.
+  the native backend/context boundary.
 - A backend must put its absolute runtime current directory in
   `PathResolutionContext`, even when the command has no explicit working
   directory. The backend API resolves an explicit relative cwd against it, or
