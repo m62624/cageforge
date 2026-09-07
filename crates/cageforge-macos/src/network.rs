@@ -53,6 +53,11 @@ pub(crate) struct MacosUnixSocketPlan {
 /// One host gateway owned by one macOS sandbox instance.
 pub(crate) struct GatewayRuntime {
     port: u16,
+    // Keep the port reserved in the owning thread as well as in the gateway
+    // thread. If the gateway exits unexpectedly while the child is still
+    // running, another process must not be able to bind the Seatbelt-allowed
+    // port and impersonate the gateway.
+    _port_reservation: TcpListener,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<Result<(), MacosNetworkError>>>,
 }
@@ -138,6 +143,9 @@ impl GatewayRuntime {
         listener
             .set_nonblocking(true)
             .map_err(|source| MacosNetworkError::Listener { source })?;
+        let reservation = listener
+            .try_clone()
+            .map_err(|source| MacosNetworkError::Listener { source })?;
         let port = listener
             .local_addr()
             .map_err(|source| MacosNetworkError::Listener { source })?
@@ -161,6 +169,7 @@ impl GatewayRuntime {
         match ready_receiver.recv_timeout(GATEWAY_STARTUP_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
                 port,
+                _port_reservation: reservation,
                 shutdown: Some(shutdown),
                 thread: Some(thread),
             }),
@@ -480,8 +489,14 @@ mod tests {
             Ok(())
         });
         let (shutdown, _receiver) = oneshot::channel();
+        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reservation");
+        let port = reservation
+            .local_addr()
+            .expect("reservation address")
+            .port();
         let mut gateway = GatewayRuntime {
-            port: 0,
+            port,
+            _port_reservation: reservation,
             shutdown: Some(shutdown),
             thread: Some(thread),
         };
@@ -503,6 +518,41 @@ mod tests {
             .shutdown_with_timeout(Duration::from_secs(1))
             .expect("released gateway shutdown");
         assert!(gateway.thread.is_none());
+    }
+
+    #[test]
+    fn gateway_keeps_its_port_reserved_until_cleanup() {
+        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reservation");
+        let port = reservation
+            .local_addr()
+            .expect("reservation address")
+            .port();
+        let (shutdown, _receiver) = oneshot::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            release_receiver
+                .recv()
+                .expect("test gateway release signal");
+            Ok(())
+        });
+        let mut gateway = GatewayRuntime {
+            port,
+            _port_reservation: reservation,
+            shutdown: Some(shutdown),
+            thread: Some(thread),
+        };
+
+        let error = std::net::TcpListener::bind(("127.0.0.1", port))
+            .expect_err("a live gateway port must remain reserved");
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+        release_sender.send(()).expect("release test gateway");
+        gateway
+            .shutdown_with_timeout(Duration::from_secs(1))
+            .expect("released gateway shutdown");
+        std::mem::drop(gateway);
+        std::net::TcpListener::bind(("127.0.0.1", port))
+            .expect("gateway port is reusable after confirmed cleanup");
     }
 
     #[test]
