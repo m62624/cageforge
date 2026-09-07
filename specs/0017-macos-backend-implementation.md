@@ -102,6 +102,13 @@ effective `tmpdir` or `slash_tmp` scope. Native tests must prove that an
 unlisted conventional temporary path remains unavailable to a restricted
 command.
 
+Compared with Codex's restricted platform defaults, Cageforge intentionally
+does not grant write access to the conventional temporary directories and
+does not grant unrestricted access to `/dev/fd`. The former is supplied only
+by an effective temporary-directory scope; the latter is limited to the
+explicit standard streams exposed by the command API. These
+are deliberate narrower native rules, not omitted runtime requirements.
+
 Unrestricted filesystem access is supported only when Seatbelt's explicit
 unrestricted profile is selected and the effective policy is unrestricted.
 An external filesystem owner is never treated as unrestricted local access.
