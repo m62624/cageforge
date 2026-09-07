@@ -584,7 +584,10 @@ mod tests {
         let _listener = UnixListener::bind(&target).expect("socket fixture");
         symlink(&target, &alias).expect("socket alias");
 
-        assert_eq!(normalize_unix_socket_path(&alias), target);
+        assert_eq!(
+            normalize_unix_socket_path(&alias),
+            target.canonicalize().expect("canonical socket target")
+        );
     }
 
     #[test]
