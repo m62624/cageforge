@@ -42,6 +42,11 @@ struct ProtocolTasksInner {
     handles: Mutex<Vec<JoinHandle<Result<(), GatewayError>>>>,
 }
 
+struct ProtocolTaskWaiter {
+    handles: Vec<JoinHandle<Result<(), GatewayError>>>,
+    current: Option<JoinHandle<Result<(), GatewayError>>>,
+}
+
 #[derive(Clone)]
 struct HttpActivity {
     inner: Arc<HttpActivityInner>,
@@ -458,10 +463,18 @@ impl ProtocolTasks {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::take(&mut *guard)
         };
-        for handle in handles {
-            handle
-                .await
-                .map_err(|source| GatewayError::ProtocolTask { source })??;
+        let mut waiter = ProtocolTaskWaiter {
+            handles,
+            current: None,
+        };
+        while !waiter.handles.is_empty() {
+            waiter.current = waiter.handles.pop();
+            let Some(handle) = waiter.current.as_mut() else {
+                break;
+            };
+            let result = handle.await;
+            waiter.current = None;
+            result.map_err(|source| GatewayError::ProtocolTask { source })??;
         }
         Ok(())
     }
@@ -611,5 +624,63 @@ impl Drop for ProtocolTasksInner {
         for handle in handles.drain(..) {
             handle.abort();
         }
+    }
+}
+
+impl Drop for ProtocolTaskWaiter {
+    fn drop(&mut self) {
+        if let Some(handle) = self.current.take() {
+            handle.abort();
+        }
+        for handle in self.handles.drain(..) {
+            handle.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use tokio::sync::oneshot;
+
+    use super::ProtocolTasks;
+    use crate::GatewayError;
+
+    struct DropMarker(Arc<AtomicBool>);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_task_waiter_aborts_in_flight_protocol_tasks() {
+        let tasks = ProtocolTasks::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (started_sender, started_receiver) = oneshot::channel();
+        let marker = DropMarker(Arc::clone(&dropped));
+        tasks.spawn(async move {
+            let _marker = marker;
+            started_sender.send(()).expect("started receiver");
+            std::future::pending::<Result<(), GatewayError>>().await
+        });
+        started_receiver.await.expect("protocol task started");
+
+        let waiter = tokio::spawn(tasks.clone().finish());
+        tokio::task::yield_now().await;
+        waiter.abort();
+        waiter.await.expect_err("waiter must be cancelled");
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelling waiter must abort its protocol task");
     }
 }
