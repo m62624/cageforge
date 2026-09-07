@@ -25,6 +25,7 @@ const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-linux-boundary-recovery";
 /// A child launched inside the Linux backend boundary.
 pub struct LinuxChild {
     child: Option<Child>,
+    child_reaped: bool,
     timeout_watchdog: Option<TimeoutWatchdog>,
     synthetic_targets: Vec<SyntheticMountTarget>,
     protected_create_monitor: Option<ProtectedCreateMonitor>,
@@ -44,6 +45,7 @@ impl LinuxChild {
     ) -> Self {
         Self {
             child: Some(child),
+            child_reaped: false,
             timeout_watchdog,
             synthetic_targets,
             protected_create_monitor,
@@ -98,6 +100,7 @@ impl LinuxChild {
             .try_wait()
             .map_err(|source| LinuxBackendError::ProcessWaitFailed { source })?;
         if let Some(status) = status {
+            self.child_reaped = true;
             return self.finish_status(status).map(Some);
         }
         if self
@@ -109,6 +112,7 @@ impl LinuxChild {
                 .child_mut()?
                 .wait()
                 .map_err(|source| LinuxBackendError::ProcessWaitFailed { source })?;
+            self.child_reaped = true;
             return self.finish_status(status).map(Some);
         }
         Ok(None)
@@ -131,26 +135,32 @@ impl LinuxChild {
             .child_mut()?
             .wait()
             .map_err(|source| LinuxBackendError::ProcessWaitFailed { source })?;
+        self.child_reaped = true;
         self.finish_status(boundary_status)
     }
 
-    /// Sends the platform termination request to the Bubblewrap process.
+    /// Terminates and confirms the complete Bubblewrap process boundary.
     pub fn kill(&mut self) -> Result<(), LinuxBackendError> {
-        self.child_mut()?
-            .kill()
-            .map_err(|source| LinuxBackendError::ProcessWaitFailed { source })
+        self.terminate_boundary()?;
+        self.cleanup_boundaries()
     }
 
     fn cleanup_synthetic_targets(&mut self) -> Result<(), LinuxBackendError> {
         let mut first_error = None;
-        for target in self.synthetic_targets.iter_mut().rev() {
-            if let Err(error) = target.cleanup()
-                && first_error.is_none()
-            {
-                first_error = Some(error);
+        let mut remaining = Vec::new();
+        while let Some(mut target) = self.synthetic_targets.pop() {
+            match target.cleanup() {
+                Ok(()) => {}
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    remaining.push(target);
+                }
             }
         }
-        self.synthetic_targets.clear();
+        remaining.reverse();
+        self.synthetic_targets = remaining;
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -212,36 +222,61 @@ impl LinuxChild {
     }
 
     fn finish_timeout_watchdog(&mut self) -> Result<bool, LinuxBackendError> {
-        let result = match &mut self.timeout_watchdog {
-            Some(watchdog) => watchdog.shutdown(),
-            None => Ok(false),
+        let Some(watchdog) = self.timeout_watchdog.as_mut() else {
+            return Ok(false);
         };
+        let timed_out = watchdog.shutdown()?;
         self.timeout_watchdog = None;
-        result
+        Ok(timed_out)
     }
 
     fn cleanup_boundaries(&mut self) -> Result<(), LinuxBackendError> {
-        let timeout = self.finish_timeout_watchdog().map(|_| ());
-        let gateway = match &mut self.gateway_runtime {
-            Some(runtime) => runtime.shutdown(),
-            None => Ok(()),
-        };
-        self.gateway_runtime = None;
-        let protected = match &mut self.protected_create_monitor {
-            Some(monitor) => monitor.shutdown(),
-            None => Ok(()),
-        };
-        self.protected_create_monitor = None;
+        let mut first_error = None;
+        if self.timeout_watchdog.is_some() {
+            match self.finish_timeout_watchdog() {
+                Ok(_) => {}
+                Err(error) => first_error = Some(error),
+            }
+        }
+        if let Some(runtime) = self.gateway_runtime.as_mut() {
+            match runtime.shutdown() {
+                Ok(()) => self.gateway_runtime = None,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        if let Some(monitor) = self.protected_create_monitor.as_mut() {
+            match monitor.shutdown() {
+                Ok(()) => self.protected_create_monitor = None,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
         self.status_channel = None;
-        let synthetic = self.cleanup_synthetic_targets();
-        timeout.and(protected).and(gateway).and(synthetic)
+        if let Err(error) = self.cleanup_synthetic_targets()
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn terminate_after_boundary_failure(&mut self) -> bool {
-        let Ok(child) = self.child_mut() else {
-            return false;
-        };
-        terminate_and_confirm(child)
+        self.terminate_boundary().is_ok()
+    }
+
+    fn terminate_boundary(&mut self) -> Result<(), LinuxBackendError> {
+        if self.child_reaped {
+            return Ok(());
+        }
+        terminate_child_and_confirm(self.child_mut()?)?;
+        self.child_reaped = true;
+        Ok(())
     }
 
     fn child_mut(&mut self) -> Result<&mut Child, LinuxBackendError> {
@@ -253,6 +288,7 @@ impl LinuxChild {
     fn take_recovery_owner(&mut self) -> Option<Self> {
         Some(Self {
             child: self.child.take(),
+            child_reaped: self.child_reaped,
             timeout_watchdog: self.timeout_watchdog.take(),
             synthetic_targets: std::mem::take(&mut self.synthetic_targets),
             protected_create_monitor: self.protected_create_monitor.take(),
@@ -264,9 +300,12 @@ impl LinuxChild {
 
     fn recover_until_terminated(mut self) {
         loop {
-            let confirmed = self.child.as_mut().is_some_and(terminate_and_confirm);
+            let confirmed =
+                self.child_reaped || self.child.as_mut().is_some_and(terminate_and_confirm);
             if confirmed {
-                let _ = self.cleanup_boundaries();
+                self.child_reaped = true;
+            }
+            if confirmed && self.cleanup_boundaries().is_ok() {
                 return;
             }
             thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
@@ -276,17 +315,35 @@ impl LinuxChild {
 
 impl Drop for LinuxChild {
     fn drop(&mut self) {
-        let boundary_terminated = if self
-            .child
-            .as_mut()
-            .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))))
+        if self.recovery_attempted {
+            // A recovery owner must retain enforcement if its thread cannot
+            // finish. Releasing any remaining resource could expose a live
+            // boundary without its policy.
+            std::mem::forget(self.child.take());
+            std::mem::forget(self.timeout_watchdog.take());
+            std::mem::forget(self.gateway_runtime.take());
+            std::mem::forget(self.protected_create_monitor.take());
+            std::mem::forget(std::mem::take(&mut self.synthetic_targets));
+            return;
+        }
+        if !self.child_reaped
+            && self
+                .child
+                .as_mut()
+                .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))))
         {
-            true
-        } else {
-            self.child.as_mut().is_some_and(terminate_and_confirm)
-        };
+            self.child_reaped = true;
+        }
+        let boundary_terminated =
+            self.child_reaped || self.child.as_mut().is_some_and(terminate_and_confirm);
         if boundary_terminated {
-            let _ = self.cleanup_boundaries();
+            if self.cleanup_boundaries().is_err()
+                && let Some(recovery) = self.take_recovery_owner()
+            {
+                let _ = thread::Builder::new()
+                    .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
+                    .spawn(move || recovery.recover_until_terminated());
+            }
         } else if !self.recovery_attempted {
             if let Some(recovery) = self.take_recovery_owner() {
                 let _ = thread::Builder::new()
@@ -308,13 +365,23 @@ impl Drop for LinuxChild {
 }
 
 fn terminate_and_confirm(child: &mut Child) -> bool {
-    let _ = child.kill();
+    terminate_child_and_confirm(child).is_ok()
+}
+
+fn terminate_child_and_confirm(child: &mut Child) -> Result<(), LinuxBackendError> {
+    if let Err(source) = child.kill() {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) | Err(_) => return Err(LinuxBackendError::ProcessWaitFailed { source }),
+        }
+    }
     let deadline = Instant::now() + BOUNDARY_WAIT_TIMEOUT;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return true,
+            Ok(Some(_)) => return Ok(()),
             Ok(None) if Instant::now() < deadline => thread::sleep(BOUNDARY_POLL_INTERVAL),
-            Ok(None) | Err(_) => return false,
+            Ok(None) => return Err(LinuxBackendError::BoundaryTerminationUnconfirmed),
+            Err(source) => return Err(LinuxBackendError::ProcessWaitFailed { source }),
         }
     }
 }

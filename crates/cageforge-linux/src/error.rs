@@ -909,6 +909,10 @@ pub enum LinuxBackendError {
         #[source]
         source: std::io::Error,
     },
+    /// The complete Bubblewrap process boundary did not exit within the
+    /// bounded termination window.
+    #[error("Linux sandbox boundary termination was not confirmed")]
+    BoundaryTerminationUnconfirmed,
     /// The complete process boundary is owned by the detached recovery owner
     /// and is no longer controllable through this child handle.
     #[error("Linux sandbox boundary is owned by its recovery owner")]

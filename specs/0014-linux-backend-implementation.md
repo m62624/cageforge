@@ -643,7 +643,23 @@ The backend must not claim that a filesystem capability is enforced merely
 because `no_new_privs` or seccomp was installed. Filesystem and process
 capabilities remain separately advertised.
 
-### 7.4 Network lowering
+### 7.4 Child lifecycle confirmation and recovery
+
+`LinuxChild::kill` is a confirming operation: it requests termination of the
+Bubblewrap boundary, waits for the child handle to report exit within the
+bounded boundary wait interval, and only then starts cleanup. A successful
+return therefore means that the boundary has been reaped, not merely that a
+signal was sent. The state records that the child was reaped so a later
+cleanup failure or detached recovery owner never attempts a second wait on the
+same child.
+
+Cleanup is transactional with respect to enforcement ownership. Watchdogs,
+gateway runtimes, protected-path monitors, and synthetic mount targets remain
+owned when their cleanup returns an error; a detached recovery owner retries
+termination and cleanup. A failed cleanup must not clear a guard while the
+associated boundary or host-side protection may still exist.
+
+### 7.5 Network lowering
 
 Network namespace isolation implements all-network-disabled behavior. Narrower
 enabled policies use the same isolated namespace plus a backend-owned gateway;
@@ -683,7 +699,7 @@ instance's gateway. Host coordination for a missing protected mount target is
 shared only by UID and canonical host target, so two instances protecting the
 same path cannot tear down that protection while either remains active.
 
-### 7.5 Environment and command execution
+### 7.6 Environment and command execution
 
 The backend must select the actual Linux core environment before applying the
 portable `EnvironmentSpec`. The `CoreEnvironment` label must never be applied

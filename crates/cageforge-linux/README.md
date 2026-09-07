@@ -413,9 +413,11 @@ instance cannot remove another instance's active protection.
 
 `LinuxChild` exposes the child identifier, configured pipe handles, `try_wait`,
 `wait`, and `kill`. Backend-default and explicit timeout policies are enforced
-by a pidfd-based watchdog when the kernel supports it. Timeout, policy-monitor
-failure, gateway failure, explicit termination, and `Drop` terminate and reap
-the Bubblewrap PID namespace boundary and clean up per-run resources.
+by a pidfd-based watchdog when the kernel supports it. `kill` terminates and
+confirms the Bubblewrap boundary before reporting success. Timeout,
+policy-monitor failure, gateway failure, explicit termination, and `Drop`
+terminate and reap the boundary and clean up per-run resources; failed cleanup
+keeps the remaining enforcement resources owned by a bounded recovery path.
 
 Use `LinuxBackendError` for typed construction, preflight, lowering, setup,
 gateway, process, timeout, and cleanup failures. Capability errors identify the
