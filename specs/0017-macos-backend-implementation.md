@@ -129,6 +129,9 @@ Gateway startup uses a bounded readiness handshake. Runtime-construction and
 listener-registration failures are sent through that handshake as typed
 errors; a gateway that produces no readiness result is rejected after its
 startup deadline rather than blocking the caller indefinitely.
+Gateway shutdown is also bounded. If one shutdown attempt cannot join its
+runtime within the cleanup deadline, the owning child or recovery owner keeps
+the gateway handle and retries; it never treats an unjoined runtime as clean.
 
 ## 5. Process and lifecycle contract
 

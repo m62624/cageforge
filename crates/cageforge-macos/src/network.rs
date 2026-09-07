@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cageforge_backend_api::{PreparedBackendRequest, SandboxBackend};
 use cageforge_network_proxy::{GatewayConfig, GatewayIngressKey, NetworkGateway, SystemResolver};
@@ -26,6 +26,8 @@ const NETWORK_GATEWAY_THREAD_NAME: &str = "cageforge-macos-network-gateway";
 const NETWORK_GATEWAY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-network-gateway-recovery";
 const GATEWAY_RELAY_BUFFER_BYTES: usize = 64 * 1024;
 const GATEWAY_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const GATEWAY_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Native network rules for one Seatbelt launch.
 #[derive(Debug)]
@@ -199,6 +201,22 @@ impl GatewayRuntime {
     pub(crate) fn shutdown(&mut self) -> Result<(), MacosNetworkError> {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
+        }
+        self.shutdown_with_timeout(GATEWAY_SHUTDOWN_TIMEOUT)
+    }
+
+    fn shutdown_with_timeout(&mut self, timeout: Duration) -> Result<(), MacosNetworkError> {
+        let Some(thread) = self.thread.as_ref() else {
+            return Ok(());
+        };
+        let deadline = Instant::now() + timeout;
+        while !thread.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(MacosNetworkError::RuntimeShutdownTimeout {
+                    timeout_ms: timeout.as_millis(),
+                });
+            }
+            thread::sleep(GATEWAY_SHUTDOWN_POLL_INTERVAL);
         }
         let Some(thread) = self.thread.take() else {
             return Ok(());
@@ -375,4 +393,51 @@ where
     let copied = tokio::io::copy(&mut reader, &mut writer).await;
     let shutdown = writer.shutdown().await;
     copied.and(shutdown).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use tokio::sync::oneshot;
+
+    use super::GatewayRuntime;
+    use crate::error::MacosNetworkError;
+
+    #[test]
+    fn gateway_shutdown_has_a_bounded_join_and_retains_the_handle() {
+        let (release_sender, release_receiver) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            release_receiver
+                .recv()
+                .expect("test gateway release signal");
+            Ok(())
+        });
+        let (shutdown, _receiver) = oneshot::channel();
+        let mut gateway = GatewayRuntime {
+            port: 0,
+            shutdown: Some(shutdown),
+            thread: Some(thread),
+        };
+
+        let error = gateway
+            .shutdown_with_timeout(Duration::from_millis(20))
+            .expect_err("a blocked gateway join must be bounded");
+        assert!(matches!(
+            error,
+            MacosNetworkError::RuntimeShutdownTimeout { timeout_ms: 20 }
+        ));
+        assert!(
+            gateway.thread.is_some(),
+            "the live thread must remain owned"
+        );
+
+        release_sender.send(()).expect("release test gateway");
+        gateway
+            .shutdown_with_timeout(Duration::from_secs(1))
+            .expect("released gateway shutdown");
+        assert!(gateway.thread.is_none());
+    }
 }

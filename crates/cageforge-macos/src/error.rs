@@ -233,6 +233,13 @@ pub enum MacosNetworkError {
     /// The gateway stopped unexpectedly while its child was active.
     #[error("macOS network gateway stopped unexpectedly")]
     RuntimeStopped,
+    /// The gateway did not finish shutting down within the bounded cleanup
+    /// interval. Its owner must retain the runtime and retry cleanup.
+    #[error("macOS network gateway did not shut down within {timeout_ms} ms")]
+    RuntimeShutdownTimeout {
+        /// Maximum time allowed for one gateway shutdown attempt.
+        timeout_ms: u128,
+    },
     /// The gateway thread panicked.
     #[error("macOS network gateway runtime panicked")]
     RuntimePanicked,

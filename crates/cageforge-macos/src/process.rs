@@ -190,14 +190,16 @@ impl MacosChild {
 impl MacosBoundaryRecovery {
     fn recover_until_terminated(mut self) {
         loop {
-            let terminated = self
+            let boundary_terminated = self
                 .child
                 .as_mut()
                 .is_some_and(|child| terminate_process_group(child, self.process_group_id).is_ok());
-            if terminated {
-                if let Some(gateway) = self.gateway.as_mut() {
-                    let _ = gateway.shutdown();
-                }
+            let gateway_terminated = boundary_terminated
+                && self
+                    .gateway
+                    .as_mut()
+                    .is_none_or(|gateway| gateway.shutdown().is_ok());
+            if gateway_terminated {
                 self.child = None;
                 self.parent_death = None;
                 self.gateway = None;
