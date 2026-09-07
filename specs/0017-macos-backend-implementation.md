@@ -173,6 +173,10 @@ waits for confirmation before releasing gateway and child resources. If a
 bounded cleanup attempt cannot confirm termination, a detached recovery owner
 retains the child and all enforcement resources and retries termination; it
 does not release a live boundary's policy resources as if cleanup succeeded.
+When the group leader has already been reaped, cleanup enumerates the remaining
+members and re-checks each member's current process group before sending
+`SIGKILL`; it does not perform a destructive group-wide signal using a numeric
+PGID that could have been reused by an unrelated group.
 
 The command timeout is per prepared command and is distinct from gateway
 handshake/relay limits. Backend construction and one command's timeout do not
@@ -210,6 +214,8 @@ Native macOS black-box tests cover at least:
 - separate simultaneous instances retain separate policies and gateway keys;
 - unrelated inherited file descriptors do not cross the launch boundary;
 - timeout, explicit kill, drop, and parent death terminate the complete group;
+- a reaped group leader cannot leave a running descendant and cleanup does not
+  target a reused numeric process-group ID;
 - every expected setup, policy, launch, and lifecycle failure is typed; and
 - every enabled feature combination passes formatting, Clippy, tests, and
   documentation checks.

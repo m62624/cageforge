@@ -158,7 +158,7 @@ impl MacosChild {
 
     fn finish(&mut self, status: ExitStatus) -> Result<ExitStatus, MacosBackendError> {
         if self.process_group_id != 0 {
-            terminate_process_group_if_present(self.process_group_id)?;
+            terminate_exited_process_group(self.process_group_id)?;
             confirm_process_group_gone(self.process_group_id)?;
         }
         self.cleanup_boundaries()?;
@@ -432,6 +432,22 @@ fn terminate_process_group(
             Err(source) => return Err(MacosBackendError::ProcessWait { source }),
         }
     }
+}
+
+fn terminate_exited_process_group(process_group_id: u32) -> Result<(), MacosBackendError> {
+    let process_group_id = libc::pid_t::try_from(process_group_id).map_err(|_| {
+        MacosBackendError::ProcessGroupPidOutOfRange {
+            pid: process_group_id,
+        }
+    })?;
+    // The group leader has already been reaped when this function is called.
+    // Do not send a destructive group-wide signal by PGID: after the last
+    // member disappears, that numeric PGID could be reused by an unrelated
+    // process group. Enumerate the remaining members and re-check each
+    // member's current group before signalling it.
+    signal_process_group_members(process_group_id, libc::SIGKILL)
+        .map_err(|source| MacosBackendError::ProcessGroup { source })?;
+    Ok(())
 }
 
 #[allow(unsafe_code)]
