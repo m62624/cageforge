@@ -1208,8 +1208,8 @@ mod tests {
     use super::{
         IngressIdentity, ProxyAddresses, ProxyProtocol, RouteServices, SHARED_INGRESSES,
         SharedIngressRegistry, WindowsNetworkGatewayError, WindowsNetworkIngressError,
-        WindowsNetworkRuntimeError, WindowsProxyIngress, WinsockSession, exclusive_listener,
-        initialize_winsock, random_route_sid, registered_route_for_sids, remove_route_if_owned,
+        WindowsNetworkRuntimeError, WindowsProxyIngress, exclusive_listener, initialize_winsock,
+        random_route_sid, registered_route_for_sids, remove_route_if_owned,
         verify_protocol_while_admitted, wait_for_starting_ingress,
     };
 
@@ -1366,7 +1366,7 @@ mod tests {
         });
         let addresses =
             ProxyAddresses::from_setup_ports(&[49_154, 49_155]).expect("test ingress ports");
-        let mut ingress = WindowsProxyIngress {
+        let ingress = WindowsProxyIngress {
             identity: IngressIdentity {
                 owner_sid: "bounded-shutdown-test".to_string(),
                 addresses,
