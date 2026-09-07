@@ -162,6 +162,13 @@ pub enum MacosFilesystemError {
         /// Workspace root that cannot be represented in a Seatbelt regex.
         path: PathBuf,
     },
+    /// A canonical target of an absolute deny glob could not be represented
+    /// losslessly in the Seatbelt regex used for the native lowering.
+    #[error("macOS filesystem glob canonical target is not valid UTF-8: {path:?}")]
+    GlobCanonicalPathNotUtf8 {
+        /// Canonical path that cannot be represented in the Seatbelt profile.
+        path: PathBuf,
+    },
     /// A filesystem glob had an access mode other than deny.
     #[error("macOS filesystem glob {pattern:?} must use deny access")]
     NonDenyGlob {

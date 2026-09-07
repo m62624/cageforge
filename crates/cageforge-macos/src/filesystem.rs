@@ -203,7 +203,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
             let pattern = normalize_macos_system_alias(PathBuf::from(pattern))
                 .to_string_lossy()
                 .into_owned();
-            self.insert_denied_glob(pattern);
+            self.insert_denied_glob(pattern)?;
         } else {
             for root in self.context.workspace_roots() {
                 let root = normalize_macos_system_alias(root.clone());
@@ -220,17 +220,18 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
                         })?
                         .to_owned()
                 };
-                self.insert_denied_glob(joined);
+                self.insert_denied_glob(joined)?;
             }
         }
         Ok(())
     }
 
-    fn insert_denied_glob(&mut self, pattern: String) {
+    fn insert_denied_glob(&mut self, pattern: String) -> Result<(), MacosFilesystemError> {
         self.denied_globs.insert(pattern.clone());
-        if let Some(canonical) = canonicalize_glob_static_prefix(&pattern) {
+        if let Some(canonical) = canonicalize_glob_static_prefix(&pattern)? {
             self.denied_globs.insert(canonical);
         }
+        Ok(())
     }
 
     fn validate_concrete_path(
@@ -385,16 +386,19 @@ fn contains_parent_component(path: &Path) -> bool {
         .any(|component| component == Component::ParentDir)
 }
 
-fn canonicalize_glob_static_prefix(pattern: &str) -> Option<String> {
+fn canonicalize_glob_static_prefix(pattern: &str) -> Result<Option<String>, MacosFilesystemError> {
     let first_glob_index = pattern.char_indices().find_map(|(index, character)| {
         matches!(character, '*' | '?' | '[' | ']' | '{' | '}').then_some(index)
     });
     let Some(first_glob_index) = first_glob_index else {
-        let canonical = fs::canonicalize(pattern).ok()?;
-        let canonical = normalize_macos_system_alias(canonical)
-            .to_string_lossy()
-            .into_owned();
-        return (canonical != pattern).then_some(canonical);
+        let Ok(canonical) = fs::canonicalize(pattern) else {
+            return Ok(None);
+        };
+        let canonical = normalize_macos_system_alias(canonical);
+        let Some(canonical_text) = canonical.to_str() else {
+            return Err(MacosFilesystemError::GlobCanonicalPathNotUtf8 { path: canonical });
+        };
+        return Ok((canonical_text != pattern).then_some(canonical_text.to_owned()));
     };
 
     let static_prefix = &pattern[..first_glob_index];
@@ -404,19 +408,27 @@ fn canonicalize_glob_static_prefix(pattern: &str) -> Option<String> {
         static_prefix.rfind('/').unwrap_or(0)
     };
     if prefix_end == 0 {
-        return None;
+        return Ok(None);
     }
 
-    let canonical_root = fs::canonicalize(&pattern[..prefix_end]).ok()?;
-    let canonical_root = normalize_macos_system_alias(canonical_root)
-        .to_string_lossy()
-        .into_owned();
-    let normalized = format!("{canonical_root}{}", &pattern[prefix_end..]);
-    (normalized != pattern).then_some(normalized)
+    let Ok(canonical_root) = fs::canonicalize(&pattern[..prefix_end]) else {
+        return Ok(None);
+    };
+    let canonical_root = normalize_macos_system_alias(canonical_root);
+    let Some(canonical_root_text) = canonical_root.to_str() else {
+        return Err(MacosFilesystemError::GlobCanonicalPathNotUtf8 {
+            path: canonical_root,
+        });
+    };
+    let normalized = format!("{canonical_root_text}{}", &pattern[prefix_end..]);
+    Ok((normalized != pattern).then_some(normalized))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::fs;
+    use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::symlink;
 
     use tempfile::TempDir;
@@ -431,7 +443,9 @@ mod tests {
         symlink(target.path(), &link).expect("symlink");
         let pattern = format!("{}/**/*.secret", link.display());
 
-        let canonical = canonicalize_glob_static_prefix(&pattern).expect("canonical pattern");
+        let canonical = canonicalize_glob_static_prefix(&pattern)
+            .expect("canonical pattern")
+            .expect("canonical path variant");
         assert_eq!(
             canonical,
             format!(
@@ -453,7 +467,9 @@ mod tests {
         symlink(target.path(), &link).expect("symlink");
         let pattern = format!("{}/{{one,two}}/secret", link.display());
 
-        let canonical = canonicalize_glob_static_prefix(&pattern).expect("canonical pattern");
+        let canonical = canonicalize_glob_static_prefix(&pattern)
+            .expect("canonical pattern")
+            .expect("canonical path variant");
         assert_eq!(
             canonical,
             format!(
@@ -465,5 +481,25 @@ mod tests {
                     .display()
             )
         );
+    }
+
+    #[test]
+    fn rejects_a_non_utf8_canonical_glob_static_prefix() {
+        let root = TempDir::new().expect("root");
+        let target = root
+            .path()
+            .join(OsString::from_vec(vec![b't', b'a', b'r', b'g', 0xff]));
+        fs::create_dir(&target).expect("non-UTF-8 target");
+        let link = root.path().join("link");
+        symlink(&target, &link).expect("symlink");
+        let pattern = format!("{}/**/*.secret", link.display());
+
+        let error = canonicalize_glob_static_prefix(&pattern)
+            .expect_err("lossy canonical target must fail closed");
+        assert!(matches!(
+            error,
+            crate::error::MacosFilesystemError::GlobCanonicalPathNotUtf8 { path }
+                if path.to_str().is_none()
+        ));
     }
 }
