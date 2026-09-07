@@ -18,6 +18,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream};
 use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 
 use crate::error::MacosNetworkError;
 
@@ -128,6 +129,7 @@ impl GatewayRuntime {
         config: GatewayConfig,
     ) -> Result<Self, MacosNetworkError> {
         let max_concurrent_connections = config.max_concurrent_connections();
+        let relay_idle_timeout = config.relay_idle_timeout();
         let gateway = NetworkGateway::with_system_resolver(policy, config)
             .map_err(|source| MacosNetworkError::Gateway { source })?;
         let ingress_key = gateway.ingress_key();
@@ -150,6 +152,7 @@ impl GatewayRuntime {
                     gateway,
                     ingress_key,
                     max_concurrent_connections,
+                    relay_idle_timeout,
                     shutdown_receiver,
                     ready_sender,
                 )
@@ -329,6 +332,7 @@ fn run_gateway(
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
     max_concurrent_connections: std::num::NonZeroUsize,
+    relay_idle_timeout: Duration,
     shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<(), MacosNetworkError>>,
 ) -> Result<(), MacosNetworkError> {
@@ -358,6 +362,7 @@ fn run_gateway(
             gateway,
             ingress_key,
             max_concurrent_connections,
+            relay_idle_timeout,
             shutdown,
         )
         .await
@@ -369,6 +374,7 @@ async fn serve_gateway(
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
     max_concurrent_connections: std::num::NonZeroUsize,
+    relay_idle_timeout: Duration,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<(), MacosNetworkError> {
     let mut connections = JoinSet::new();
@@ -391,6 +397,7 @@ async fn serve_gateway(
                     gateway.clone(),
                     ingress_key.clone(),
                     permit,
+                    relay_idle_timeout,
                 ));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
@@ -412,6 +419,7 @@ async fn serve_private_stream(
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
     _admission: tokio::sync::OwnedSemaphorePermit,
+    relay_idle_timeout: Duration,
 ) {
     let (mut client_side, gateway_side) = tokio::io::duplex(GATEWAY_RELAY_BUFFER_BYTES);
     if ingress_key.authenticate(&mut client_side).await.is_err() {
@@ -434,6 +442,10 @@ async fn serve_private_stream(
             }
         }
     }
+    // The gateway may finish after writing response bytes into the duplex
+    // buffer. Drain the client direction for the same bounded idle period as
+    // the Linux bridge before dropping the relay futures.
+    let _ = timeout(relay_idle_timeout, &mut to_client).await;
 }
 
 async fn relay_direction<R, W>(mut reader: R, mut writer: W) -> std::io::Result<()>
