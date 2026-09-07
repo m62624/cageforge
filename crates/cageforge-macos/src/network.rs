@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn gateway_keeps_its_port_reserved_until_cleanup() {
-        let loopback = std::net::Ipv4Addr::new(127, 0, 0, 2);
+        let loopback = std::net::Ipv6Addr::LOCALHOST;
         let reservation = std::net::TcpListener::bind((loopback, 0)).expect("reservation");
         let port = reservation
             .local_addr()
