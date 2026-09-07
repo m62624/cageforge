@@ -956,7 +956,13 @@ fn workspace_glob_rejects_a_non_utf8_root_before_launch() {
     let rule = FilesystemRule::workspace_glob("**/*.secret", AccessMode::Deny)
         .expect("workspace deny glob");
     let policy = SandboxPolicy::new(
-        FilesystemPolicy::restricted([rule]),
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(
+                PathSelector::absolute(parent.path().to_path_buf()).expect("parent scope"),
+                AccessMode::Read,
+            ),
+            rule,
+        ]),
         NetworkPolicy::disabled(),
     );
     let (command, effective, context) = request_for(&root, &policy, shell_command(":"));
