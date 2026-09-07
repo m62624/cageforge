@@ -16,9 +16,8 @@ use cageforge_policy::{NetworkDecision, NetworkMode, UnixSocketMode};
 use cageforge_policy_compose::EffectiveNetworkLowering;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinSet;
-use tokio::time::timeout;
 
 use crate::error::MacosNetworkError;
 
@@ -128,7 +127,7 @@ impl GatewayRuntime {
         policy: cageforge_policy_compose::EffectiveNetworkPolicy,
         config: GatewayConfig,
     ) -> Result<Self, MacosNetworkError> {
-        let relay_idle_timeout = config.relay_idle_timeout();
+        let max_concurrent_connections = config.max_concurrent_connections();
         let gateway = NetworkGateway::with_system_resolver(policy, config)
             .map_err(|source| MacosNetworkError::Gateway { source })?;
         let ingress_key = gateway.ingress_key();
@@ -150,7 +149,7 @@ impl GatewayRuntime {
                     listener,
                     gateway,
                     ingress_key,
-                    relay_idle_timeout,
+                    max_concurrent_connections,
                     shutdown_receiver,
                     ready_sender,
                 )
@@ -247,7 +246,7 @@ fn retain_gateway_thread(thread: JoinHandle<Result<(), MacosNetworkError>>) {
     // The gateway thread remains the owner of its listener and runtime until
     // it exits. Keep joining it in a recovery owner instead of blocking the
     // caller during ordinary cleanup. If the recovery thread cannot be
-    // created, dropping its closure invokes the owner's synchronous join.
+    // created, its Drop path intentionally retains the live thread.
     let recovery = GatewayThreadRecovery {
         thread: Some(thread),
     };
@@ -329,7 +328,7 @@ fn run_gateway(
     listener: TcpListener,
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
-    relay_idle_timeout: Duration,
+    max_concurrent_connections: std::num::NonZeroUsize,
     shutdown: oneshot::Receiver<()>,
     ready: mpsc::SyncSender<Result<(), MacosNetworkError>>,
 ) -> Result<(), MacosNetworkError> {
@@ -354,7 +353,14 @@ fn run_gateway(
         ready
             .send(Ok(()))
             .map_err(|_| MacosNetworkError::StartupChannelClosed)?;
-        serve_gateway(listener, gateway, ingress_key, relay_idle_timeout, shutdown).await
+        serve_gateway(
+            listener,
+            gateway,
+            ingress_key,
+            max_concurrent_connections,
+            shutdown,
+        )
+        .await
     })
 }
 
@@ -362,20 +368,29 @@ async fn serve_gateway(
     listener: TokioTcpListener,
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
-    relay_idle_timeout: Duration,
+    max_concurrent_connections: std::num::NonZeroUsize,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<(), MacosNetworkError> {
     let mut connections = JoinSet::new();
+    let admission = std::sync::Arc::new(Semaphore::new(max_concurrent_connections.get()));
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
             accepted = listener.accept() => {
                 let (stream, _) = accepted.map_err(|source| MacosNetworkError::RuntimeListener { source })?;
+                let Some(permit) = try_admission(&admission) else {
+                    // Refuse excess ingress before creating a relay task or
+                    // retaining another socket. The network gateway has its
+                    // own limit for direct callers; this admission limit also
+                    // bounds the macOS TCP bridge itself.
+                    drop(stream);
+                    continue;
+                };
                 connections.spawn(serve_private_stream(
                     stream,
                     gateway.clone(),
                     ingress_key.clone(),
-                    relay_idle_timeout,
+                    permit,
                 ));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
@@ -386,11 +401,17 @@ async fn serve_gateway(
     Ok(())
 }
 
+fn try_admission(
+    admission: &std::sync::Arc<Semaphore>,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    admission.clone().try_acquire_owned().ok()
+}
+
 async fn serve_private_stream(
     client: TcpStream,
     gateway: NetworkGateway<SystemResolver>,
     ingress_key: GatewayIngressKey,
-    relay_idle_timeout: Duration,
+    _admission: tokio::sync::OwnedSemaphorePermit,
 ) {
     let (mut client_side, gateway_side) = tokio::io::duplex(GATEWAY_RELAY_BUFFER_BYTES);
     if ingress_key.authenticate(&mut client_side).await.is_err() {
@@ -405,15 +426,14 @@ async fn serve_private_stream(
     tokio::pin!(to_gateway, to_client);
     tokio::select! {
         result = &mut gateway_task => { let _ = result; }
-        _ = &mut to_client => return,
+        _ = &mut to_client => (),
         _ = &mut to_gateway => {
             tokio::select! {
                 result = &mut gateway_task => { let _ = result; }
-                _ = &mut to_client => return,
+                _ = &mut to_client => (),
             }
         }
     }
-    let _ = timeout(relay_idle_timeout, &mut to_client).await;
 }
 
 async fn relay_direction<R, W>(mut reader: R, mut writer: W) -> std::io::Result<()>
@@ -428,13 +448,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
     use tokio::sync::oneshot;
 
-    use super::GatewayRuntime;
+    use super::{GatewayRuntime, try_admission};
     use crate::error::MacosNetworkError;
 
     #[test]
@@ -470,5 +491,14 @@ mod tests {
             .shutdown_with_timeout(Duration::from_secs(1))
             .expect("released gateway shutdown");
         assert!(gateway.thread.is_none());
+    }
+
+    #[test]
+    fn gateway_admission_does_not_retain_more_sockets_than_configured() {
+        let admission = Arc::new(tokio::sync::Semaphore::new(1));
+        let first = try_admission(&admission).expect("first connection permit");
+        assert!(try_admission(&admission).is_none());
+        drop(first);
+        assert!(try_admission(&admission).is_some());
     }
 }
