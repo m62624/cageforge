@@ -344,22 +344,12 @@ impl Drop for LinuxChild {
                     .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
                     .spawn(move || recovery.recover_until_terminated());
             }
-        } else if !self.recovery_attempted {
+        } else {
             if let Some(recovery) = self.take_recovery_owner() {
                 let _ = thread::Builder::new()
                     .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
                     .spawn(move || recovery.recover_until_terminated());
             }
-        } else {
-            // Dropping these resources would disable monitoring, remove the
-            // gateway, or unmount synthetic targets while the boundary may
-            // still be alive. Leak them deliberately until the process can
-            // be recovered; this is fail-closed and preserves enforcement.
-            std::mem::forget(self.child.take());
-            std::mem::forget(self.timeout_watchdog.take());
-            std::mem::forget(self.gateway_runtime.take());
-            std::mem::forget(self.protected_create_monitor.take());
-            std::mem::forget(std::mem::take(&mut self.synthetic_targets));
         }
     }
 }
