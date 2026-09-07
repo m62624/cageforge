@@ -145,6 +145,10 @@ For network enforcement:
 Each proxy ingress and gateway owns its policy, key, listener, and limits.
 Dropping one child closes and joins only its own runtime. A second instance
 cannot reuse the first instance's policy merely because both are on loopback.
+The owning `GatewayRuntime` also retains a duplicate of the bound listener
+until the gateway thread has been joined successfully. This keeps the
+Seatbelt-authorized ingress port reserved if the gateway exits unexpectedly;
+the port is reusable only after confirmed gateway cleanup.
 Gateway startup uses a bounded readiness handshake. Runtime-construction and
 listener-registration failures are sent through that handshake as typed
 errors; a gateway that produces no readiness result is rejected after its
@@ -198,6 +202,7 @@ Native macOS black-box tests cover at least:
 - disabled networking blocks direct connections;
 - enabled unrestricted networking preserves direct connections;
 - restricted networking reaches only exact authorized gateway targets;
+- a gateway ingress port remains unavailable until confirmed runtime cleanup;
 - separate simultaneous instances retain separate policies and gateway keys;
 - unrelated inherited file descriptors do not cross the launch boundary;
 - timeout, explicit kill, drop, and parent death terminate the complete group;
