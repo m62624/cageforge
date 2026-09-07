@@ -310,10 +310,10 @@ fn send_direct_request(target: SocketAddr) -> io::Result<Vec<u8>> {
     Ok(response)
 }
 
-fn network_policy() -> SandboxPolicy {
+fn restricted_network_policy(target: SocketAddr) -> SandboxPolicy {
     let network = NetworkPolicy::enabled()
         .with_domain_mode(DomainMode::Restricted)
-        .with_domain("127.0.0.1", DomainAccess::Allow)
+        .with_domain(target.to_string(), DomainAccess::Allow)
         .expect("loopback domain rule");
     SandboxPolicy::new(FilesystemPolicy::unrestricted(), network)
 }
@@ -1195,7 +1195,7 @@ fn network_client_fixture() {
 fn restricted_network_reaches_only_the_authorized_loopback_target() {
     let (target, server) = start_http_server();
     let workspace = TempDir::new().expect("workspace");
-    let policy = network_policy();
+    let policy = restricted_network_policy(target);
     let (command, effective, runtime) = network_request(workspace.path(), &policy, "http", target);
     let backend = backend();
     let prepared = backend
@@ -1223,6 +1223,77 @@ fn restricted_network_reaches_only_the_authorized_loopback_target() {
         String::from_utf8_lossy(&output)
     );
     server_result.expect("HTTP server I/O");
+}
+
+#[test]
+fn simultaneous_restricted_network_instances_keep_separate_gateway_policies() {
+    let (first_target, first_server) = start_http_server();
+    let (second_target, second_server) = start_http_server();
+    assert_ne!(first_target, second_target);
+
+    let first_workspace = TempDir::new().expect("first workspace");
+    let second_workspace = TempDir::new().expect("second workspace");
+    let first_policy = restricted_network_policy(first_target);
+    let second_policy = restricted_network_policy(second_target);
+    let (first_command, first_effective, first_context) =
+        network_request(first_workspace.path(), &first_policy, "http", first_target);
+    let (second_command, second_effective, second_context) = network_request(
+        second_workspace.path(),
+        &second_policy,
+        "http",
+        second_target,
+    );
+    let backend = backend();
+    let first = backend
+        .prepare(
+            BackendRequest::new(&first_command, &first_effective),
+            &first_context,
+        )
+        .expect("first prepare");
+    let second = backend
+        .prepare(
+            BackendRequest::new(&second_command, &second_effective),
+            &second_context,
+        )
+        .expect("second prepare");
+    let mut first = backend.spawn(first).expect("first spawn");
+    let mut second = backend.spawn(second).expect("second spawn");
+
+    let mut first_output = Vec::new();
+    first
+        .stdout()
+        .expect("first stdout")
+        .read_to_end(&mut first_output)
+        .expect("first output");
+    let mut second_output = Vec::new();
+    second
+        .stdout()
+        .expect("second stdout")
+        .read_to_end(&mut second_output)
+        .expect("second output");
+    let first_status = first.wait().expect("first wait");
+    let second_status = second.wait().expect("second wait");
+
+    first_server
+        .join()
+        .expect("first HTTP server")
+        .expect("first HTTP server I/O");
+    second_server
+        .join()
+        .expect("second HTTP server")
+        .expect("second HTTP server I/O");
+    assert_eq!(
+        first_status.code(),
+        Some(0),
+        "first sandbox output: {}",
+        String::from_utf8_lossy(&first_output)
+    );
+    assert_eq!(
+        second_status.code(),
+        Some(0),
+        "second sandbox output: {}",
+        String::from_utf8_lossy(&second_output)
+    );
 }
 
 #[test]
