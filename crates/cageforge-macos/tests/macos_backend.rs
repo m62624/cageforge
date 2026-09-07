@@ -953,7 +953,6 @@ fn workspace_glob_rejects_a_non_utf8_root_before_launch() {
     let root = parent
         .path()
         .join(OsString::from_vec(vec![b'w', b'o', b'r', b'k', 0xff]));
-    fs::create_dir(&root).expect("non-UTF-8 workspace root");
     let rule = FilesystemRule::workspace_glob("**/*.secret", AccessMode::Deny)
         .expect("workspace deny glob");
     let policy = SandboxPolicy::new(
