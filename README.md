@@ -1,184 +1,143 @@
 # Cageforge
 
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or
+> endorsed by OpenAI.
 
-> 🚧 **Development status**
->
-> Cageforge is under active development and is not ready for production use.
-> The 0.1.0 release is not yet available.
+> **Development status:** Cageforge is under active development and has not
+> published its first `0.1.0` release yet.
+
+Cageforge is a reusable Rust toolkit for running potentially untrusted
+commands, agents, plugins, build scripts, and mods inside an OS-enforced
+process boundary. It describes and validates command, filesystem, environment,
+and network intent, narrows that intent with an optional safety ceiling, and
+hands the result to a native Linux, macOS, or Windows backend.
 
 The sandbox isolates processes using the host operating system's native
 enforcement mechanisms. Its guarantees depend on a correct host OS, correct
 native enforcement, and a correct Cageforge implementation.
 
-Cageforge is a reusable Rust toolkit for describing, validating, narrowing,
-and handing off sandboxed process execution. It is designed for agent
-harnesses, build tools, developer tools, and other applications that need an
-explicit boundary around commands, files, environment variables, and network
-destinations.
+## Start with the facade
 
-## Sandbox model
+Most applications should begin with [`cageforge`](https://docs.rs/cageforge/latest/cageforge/).
+Enable only the native backend feature for the target platform:
 
-The sandbox is created to run potentially untrusted commands, agents, plugins,
-build scripts, and mods inside an OS-enforced boundary. It:
-
-- limits access to files and the working directory;
-- limits network access and routing;
-- isolates child processes;
-- applies timeouts and terminates the complete process tree;
-- passes only explicitly authorized file descriptors or handles; and
-- supports multiple independent instances at the same time.
-
-One `spawn` creates one sandbox boundary for a command and all of its
-descendants. The backend and policy can be reused for several commands, while
-each spawn receives its own process, lifecycle, and native enforcement state.
-Linux, Windows, and macOS backends implement this same portable model with
-their respective operating-system mechanisms.
-
-The workspace is split into small libraries so an application can use only the
-layer it needs. The portable crates do not choose an operating-system sandbox
-for the caller and do not contain a process runner. A native backend consumes
-their validated values and applies the corresponding Linux, macOS, or Windows
-enforcement mechanism.
-
-## Start here
-
-Choose the smallest entry point that matches your application:
-
-| You need to… | Start with | What it gives you |
-| --- | --- | --- |
-| Compare paths using consistent POSIX/Windows rules | [`cageforge-path`](https://docs.rs/cageforge-path/latest/cageforge_path/) | Lexical equality, containment, native path keys, and parent-traversal checks |
-| Describe a command without launching it | [`cageforge-command`](https://docs.rs/cageforge-command/latest/cageforge_command/) | Validated argv, working directory, environment, stdio, and timeout intent |
-| Describe filesystem and network permissions | [`cageforge-policy`](https://docs.rs/cageforge-policy/latest/cageforge_policy/) | Portable policy values, validation, and access decisions |
-| Load named profiles from TOML | [`cageforge-config`](https://docs.rs/cageforge-config/latest/cageforge_config/) | Strict parsing, inheritance, diagnostics, schema, and resolved policy/command values |
-| Apply an outer safety limit | [`cageforge-policy-compose`](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/) | Monotonic intersection of requested permissions and a policy ceiling |
-| Check a request against a backend contract | [`cageforge-backend-api`](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/) | Typed capability negotiation and side-effect-free preflight for a native backend |
-| Build the bundled Linux Bubblewrap resource | `cageforge-bwrap` | Builds the pinned upstream Bubblewrap source and stages `bwrap` plus its digest manifest |
-| Integrate a native Linux process sandbox | [`cageforge-linux`](https://docs.rs/cageforge-linux/latest/cageforge_linux/) | Bubblewrap namespaces, filesystem lowering, process hardening, and network enforcement |
-| Integrate a native Windows process sandbox | [`cageforge-windows`](https://docs.rs/cageforge-windows/latest/cageforge_windows/) | Managed setup, restricted process trees, ACL, Job Object, firewall/WFP, and network-route enforcement |
-
-Most applications use the crates in this order:
-
-```text
-configuration source       Rust builders
-        │                       │
-        └──────────┬────────────┘
-                   ▼
-       cageforge-config or direct values
-                   │
-                   ▼
-       cageforge-policy + cageforge-command
-                   │
-                   ▼
-       cageforge-policy-compose (optional outer limit)
-                   │
-                   ▼
-       cageforge-backend-api (capability preflight)
-                   │
-                   ▼
-       cageforge-linux or another native backend / application-owned executor
+```toml
+[dependencies]
+cageforge = { version = "0.1.0", features = ["linux"] }
 ```
 
-`cageforge-path` is the shared path-semantics layer used by the other crates.
-Most users receive it through those crates and do not need to call it
-directly. Use it directly when your own configuration or backend code must
-make the same native path comparisons.
+Use `windows` on Windows or `macos` on macOS. Add `config` when profiles
+should come from TOML. On Linux, `linux-bundled-bubblewrap` additionally
+selects the verified embedded Bubblewrap resource.
 
-## The normal application flow
+The normal flow is explicit:
 
-### 1. Choose a configuration boundary
+```text
+CommandRequest + SandboxPolicy
+             │
+             ▼
+  optional policy composition
+             │
+             ▼
+       prepare(request)
+             │
+             ▼
+          spawn()
+             │
+             ▼
+  one boundary for the command
+  and all of its descendants
+```
 
-Use `cageforge-config` when operators should write named TOML profiles. Use
-the `cageforge-policy` and `cageforge-command` builders directly when the
-caller already has a typed configuration system or wants compile-time Rust
-construction.
+Each `spawn` creates an independent sandbox instance. A reusable backend and
+policy can prepare several commands, while every instance owns its own native
+process boundary, timeout, lifecycle, and network state. If Cargo starts
+`rustc`, `build.rs`, or a linker, those descendants remain inside the same
+boundary as Cargo.
 
-### 2. Build or resolve the portable values
+The facade is synchronous. An application with an async runtime can execute
+blocking preparation, spawning, and waiting in its blocking-task facility.
 
-The result is a `SandboxPolicy` plus an optional `CommandRequest`. These are
-validated values, not an instruction to launch a process. Special filesystem
-selectors such as `workspace-root` are resolved later from a runtime context
-owned by the application or backend.
+## Workspace packages
 
-### 3. Narrow with an outer ceiling when needed
+The workspace currently contains 13 Cargo packages: 12 reusable library or
+resource packages and one internal upstream-review tool.
 
-If an application has a system, tenant, workspace, or harness-wide limit,
-construct a `PolicyCeiling` and call `cageforge_policy_compose::compose`.
-The resulting `EffectiveSandbox` is the value a backend must enforce. It is
-never safe for a backend to replace it with the original requested policy.
+| Package | Role | Native target or feature |
+| --- | --- | --- |
+| [`cageforge`](crates/cageforge/README.md) | Unified application-facing facade | `linux`, `windows`, or `macos` |
+| [`cageforge-backend-api`](crates/cageforge-backend-api/README.md) | Capability preflight and backend-bound handoff | Portable |
+| [`cageforge-command`](crates/cageforge-command/README.md) | Validated command, environment, stdio, and timeout values | Portable |
+| [`cageforge-config`](crates/cageforge-config/README.md) | TOML profiles and inheritance resolution | Portable, optional facade feature `config` |
+| [`cageforge-network-proxy`](crates/cageforge-network-proxy/README.md) | Policy-enforcing HTTP/SOCKS gateway | Portable; runtime feature is optional |
+| [`cageforge-path`](crates/cageforge-path/README.md) | Native lexical path identity and containment | Portable |
+| [`cageforge-policy`](crates/cageforge-policy/README.md) | Filesystem and network policy model | Portable |
+| [`cageforge-policy-compose`](crates/cageforge-policy-compose/README.md) | Requested-policy and ceiling intersection | Portable |
+| [`cageforge-linux`](crates/cageforge-linux/README.md) | Linux native process sandbox | Linux |
+| [`cageforge-macos`](crates/cageforge-macos/README.md) | macOS native process sandbox | macOS |
+| [`cageforge-windows`](crates/cageforge-windows/README.md) | Windows native process sandbox | Windows |
+| [`cageforge-bwrap`](crates/cageforge-bwrap/README.md) | Builds and stages the pinned Bubblewrap resource | Linux build/release support |
+| `cageforge-upstream-review` | Read-only internal upstream comparison tool | `publish = false` |
 
-### 4. Apply native enforcement
+The three native backend README files are the platform-specific guides. The
+other package README files describe the portable layers and their handoff
+relationships. The `cageforge-bwrap` README covers the separately licensed
+Bubblewrap build component.
 
-A backend selects its platform-specific capabilities and performs the actual
-enforcement. In particular:
+## Portable layers
 
-- filesystem access must be combined with native symlink, junction/reparse,
-  mount, and TOCTOU-safe operations;
-- network connections must use the exact `SocketAddr` authorized from a
-  `ResolvedNetworkTarget` immediately before connecting;
-- the backend chooses the actual platform-specific variables for the
-  `EnvironmentBase::Core` request;
-- unsupported native capabilities must produce typed errors rather than being
-  silently widened or ignored.
+Applications can use the smaller packages independently:
 
-The portable crates deliberately keep these responsibilities outside their
-APIs so the same values can be integrated with different execution systems.
+1. `cageforge-path` provides shared lexical path equality, containment, native
+   case handling, and parent-traversal decisions.
+2. `cageforge-command` validates executable, arguments, working directory,
+   environment, standard streams, and timeout intent.
+3. `cageforge-policy` validates filesystem and network rules and evaluates
+   portable decisions.
+4. `cageforge-config` can resolve those values from named TOML profiles.
+5. `cageforge-policy-compose` can narrow requested values with an outer
+   `PolicyCeiling`.
+6. `cageforge-backend-api` performs common capability preflight and creates a
+   backend-bound prepared handoff.
+7. A native backend lowers that complete handoff to the OS enforcement API.
 
-## Use the crates independently
+The portable packages do not launch processes or silently select an OS
+sandbox. They provide validated values for an application or the `cageforge`
+facade to pass to a selected native backend.
 
-The crates are libraries, not a mandatory monolith:
+## Policy and command boundaries
 
-- `cageforge-path` can be used without any sandbox policy.
-- `cageforge-command` can describe ordinary or sandboxed process requests and
-  can be paired with a custom configuration format.
-- `cageforge-policy` can be built from Rust, JSON, another config language,
-  or an application-specific API without using TOML.
-- `cageforge-config` depends on the validated policy and command models but
-  does not depend on a backend.
-- `cageforge-policy-compose` can narrow values produced by TOML, JSON, Rust,
-  or another configuration source; it does not require `cageforge-config`.
-- `cageforge-backend-api` can validate a composed request before any native
-  backend or application-owned executor performs process, filesystem, or
-  network operations.
+Filesystem and network restrictions are explicit. Restricted policies start
+from denial and add only validated scopes or destinations. An outer
+`PolicyCeiling` can narrow a request further; native lowering consumes the
+complete effective result rather than reconstructing a broader request.
 
-The individual crate pages contain copyable examples and explain the handoff
-to the next layer:
+Network authorization is bound to the exact resolved `SocketAddr` that a
+backend is about to connect to. Filesystem policy is combined with native
+symlink, mount, reparse-point, and TOCTOU-safe enforcement by the selected
+backend. Unsupported native requirements become typed errors before launch.
 
-- [`cageforge-path` API guide](https://docs.rs/cageforge-path/latest/cageforge_path/)
-- [`cageforge-command` API guide](https://docs.rs/cageforge-command/latest/cageforge_command/)
-- [`cageforge-policy` API guide](https://docs.rs/cageforge-policy/latest/cageforge_policy/)
-- [`cageforge-config` API guide](https://docs.rs/cageforge-config/latest/cageforge_config/)
-- [`cageforge-policy-compose` API guide](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/)
-- [`cageforge-backend-api` API guide](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/)
+Commands launched outside an application’s Cageforge integration are not
+automatically sandboxed. A CLI can wrap the facade, for example:
 
-## Configuration examples
+```text
+my-tool cargo test --workspace
+```
 
-The [`cageforge-config/examples`](crates/cageforge-config/examples/README.md)
-directory contains complete TOML scenarios, including minimal read-only
-profiles, inheritance, environment filtering, protected metadata, and native
-Unix/macOS and Windows path spellings. Start with
-[`minimal-policy.toml`](crates/cageforge-config/examples/minimal-policy.toml),
-then compare it with
-[`workspace-development.toml`](crates/cageforge-config/examples/workspace-development.toml).
+The wrapper constructs a `CommandRequest`, applies its policy, and starts
+Cargo through `spawn`.
 
-## Project relationship and provenance
+## Configuration and references
 
-Cageforge is independently implemented. Its portable sandbox design and
-security boundaries are informed by relevant open-source sandboxing code in
-[OpenAI Codex](https://github.com/openai/codex), without copying Codex source
-into the current crates. This project is not a Codex fork and does not expose
-Codex protocols, telemetry, PTY types, or product-specific process APIs.
+The TOML examples are in
+[`crates/cageforge-config/examples`](crates/cageforge-config/examples/README.md).
+The complete public API is available on [docs.rs](https://docs.rs/cageforge/latest/cageforge/)
+and in the package README files linked above.
 
-The legal, provenance, and upstream-review rules are maintained in:
-
-- [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md)
-- [`NOTICE`](NOTICE)
-- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
-- [`UPSTREAM.md`](UPSTREAM.md)
-
-The current workspace contains the portable layers and the Linux and Windows
-backends described above. The macOS backend and ergonomic facade are future
-architectural layers; they should consume these APIs rather than move platform
-enforcement into the portable crates.
+Cageforge is independently implemented. Its design and security boundaries
+are reviewed against relevant open-source sandboxing code in
+[OpenAI Codex](https://github.com/openai/codex), without exposing Codex
+protocols or making Codex a runtime dependency. The legal and provenance
+records are maintained in [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
+[`NOTICE`](NOTICE), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and
+[`UPSTREAM.md`](UPSTREAM.md).
