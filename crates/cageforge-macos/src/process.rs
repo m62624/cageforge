@@ -174,7 +174,7 @@ impl MacosChild {
         let Some(child) = self.child.take() else {
             return;
         };
-        let recovery = MacosBoundaryRecovery {
+        let mut recovery = MacosBoundaryRecovery {
             child: Some(child),
             process_group_id: self.process_group_id,
             parent_death: self.parent_death.take(),
