@@ -48,7 +48,7 @@ The behavior review is against commit
 | `codex-rs/sandboxing/src/seatbelt.rs` | Seatbelt command construction, closed-by-default policy, filesystem scopes, protected paths, glob denials, Unix sockets, and proxy-port rules | Independently reimplemented against `EffectiveSandbox`; no Codex command/profile types are exposed |
 | `codex-rs/sandboxing/src/seatbelt_base_policy.sbpl` | Required loader, process, device, preference, IPC, and system-service allowances | Re-authored as Cageforge policy text and reviewed for the supported command contract |
 | `codex-rs/sandboxing/src/seatbelt_network_policy.sbpl` | Minimal network service allowances needed by macOS clients | Re-authored and composed only with the selected effective network mode |
-| `codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl` | Minimal system/framework visibility for restricted commands | Re-authored as a Cageforge platform-default policy; it is never used to grant workspace access |
+| `codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl` | Minimal system/framework visibility for restricted commands | Re-authored as Cageforge's fixed read-only runtime policy; it is never used to grant workspace access |
 | `codex-rs/sandboxing/src/manager.rs` and `src/spawn.rs` | Platform selection and process handoff | Replaced by `SandboxBackend`, backend-bound preparation, and `MacosChild`; PTY remains outside the portable API |
 | `codex-rs/utils/pty/src/process_group.rs` | macOS process-group member enumeration and per-member fallback after `EPERM` | Retained for Cageforge's `SIGKILL` cleanup; the fallback validates each member's current group before signalling it |
 
@@ -86,6 +86,9 @@ The filesystem lowering must:
   before policy construction;
 - enforce read, write, deny, read-only descendant, protected-relative-path,
   and deny-glob rules without widening an effective intersection;
+- lower deny globs using both their submitted form and the form obtained by
+  canonicalizing an existing static prefix, so a symlink or firmlink alias
+  cannot bypass a deny rule;
 - bound glob expansion according to the effective scan-depth requirement and
   fail closed when the requested semantics cannot be represented; and
 - keep platform-default reads separate from caller workspace and write

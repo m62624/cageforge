@@ -844,6 +844,43 @@ fn deny_glob_blocks_writes_inside_a_writable_workspace() {
 }
 
 #[test]
+fn deny_glob_blocks_a_symlinked_static_prefix() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = TempDir::new().expect("workspace");
+    let real_root = workspace.path().join("real");
+    fs::create_dir(&real_root).expect("real root");
+    let link = workspace.path().join("link");
+    symlink(&real_root, &link).expect("static-prefix symlink");
+    let secret = real_root.join("value.secret");
+    let glob =
+        FilesystemRule::absolute_glob(format!("{}/**/*.secret", link.display()), AccessMode::Deny)
+            .expect("absolute secret glob");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(
+                PathSelector::absolute(workspace.path().to_path_buf()).expect("workspace"),
+                AccessMode::Write,
+            ),
+            glob,
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let script = format!("printf secret > '{}/value.secret'", link.display());
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command(&script));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert!(!status.success(), "symlinked deny glob was bypassed");
+    assert!(!secret.exists(), "symlinked deny glob was bypassed");
+}
+
+#[test]
 fn writable_workspace_cannot_escape_through_a_symlink() {
     use std::os::unix::fs::symlink;
 
