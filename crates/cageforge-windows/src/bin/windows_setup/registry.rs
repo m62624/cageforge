@@ -5,6 +5,7 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{OsStr, OsString};
+use std::io;
 use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use windows_sys::Win32::System::Registry::{
 use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 
 use crate::owner_identity::owner_key;
-use crate::setup_protocol::{SetupFailureCode, SetupRequest, SetupStage};
+use crate::setup_protocol::{SetupFailureCode, SetupOperation, SetupRequest, SetupStage};
 
 use super::{NativeSetupFailure, NativeSetupResult};
 
@@ -66,6 +67,21 @@ pub(super) fn claim(request: &SetupRequest) -> NativeSetupResult<OwnerSetupLease
     let lease = OwnerSetupLease { mutex, key };
     match read_state_directory(lease.key)? {
         Some(existing) if !paths_equal(&existing, &request.state_directory) => {
+            // A previous setup may have been interrupted after claiming the
+            // owner binding and before its temporary state root was removed.
+            // Reclaim only a root that is demonstrably absent. Existing roots
+            // (including reparse points) remain a hard conflict so a live or
+            // ambiguous setup can never be silently replaced.
+            if matches!(request.operation, SetupOperation::Install)
+                && !state_root_exists(&existing)?
+            {
+                super::wfp::remove_proxy_filters(
+                    &request.owner_sid,
+                    &crate::firewall_contract::proxy_ports_for_state_directory(&existing),
+                )?;
+                write_state_directory(lease.key, &request.state_directory)?;
+                return Ok(lease);
+            }
             Err(NativeSetupFailure::new(
                 SetupStage::StateDirectory,
                 SetupFailureCode::OwnerSetupConflict,
@@ -81,6 +97,17 @@ pub(super) fn claim(request: &SetupRequest) -> NativeSetupResult<OwnerSetupLease
             write_state_directory(lease.key, &request.state_directory)?;
             Ok(lease)
         }
+    }
+}
+
+fn state_root_exists(path: &std::path::Path) -> NativeSetupResult<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(registry_failure(
+            SetupFailureCode::SetupRegistryRead,
+            format!("failed to inspect the existing owner setup root {path:?}: {error}"),
+        )),
     }
 }
 

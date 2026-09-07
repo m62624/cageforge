@@ -451,6 +451,13 @@ pub enum NetworkGatewayRuntimeError {
         /// Maximum time allowed for gateway runtime startup.
         timeout_ms: u128,
     },
+    /// The gateway did not finish shutting down within the bounded cleanup
+    /// interval. Its owner must retain the runtime and retry cleanup.
+    #[error("gateway did not shut down within {timeout_ms} ms")]
+    ShutdownTimeout {
+        /// Maximum time allowed for one gateway shutdown attempt.
+        timeout_ms: u128,
+    },
     /// The gateway thread terminated by panic.
     #[error("gateway runtime thread panicked")]
     Panicked,
@@ -909,6 +916,10 @@ pub enum LinuxBackendError {
         #[source]
         source: std::io::Error,
     },
+    /// The complete Bubblewrap process boundary did not exit within the
+    /// bounded termination window.
+    #[error("Linux sandbox boundary termination was not confirmed")]
+    BoundaryTerminationUnconfirmed,
     /// The complete process boundary is owned by the detached recovery owner
     /// and is no longer controllable through this child handle.
     #[error("Linux sandbox boundary is owned by its recovery owner")]

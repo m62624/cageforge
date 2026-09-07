@@ -4,6 +4,10 @@
 > crate adapts sandbox design ideas from open-source OpenAI Codex into an
 > independent library API and contains no copied Codex source.
 
+The sandbox isolates processes using the host operating system's native
+enforcement mechanisms. Its guarantees depend on a correct host OS, correct
+native enforcement, and a correct Cageforge implementation.
+
 # cageforge-windows
 
 `cageforge-windows` is the Windows-native backend for Cageforge's library API.
@@ -80,6 +84,10 @@ idempotent, while a different root is rejected with the typed
 WFP state is reconciled. To run several isolated workloads, reuse the verified
 setup and create one or more `WindowsBackend` instances; each `spawn` then
 creates its own launch boundary.
+
+If an interrupted setup left a binding to a root that has since disappeared,
+the next owner setup can reclaim that stale binding under the setup lifecycle
+lock. A root that still exists is never silently replaced.
 
 Setup creates two persistent ordinary local accounts scoped to the signed-in
 owner:
@@ -358,6 +366,11 @@ Cageforge HTTP or SOCKS5 gateway, which rechecks the exact resolved destination
 at connect time. A process cannot use another instance's route SID or gateway
 credential.
 
+Ingress shutdown has a bounded cleanup wait. If the shared ingress thread does
+not confirm exit within that interval, a recovery owner retains the thread,
+Winsock session, and retiring ports until the thread exits; another setup cannot
+reuse those ports while the old ingress may still be alive.
+
 ## Process lifecycle and errors
 
 `WindowsChild` exposes the child identifier, configured standard-stream pipes,
@@ -365,6 +378,9 @@ credential.
 boundary, private desktop, Job Object relationship, filesystem enforcement,
 network route, and active-child lease. Completion releases the route and ACL
 resources only after the process boundary and runner lifecycle have finished.
+`kill` reports success only after the complete Job boundary is confirmed empty;
+an unconfirmed termination retains the resources for the per-instance recovery
+owner instead of releasing enforcement early.
 
 The parent does not parse runner `stdout` or `stderr` as a protocol. The
 authenticated runner reports `Ready`, `Spawned`, `Exited`, and typed `Failed`

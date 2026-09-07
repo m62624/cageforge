@@ -9,6 +9,10 @@
 > Cageforge is under active development and is not ready for production use.
 > The 0.1.0 release is not yet available.
 
+The sandbox isolates processes using the host operating system's native
+enforcement mechanisms. Its guarantees depend on a correct host OS, correct
+native enforcement, and a correct Cageforge implementation.
+
 Cageforge is a reusable Rust toolkit for describing, validating, narrowing,
 and handing off sandboxed process execution. It is designed for agent
 harnesses, build tools, developer tools, and other applications that need an

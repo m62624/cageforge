@@ -4,6 +4,10 @@
 > crate adapts sandbox design ideas from open-source OpenAI Codex into an
 > independent library API and contains no copied Codex source.
 
+The sandbox isolates processes using the host operating system's native
+enforcement mechanisms. Its guarantees depend on a correct host OS, correct
+native enforcement, and a correct Cageforge implementation.
+
 # cageforge-linux
 
 `cageforge-linux` is the Linux-native backend for Cageforge's library API. It
@@ -409,13 +413,20 @@ only when callers deliberately give multiple instances the same writable host
 path; coordination for the same protected missing path is UID-scoped so one
 instance cannot remove another instance's active protection.
 
+Gateway shutdown has a bounded cleanup wait. If the gateway thread does not
+confirm exit within that interval, a recovery owner retains the thread and its
+private socket directory and joins it later; the directory is not removed while
+the gateway may still be serving authenticated connections.
+
 ## Process lifecycle and errors
 
 `LinuxChild` exposes the child identifier, configured pipe handles, `try_wait`,
 `wait`, and `kill`. Backend-default and explicit timeout policies are enforced
-by a pidfd-based watchdog when the kernel supports it. Timeout, policy-monitor
-failure, gateway failure, explicit termination, and `Drop` terminate and reap
-the Bubblewrap PID namespace boundary and clean up per-run resources.
+by a pidfd-based watchdog when the kernel supports it. `kill` terminates and
+confirms the Bubblewrap boundary before reporting success. Timeout,
+policy-monitor failure, gateway failure, explicit termination, and `Drop`
+terminate and reap the boundary and clean up per-run resources; failed cleanup
+keeps the remaining enforcement resources owned by a bounded recovery path.
 
 Use `LinuxBackendError` for typed construction, preflight, lowering, setup,
 gateway, process, timeout, and cleanup failures. Capability errors identify the

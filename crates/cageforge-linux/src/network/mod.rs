@@ -35,16 +35,23 @@ const AUTHENTICATED_BRIDGE_BUFFER_BYTES: usize = 64 * 1024;
 const NETWORK_GATEWAY_THREAD_NAME: &str = "cageforge-network-gateway";
 const NETWORK_GATEWAY_RECOVERY_THREAD_NAME: &str = "cageforge-network-gateway-recovery";
 const NETWORK_GATEWAY_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const NETWORK_GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const NETWORK_GATEWAY_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Clone)]
 struct BridgeIngressToken(Arc<[u8; BRIDGE_TOKEN_BYTES]>);
 
 /// One independently budgeted host gateway owned by one launched process.
 pub(crate) struct GatewayRuntime {
-    _directory: TempDir,
+    directory: Option<TempDir>,
     socket_directory: PathBuf,
     bridge_token: BridgeIngressToken,
     shutdown: Option<oneshot::Sender<()>>,
+    thread: Option<JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>>,
+}
+
+struct GatewayThreadRecovery {
+    directory: Option<TempDir>,
     thread: Option<JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>>,
 }
 
@@ -171,23 +178,23 @@ impl GatewayRuntime {
             })?;
         match ready_rx.recv_timeout(NETWORK_GATEWAY_STARTUP_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
-                _directory: directory,
+                directory: Some(directory),
                 socket_directory,
                 bridge_token,
                 shutdown: Some(shutdown),
                 thread: Some(thread),
             }),
             Ok(Err(source)) => {
-                let _ = thread.join();
+                retain_gateway_thread(thread, Some(directory));
                 Err(NetworkGatewayRuntimeError::Failed { source }.into())
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = thread.join();
+                retain_gateway_thread(thread, Some(directory));
                 Err(NetworkGatewayRuntimeError::StartupChannelClosed.into())
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let _ = shutdown.send(());
-                retain_startup_thread(thread);
+                retain_gateway_thread(thread, Some(directory));
                 Err(NetworkGatewayRuntimeError::StartupTimeout {
                     timeout_ms: NETWORK_GATEWAY_STARTUP_TIMEOUT.as_millis(),
                 }
@@ -227,6 +234,23 @@ impl GatewayRuntime {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
+        self.shutdown_with_timeout(NETWORK_GATEWAY_SHUTDOWN_TIMEOUT)
+    }
+
+    fn shutdown_with_timeout(&mut self, timeout: Duration) -> Result<(), LinuxBackendError> {
+        let Some(thread) = self.thread.as_ref() else {
+            return Ok(());
+        };
+        let deadline = std::time::Instant::now() + timeout;
+        while !thread.is_finished() {
+            if std::time::Instant::now() >= deadline {
+                return Err(NetworkGatewayRuntimeError::ShutdownTimeout {
+                    timeout_ms: timeout.as_millis(),
+                }
+                .into());
+            }
+            thread::sleep(NETWORK_GATEWAY_SHUTDOWN_POLL_INTERVAL);
+        }
         let Some(thread) = self.thread.take() else {
             return Ok(());
         };
@@ -240,20 +264,48 @@ impl GatewayRuntime {
 
 impl Drop for GatewayRuntime {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        if self.shutdown().is_err()
+            && let Some(thread) = self.thread.take()
+        {
+            retain_gateway_thread(thread, self.directory.take());
+        }
     }
 }
 
-fn retain_startup_thread(thread: JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>) {
-    // The startup thread is already detached if the recovery owner cannot be
-    // created. It owns no sandbox boundary and its listener remains
-    // authenticated, so retaining it is safer than joining indefinitely in
-    // the caller while still reporting the bounded startup failure.
+fn retain_gateway_thread(
+    thread: JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>,
+    directory: Option<TempDir>,
+) {
+    // The gateway thread owns the listener and the socket directory until it
+    // exits. Keep both in a recovery owner instead of deleting the directory
+    // while a live runtime may still accept authenticated connections.
+    let recovery = GatewayThreadRecovery {
+        directory,
+        thread: Some(thread),
+    };
     let _ = thread::Builder::new()
         .name(NETWORK_GATEWAY_RECOVERY_THREAD_NAME.to_owned())
-        .spawn(move || {
+        .spawn(move || recovery.join());
+}
+
+impl GatewayThreadRecovery {
+    fn join(mut self) {
+        if let Some(thread) = self.thread.take() {
             let _ = thread.join();
-        });
+        }
+        self.directory.take();
+    }
+}
+
+impl Drop for GatewayThreadRecovery {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            // A failed recovery-thread spawn must not release the live
+            // listener or its private socket directory.
+            std::mem::forget(self.thread.take());
+            std::mem::forget(self.directory.take());
+        }
+    }
 }
 
 fn thread_failure(

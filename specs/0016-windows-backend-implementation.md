@@ -109,6 +109,14 @@ reconciliation. This setup-level restriction does not limit concurrent runtime
 instances, which share the verified setup while receiving independent runtime
 state, tokens, jobs, ACL leases, and network route identities.
 
+If the recorded root is no longer present, the owner binding is treated as a
+stale interrupted-setup record and may be rebound while the owner lifecycle
+mutex is held. A present root is never silently replaced, including a root
+whose contents are malformed or a reparse point; those cases remain typed
+failures. This recovery is limited to the missing-root case so a temporary CI
+or application-selected root cannot permanently poison later setup after its
+directory has been removed.
+
 The elevated helper independently resolves the default ProgramData path and
 accepts the caller's requested path as that default only when canonical Windows
 path equality matches. It pins every existing ancestor without delete sharing,
@@ -774,10 +782,13 @@ before the portable gateway acquires its own per-route connection permit.
 
 The process-wide ingress is shared only while at least one routed child retains
 its route. When the last route is released, the owning ingress sends an explicit
-shutdown signal, joins its runtime thread, aborts any unfinished admission
-tasks, and releases both fixed listener sockets before another setup may reuse
-those ports. The registry retains only a weak reference, so a dropped backend
-cannot keep a stale ingress runtime alive across uninstall or reinstall.
+shutdown signal and performs a bounded join. It aborts any unfinished admission
+tasks and releases both fixed listener sockets before another setup may reuse
+those ports. If the join deadline expires, a recovery owner retains the ingress
+thread, Winsock session, and retiring ports until the thread exits; a replacement
+setup cannot reuse those ports while the old ingress may still accept traffic.
+The registry retains only a weak reference, so a dropped backend cannot keep a
+confirmed-stopped ingress runtime alive across uninstall or reinstall.
 
 The Cageforge ingress strengthens the frozen implementation by requiring
 `SO_EXCLUSIVEADDRUSE` before binding each fixed setup port, bounding owner-table

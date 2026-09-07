@@ -2911,6 +2911,28 @@ fn dropping_a_running_child_terminates_the_boundary() {
 }
 
 #[test]
+fn explicit_kill_confirms_and_cleans_the_boundary() {
+    let temp = TempDir::new().expect("temporary workspace");
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args(["-c", "sleep 30"])
+        .expect("arguments");
+    let (command, effective, runtime) = request(temp.path(), SandboxPolicy::workspace(), command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    child.kill().expect("kill confirms the boundary");
+
+    assert!(
+        child.try_wait().expect("reaped boundary status").is_some(),
+        "confirmed kill must leave a terminal child status"
+    );
+}
+
+#[test]
 fn read_only_carveout_remains_read_only_under_workspace_write() {
     let temp = TempDir::new().expect("temporary workspace");
     let readonly = temp.path().join("readonly.txt");
