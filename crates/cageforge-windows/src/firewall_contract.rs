@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
@@ -54,6 +55,17 @@ pub(crate) const FIREWALL_LOOPBACK_ADDRESSES: &str = "127.0.0.0/8,::/127";
 
 /// Windows Firewall address set used to exclude all non-loopback addresses.
 pub(crate) const FIREWALL_NON_LOOPBACK_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+
+/// Derives the two fixed loopback ingress ports for one setup root.
+pub(crate) fn proxy_ports_for_state_directory(state_directory: &Path) -> Vec<u16> {
+    const WINDOWS_DYNAMIC_PORT_START: u16 = 49_152;
+    const STATIC_PORT_START: u16 = 40_000;
+    const STATIC_PORT_PAIRS: u16 = (WINDOWS_DYNAMIC_PORT_START - STATIC_PORT_START) / 2;
+    let digest = Sha256::digest(state_directory.as_os_str().to_string_lossy().as_bytes());
+    let offset = u16::from_be_bytes([digest[0], digest[1]]) % STATIC_PORT_PAIRS;
+    let first = STATIC_PORT_START + offset * 2;
+    vec![first, first + 1]
+}
 
 /// Derives the owner-scoped Firewall identifier used by setup and read-back.
 pub(crate) fn firewall_policy_id(owner_sid: &str) -> String {

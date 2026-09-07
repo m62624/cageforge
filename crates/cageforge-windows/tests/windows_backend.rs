@@ -1985,7 +1985,30 @@ fn different_setup_roots_for_one_owner_fail_closed_before_global_reconciliation(
         first.status().expect("first setup remains verifiable"),
         WindowsSetupStatus::Ready(_)
     ));
-    first.uninstall().expect("first owner setup cleanup");
+
+    // A crashed or externally interrupted setup can leave only the protected
+    // owner binding behind after its temporary root has disappeared. The next
+    // setup may recover that stale binding, but must still reject a different
+    // root while the original root exists.
+    let abandoned_root = first
+        .state_directory()
+        .expect("first setup state directory");
+    drop(first);
+    fs::remove_dir_all(&abandoned_root).expect("remove abandoned setup root");
+    let recovered_config = WindowsSetupConfig::new()
+        .with_state_directory(temporary.path().join("recovered-state"))
+        .expect("recovered state directory")
+        .with_setup_helper_path(PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup")))
+        .expect("setup helper")
+        .with_command_runner_path(PathBuf::from(env!(
+            "CARGO_BIN_EXE_cageforge-windows-command-runner"
+        )))
+        .expect("command runner");
+    let recovered = WindowsSetup::new(recovered_config);
+    recovered
+        .install()
+        .expect("stale missing owner root is recoverable");
+    recovered.uninstall().expect("recovered setup cleanup");
 }
 
 #[test]

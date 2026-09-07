@@ -109,6 +109,14 @@ reconciliation. This setup-level restriction does not limit concurrent runtime
 instances, which share the verified setup while receiving independent runtime
 state, tokens, jobs, ACL leases, and network route identities.
 
+If the recorded root is no longer present, the owner binding is treated as a
+stale interrupted-setup record and may be rebound while the owner lifecycle
+mutex is held. A present root is never silently replaced, including a root
+whose contents are malformed or a reparse point; those cases remain typed
+failures. This recovery is limited to the missing-root case so a temporary CI
+or application-selected root cannot permanently poison later setup after its
+directory has been removed.
+
 The elevated helper independently resolves the default ProgramData path and
 accepts the caller's requested path as that default only when canonical Windows
 path equality matches. It pins every existing ancestor without delete sharing,

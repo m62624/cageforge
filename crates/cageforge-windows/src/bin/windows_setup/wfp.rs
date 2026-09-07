@@ -305,6 +305,24 @@ pub(super) fn remove(owner_sid: &str, proxy_ports: &[u16]) -> NativeSetupResult<
 }
 
 #[allow(unsafe_code)]
+pub(super) fn remove_proxy_filters(owner_sid: &str, proxy_ports: &[u16]) -> NativeSetupResult<()> {
+    let engine = Engine::open()?;
+    let mut transaction = engine.begin_transaction()?;
+    for port in proxy_ports {
+        let label = format!("proxy-v4-{port}");
+        let key = derived_guid(owner_sid, &label);
+        let status = unsafe { FwpmFilterDeleteByKey0(engine.handle, &key) };
+        wfp_status_or(
+            status,
+            &[FWP_E_FILTER_NOT_FOUND as u32, FWP_E_NOT_FOUND as u32],
+            SetupFailureCode::Cleanup,
+            format!("failed to remove stale WFP proxy filter for port {port}"),
+        )?;
+    }
+    transaction.commit()
+}
+
+#[allow(unsafe_code)]
 fn ensure_provider(engine: &Engine) -> NativeSetupResult<()> {
     let name = wide("Cageforge Windows Sandbox WFP");
     let description = wide("Persistent provider for Cageforge offline identities");
