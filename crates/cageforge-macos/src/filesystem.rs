@@ -425,7 +425,14 @@ mod tests {
         let canonical = canonicalize_glob_static_prefix(&pattern).expect("canonical pattern");
         assert_eq!(
             canonical,
-            format!("{}/**/*.secret", target.path().display())
+            format!(
+                "{}/**/*.secret",
+                target
+                    .path()
+                    .canonicalize()
+                    .expect("canonicalize target")
+                    .display()
+            )
         );
     }
 }
