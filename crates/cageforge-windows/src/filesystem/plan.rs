@@ -975,6 +975,7 @@ mod tests {
         let workspace = temporary.path().join("workspace");
         let denied = workspace.join("Artifacts/deep/private/a7.json");
         let allowed = workspace.join("Artifacts/deep/public/a7.json");
+        std::fs::create_dir_all(&minimal).expect("minimal directory");
         std::fs::create_dir_all(denied.parent().expect("denied parent")).expect("denied tree");
         std::fs::create_dir_all(allowed.parent().expect("allowed parent")).expect("allowed tree");
         std::fs::write(&denied, b"denied").expect("denied fixture");
