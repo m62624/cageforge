@@ -159,15 +159,15 @@ cageforge-backend-api backend capability and execution contracts
 cageforge-linux       bubblewrap, namespaces, seccomp, and Landlock support
 cageforge-macos       Seatbelt policy generation and process launch
 cageforge-windows     restricted tokens, ACLs, WFP, and Windows process launch
-cageforge-core        ergonomic facade and backend selection
+cageforge             ergonomic facade and backend selection
 ```
 
-`cageforge-policy` is the first implementation crate. It is deliberately
-smaller than the future facade and contains only platform-independent policy
-semantics; it does not parse TOML or launch processes. The detailed first
+`cageforge-policy` is deliberately smaller than the facade and contains only
+platform-independent policy semantics; it does not parse TOML or launch
+processes. The detailed first
 policy model is specified in `specs/0006-policy-model.md`.
 
-`cageforge-core` must not depend on Codex crates. The core API must not expose
+`cageforge` must not depend on Codex crates. The facade API must not expose
 Codex `PermissionProfile`, Codex network-proxy types, Codex PTY types, Codex
 telemetry, or Codex-specific error and protocol structures.
 

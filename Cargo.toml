@@ -12,7 +12,7 @@ members = [
     "crates/cageforge-path",
     "crates/cageforge-policy",
     "crates/cageforge-policy-compose",
-    "crates/cageforge-core",
+    "crates/cageforge",
     "tools/cageforge-upstream-review",
 ]
 

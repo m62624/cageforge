@@ -10,8 +10,8 @@ capability and preparation contract without implementing process launch,
 filesystem I/O, DNS, network I/O, PTY handling, or operating-system
 enforcement.
 
-The crate is intentionally smaller than `cageforge-core`. Native backends
-implement this contract, while `cageforge-core` later provides an ergonomic
+The crate is intentionally smaller than `cageforge`. Native backends
+implement this contract, while `cageforge` provides an ergonomic
 facade and backend selection after native backends exist.
 
 ## Required input boundary
@@ -208,8 +208,8 @@ It must not depend on `cageforge-config`, a process runtime, PTY, network
 proxy, telemetry, an agent protocol, or a platform backend. Configuration is
 an optional producer of the input values, not part of the backend contract.
 
-`cageforge-core` may depend on this API and on selected native backends later,
-but this API must never depend on `cageforge-core`. That direction keeps the
+`cageforge` may depend on this API and on selected native backends,
+but this API must never depend on `cageforge`. That direction keeps the
 contract reusable by applications that do not use the Cageforge facade.
 
 ## Required tests

@@ -35,7 +35,7 @@ These rules are mandatory:
    licensing scaffold has been reviewed.
 6. Keep the public API independent from Codex protocols, telemetry, PTY,
    network-proxy, and product-specific types. Harness integrations belong in
-   adapters, not in `cageforge-core`.
+   adapters, not in `cageforge`.
 7. Do not preserve Codex legacy configuration names, aliases, or compatibility
    layers merely for compatibility. Design Cageforge's generalized capability
    and profile model as the canonical API and default behavior. Any compatibility

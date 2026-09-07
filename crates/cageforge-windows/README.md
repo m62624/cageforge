@@ -49,7 +49,7 @@ capability authority.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces exact resolved-target HTTP and SOCKS5 gateway policy. |
 | `cageforge-windows` | Applies the Windows-native setup, ACL, token, process, Job Object, desktop, firewall/WFP, and route boundary. |
-| `cageforge-core` | Will provide the final target-selecting facade over native backends. |
+| `cageforge` | Provides the final target-selecting facade over native backends. |
 
 The integration sequence is:
 

@@ -33,7 +33,7 @@ descendant process tree. The boundary:
 
 `LinuxBackend` and the policy can be reused for several commands, while every
 spawn receives its own process boundary, lifecycle, and native enforcement
-state. A future `cageforge-core` facade will select this backend on Linux;
+state. The `cageforge` facade selects this backend on Linux;
 applications may also use `LinuxBackend` directly.
 
 ## Workspace role
@@ -47,7 +47,7 @@ applications may also use `LinuxBackend` directly.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces restricted HTTP, CONNECT, and SOCKS5 destinations through exact resolved addresses. |
 | `cageforge-linux` | Converts the prepared values above into the Linux-native process boundary. |
-| `cageforge-core` | Will provide the final target-selecting facade over native backends. |
+| `cageforge` | Provides the final target-selecting facade over native backends. |
 
 The data flow is:
 
