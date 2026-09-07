@@ -998,7 +998,8 @@ mod tests {
         );
         assert_eq!(
             target_access(&plan, &allowed),
-            Some(FilesystemPlanAccess::WriteRoot)
+            None,
+            "a non-matching file must remain covered by the workspace root, not a deny target"
         );
     }
 
