@@ -30,6 +30,7 @@ The package exposes these features:
 | Feature | Enables | Target |
 | --- | --- | --- |
 | `linux` | `cageforge-linux` | Linux |
+| `linux-bundled-bubblewrap` | `cageforge-linux` with its embedded Bubblewrap resource | Linux |
 | `windows` | `cageforge-windows` | Windows |
 | `macos` | `cageforge-macos` | macOS |
 | `config` | `cageforge-config` and TOML profile re-exports | all targets |

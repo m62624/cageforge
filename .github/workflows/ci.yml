@@ -480,7 +480,7 @@ jobs:
           test -s "${resource}.sha256"
           cargo test -p cageforge-bwrap --no-default-features --features embedded
           cargo check -p cageforge-linux --no-default-features --features bundled-bubblewrap
-          cargo check -p cageforge --no-default-features --features linux
+          cargo check -p cageforge --no-default-features --features linux-bundled-bubblewrap
       - name: Cache verified Bubblewrap resource
         if: steps.bwrap-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4

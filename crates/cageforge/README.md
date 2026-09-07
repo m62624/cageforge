@@ -26,6 +26,9 @@ cageforge = { version = "0.1.0", features = ["linux", "config"] }
 
 Use `windows` on Windows or `macos` on macOS instead of `linux`. The portable
 model is available without an OS feature; native dependencies are optional.
+On Linux, use `linux-bundled-bubblewrap` when the application deliberately
+wants the backend's embedded, verified Bubblewrap resource instead of the
+system or externally staged executable selection.
 
 ## Run a command
 

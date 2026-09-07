@@ -23,6 +23,7 @@ targets = [
 default = []
 config = ["dep:cageforge-config"]
 linux = ["dep:cageforge-linux"]
+linux-bundled-bubblewrap = ["linux", "cageforge-linux/bundled-bubblewrap"]
 windows = ["dep:cageforge-windows"]
 macos = ["dep:cageforge-macos"]
 
