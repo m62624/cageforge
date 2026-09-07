@@ -137,8 +137,13 @@ fn decode_password(
 
 #[allow(unsafe_code)]
 fn decrypt(component: &'static str, data: &[u8]) -> Result<Vec<u8>, WindowsSetupVerificationError> {
-    let input_length = u32::try_from(data.len())
-        .map_err(|_| WindowsSetupVerificationError::CredentialIdentityMismatch)?;
+    let input_length = u32::try_from(data.len()).map_err(|_| {
+        WindowsSetupVerificationError::CredentialPayloadTooLarge {
+            component,
+            actual: data.len(),
+            maximum: u32::MAX as usize,
+        }
+    })?;
     let input = CRYPT_INTEGER_BLOB {
         cbData: input_length,
         pbData: data.as_ptr().cast_mut(),

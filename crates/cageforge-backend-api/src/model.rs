@@ -180,8 +180,11 @@ pub enum BackendCapability {
     /// Prevent pathname local-IPC endpoint access while retaining
     /// process-local IPC.
     NetworkLocalIpcIsolation,
-    /// Enforce per-path local-IPC endpoint allow and deny rules.
+    /// Enforce per-path local-IPC endpoint allow rules.
     NetworkLocalIpcRules,
+    /// Enforce explicit pathname local-IPC deny rules when the default is
+    /// otherwise allow-all.
+    NetworkLocalIpcDenyRules,
     /// Start from all inherited environment variables.
     EnvironmentAll,
     /// Start from a backend-selected core environment.

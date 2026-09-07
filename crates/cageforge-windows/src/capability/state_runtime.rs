@@ -96,6 +96,12 @@ pub(crate) enum CapabilityStateTransitionError {
     InvalidMaterialization,
     #[error("materialized filesystem object at {path:?} failed identity or marker verification")]
     MaterializationDrift { path: PathBuf },
+    #[error("materialized filesystem state at {path:?} failed validation: {source}")]
+    MaterializationValidation {
+        path: PathBuf,
+        #[source]
+        source: CapabilityStateError,
+    },
     #[error("a filesystem materialization removal is already pending for {path:?}")]
     PendingMaterializationRemoval { path: PathBuf },
     #[error("no filesystem materialization removal is pending")]
@@ -496,9 +502,10 @@ impl CapabilityState {
                 let mut next = self.materialized_objects.clone();
                 next.push(candidate);
                 next.sort_by_key(materialized_object_key);
-                validate_materialized_objects(&next).map_err(|_| {
-                    CapabilityStateTransitionError::MaterializationDrift {
+                validate_materialized_objects(&next).map_err(|source| {
+                    CapabilityStateTransitionError::MaterializationValidation {
                         path: pending.path.clone(),
+                        source,
                     }
                 })?;
                 self.materialized_objects = next;
@@ -808,7 +815,7 @@ mod tests {
     use pretty_assertions::{assert_eq, assert_ne};
     use windows_sys::Win32::Security::{ACL, ACL_REVISION, ACL_REVISION_DS, InitializeAcl};
 
-    use crate::capability::state::CAPABILITY_STATE_VERSION;
+    use crate::capability::state::{CAPABILITY_STATE_VERSION, CapabilityStateError};
 
     use super::{
         AclMutationRecovery, CapabilityRole, CapabilityState, CapabilityStateTransitionError,
@@ -1155,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_materialization_identity_fails_without_mutating_state() {
+    fn duplicate_materialization_identity_fails_validation_without_mutating_state() {
         let mut state = fresh_state();
         let descriptor = empty_dacl(ACL_REVISION, true);
         let marker_descriptor = empty_dacl(ACL_REVISION_DS, true);
@@ -1176,7 +1183,8 @@ mod tests {
                 marker_descriptor,
                 nonce,
             ))),
-            Err(CapabilityStateTransitionError::MaterializationDrift { .. })
+                Err(CapabilityStateTransitionError::MaterializationValidation { source, .. })
+                    if matches!(source, CapabilityStateError::InvalidMaterialization)
         ));
         assert!(state.pending_materialization().is_some());
         assert!(state.materialized_objects.is_empty());

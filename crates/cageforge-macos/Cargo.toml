@@ -1,0 +1,33 @@
+[package]
+name = "cageforge-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "macOS native backend for Cageforge process sandboxing"
+readme = "README.md"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-apple-darwin", "aarch64-apple-darwin"]
+
+[lib]
+name = "cageforge_macos"
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cageforge-backend-api.workspace = true
+cageforge-command.workspace = true
+cageforge-network-proxy = { workspace = true, features = ["runtime"] }
+cageforge-path.workspace = true
+cageforge-policy.workspace = true
+cageforge-policy-compose.workspace = true
+libc.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

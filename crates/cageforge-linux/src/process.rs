@@ -2,7 +2,6 @@
 
 //! Linux child lifecycle and timeout handling.
 
-use std::io;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
 use std::thread;
@@ -248,12 +247,7 @@ impl LinuxChild {
     fn child_mut(&mut self) -> Result<&mut Child, LinuxBackendError> {
         self.child
             .as_mut()
-            .ok_or_else(|| LinuxBackendError::ProcessWaitFailed {
-                source: io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "Linux sandbox boundary was transferred to recovery",
-                ),
-            })
+            .ok_or(LinuxBackendError::BoundaryOwnedByRecovery)
     }
 
     fn take_recovery_owner(&mut self) -> Option<Self> {

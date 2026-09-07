@@ -40,12 +40,13 @@ pub(crate) enum BootstrapError {
     #[error(transparent)]
     Protocol(#[from] WindowsRunnerProtocolError),
     #[error(
-        "clean bootstrap rejected runner preparation during {stage:?}/{code:?} (Windows error {native_code:?})"
+        "clean bootstrap rejected runner preparation during {stage:?}/{code:?} (Windows error {native_code:?}): {detail}"
     )]
     RemoteFailure {
         stage: crate::runner::protocol::WindowsRunnerFailureStage,
         code: crate::runner::protocol::WindowsRunnerFailureCode,
         native_code: Option<u32>,
+        detail: String,
     },
     #[error("failed to start the clean Windows runner bootstrap: Windows error {code}")]
     ProcessStart { code: u32 },
@@ -59,8 +60,13 @@ pub(crate) enum BootstrapError {
     ExitCodeRead { code: u32 },
     #[error("clean bootstrap reported an unexpected {actual} message")]
     UnexpectedMessage { actual: &'static str },
-    #[error("clean bootstrap reported invalid suspended-runner metadata")]
-    InvalidReport,
+    #[error("clean bootstrap reported invalid suspended-runner metadata: {field} ({reason})")]
+    InvalidReport {
+        /// Metadata field that failed validation.
+        field: &'static str,
+        /// Exact validation rule that failed.
+        reason: &'static str,
+    },
     #[error("clean bootstrap did not exit after transferring the suspended-runner handles")]
     ExitTimeout,
     #[error("waiting for clean bootstrap termination failed: Windows error {code}")]
@@ -105,6 +111,7 @@ impl BootstrapResult {
                 stage: failure.stage(),
                 code: failure.code(),
                 native_code: failure.native_code(),
+                detail: failure.detail.clone(),
             }),
             Ok(message) => Err(BootstrapError::UnexpectedMessage {
                 actual: message.kind(),
@@ -130,13 +137,22 @@ impl BootstrapProcess {
         names: &RunnerPipeNames,
         report_name: &str,
     ) -> Result<Self, BootstrapError> {
-        let runner = runner_path.to_str().ok_or(BootstrapError::InvalidReport)?;
+        let runner = runner_path.to_str().ok_or(BootstrapError::InvalidReport {
+            field: "runner_path",
+            reason: "path is not valid UTF-8",
+        })?;
         let cwd = working_directory
             .to_str()
-            .ok_or(BootstrapError::InvalidReport)?;
+            .ok_or(BootstrapError::InvalidReport {
+                field: "working_directory",
+                reason: "path is not valid UTF-8",
+            })?;
         let credential_path = credential_path
             .to_str()
-            .ok_or(BootstrapError::InvalidReport)?;
+            .ok_or(BootstrapError::InvalidReport {
+                field: "credential_path",
+                reason: "path is not valid UTF-8",
+            })?;
         let command_line = [
             runner.to_string(),
             BOOTSTRAP_MODE.to_string(),
@@ -257,15 +273,43 @@ fn bootstrap_result(
     thread_handle: u64,
     logon_sid: String,
 ) -> Result<BootstrapResult, BootstrapError> {
-    let process = usize::try_from(process_handle).map_err(|_| BootstrapError::InvalidReport)?;
-    let thread = usize::try_from(thread_handle).map_err(|_| BootstrapError::InvalidReport)?;
-    if process_id == 0
-        || process == 0
-        || thread == 0
-        || logon_sid.is_empty()
-        || logon_sid.contains('\0')
-    {
-        return Err(BootstrapError::InvalidReport);
+    let process = usize::try_from(process_handle).map_err(|_| BootstrapError::InvalidReport {
+        field: "process_handle",
+        reason: "reported handle does not fit the host handle width",
+    })?;
+    let thread = usize::try_from(thread_handle).map_err(|_| BootstrapError::InvalidReport {
+        field: "thread_handle",
+        reason: "reported handle does not fit the host handle width",
+    })?;
+    if process_id == 0 {
+        return Err(BootstrapError::InvalidReport {
+            field: "process_id",
+            reason: "must be non-zero",
+        });
+    }
+    if process == 0 {
+        return Err(BootstrapError::InvalidReport {
+            field: "process_handle",
+            reason: "must be non-zero",
+        });
+    }
+    if thread == 0 {
+        return Err(BootstrapError::InvalidReport {
+            field: "thread_handle",
+            reason: "must be non-zero",
+        });
+    }
+    if logon_sid.is_empty() {
+        return Err(BootstrapError::InvalidReport {
+            field: "logon_sid",
+            reason: "must be non-empty",
+        });
+    }
+    if logon_sid.contains('\0') {
+        return Err(BootstrapError::InvalidReport {
+            field: "logon_sid",
+            reason: "must not contain NUL",
+        });
     }
     Ok(BootstrapResult {
         process: unsafe { OwnedHandle::from_raw_handle(process as RawHandle) },

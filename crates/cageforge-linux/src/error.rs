@@ -445,6 +445,12 @@ pub enum NetworkGatewayRuntimeError {
     /// The startup readiness channel closed before reporting a result.
     #[error("gateway startup channel closed")]
     StartupChannelClosed,
+    /// The gateway did not report readiness within its startup deadline.
+    #[error("gateway did not report readiness within {timeout_ms} ms")]
+    StartupTimeout {
+        /// Maximum time allowed for gateway runtime startup.
+        timeout_ms: u128,
+    },
     /// The gateway thread terminated by panic.
     #[error("gateway runtime thread panicked")]
     Panicked,
@@ -461,11 +467,58 @@ pub enum LinuxBackendError {
     /// The configured Bubblewrap executable was not found.
     #[error("Bubblewrap executable was not found")]
     BubblewrapUnavailable,
+    /// Opening a selected Bubblewrap executable failed after path selection.
+    #[error("failed to open Bubblewrap executable {path:?}: {source}")]
+    BubblewrapOpenFailed {
+        /// Executable path being opened.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Reading metadata from a selected Bubblewrap executable failed.
+    #[error("failed to inspect Bubblewrap executable {path:?}: {source}")]
+    BubblewrapMetadataFailed {
+        /// Executable path whose metadata was inspected.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Reading the stable identity of a selected Bubblewrap executable failed.
+    #[error("failed to read Bubblewrap executable identity {path:?}: {source}")]
+    BubblewrapIdentityFailed {
+        /// Executable path whose identity was read.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Canonicalizing a selected Bubblewrap executable failed.
+    #[error("failed to canonicalize Bubblewrap executable {path:?}: {source}")]
+    BubblewrapCanonicalizeFailed {
+        /// Executable path being canonicalized.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
     /// A bundled Bubblewrap resource had no trusted digest manifest.
     #[error("bundled Bubblewrap digest manifest was not found: {path:?}")]
     BubblewrapDigestUnavailable {
         /// Bundled executable whose digest manifest is missing.
         path: PathBuf,
+    },
+    /// Reading the digest manifest failed for a reason other than absence.
+    #[error("failed to read the bundled Bubblewrap digest manifest {manifest:?}: {source}")]
+    BubblewrapDigestReadFailed {
+        /// Bundled executable whose digest manifest was being read.
+        path: PathBuf,
+        /// Digest manifest path.
+        manifest: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
     },
     /// A bundled Bubblewrap resource did not match its digest manifest.
     #[error("bundled Bubblewrap digest mismatch for {path:?}: expected {expected}, got {actual}")]
@@ -502,6 +555,15 @@ pub enum LinuxBackendError {
     /// The configured packaged-resource directory was not available.
     #[error("Cageforge Linux resource directory was not found")]
     ResourceDirectoryUnavailable,
+    /// Canonicalizing the configured packaged-resource directory failed.
+    #[error("failed to canonicalize Linux resource directory {path:?}: {source}")]
+    ResourceDirectoryCanonicalizeFailed {
+        /// Configured resource-directory path.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
     /// The embedded Bubblewrap resource could not be materialized securely.
     #[error("cannot materialize the bundled Bubblewrap resource during {operation}: {source}")]
     BundledBubblewrapMaterialization {
@@ -510,6 +572,15 @@ pub enum LinuxBackendError {
         /// Operating-system failure.
         #[source]
         source: std::io::Error,
+    },
+    /// Hashing a selected Bubblewrap executable failed.
+    #[error("failed to hash Bubblewrap executable {path:?}: {source}")]
+    BubblewrapHashFailed {
+        /// Executable path whose bytes were hashed.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
     },
     /// The command path collides with the reserved in-sandbox helper path.
     #[error("command path is reserved by the Linux backend hardening helper: {path:?}")]
@@ -789,6 +860,7 @@ pub enum LinuxBackendError {
     #[error("failed to spawn sandboxed process: {source}")]
     ProcessSpawnFailed {
         /// Operating-system error returned by process creation.
+        #[source]
         source: std::io::Error,
     },
     /// Controlled descriptors for a sandbox launch could not be assigned distinct targets.
@@ -834,8 +906,13 @@ pub enum LinuxBackendError {
     #[error("failed while waiting for sandboxed process: {source}")]
     ProcessWaitFailed {
         /// Operating-system error returned while waiting or terminating.
+        #[source]
         source: std::io::Error,
     },
+    /// The complete process boundary is owned by the detached recovery owner
+    /// and is no longer controllable through this child handle.
+    #[error("Linux sandbox boundary is owned by its recovery owner")]
+    BoundaryOwnedByRecovery,
 }
 
 impl BubblewrapFlag {

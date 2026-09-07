@@ -270,6 +270,12 @@ pub enum LinuxHardeningError {
         #[source]
         source: ParseIntError,
     },
+    /// A helper environment variable was present but was not valid Unicode.
+    #[error("helper environment variable {name} is not valid Unicode")]
+    InvalidEnvironmentEncoding {
+        /// Invalid variable name.
+        name: &'static str,
+    },
     /// A helper authentication descriptor was a standard stream.
     #[error("authentication descriptor {fd} must be above the standard streams")]
     AuthenticationDescriptorTooLow {
@@ -316,6 +322,10 @@ pub enum LinuxHardeningError {
     /// The proxy gateway connection limit was not configured.
     #[error("missing gateway connection limit")]
     MissingGatewayConnectionLimit,
+    /// The proxy gateway connection limit was present but was not valid
+    /// Unicode and therefore could not be parsed.
+    #[error("gateway connection limit is not valid Unicode")]
+    InvalidGatewayConnectionLimitEncoding,
     /// The proxy gateway connection limit was invalid.
     #[error("invalid gateway connection limit: {source}")]
     InvalidGatewayConnectionLimit {

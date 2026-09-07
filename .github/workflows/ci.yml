@@ -35,7 +35,7 @@ concurrency:
 # Current runners for common-component checks:
 #   ubuntu-24.04
 #   windows-latest
-#   macos-latest
+#   macos-15 — native macOS Seatbelt
 #
 # Current native sandbox runners:
 #   Linux x64       — disposable QEMU/KVM guest on ubuntu-24.04
@@ -129,9 +129,8 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
-          # macOS: the native crate when it is added, plus the portable
-          # backend-facing crates shared by every native backend. Until the
-          # crate exists, the lane reports its unavailable backend explicitly.
+          # macOS: cageforge-macos plus the portable backend-facing crates
+          # shared by every native backend.
           macos_sandbox_packages=(
             cageforge-macos
             cageforge-backend-api
@@ -505,26 +504,23 @@ jobs:
     name: macOS sandbox
     needs: changes
     if: ${{ needs.changes.outputs.macos_sandbox == 'true' }}
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Run native macOS backend when available
-        shell: bash
-        run: |
-          set -euo pipefail
-          if cargo metadata --no-deps --format-version 1 | grep -q '"name":"cageforge-macos"'; then
-            cargo fmt --package cageforge-macos -- --check
-            cargo clippy -p cageforge-macos --no-default-features --all-targets -- -D warnings
-            cargo clippy -p cageforge-macos --all-features --all-targets -- -D warnings
-            cargo test -p cageforge-macos --no-default-features
-            cargo test -p cageforge-macos --all-features
-          else
-            echo "::notice::cageforge-macos is not in this workspace yet; no native macOS enforcement crate was run."
-          fi
+      - name: Check macOS backend formatting
+        run: cargo fmt --package cageforge-macos -- --check
+      - name: Lint macOS backend
+        run: cargo clippy -p cageforge-macos --all-targets -- -D warnings
+      - name: Test macOS backend
+        run: cargo test -p cageforge-macos --all-targets
+      - name: Check macOS backend documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p cageforge-macos --no-deps
 
   native-windows:
     name: "Windows sandbox (Windows Server 2025)"

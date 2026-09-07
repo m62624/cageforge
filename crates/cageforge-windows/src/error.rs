@@ -18,6 +18,7 @@ use crate::runner::protocol::{
 };
 use crate::runner::session::RunnerSessionError;
 use crate::runner::stdio::WindowsStandardStreamError;
+use crate::setup::pinned::file::SetupPinnedFileError;
 use crate::setup::protocol::{SetupFailureCode, SetupStage};
 
 /// Failure while resolving one Windows account or group SID.
@@ -180,12 +181,13 @@ pub enum WindowsSetupVerificationError {
         source: io::Error,
     },
     /// The protected capability-SID record was malformed or internally inconsistent.
-    #[error("invalid protected Windows capability-SID state {path:?}: {detail}")]
+    #[error("invalid protected Windows capability-SID state {path:?}: {source}")]
     CapabilityStateInvalid {
         /// Capability-SID state path.
         path: PathBuf,
-        /// Exact validation failure.
-        detail: String,
+        /// Exact state-model or transition failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// The marker does not contain exactly two usable ingress ports.
     #[error("Windows setup marker has invalid proxy ingress ports: {ports:?}")]
@@ -236,12 +238,13 @@ pub enum WindowsSetupVerificationError {
         code: u32,
     },
     /// A protected setup path is relative, a reparse point, or resolves to another object.
-    #[error("protected Windows setup path is unsafe at {path:?}: {detail}")]
+    #[error("protected Windows setup path is unsafe at {path:?}: {source}")]
     ProtectedPathUnsafe {
         /// Rejected state, credential, marker, or helper path.
         path: PathBuf,
         /// Exact lexical, reparse-point, or final-path failure.
-        detail: String,
+        #[source]
+        source: SetupPinnedFileError,
     },
     /// A protected setup path has the wrong object owner or effective DACL.
     #[error("protected Windows setup security descriptor mismatch at {path:?}: {actual}")]
@@ -296,6 +299,19 @@ pub enum WindowsSetupVerificationError {
     /// A decrypted credential record names a different sandbox account.
     #[error("protected Windows credential identity does not match the setup marker")]
     CredentialIdentityMismatch,
+    /// A protected credential component cannot be represented by DPAPI's
+    /// length field.
+    #[error(
+        "protected Windows credential component {component} is too large: {actual} bytes exceeds {maximum}"
+    )]
+    CredentialPayloadTooLarge {
+        /// Offline or online encrypted credential component.
+        component: &'static str,
+        /// Number of bytes in the stored component.
+        actual: usize,
+        /// Maximum number of bytes representable by the native API.
+        maximum: usize,
+    },
     /// A staged helper resource could not be read.
     #[error("failed to read staged Windows setup resource {path:?}: {source}")]
     ResourceRead {
@@ -365,11 +381,24 @@ pub enum WindowsSetupVerificationError {
         /// One `NET_FW_PROFILE_TYPE2` bit.
         profile: i32,
     },
-    /// One mandatory firewall rule is absent.
-    #[error("mandatory Windows Firewall rule is missing: {name}")]
-    FirewallRuleMissing {
+    /// Windows Firewall could not look up one mandatory rule.
+    #[error("failed to look up mandatory Windows Firewall rule {name:?}: HRESULT {code:#x}")]
+    FirewallRuleLookupFailed {
         /// Stable owner-scoped rule name.
         name: String,
+        /// HRESULT returned by the firewall rule collection.
+        code: i32,
+    },
+    /// A firewall rule was found, but Windows could not expose the interface
+    /// required for complete read-back.
+    #[error(
+        "Windows Firewall rule {name:?} does not expose the required COM interface: HRESULT {code:#x}"
+    )]
+    FirewallRuleInterface {
+        /// Stable owner-scoped rule name.
+        name: String,
+        /// HRESULT returned by the COM interface conversion.
+        code: i32,
     },
     /// One property of a mandatory firewall rule differs from its expected state.
     #[error(
@@ -413,6 +442,72 @@ pub enum WindowsSetupVerificationError {
     },
 }
 
+/// Failure while querying elevation or launching the elevated setup helper.
+#[derive(Debug, Error)]
+pub enum WindowsElevationError {
+    /// Windows could not open the current process token.
+    #[error("failed to open the current Windows process token: {source}")]
+    CurrentProcessToken {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Windows could not read the token elevation record.
+    #[error("failed to read the Windows token elevation record: {source}")]
+    TokenElevation {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Windows returned a truncated token elevation record.
+    #[error(
+        "Windows returned a truncated token elevation record: expected {expected} bytes, received {actual}"
+    )]
+    TokenElevationRecordTruncated {
+        /// Minimum record size required by the API contract.
+        expected: u32,
+        /// Number of bytes reported by Windows.
+        actual: u32,
+    },
+    /// ShellExecuteExW could not start the elevated helper.
+    #[error("failed to request Windows elevation for the setup helper: {source}")]
+    ShellExecute {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The already-elevated process could not start or wait for the helper.
+    #[error("failed to run the Windows setup helper directly: {source}")]
+    DirectLaunch {
+        /// Native process creation or wait failure.
+        #[source]
+        source: io::Error,
+    },
+    /// ShellExecuteExW reported success without returning a process handle.
+    #[error("Windows elevation returned no setup-helper process handle")]
+    MissingProcessHandle,
+    /// Waiting for the elevated helper failed.
+    #[error("failed while waiting for the elevated Windows setup helper: {source}")]
+    Wait {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Windows returned an unexpected wait result.
+    #[error("Windows elevation returned unexpected wait result {result:#x}")]
+    UnexpectedWaitResult {
+        /// Native wait result.
+        result: u32,
+    },
+    /// Windows could not read the elevated helper's exit code.
+    #[error("failed to read the elevated Windows setup helper exit code: {source}")]
+    ExitCode {
+        /// Native Windows failure.
+        #[source]
+        source: io::Error,
+    },
+}
+
 /// Provisioning, marker, account, firewall, or WFP verification failure.
 #[derive(Debug, Error)]
 pub enum WindowsSetupError {
@@ -445,12 +540,13 @@ pub enum WindowsSetupError {
         source: io::Error,
     },
     /// The setup marker is a reparse point or resolves outside its expected path.
-    #[error("Windows setup state path is unsafe at {path:?}: {detail}")]
+    #[error("Windows setup state path is unsafe at {path:?}: {source}")]
     StatePathUnsafe {
         /// Rejected setup marker path.
         path: PathBuf,
         /// Exact lexical, reparse-point, or final-path failure.
-        detail: String,
+        #[source]
+        source: SetupPinnedFileError,
     },
     /// Setup state was not valid JSON.
     #[error("failed to decode Windows setup state {path:?}: {source}")]
@@ -495,11 +591,32 @@ pub enum WindowsSetupError {
     /// A setup account failed its unprivileged-membership contract.
     #[error(transparent)]
     AccountVerification(#[from] WindowsAccountVerificationError),
-    /// A setup-helper source is unavailable.
-    #[error("Windows setup helper is unavailable: {detail}")]
-    HelperUnavailable {
-        /// Resolution diagnostic.
-        detail: String,
+    /// The current executable path could not be resolved while locating a bundled resource.
+    #[error(
+        "failed to resolve the current executable while locating a Windows setup resource: {source}"
+    )]
+    CurrentExecutable {
+        /// Filesystem failure returned by Windows.
+        #[source]
+        source: io::Error,
+    },
+    /// A bundled helper or runner was not present in the supported resource layout.
+    #[error(
+        "bundled Windows setup resource {resource:?} was not found beside executable {executable:?}"
+    )]
+    BundledResourceMissing {
+        /// Resource filename that was requested.
+        resource: &'static str,
+        /// Executable whose supported resource layouts were searched.
+        executable: PathBuf,
+    },
+    /// The current executable did not have a parent directory for a sibling resource.
+    #[error(
+        "current executable {executable:?} has no parent directory for a Windows setup resource"
+    )]
+    ExecutableDirectoryMissing {
+        /// Executable whose sibling resource was requested.
+        executable: PathBuf,
     },
     /// A helper resource could not be read for digest pinning.
     #[error("failed to read Windows setup resource {path:?}: {source}")]
@@ -511,20 +628,52 @@ pub enum WindowsSetupError {
         source: io::Error,
     },
     /// A setup executable source was not one stable non-reparse file.
-    #[error("Windows setup resource {path:?} is not safe to execute or stage: {detail}")]
+    #[error("Windows setup resource {path:?} is not safe to execute or stage: {source}")]
     HelperResourceUnsafe {
         /// Rejected setup helper or command-runner path.
         path: PathBuf,
-        /// Exact lexical, reparse-point, identity, or final-path mismatch.
-        detail: String,
+        /// Exact lexical, reparse-point, identity, or final-path failure.
+        #[source]
+        source: crate::filesystem::path::ValidatedPathError,
     },
-    /// The versioned setup request could not be written.
-    #[error("failed to write Windows setup request {path:?}: {detail}")]
+    /// The temporary directory for a versioned setup request could not be created.
+    #[error(
+        "failed to create the temporary directory for Windows setup request under {parent:?}: {source}"
+    )]
+    RequestTemporaryDirectory {
+        /// Parent directory selected for the request transport.
+        parent: PathBuf,
+        /// Filesystem failure returned by Windows.
+        #[source]
+        source: io::Error,
+    },
+    /// The versioned setup request could not be serialized.
+    #[error("failed to serialize Windows setup request {path:?}: {source}")]
+    RequestSerialize {
+        /// Request file path that would have received the serialized message.
+        path: PathBuf,
+        /// JSON serialization failure.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The serialized setup request exceeded the bounded helper protocol.
+    #[error("Windows setup request {path:?} is too large: {actual} bytes exceeds {maximum}")]
+    RequestTooLarge {
+        /// Request file path.
+        path: PathBuf,
+        /// Encoded request size.
+        actual: usize,
+        /// Maximum accepted request size.
+        maximum: usize,
+    },
+    /// The serialized setup request could not be written durably.
+    #[error("failed to write Windows setup request {path:?}: {source}")]
     RequestWrite {
         /// Request file path.
         path: PathBuf,
-        /// Filesystem or serialization failure rendered as stable text.
-        detail: String,
+        /// Filesystem failure returned by Windows.
+        #[source]
+        source: io::Error,
     },
     /// The elevated helper could not be launched or waited for.
     #[error("failed to run elevated Windows setup helper {path:?}: {source}")]
@@ -533,7 +682,7 @@ pub enum WindowsSetupError {
         path: PathBuf,
         /// Shell elevation or process wait failure.
         #[source]
-        source: io::Error,
+        source: WindowsElevationError,
     },
     /// The helper exited before creating its mandatory structured response.
     #[error(

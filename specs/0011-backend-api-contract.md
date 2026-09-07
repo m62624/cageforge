@@ -82,7 +82,8 @@ change backend safety:
 - deny-glob support, including explicit and unbounded scan-depth semantics,
   and missing-path behavior;
 - network domain rules, resolved-address authorization, local-address
-  restrictions, and Unix sockets;
+  restrictions, pathname Unix-socket isolation, and separate per-path
+  allow/explicit-deny rules;
 - external enforcement declarations;
 - environment bases, filters, and overrides; and
 - supported command stdio and timeout modes.

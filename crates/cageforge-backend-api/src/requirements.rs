@@ -160,6 +160,11 @@ pub(super) fn add_network_capabilities(
             .capabilities
             .insert(BackendCapability::NetworkLocalIpcRules);
     }
+    if requirements.local_ipc_deny_rules() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkLocalIpcDenyRules);
+    }
 }
 
 pub(super) fn add_environment_capabilities(

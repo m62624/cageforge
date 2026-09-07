@@ -66,6 +66,8 @@ pub(super) enum TokenHardeningError {
     SidParse { component: &'static str, code: u32 },
     #[error("duplicate restricting SID after Windows canonicalization")]
     DuplicateRestrictingSid,
+    #[error("restricted-token SID count {actual} exceeds the Windows limit")]
+    TooManyRestrictingSids { actual: usize },
     #[error("no capability SID was supplied for a restricted Windows process")]
     MissingCapabilitySid,
     #[error("CreateRestrictedToken failed: Windows error {code}")]
@@ -76,6 +78,8 @@ pub(super) enum TokenHardeningError {
     DefaultDaclSet { code: u32 },
     #[error("restricted-token default DACL differs from the requested logon/capability set")]
     DefaultDaclMismatch,
+    #[error("restricted-token default DACL entry count {actual} exceeds the Windows limit")]
+    TooManyDefaultDaclEntries { actual: usize },
     #[error("failed to resolve SeChangeNotifyPrivilege: Windows error {code}")]
     ChangeNotifyLookup { code: u32 },
     #[error("failed to enable SeChangeNotifyPrivilege: Windows error {code}")]
@@ -242,10 +246,12 @@ impl TokenHardeningError {
             | Self::DuplicateLogonSid
             | Self::DuplicateRestrictingSid
             | Self::MissingCapabilitySid => WindowsRunnerFailureCode::RestrictingSidParse,
+            Self::TooManyRestrictingSids { .. } => WindowsRunnerFailureCode::RestrictedTokenCreate,
             Self::RestrictedTokenCreate { .. } => WindowsRunnerFailureCode::RestrictedTokenCreate,
             Self::DefaultDaclBuild { .. }
             | Self::DefaultDaclSet { .. }
-            | Self::DefaultDaclMismatch => WindowsRunnerFailureCode::TokenDefaultDacl,
+            | Self::DefaultDaclMismatch
+            | Self::TooManyDefaultDaclEntries { .. } => WindowsRunnerFailureCode::TokenDefaultDacl,
             Self::ChangeNotifyLookup { .. }
             | Self::ChangeNotifyEnable { .. }
             | Self::PrivilegeMismatch => WindowsRunnerFailureCode::TokenPrivilege,
@@ -273,7 +279,9 @@ impl TokenHardeningError {
             | Self::DuplicateLogonSid
             | Self::DuplicateRestrictingSid
             | Self::MissingCapabilitySid
+            | Self::TooManyRestrictingSids { .. }
             | Self::DefaultDaclMismatch
+            | Self::TooManyDefaultDaclEntries { .. }
             | Self::PrivilegeMismatch
             | Self::TokenUserMismatch
             | Self::RestrictingSidMismatch => None,
@@ -307,8 +315,11 @@ fn create_restricted_token(
     base: *mut c_void,
     restricting: &[SID_AND_ATTRIBUTES],
 ) -> Result<OwnedHandle, TokenHardeningError> {
-    let count = u32::try_from(restricting.len())
-        .map_err(|_| TokenHardeningError::DuplicateRestrictingSid)?;
+    let count = u32::try_from(restricting.len()).map_err(|_| {
+        TokenHardeningError::TooManyRestrictingSids {
+            actual: restricting.len(),
+        }
+    })?;
     let mut token = std::ptr::null_mut();
     if unsafe {
         CreateRestrictedToken(
@@ -348,8 +359,11 @@ fn set_default_dacl(token: *mut c_void, sids: &[*mut c_void]) -> Result<(), Toke
             },
         })
         .collect::<Vec<_>>();
-    let count =
-        u32::try_from(entries.len()).map_err(|_| TokenHardeningError::DefaultDaclMismatch)?;
+    let count = u32::try_from(entries.len()).map_err(|_| {
+        TokenHardeningError::TooManyDefaultDaclEntries {
+            actual: entries.len(),
+        }
+    })?;
     let mut acl = std::ptr::null_mut();
     let status = unsafe { SetEntriesInAclW(count, entries.as_ptr(), std::ptr::null(), &mut acl) };
     if status != ERROR_SUCCESS {

@@ -33,6 +33,8 @@ const HOST_GATEWAY_SOCKET: &str = "gateway.sock";
 const UNIX_SOCKET_PATH_MAX_BYTES: usize = 107;
 const AUTHENTICATED_BRIDGE_BUFFER_BYTES: usize = 64 * 1024;
 const NETWORK_GATEWAY_THREAD_NAME: &str = "cageforge-network-gateway";
+const NETWORK_GATEWAY_RECOVERY_THREAD_NAME: &str = "cageforge-network-gateway-recovery";
+const NETWORK_GATEWAY_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct BridgeIngressToken(Arc<[u8; BRIDGE_TOKEN_BYTES]>);
@@ -167,7 +169,7 @@ impl GatewayRuntime {
             .map_err(|source| LinuxBackendError::NetworkGatewaySetup {
                 source: NetworkGatewaySetupError::ThreadSpawn { source },
             })?;
-        match ready_rx.recv() {
+        match ready_rx.recv_timeout(NETWORK_GATEWAY_STARTUP_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
                 _directory: directory,
                 socket_directory,
@@ -179,9 +181,17 @@ impl GatewayRuntime {
                 let _ = thread.join();
                 Err(NetworkGatewayRuntimeError::Failed { source }.into())
             }
-            Err(_) => {
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = thread.join();
                 Err(NetworkGatewayRuntimeError::StartupChannelClosed.into())
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = shutdown.send(());
+                retain_startup_thread(thread);
+                Err(NetworkGatewayRuntimeError::StartupTimeout {
+                    timeout_ms: NETWORK_GATEWAY_STARTUP_TIMEOUT.as_millis(),
+                }
+                .into())
             }
         }
     }
@@ -232,6 +242,18 @@ impl Drop for GatewayRuntime {
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
+}
+
+fn retain_startup_thread(thread: JoinHandle<Result<(), NetworkGatewayRuntimeFailure>>) {
+    // The startup thread is already detached if the recovery owner cannot be
+    // created. It owns no sandbox boundary and its listener remains
+    // authenticated, so retaining it is safer than joining indefinitely in
+    // the caller while still reporting the bounded startup failure.
+    let _ = thread::Builder::new()
+        .name(NETWORK_GATEWAY_RECOVERY_THREAD_NAME.to_owned())
+        .spawn(move || {
+            let _ = thread.join();
+        });
 }
 
 fn thread_failure(

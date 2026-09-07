@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error as StdError;
 use std::ffi::OsString;
+use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
@@ -58,6 +59,28 @@ struct TraceSupervisor {
 struct CommandSeccompFilter {
     clone3_compatibility: BpfProgram,
     policy: BpfProgram,
+}
+
+#[derive(Debug)]
+struct SeccompApplyError {
+    operation: &'static str,
+    source: seccompiler::Error,
+}
+
+impl fmt::Display for SeccompApplyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "installing the {} seccomp filter failed: {}",
+            self.operation, self.source
+        )
+    }
+}
+
+impl StdError for SeccompApplyError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&self.source)
+    }
 }
 
 const LINUX_SOCKET_TYPE_MASK: u64 = 0x0f;
@@ -381,9 +404,24 @@ fn write_runtime_failure(
 
 fn prepare_traced_command(filter: &CommandSeccompFilter) -> io::Result<()> {
     set_command_parent_death_signal()?;
-    apply_filter(&filter.clone3_compatibility)
-        .and_then(|()| apply_filter(&filter.policy))
-        .map_err(|_| io::Error::from_raw_os_error(libc::EPERM))?;
+    apply_filter(&filter.clone3_compatibility).map_err(|source| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            SeccompApplyError {
+                operation: "clone3 compatibility",
+                source,
+            },
+        )
+    })?;
+    apply_filter(&filter.policy).map_err(|source| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            SeccompApplyError {
+                operation: "command policy",
+                source,
+            },
+        )
+    })?;
     request_parent_tracing()
 }
 
@@ -557,10 +595,17 @@ fn start_gateway_bridge(
     if !socket.is_absolute() {
         return Err(LinuxHardeningError::RelativeGatewaySocket { path: socket });
     }
-    let max_connections = std::env::var(GATEWAY_CONNECTION_LIMIT_ENV)
-        .map_err(|_| LinuxHardeningError::MissingGatewayConnectionLimit)?
-        .parse::<usize>()
-        .map_err(|source| LinuxHardeningError::InvalidGatewayConnectionLimit { source })?;
+    let max_connections = match std::env::var(GATEWAY_CONNECTION_LIMIT_ENV) {
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|source| LinuxHardeningError::InvalidGatewayConnectionLimit { source })?,
+        Err(std::env::VarError::NotPresent) => {
+            return Err(LinuxHardeningError::MissingGatewayConnectionLimit);
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(LinuxHardeningError::InvalidGatewayConnectionLimitEncoding);
+        }
+    };
     if max_connections == 0 {
         return Err(LinuxHardeningError::ZeroGatewayConnectionLimit);
     }
@@ -582,13 +627,20 @@ fn start_gateway_bridge(
 }
 
 fn verify_helper_authentication() -> Result<File, LinuxHardeningError> {
-    let fd: libc::c_int = std::env::var(AUTH_FD_ENV)
-        .map_err(|_| LinuxHardeningError::MissingEnvironment { name: AUTH_FD_ENV })?
-        .parse()
-        .map_err(|source| LinuxHardeningError::InvalidEnvironment {
-            name: AUTH_FD_ENV,
-            source,
-        })?;
+    let fd: libc::c_int = match std::env::var(AUTH_FD_ENV) {
+        Ok(value) => value
+            .parse()
+            .map_err(|source| LinuxHardeningError::InvalidEnvironment {
+                name: AUTH_FD_ENV,
+                source,
+            })?,
+        Err(std::env::VarError::NotPresent) => {
+            return Err(LinuxHardeningError::MissingEnvironment { name: AUTH_FD_ENV });
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(LinuxHardeningError::InvalidEnvironmentEncoding { name: AUTH_FD_ENV });
+        }
+    };
     if fd <= libc::STDERR_FILENO {
         return Err(LinuxHardeningError::AuthenticationDescriptorTooLow { fd });
     }

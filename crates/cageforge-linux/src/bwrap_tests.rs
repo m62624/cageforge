@@ -238,6 +238,20 @@ fn bundled_bubblewrap_requires_a_matching_digest_manifest() {
     ));
 }
 
+#[test]
+fn bundled_bubblewrap_digest_read_failure_preserves_the_manifest_io_error() {
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let binary = temporary.path().join("bwrap");
+    fs::write(&binary, b"trusted fixture").expect("write fixture");
+    fs::create_dir(temporary.path().join("bwrap.sha256")).expect("directory manifest");
+
+    let error = verify_bundled_digest(&binary).expect_err("directory manifest must fail");
+    assert!(matches!(
+        error,
+        LinuxBackendError::BubblewrapDigestReadFailed { .. }
+    ));
+}
+
 #[cfg(feature = "bundled-bubblewrap")]
 #[test]
 fn bundled_feature_materializes_a_private_verified_resource() {
