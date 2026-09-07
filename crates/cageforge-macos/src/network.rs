@@ -534,7 +534,8 @@ mod tests {
 
     #[test]
     fn gateway_keeps_its_port_reserved_until_cleanup() {
-        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reservation");
+        let loopback = std::net::Ipv4Addr::new(127, 0, 0, 2);
+        let reservation = std::net::TcpListener::bind((loopback, 0)).expect("reservation");
         let port = reservation
             .local_addr()
             .expect("reservation address")
@@ -554,7 +555,7 @@ mod tests {
             thread: Some(thread),
         };
 
-        let error = std::net::TcpListener::bind(("127.0.0.1", port))
+        let error = std::net::TcpListener::bind((loopback, port))
             .expect_err("a live gateway port must remain reserved");
         assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
 
@@ -563,7 +564,7 @@ mod tests {
             .shutdown_with_timeout(Duration::from_secs(1))
             .expect("released gateway shutdown");
         std::mem::drop(gateway);
-        std::net::TcpListener::bind(("127.0.0.1", port))
+        std::net::TcpListener::bind((loopback, port))
             .expect("gateway port is reusable after confirmed cleanup");
     }
 
