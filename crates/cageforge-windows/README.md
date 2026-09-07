@@ -4,6 +4,10 @@
 > crate adapts sandbox design ideas from open-source OpenAI Codex into an
 > independent library API and contains no copied Codex source.
 
+The sandbox isolates processes using the host operating system's native
+enforcement mechanisms. Its guarantees depend on a correct host OS, correct
+native enforcement, and a correct Cageforge implementation.
+
 # cageforge-windows
 
 `cageforge-windows` is the Windows-native backend for Cageforge's library API.
