@@ -81,6 +81,10 @@ WFP state is reconciled. To run several isolated workloads, reuse the verified
 setup and create one or more `WindowsBackend` instances; each `spawn` then
 creates its own launch boundary.
 
+If an interrupted setup left a binding to a root that has since disappeared,
+the next owner setup can reclaim that stale binding under the setup lifecycle
+lock. A root that still exists is never silently replaced.
+
 Setup creates two persistent ordinary local accounts scoped to the signed-in
 owner:
 

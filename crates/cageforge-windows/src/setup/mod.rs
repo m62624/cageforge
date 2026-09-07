@@ -376,7 +376,8 @@ impl WindowsSetup {
         let runner_path = runner.final_path().to_path_buf();
         let helper_sha256 = file_digest(&helper, &helper_path)?;
         let runner_sha256 = file_digest(&runner, &runner_path)?;
-        let proxy_ports = proxy_ports_for_current_owner(&state_directory);
+        let proxy_ports =
+            crate::firewall_contract::proxy_ports_for_state_directory(&state_directory);
         let request = SetupRequest {
             version: SETUP_PROTOCOL_VERSION,
             operation,
@@ -739,39 +740,18 @@ fn file_digest(resource: &ValidatedPath, path: &Path) -> Result<String, WindowsS
         .collect())
 }
 
-fn proxy_ports_for_current_owner(state_directory: &Path) -> Vec<u16> {
-    // Keep setup-owned listeners out of Windows' default dynamic client-port
-    // range (49152..=65535). A listener in that range can be rejected with
-    // WSAEACCES when the OS has reserved the port for an ephemeral service.
-    // The selected ports are persisted in setup.json, so this remains stable
-    // for one setup while different state roots still receive independent
-    // deterministic pairs. There is deliberately no ephemeral fallback:
-    // the firewall/WFP contract must name the exact ports that the ingress
-    // binds, or setup must fail closed.
-    const WINDOWS_DYNAMIC_PORT_START: u16 = 49_152;
-    const STATIC_PORT_START: u16 = 40_000;
-    const STATIC_PORT_PAIRS: u16 = (WINDOWS_DYNAMIC_PORT_START - STATIC_PORT_START) / 2;
-    let digest = Sha256::digest(state_directory.as_os_str().to_string_lossy().as_bytes());
-    let offset = u16::from_be_bytes([digest[0], digest[1]]) % STATIC_PORT_PAIRS;
-    let first = STATIC_PORT_START + offset * 2;
-    vec![first, first + 1]
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
-    use super::{
-        bundled_resource_path_for_exe, pin_setup_resource, proxy_ports_for_current_owner,
-        write_pinned_setup_request,
-    };
+    use super::{bundled_resource_path_for_exe, pin_setup_resource, write_pinned_setup_request};
 
     #[test]
     fn proxy_ports_stay_outside_the_windows_dynamic_range() {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let ports = proxy_ports_for_current_owner(temporary.path());
+        let ports = crate::firewall_contract::proxy_ports_for_state_directory(temporary.path());
 
         assert_eq!(ports.len(), 2);
         assert!(ports.iter().all(|port| (40_000..49_152).contains(port)));
