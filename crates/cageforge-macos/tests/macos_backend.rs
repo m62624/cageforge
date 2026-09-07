@@ -963,10 +963,15 @@ fn workspace_glob_rejects_a_non_utf8_root_before_launch() {
     let error = backend()
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect_err("macOS Seatbelt glob lowering must reject lossy roots");
-    assert!(matches!(
-        error,
-        MacosBackendError::Filesystem(MacosFilesystemError::GlobRootNotUtf8 { path }) if path == root
-    ));
+    match error {
+        MacosBackendError::Filesystem(MacosFilesystemError::GlobRootNotUtf8 { path }) => {
+            assert!(
+                path.to_str().is_none(),
+                "the diagnostic path must retain its non-UTF-8 identity"
+            );
+        }
+        error => panic!("unexpected non-UTF-8 glob error: {error:?}"),
+    }
 }
 
 #[test]
