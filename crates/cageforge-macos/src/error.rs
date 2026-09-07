@@ -52,6 +52,13 @@ pub enum MacosBackendError {
     /// The command exceeded its prepared timeout.
     #[error("the macOS sandboxed command exceeded its prepared timeout")]
     ProcessTimedOut,
+    /// The prepared timeout cannot be represented by the native monotonic
+    /// deadline used by the child lifecycle.
+    #[error("macOS sandbox timeout cannot be represented by a native deadline: {timeout_ms} ms")]
+    TimeoutOutOfRange {
+        /// The rejected timeout in milliseconds.
+        timeout_ms: u128,
+    },
     /// The process boundary could not be terminated and confirmed.
     #[error("could not confirm termination of the complete macOS sandbox process group")]
     BoundaryTerminationUnconfirmed,

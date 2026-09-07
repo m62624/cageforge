@@ -18,7 +18,8 @@ use crate::error::MacosBackendError;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::{GatewayRuntime, MacosNetworkPlan};
 use crate::process::{
-    MacosChild, ParentDeathChannel, configure_process_group, process_group_id, stream,
+    MacosChild, ParentDeathChannel, command_deadline, configure_process_group, process_group_id,
+    stream,
 };
 use crate::seatbelt::SeatbeltProfile;
 
@@ -89,6 +90,11 @@ impl MacosBackend {
         let sandbox = prepared.sandbox(self)?;
         let filesystem = MacosFilesystemPlan::lower(self, &prepared)?;
         let mut network = MacosNetworkPlan::lower(self, &prepared)?;
+        let timeout = match prepared.timeout_policy(self)? {
+            cageforge_command::TimeoutPolicy::BackendDefault => Some(self.config.default_timeout()),
+            cageforge_command::TimeoutPolicy::Limit(timeout) => Some(timeout),
+            cageforge_command::TimeoutPolicy::Disabled => None,
+        };
         let mut gateway = if network.requires_gateway() {
             Some(GatewayRuntime::start(
                 sandbox.network().clone(),
@@ -132,11 +138,7 @@ impl MacosBackend {
         command.stdout(stream(stdio.stdout()));
         command.stderr(stream(stdio.stderr()));
         configure_process_group(&mut command, parent_death.read_fd());
-        let timeout = match prepared.timeout_policy(self)? {
-            cageforge_command::TimeoutPolicy::BackendDefault => Some(self.config.default_timeout()),
-            cageforge_command::TimeoutPolicy::Limit(timeout) => Some(timeout),
-            cageforge_command::TimeoutPolicy::Disabled => None,
-        };
+        let deadline = command_deadline(timeout)?;
         let child = command
             .spawn()
             .map_err(|source| MacosBackendError::ProcessStart { source })?;
@@ -154,7 +156,7 @@ impl MacosBackend {
             process_group_id,
             parent_death.into_writer(),
             gateway.take(),
-            timeout,
+            deadline,
         ))
     }
 

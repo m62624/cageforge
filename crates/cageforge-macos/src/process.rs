@@ -58,14 +58,14 @@ impl MacosChild {
         process_group_id: u32,
         parent_death: OwnedFd,
         gateway: Option<GatewayRuntime>,
-        timeout: Option<Duration>,
+        deadline: Option<Instant>,
     ) -> Self {
         Self {
             child: Some(child),
             process_group_id,
             parent_death: Some(parent_death),
             gateway,
-            deadline: timeout.map(|timeout| Instant::now() + timeout),
+            deadline,
             recovery_attempted: false,
         }
     }
@@ -194,6 +194,20 @@ impl MacosChild {
             .name(BOUNDARY_RECOVERY_THREAD_NAME.to_owned())
             .spawn(move || recovery.recover_until_terminated());
     }
+}
+
+pub(crate) fn command_deadline(
+    timeout: Option<Duration>,
+) -> Result<Option<Instant>, MacosBackendError> {
+    timeout
+        .map(|timeout| {
+            Instant::now()
+                .checked_add(timeout)
+                .ok_or(MacosBackendError::TimeoutOutOfRange {
+                    timeout_ms: timeout.as_millis(),
+                })
+        })
+        .transpose()
 }
 
 impl MacosBoundaryRecovery {
@@ -557,8 +571,9 @@ fn confirm_process_group_gone(pid: u32) -> Result<(), MacosBackendError> {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::time::Duration;
 
-    use super::{MacosChild, signal_process_group_members};
+    use super::{MacosChild, command_deadline, signal_process_group_members};
     use crate::error::MacosBackendError;
 
     #[test]
@@ -600,5 +615,14 @@ mod tests {
     #[test]
     fn process_group_id_is_the_pre_exec_boundary_pid() {
         assert_eq!(super::process_group_id(42).expect("valid process ID"), 42);
+    }
+
+    #[test]
+    fn command_deadline_rejects_an_unrepresentable_timeout() {
+        let error = command_deadline(Some(Duration::MAX)).expect_err("deadline overflow");
+        assert!(matches!(
+            error,
+            MacosBackendError::TimeoutOutOfRange { timeout_ms } if timeout_ms == Duration::MAX.as_millis()
+        ));
     }
 }
