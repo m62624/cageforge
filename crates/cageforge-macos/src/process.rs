@@ -237,15 +237,7 @@ pub(crate) fn command_deadline(
 impl MacosBoundaryRecovery {
     fn recover_until_terminated(&mut self) {
         loop {
-            let boundary_terminated = if self.child_reaped {
-                terminate_exited_process_group(self.process_group_id)
-                    .and_then(|()| confirm_process_group_gone(self.process_group_id))
-                    .is_ok()
-            } else {
-                self.child.as_mut().is_some_and(|child| {
-                    terminate_process_group(child, self.process_group_id).is_ok()
-                })
-            };
+            let boundary_terminated = self.recover_boundary();
             let gateway_terminated = boundary_terminated
                 && self
                     .gateway
@@ -259,6 +251,30 @@ impl MacosBoundaryRecovery {
                 return;
             }
             thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
+        }
+    }
+
+    fn recover_boundary(&mut self) -> bool {
+        if self.child_reaped {
+            return terminate_exited_process_group(self.process_group_id)
+                .and_then(|()| confirm_process_group_gone(self.process_group_id))
+                .is_ok();
+        }
+
+        let result = self
+            .child
+            .as_mut()
+            .map(|child| terminate_process_group(child, self.process_group_id));
+        match result {
+            Some(Ok(())) => {
+                self.child_reaped = true;
+                true
+            }
+            Some(Err(error)) => {
+                self.child_reaped |= error.child_reaped;
+                false
+            }
+            None => true,
         }
     }
 }
@@ -724,6 +740,29 @@ mod tests {
 
         assert!(recovery.completed);
         assert!(recovery.child.is_none());
+    }
+
+    #[test]
+    fn recovery_records_a_reaped_leader_before_retrying_other_cleanup() {
+        let parent_death = super::ParentDeathChannel::new().expect("parent-death channel");
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        super::configure_process_group(&mut command, parent_death.read_fd());
+        let child = command.spawn().expect("recovery fixture");
+        let process_group_id = child.id();
+        let parent_death = parent_death.into_writer();
+
+        let mut recovery = super::MacosBoundaryRecovery {
+            child: Some(child),
+            child_reaped: false,
+            process_group_id,
+            parent_death: Some(parent_death),
+            gateway: None,
+            completed: false,
+        };
+
+        assert!(recovery.recover_boundary());
+        assert!(recovery.child_reaped);
     }
 
     #[test]
