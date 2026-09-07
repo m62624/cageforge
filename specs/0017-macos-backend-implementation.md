@@ -118,6 +118,10 @@ does not grant unrestricted access to `/dev/fd`. The former is supplied only
 by an effective temporary-directory scope; the latter is limited to the
 explicit standard streams exposed by the command API. These
 are deliberate narrower native rules, not omitted runtime requirements.
+Codex's app-sandbox extension predicates are also not included: Cageforge has
+no portable input that authorizes ambient app-sandbox extensions, and honoring
+them implicitly could widen the effective filesystem policy without a
+corresponding Cageforge scope.
 
 Unrestricted filesystem access is supported only when Seatbelt's explicit
 unrestricted profile is selected and the effective policy is unrestricted.
