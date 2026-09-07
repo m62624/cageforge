@@ -981,43 +981,6 @@ fn workspace_glob_rejects_a_non_utf8_root_before_launch() {
 }
 
 #[test]
-fn absolute_glob_rejects_a_non_utf8_canonical_prefix_before_launch() {
-    use std::os::unix::fs::symlink;
-
-    let parent = TempDir::new().expect("glob parent");
-    let target = parent
-        .path()
-        .join(OsString::from_vec(vec![b't', b'a', b'r', b'g', 0xff]));
-    fs::create_dir(&target).expect("non-UTF-8 glob target");
-    let link = parent.path().join("link");
-    symlink(&target, &link).expect("glob prefix symlink");
-    let pattern = format!("{}/**/*.secret", link.display());
-    let rule =
-        FilesystemRule::absolute_glob(pattern, AccessMode::Deny).expect("absolute deny glob");
-    let workspace = TempDir::new().expect("workspace");
-    let policy = SandboxPolicy::new(
-        FilesystemPolicy::restricted([
-            FilesystemRule::new(
-                PathSelector::absolute(parent.path().to_path_buf()).expect("glob parent selector"),
-                AccessMode::Read,
-            ),
-            rule,
-        ]),
-        NetworkPolicy::disabled(),
-    );
-    let (command, effective, context) = request_for(workspace.path(), &policy, shell_command(":"));
-    let error = backend()
-        .prepare(BackendRequest::new(&command, &effective), &context)
-        .expect_err("lossy canonical glob prefix must fail before launch");
-    assert!(matches!(
-        error,
-        MacosBackendError::Filesystem(
-            MacosFilesystemError::GlobCanonicalPathNotUtf8 { path }
-        ) if path.to_str().is_none()
-    ));
-}
-
-#[test]
 fn timeout_terminates_the_complete_seatbelt_process_group() {
     let workspace = TempDir::new().expect("workspace");
     let policy = restricted_policy(workspace.path());

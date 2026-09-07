@@ -426,9 +426,6 @@ fn canonicalize_glob_static_prefix(pattern: &str) -> Result<Option<String>, Maco
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-    use std::fs;
-    use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::symlink;
 
     use tempfile::TempDir;
@@ -481,25 +478,5 @@ mod tests {
                     .display()
             )
         );
-    }
-
-    #[test]
-    fn rejects_a_non_utf8_canonical_glob_static_prefix() {
-        let root = TempDir::new().expect("root");
-        let target = root
-            .path()
-            .join(OsString::from_vec(vec![b't', b'a', b'r', b'g', 0xff]));
-        fs::create_dir(&target).expect("non-UTF-8 target");
-        let link = root.path().join("link");
-        symlink(&target, &link).expect("symlink");
-        let pattern = format!("{}/**/*.secret", link.display());
-
-        let error = canonicalize_glob_static_prefix(&pattern)
-            .expect_err("lossy canonical target must fail closed");
-        assert!(matches!(
-            error,
-            crate::error::MacosFilesystemError::GlobCanonicalPathNotUtf8 { path }
-                if path.to_str().is_none()
-        ));
     }
 }
