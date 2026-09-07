@@ -1487,9 +1487,9 @@ fn missing_path_skip_does_not_suppress_non_not_found_errors() {
 #[test]
 fn deny_glob_is_expanded_and_enforced_before_launch() {
     let temp = TempDir::new().expect("temporary workspace");
-    let secret_dir = temp.path().join("secret/nested");
+    let secret_dir = temp.path().join("secret/deep/private");
     std::fs::create_dir_all(&secret_dir).expect("secret directory");
-    let secret = secret_dir.join("token.txt");
+    let secret = secret_dir.join("a7.token");
     let public = temp.path().join("public.txt");
     std::fs::write(&secret, "secret").expect("secret fixture");
     std::fs::write(&public, "public").expect("public fixture");
@@ -1498,7 +1498,11 @@ fn deny_glob_is_expanded_and_enforced_before_launch() {
             FilesystemRule::new(PathSelector::root(), AccessMode::Read),
             FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
             FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
-            FilesystemRule::workspace_glob("secret/**", AccessMode::Deny).expect("glob"),
+            FilesystemRule::workspace_glob(
+                "secret/**/{private,{secret,内部}}/[a-c][0-9].{token,secret}",
+                AccessMode::Deny,
+            )
+            .expect("glob"),
         ]),
         NetworkPolicy::disabled(),
     );

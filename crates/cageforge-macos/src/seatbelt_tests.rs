@@ -178,6 +178,22 @@ fn glob_translation_is_anchored_and_keeps_path_components_bounded() {
         glob_to_seatbelt_regex("/workspace/private"),
         r"^/workspace/private(/.*)?$"
     );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/{private,secret}/file"),
+        r"^/workspace/(private|secret)/file$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/**/{private,{secret,内部}}/[a-c][0-9].{json,toml}"),
+        r"^/workspace/(.*/)?(private|(secret|内部))/[a-c][0-9]\.(json|toml)$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/[^^]/file"),
+        r"^/workspace/[\^^]/file$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/literal]/file"),
+        r"^/workspace/literal\]/file$"
+    );
 }
 
 #[test]

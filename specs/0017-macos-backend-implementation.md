@@ -89,10 +89,20 @@ The filesystem lowering must:
 - lower deny globs using both their submitted form and the form obtained by
   canonicalizing an existing static prefix, so a symlink or firmlink alias
   cannot bypass a deny rule;
+- preserve the portable glob semantics for component wildcards, recursive
+  wildcards, character classes, ranges, and alternates when translating a
+  deny pattern into Seatbelt regex; and
 - bound glob expansion according to the effective scan-depth requirement and
   fail closed when the requested semantics cannot be represented; and
 - keep platform-default reads separate from caller workspace and write
   scopes.
+
+macOS does not enumerate matching glob paths during lowering. Seatbelt applies
+the translated deny regex to filesystem operations in the kernel, so the
+effective scan-depth value is consumed by the shared capability contract but
+does not trigger a userspace directory walk on this backend. A bounded value
+therefore cannot widen the deny rule or make it dependent on the current
+directory contents.
 
 The fixed profile may grant only the explicit read-only system paths required
 for process startup and ordinary runtime loading. It must not grant write

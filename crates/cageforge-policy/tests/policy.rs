@@ -580,6 +580,8 @@ fn filesystem_globs_support_character_classes_and_ranges() {
             .expect("range glob"),
         FilesystemRule::workspace_glob("Secrets/[!x]oken", AccessMode::Deny)
             .expect("negative class glob"),
+        FilesystemRule::workspace_glob("Secrets/{a,b}.token", AccessMode::Deny)
+            .expect("alternate glob"),
     ]);
 
     assert_eq!(
@@ -607,6 +609,24 @@ fn filesystem_globs_support_character_classes_and_ranges() {
                 &context,
             )
             .expect("negative class non-match"),
+        FilesystemDecision::Write
+    );
+    assert_eq!(
+        policy
+            .access_for_path(
+                &Path::new(&workspace_root).join("Secrets").join("a.token"),
+                &context,
+            )
+            .expect("alternate match"),
+        FilesystemDecision::Deny
+    );
+    assert_eq!(
+        policy
+            .access_for_path(
+                &Path::new(&workspace_root).join("Secrets").join("c.token"),
+                &context,
+            )
+            .expect("alternate non-match"),
         FilesystemDecision::Write
     );
 }
@@ -703,6 +723,45 @@ fn resolved_scope_depth_controls_filesystem_precedence() {
             )
             .expect("nested deny lookup"),
         FilesystemDecision::Deny
+    );
+}
+
+#[test]
+fn filesystem_globs_support_nested_alternates_recursive_paths_and_unicode() {
+    let workspace_root = native_path("/workspace");
+    let context = PathResolutionContext::new()
+        .with_workspace_root(&workspace_root)
+        .expect("workspace root");
+    let policy = FilesystemPolicy::restricted([
+        FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        FilesystemRule::workspace_glob(
+            "Artifacts/**/{private,{secret,内部}}/[a-c][0-9].{json,toml}",
+            AccessMode::Deny,
+        )
+        .expect("nested alternate glob"),
+    ]);
+
+    for (path, label) in [
+        ("Artifacts/deep/private/a7.json", "private JSON"),
+        ("Artifacts/deep/secret/b4.toml", "secret TOML"),
+        ("Artifacts/深/内部/c1.json", "Unicode nested alternate"),
+    ] {
+        assert_eq!(
+            policy
+                .access_for_path(&Path::new(&workspace_root).join(path), &context,)
+                .expect("nested glob decision"),
+            FilesystemDecision::Deny,
+            "{label} must be denied",
+        );
+    }
+    assert_eq!(
+        policy
+            .access_for_path(
+                &Path::new(&workspace_root).join("Artifacts/deep/public/a7.json"),
+                &context,
+            )
+            .expect("nested glob non-match"),
+        FilesystemDecision::Write
     );
 }
 

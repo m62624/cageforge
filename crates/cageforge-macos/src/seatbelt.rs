@@ -547,36 +547,9 @@ impl ProfileBuilder {
 
 pub(crate) fn glob_to_seatbelt_regex(pattern: &str) -> String {
     let mut regex = String::from("^");
-    let mut chars = pattern.chars().peekable();
-    while let Some(character) = chars.next() {
-        match character {
-            '*' if chars.peek() == Some(&'*') => {
-                chars.next();
-                if chars.peek() == Some(&'/') {
-                    chars.next();
-                    regex.push_str("(.*/)?");
-                } else {
-                    regex.push_str(".*");
-                }
-            }
-            '*' => regex.push_str("[^/]*"),
-            '?' => regex.push_str("[^/]"),
-            '[' => {
-                regex.push('[');
-                if chars.peek() == Some(&'!') {
-                    chars.next();
-                    regex.push('^');
-                }
-                for class_character in chars.by_ref() {
-                    regex.push(class_character);
-                    if class_character == ']' {
-                        break;
-                    }
-                }
-            }
-            character => push_regex_literal(&mut regex, character),
-        }
-    }
+    let characters: Vec<char> = pattern.chars().collect();
+    let mut index = 0;
+    translate_glob_sequence(&characters, &mut index, None, &mut regex);
     if !pattern_has_glob_meta(pattern) {
         regex.push_str("(/.*)?");
     }
@@ -587,7 +560,135 @@ pub(crate) fn glob_to_seatbelt_regex(pattern: &str) -> String {
 fn pattern_has_glob_meta(pattern: &str) -> bool {
     pattern
         .chars()
-        .any(|character| matches!(character, '*' | '?' | '['))
+        .any(|character| matches!(character, '*' | '?' | '[' | '{' | '}'))
+}
+
+fn translate_glob_sequence(
+    characters: &[char],
+    index: &mut usize,
+    terminator: Option<char>,
+    regex: &mut String,
+) {
+    while *index < characters.len() {
+        let character = characters[*index];
+        if Some(character) == terminator || (terminator == Some('}') && character == ',') {
+            return;
+        }
+        match character {
+            '*' => {
+                *index += 1;
+                if characters.get(*index) == Some(&'*') {
+                    *index += 1;
+                    if characters.get(*index) == Some(&'/') {
+                        *index += 1;
+                        regex.push_str("(.*/)?");
+                    } else {
+                        regex.push_str(".*");
+                    }
+                } else {
+                    regex.push_str("[^/]*");
+                }
+            }
+            '?' => {
+                *index += 1;
+                regex.push_str("[^/]");
+            }
+            '[' => {
+                translate_glob_class(characters, index, regex);
+            }
+            '{' => {
+                translate_glob_alternation(characters, index, regex);
+            }
+            ']' | '}' => {
+                *index += 1;
+                push_regex_literal(regex, character);
+            }
+            _ => {
+                *index += 1;
+                push_regex_literal(regex, character);
+            }
+        }
+    }
+}
+
+fn translate_glob_class(characters: &[char], index: &mut usize, regex: &mut String) {
+    let start = *index;
+    *index += 1;
+    let Some(end) = characters[*index..]
+        .iter()
+        .position(|&character| character == ']')
+    else {
+        // Valid public PathPattern values cannot reach this branch. Keeping
+        // malformed internal input literal prevents a partial class from
+        // becoming a different, broader regular expression.
+        push_regex_literal(regex, '[');
+        *index = start + 1;
+        return;
+    };
+    let end = *index + end;
+    regex.push('[');
+    let mut class_index = *index;
+    if class_index < end {
+        match characters[class_index] {
+            '!' => {
+                regex.push('^');
+                class_index += 1;
+            }
+            '^' => {
+                regex.push_str("\\^");
+                class_index += 1;
+            }
+            _ => {}
+        }
+    }
+    while class_index < end {
+        match characters[class_index] {
+            '\\' => regex.push_str("\\\\"),
+            character => regex.push(character),
+        }
+        class_index += 1;
+    }
+    regex.push(']');
+    *index = end + 1;
+}
+
+fn translate_glob_alternation(characters: &[char], index: &mut usize, regex: &mut String) {
+    let opening_index = *index;
+    let regex_start = regex.len();
+    *index += 1;
+    regex.push('(');
+    loop {
+        translate_glob_sequence(characters, index, Some('}'), regex);
+        if *index >= characters.len() {
+            // Valid public PathPattern values cannot reach this branch. Keep
+            // malformed internal input literal and the generated expression
+            // valid instead of leaving an unterminated regular-expression
+            // group in the profile.
+            regex.truncate(regex_start);
+            push_regex_literal(regex, '{');
+            *index = opening_index + 1;
+            break;
+        }
+        match characters[*index] {
+            ',' => {
+                regex.push('|');
+                *index += 1;
+            }
+            '}' => {
+                regex.push(')');
+                *index += 1;
+                break;
+            }
+            _ => {
+                // Defensive recovery for malformed internal input. Public
+                // PathPattern construction rejects unbalanced alternations.
+                regex.truncate(regex_start);
+                push_regex_literal(regex, '{');
+                *index = opening_index + 1;
+                break;
+            }
+        }
+    }
 }
 
 fn push_regex_literal(regex: &mut String, character: char) {

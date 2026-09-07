@@ -968,6 +968,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn complex_nested_glob_is_expanded_into_denied_windows_targets() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let minimal = temporary.path().join("minimal");
+        let workspace = temporary.path().join("workspace");
+        let denied = workspace.join("Artifacts/deep/private/a7.json");
+        let allowed = workspace.join("Artifacts/deep/public/a7.json");
+        std::fs::create_dir_all(denied.parent().expect("denied parent")).expect("denied tree");
+        std::fs::create_dir_all(allowed.parent().expect("allowed parent")).expect("allowed tree");
+        std::fs::write(&denied, b"denied").expect("denied fixture");
+        std::fs::write(&allowed, b"allowed").expect("allowed fixture");
+        let policy = FilesystemPolicy::restricted([
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(absolute(&workspace), AccessMode::Write),
+            FilesystemRule::workspace_glob(
+                "Artifacts/**/{private,{secret,内部}}/[a-c][0-9].{json,toml}",
+                AccessMode::Deny,
+            )
+            .expect("nested alternate glob"),
+        ]);
+
+        let plan = plan(&workspace, &minimal, policy.clone(), policy);
+
+        assert_eq!(
+            target_access(&plan, &denied),
+            Some(FilesystemPlanAccess::Deny)
+        );
+        assert_eq!(
+            target_access(&plan, &allowed),
+            Some(FilesystemPlanAccess::WriteRoot)
+        );
+    }
+
     fn plan(
         workspace: &Path,
         minimal: &Path,

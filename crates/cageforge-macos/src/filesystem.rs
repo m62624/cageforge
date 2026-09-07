@@ -377,9 +377,9 @@ fn contains_parent_component(path: &Path) -> bool {
 }
 
 fn canonicalize_glob_static_prefix(pattern: &str) -> Option<String> {
-    let first_glob_index = pattern
-        .char_indices()
-        .find_map(|(index, character)| matches!(character, '*' | '?' | '[' | ']').then_some(index));
+    let first_glob_index = pattern.char_indices().find_map(|(index, character)| {
+        matches!(character, '*' | '?' | '[' | ']' | '{' | '}').then_some(index)
+    });
     let Some(first_glob_index) = first_glob_index else {
         let canonical = fs::canonicalize(pattern).ok()?;
         let canonical = normalize_macos_system_alias(canonical)
@@ -427,6 +427,28 @@ mod tests {
             canonical,
             format!(
                 "{}/**/*.secret",
+                target
+                    .path()
+                    .canonicalize()
+                    .expect("canonicalize target")
+                    .display()
+            )
+        );
+    }
+
+    #[test]
+    fn canonicalizes_a_brace_glob_static_prefix_through_a_symlink() {
+        let root = TempDir::new().expect("root");
+        let target = TempDir::new().expect("target");
+        let link = root.path().join("link");
+        symlink(target.path(), &link).expect("symlink");
+        let pattern = format!("{}/{{one,two}}/secret", link.display());
+
+        let canonical = canonicalize_glob_static_prefix(&pattern).expect("canonical pattern");
+        assert_eq!(
+            canonical,
+            format!(
+                "{}/{{one,two}}/secret",
                 target
                     .path()
                     .canonicalize()
