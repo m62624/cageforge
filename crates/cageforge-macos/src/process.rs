@@ -188,7 +188,7 @@ impl MacosChild {
 }
 
 impl MacosBoundaryRecovery {
-    fn recover_until_terminated(mut self) {
+    fn recover_until_terminated(&mut self) {
         loop {
             let boundary_terminated = self
                 .child
@@ -214,13 +214,11 @@ impl MacosBoundaryRecovery {
 impl Drop for MacosBoundaryRecovery {
     fn drop(&mut self) {
         if !self.completed {
-            // Dropping an unconfirmed boundary would release its parent-death
-            // and gateway ownership while the process group may still live.
-            // Keep every enforcement resource alive if the recovery thread
-            // itself cannot be created or terminates unexpectedly.
-            std::mem::forget(self.child.take());
-            std::mem::forget(self.parent_death.take());
-            std::mem::forget(self.gateway.take());
+            // A failed thread spawn drops the closure and therefore this
+            // owner. Continue recovery synchronously so the boundary never
+            // becomes an unowned detached process. The same path also runs
+            // during unwinding if the recovery closure unexpectedly panics.
+            self.recover_until_terminated();
         }
     }
 }

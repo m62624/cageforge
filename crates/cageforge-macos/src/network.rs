@@ -57,6 +57,10 @@ pub(crate) struct GatewayRuntime {
     thread: Option<JoinHandle<Result<(), MacosNetworkError>>>,
 }
 
+struct GatewayThreadRecovery {
+    thread: Option<JoinHandle<Result<(), MacosNetworkError>>>,
+}
+
 impl MacosNetworkPlan {
     /// Lowers every effective network layer into a native launch plan.
     pub(crate) fn lower<'request, B: SandboxBackend>(
@@ -242,14 +246,32 @@ impl Drop for GatewayRuntime {
 fn retain_gateway_thread(thread: JoinHandle<Result<(), MacosNetworkError>>) {
     // The gateway thread remains the owner of its listener and runtime until
     // it exits. Keep joining it in a recovery owner instead of blocking the
-    // caller; if that owner cannot be created, dropping the JoinHandle is the
-    // final non-blocking fallback and the shutdown signal has already been
-    // sent.
+    // caller during ordinary cleanup. If the recovery thread cannot be
+    // created, dropping its closure invokes the owner's synchronous join.
+    let recovery = GatewayThreadRecovery {
+        thread: Some(thread),
+    };
     let _ = thread::Builder::new()
         .name(NETWORK_GATEWAY_RECOVERY_THREAD_NAME.to_owned())
         .spawn(move || {
-            let _ = thread.join();
+            recovery.join();
         });
+}
+
+impl GatewayThreadRecovery {
+    fn join(mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for GatewayThreadRecovery {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 fn lower_unix_socket_plan<'request, B: SandboxBackend>(
