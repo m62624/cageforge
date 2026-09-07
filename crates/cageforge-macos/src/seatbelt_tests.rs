@@ -188,11 +188,31 @@ fn glob_translation_is_anchored_and_keeps_path_components_bounded() {
     );
     assert_eq!(
         glob_to_seatbelt_regex("/workspace/[^^]/file"),
-        r"^/workspace/[\^^]/file$"
+        r"^/workspace/[^\^]/file$"
     );
     assert_eq!(
         glob_to_seatbelt_regex("/workspace/literal]/file"),
         r"^/workspace/literal\]/file(/.*)?$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/[]]/file"),
+        r"^/workspace/[\]]/file$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/[]-z]/file"),
+        r"^/workspace/[\]-z]/file$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/a**b/file"),
+        r"^/workspace/a[^/]*b/file$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/***/file"),
+        r"^/workspace/[^/]*/file$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex("/workspace/{one,}/file"),
+        r"^/workspace/one/file$"
     );
 }
 

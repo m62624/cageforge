@@ -575,20 +575,7 @@ fn translate_glob_sequence(
             return;
         }
         match character {
-            '*' => {
-                *index += 1;
-                if characters.get(*index) == Some(&'*') {
-                    *index += 1;
-                    if characters.get(*index) == Some(&'/') {
-                        *index += 1;
-                        regex.push_str("(.*/)?");
-                    } else {
-                        regex.push_str(".*");
-                    }
-                } else {
-                    regex.push_str("[^/]*");
-                }
-            }
+            '*' => translate_glob_stars(characters, index, regex),
             '?' => {
                 *index += 1;
                 regex.push_str("[^/]");
@@ -613,11 +600,61 @@ fn translate_glob_sequence(
 
 fn translate_glob_class(characters: &[char], index: &mut usize, regex: &mut String) {
     let start = *index;
-    *index += 1;
-    let Some(end) = characters[*index..]
-        .iter()
-        .position(|&character| character == ']')
-    else {
+    let mut class_index = start + 1;
+    let negated = matches!(characters.get(class_index), Some('!') | Some('^'));
+    if negated {
+        class_index += 1;
+    }
+
+    let mut first = true;
+    let mut in_range = false;
+    let mut ranges = Vec::new();
+    let Some(content_end) = (loop {
+        let Some(&character) = characters.get(class_index) else {
+            break None;
+        };
+        match character {
+            ']' if first => {
+                ranges.push((']', ']'));
+                first = false;
+                class_index += 1;
+            }
+            ']' => {
+                break Some(class_index);
+            }
+            '-' if first => {
+                ranges.push(('-', '-'));
+                first = false;
+                class_index += 1;
+            }
+            '-' if in_range => {
+                if let Some(range) = ranges.last_mut() {
+                    range.1 = '-';
+                }
+                in_range = false;
+                first = false;
+                class_index += 1;
+            }
+            '-' => {
+                in_range = true;
+                first = false;
+                class_index += 1;
+            }
+            character if in_range => {
+                if let Some(range) = ranges.last_mut() {
+                    range.1 = character;
+                }
+                in_range = false;
+                first = false;
+                class_index += 1;
+            }
+            character => {
+                ranges.push((character, character));
+                first = false;
+                class_index += 1;
+            }
+        }
+    }) else {
         // Valid public PathPattern values cannot reach this branch. Keeping
         // malformed internal input literal prevents a partial class from
         // becoming a different, broader regular expression.
@@ -625,69 +662,109 @@ fn translate_glob_class(characters: &[char], index: &mut usize, regex: &mut Stri
         *index = start + 1;
         return;
     };
-    let end = *index + end;
-    regex.push('[');
-    let mut class_index = *index;
-    if class_index < end {
-        match characters[class_index] {
-            '!' => {
-                regex.push('^');
-                class_index += 1;
-            }
-            '^' => {
-                regex.push_str("\\^");
-                class_index += 1;
-            }
-            _ => {}
-        }
+
+    if in_range {
+        ranges.push(('-', '-'));
     }
-    while class_index < end {
-        match characters[class_index] {
-            '\\' => regex.push_str("\\\\"),
-            character => regex.push(character),
+
+    regex.push('[');
+    if negated {
+        regex.push('^');
+    }
+
+    for (range_start, range_end) in ranges {
+        push_regex_class_character(regex, range_start);
+        if range_start != range_end {
+            regex.push('-');
+            push_regex_class_character(regex, range_end);
         }
-        class_index += 1;
     }
     regex.push(']');
-    *index = end + 1;
+    *index = content_end + 1;
+}
+
+fn translate_glob_stars(characters: &[char], index: &mut usize, regex: &mut String) {
+    let start = *index;
+    while characters.get(*index) == Some(&'*') {
+        *index += 1;
+    }
+    let count = *index - start;
+    let at_component_boundary = start == 0
+        || matches!(
+            characters.get(start.wrapping_sub(1)),
+            Some('/') | Some('{') | Some(',')
+        );
+
+    // This is the globset recursive-prefix form. A longer run such as ***
+    // remains a normal component wildcard, just as globset parses it.
+    if count == 2 && at_component_boundary && characters.get(*index) == Some(&'/') {
+        *index += 1;
+        regex.push_str("(.*/)?");
+    } else if count == 2
+        && at_component_boundary
+        && characters
+            .get(*index)
+            .map_or(true, |character| matches!(character, '}' | ','))
+    {
+        regex.push_str(".*");
+    } else {
+        regex.push_str("[^/]*");
+    }
+}
+
+fn push_regex_class_character(regex: &mut String, character: char) {
+    if matches!(character, '\\' | ']' | '[' | '^') {
+        regex.push('\\');
+    }
+    regex.push(character);
 }
 
 fn translate_glob_alternation(characters: &[char], index: &mut usize, regex: &mut String) {
     let opening_index = *index;
-    let regex_start = regex.len();
     *index += 1;
-    regex.push('(');
+    let mut branches = Vec::new();
     loop {
-        translate_glob_sequence(characters, index, Some('}'), regex);
+        let mut branch = String::new();
+        translate_glob_sequence(characters, index, Some('}'), &mut branch);
         if *index >= characters.len() {
             // Valid public PathPattern values cannot reach this branch. Keep
             // malformed internal input literal and the generated expression
             // valid instead of leaving an unterminated regular-expression
             // group in the profile.
-            regex.truncate(regex_start);
             push_regex_literal(regex, '{');
             *index = opening_index + 1;
-            break;
+            return;
         }
         match characters[*index] {
             ',' => {
-                regex.push('|');
+                if !branch.is_empty() {
+                    branches.push(branch);
+                }
                 *index += 1;
             }
             '}' => {
-                regex.push(')');
+                if !branch.is_empty() {
+                    branches.push(branch);
+                }
                 *index += 1;
                 break;
             }
             _ => {
                 // Defensive recovery for malformed internal input. Public
                 // PathPattern construction rejects unbalanced alternations.
-                regex.truncate(regex_start);
                 push_regex_literal(regex, '{');
                 *index = opening_index + 1;
-                break;
+                return;
             }
         }
+    }
+
+    if branches.len() == 1 {
+        regex.push_str(&branches[0]);
+    } else if !branches.is_empty() {
+        regex.push('(');
+        regex.push_str(&branches.join("|"));
+        regex.push(')');
     }
 }
 

@@ -629,6 +629,29 @@ fn filesystem_globs_support_character_classes_and_ranges() {
             .expect("alternate non-match"),
         FilesystemDecision::Write
     );
+    for (pattern, matching, non_matching) in [
+        ("Secrets/[^^].token", "a.token", "^.token"),
+        ("Secrets/[]].token", "].token", "a.token"),
+        ("Secrets/[-a].token", "-.token", "b.token"),
+    ] {
+        let pattern = PathPattern::workspace(pattern).expect("special class glob");
+        assert!(
+            pattern.matches_path(
+                &Path::new(&workspace_root).join("Secrets").join(matching),
+                &context,
+            ),
+            "expected {matching:?} to match"
+        );
+        assert!(
+            !pattern.matches_path(
+                &Path::new(&workspace_root)
+                    .join("Secrets")
+                    .join(non_matching),
+                &context,
+            ),
+            "did not expect {non_matching:?} to match"
+        );
+    }
 }
 
 #[test]
