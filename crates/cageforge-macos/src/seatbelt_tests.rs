@@ -94,6 +94,12 @@ fn base_profile_keeps_required_platform_runtime_rules_explicit() {
     assert!(policy.contains("(mac-policy-name \"vnguard\")"));
     assert!(policy.contains("(fsctl-command FSIOC_CAS_BSDFLAGS)"));
     assert!(policy.contains("/__KMP_REGISTERED_LIB_[0-9]+"));
+    assert!(policy.contains("(sysctl-name \"hw.logicalcpu\")"));
+    assert!(policy.contains("(literal \"/dev/autofs_nowait\")"));
+    assert!(policy.contains("(global-name \"com.apple.dt.automationmode.reader\")"));
+    assert!(policy.contains("(global-name \"com.apple.espd\")"));
+    assert!(policy.contains("(literal \"/private/etc/passwd\")"));
+    assert!(policy.contains("(literal \"/System/Volumes/Data/Users\")"));
     assert!(policy.contains("com.apple.runningboard"));
     assert!(policy.contains("/private/var/run/syslog"));
 }
