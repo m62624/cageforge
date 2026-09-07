@@ -24,7 +24,7 @@ attach their own native ingress boundaries to the same gateway.
 | `cageforge-policy-compose` | Produces the mandatory requested-policy ∩ ceiling network value |
 | `cageforge-network-proxy` | Parses proxy traffic and performs exact authorized outbound connects |
 | Native backend crates | Own private ingress, OS isolation, launch, and lifecycle |
-| `cageforge-core` | Will provide the target-selected high-level sandbox API |
+| `cageforge` | Provides the target-selected high-level sandbox API |
 
 Start with [`NetworkGateway`](https://docs.rs/cageforge-network-proxy/latest/cageforge_network_proxy/struct.NetworkGateway.html),
 [`GatewayConfig`](https://docs.rs/cageforge-network-proxy/latest/cageforge_network_proxy/struct.GatewayConfig.html),

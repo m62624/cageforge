@@ -341,7 +341,10 @@ sudo mount -L CAGEFORGE_SOURCE -o ro "$source_mount"
 root_dir=$(sudo cat /var/lib/cageforge-source-root)
 cd "$root_dir"
 cargo fmt --all -- --check
-cargo clippy -p cageforge-bwrap -p cageforge-core --all-targets --locked -- -D warnings
+cargo clippy -p cageforge-bwrap --all-targets --locked -- -D warnings
+
+echo 'Running the unified facade Clippy with the Linux feature.'
+cargo clippy -p cageforge --no-default-features --features linux --all-targets --locked -- -D warnings
 
 echo 'Running cageforge-linux Clippy without optional features.'
 cargo clippy -p cageforge-linux --no-default-features --all-targets --locked -- -D warnings
@@ -357,6 +360,9 @@ echo 'Running cageforge-linux Clippy with all features.'
 cargo clippy -p cageforge-linux --all-features --all-targets --locked -- -D warnings
 echo 'Running cageforge-linux tests with all features.'
 cargo test -p cageforge-linux --all-features --locked
+
+echo 'Running the unified facade tests with the Linux feature.'
+cargo test -p cageforge --no-default-features --features linux --locked
 EOF
 result=$?
 set -e

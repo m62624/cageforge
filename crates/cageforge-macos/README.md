@@ -45,7 +45,7 @@ concurrently with different policies.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces restricted HTTP, CONNECT, and SOCKS5 destinations through exact resolved addresses. |
 | `cageforge-macos` | Converts the prepared values above into the macOS-native Seatbelt process boundary. |
-| `cageforge-core` | Will provide the final target-selecting facade over native backends. |
+| `cageforge` | Provides the final target-selecting facade over native backends. |
 
 The integration sequence is:
 

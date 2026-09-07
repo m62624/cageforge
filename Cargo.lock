@@ -169,6 +169,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "cageforge"
+version = "0.1.0"
+dependencies = [
+ "cageforge-backend-api",
+ "cageforge-command",
+ "cageforge-config",
+ "cageforge-linux",
+ "cageforge-macos",
+ "cageforge-path",
+ "cageforge-policy",
+ "cageforge-policy-compose",
+ "cageforge-windows",
+]
+
+[[package]]
 name = "cageforge-backend-api"
 version = "0.1.0"
 dependencies = [
@@ -218,10 +233,6 @@ dependencies = [
  "thiserror",
  "toml",
 ]
-
-[[package]]
-name = "cageforge-core"
-version = "0.1.0"
 
 [[package]]
 name = "cageforge-linux"

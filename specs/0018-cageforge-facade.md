@@ -17,11 +17,11 @@ descendant it creates remain inside the same native sandbox boundary.
 
 ## Package and migration
 
-The workspace placeholder package `cageforge-core` is renamed to the package
-and library crate `cageforge`. The source directory, package metadata, README,
-workspace member, dependency keys, documentation links, and repository
-references must use `cageforge`. No compatibility package or alias named
-`cageforge-core` is retained before publication.
+The workspace placeholder package is renamed to the package and library crate
+`cageforge`. The source directory, package metadata, README, workspace member,
+dependency keys, documentation links, and repository references must use
+`cageforge`. No compatibility package or legacy alias is retained before
+publication.
 
 ## Cargo features and dependency boundaries
 
@@ -45,6 +45,11 @@ combinations relevant to that target.
 The facade must not depend on Bubblewrap source or compile third-party native
 source. Linux's optional dependency consumes the staged resource according to
 Specification 0015.
+
+The package metadata for docs.rs must build the facade with all features for
+the supported x86_64 and AArch64 Linux, Windows, and macOS targets. Each
+target still receives only its matching native re-export; the other native
+features remain inactive through target-specific dependencies and guards.
 
 ## Public re-exports
 

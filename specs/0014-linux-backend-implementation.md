@@ -43,10 +43,10 @@ backend types and implementation modules are conditionally compiled. A
 non-Linux caller must receive an explicit unsupported-platform result from any
 cross-platform entry point rather than silently executing without enforcement.
 
-The crate must not depend on `cageforge-core`. The dependency direction is:
+The crate must not depend on `cageforge`. The dependency direction is:
 
 ```text
-cageforge-core (future facade)
+cageforge (facade)
         ↓
 cageforge-linux
         ↓
@@ -55,7 +55,7 @@ cageforge-backend-api
 portable Cageforge crates
 ```
 
-In the first implementation, `cageforge-core` may remain a placeholder while
+In the first implementation, `cageforge` may remain a placeholder while
 the Linux backend is tested directly through its public API.
 
 ## 3. Upstream reference and deliberate exclusions
@@ -221,29 +221,27 @@ The Linux backend must consume the crates as follows:
 | `cageforge-policy` | Owns declarative filesystem/network rules and resolved-target authorization inputs | Consume complete effective lowering; never turn a lexical decision or hostname decision into direct host I/O permission |
 | `cageforge-policy-compose` | Narrows requested policy by the outer `PolicyCeiling` | Backend receives `EffectiveSandbox` only; it must preserve both composition layers and all narrowing requirements |
 | `cageforge-backend-api` | Owns capability derivation, runtime-context validation, identity binding, and prepared handoff | Call `BackendRequest::prepare_for`; lower only `PreparedBackendRequest<LinuxBackend>` |
-| `cageforge-core` | Future ergonomic facade and backend selection | May depend on selected backends; must not be a security bypass or a second policy implementation |
+| `cageforge` | Ergonomic facade and backend selection | May depend on selected backends; must not be a security bypass or a second policy implementation |
 | `cageforge-upstream-review` | Development-time upstream tracking | Never a runtime dependency |
 
-The final `cageforge-core` crate is intended to provide one convenient entry
-point for applications, but it does not mean that every backend is compiled
+The final `cageforge` crate provides one convenient entry point for
+applications, but it does not mean that every backend is compiled
 into every binary. Its implementation must select the target-appropriate
 backend through target configuration and optional backend features. A Linux
 binary uses `cageforge-linux`, a macOS binary uses `cageforge-macos`, and a
 Windows binary uses `cageforge-windows`; unsupported targets return a typed
 platform error rather than a no-op backend.
 
-The final facade may expose an API shaped like this:
+The facade exposes a common execution contract shaped like this:
 
 ```text
-Engine::new(config) -> Result<Engine, CoreError>
-Engine::prepare(command, effective_sandbox, runtime) -> Result<PreparedExecution, CoreError>
-PreparedExecution::launch() -> Result<Child, CoreError>
+Sandbox::prepare(command, effective_sandbox, runtime) -> Result<PreparedExecution, BackendError>
+Sandbox::spawn(prepared) -> Result<Child, BackendError>
 ```
 
-These names are illustrative until the first native backend exists. The
-non-negotiable behavior is that `Engine::prepare` delegates to the selected
+The non-negotiable behavior is that `Sandbox::prepare` delegates to the selected
 backend's `BackendRequest::prepare_for`, and launch accepts only the
-backend-bound prepared result. `Engine` must not expose a method that accepts a
+backend-bound prepared result. `Sandbox` must not expose a method that accepts a
 raw `SandboxPolicy`, a raw `PolicyCeiling`, an unchecked `CommandRequest`, or a
 hostname-only network decision for launch.
 
@@ -874,7 +872,7 @@ they do not claim protection against a vulnerability in the VM or hypervisor
 itself.
 
 The portable default job must continue to test all portable crates on one
-Linux runner. A change to a portable crate, `cageforge-core`, workspace
+Linux runner. A change to a portable crate, `cageforge`, workspace
 metadata, or CI configuration must run the complete OS matrix. A change only
 to `cageforge-linux` may select Linux core/backend jobs, but the branch
 protection gate must require their stable aggregate result.
@@ -898,7 +896,7 @@ Implementation must proceed in these stages:
 7. add only the network modes whose exact enforcement is implemented;
 8. update Linux CI and label routing to run the real crate; and
 9. run the complete workspace and native Linux test matrix before considering
-   `cageforge-core` facade work.
+   `cageforge` facade work.
 
 No later backend crate should be started until the Linux backend's required
 tests, Clippy, documentation, and Linux CI gate pass.

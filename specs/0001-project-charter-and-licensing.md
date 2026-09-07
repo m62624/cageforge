@@ -162,9 +162,9 @@ cageforge-windows     restricted tokens, ACLs, WFP, and Windows process launch
 cageforge             ergonomic facade and backend selection
 ```
 
-`cageforge-policy` is the first implementation crate. It is deliberately
-smaller than the future facade and contains only platform-independent policy
-semantics; it does not parse TOML or launch processes. The detailed first
+`cageforge-policy` is deliberately smaller than the facade and contains only
+platform-independent policy semantics; it does not parse TOML or launch
+processes. The detailed first
 policy model is specified in `specs/0006-policy-model.md`.
 
 `cageforge` must not depend on Codex crates. The facade API must not expose

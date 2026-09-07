@@ -209,7 +209,7 @@ proxy, telemetry, an agent protocol, or a platform backend. Configuration is
 an optional producer of the input values, not part of the backend contract.
 
 `cageforge` may depend on this API and on selected native backends,
-but this API must never depend on `cageforge-core`. That direction keeps the
+but this API must never depend on `cageforge`. That direction keeps the
 contract reusable by applications that do not use the Cageforge facade.
 
 ## Required tests

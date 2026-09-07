@@ -148,7 +148,7 @@ The native backend owns:
 - platform-specific core environment selection; and
 - process launch, stdio, timeout, cancellation, and lifecycle handling.
 
-`cageforge-core` will provide the ergonomic facade and backend selection that
+`cageforge` provides the ergonomic facade and backend selection that
 connect this contract to a concrete execution flow.
 
 ## Workspace role

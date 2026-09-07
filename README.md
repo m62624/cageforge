@@ -34,8 +34,8 @@ build scripts, and mods inside an OS-enforced boundary. It:
 One `spawn` creates one sandbox boundary for a command and all of its
 descendants. The backend and policy can be reused for several commands, while
 each spawn receives its own process, lifecycle, and native enforcement state.
-Linux, Windows, and the future macOS backend implement this same portable
-model with their respective operating-system mechanisms.
+Linux, Windows, and macOS backends implement this same portable model with
+their respective operating-system mechanisms.
 
 The workspace is split into small libraries so an application can use only the
 layer it needs. The portable crates do not choose an operating-system sandbox

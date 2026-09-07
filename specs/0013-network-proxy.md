@@ -58,7 +58,7 @@ cageforge-network-proxy
         ↓
 cageforge-linux / cageforge-macos / cageforge-windows
         ↓
-cageforge-core
+cageforge
 ```
 
 `GatewayConfig` and `GatewayConfigError` are available without the crate's

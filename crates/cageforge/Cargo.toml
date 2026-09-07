@@ -1,0 +1,47 @@
+[package]
+name = "cageforge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Unified ergonomic facade for Cageforge sandbox backends"
+repository.workspace = true
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[features]
+default = []
+config = ["dep:cageforge-config"]
+linux = ["dep:cageforge-linux"]
+windows = ["dep:cageforge-windows"]
+macos = ["dep:cageforge-macos"]
+
+[dependencies]
+cageforge-backend-api.workspace = true
+cageforge-command.workspace = true
+cageforge-path.workspace = true
+cageforge-policy.workspace = true
+cageforge-policy-compose.workspace = true
+cageforge-config = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cageforge-linux = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+cageforge-windows = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cageforge-macos = { workspace = true, optional = true }
+
+[lints]
+workspace = true
