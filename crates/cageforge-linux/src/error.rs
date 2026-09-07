@@ -451,6 +451,13 @@ pub enum NetworkGatewayRuntimeError {
         /// Maximum time allowed for gateway runtime startup.
         timeout_ms: u128,
     },
+    /// The gateway did not finish shutting down within the bounded cleanup
+    /// interval. Its owner must retain the runtime and retry cleanup.
+    #[error("gateway did not shut down within {timeout_ms} ms")]
+    ShutdownTimeout {
+        /// Maximum time allowed for one gateway shutdown attempt.
+        timeout_ms: u128,
+    },
     /// The gateway thread terminated by panic.
     #[error("gateway runtime thread panicked")]
     Panicked,

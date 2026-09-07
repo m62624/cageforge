@@ -677,7 +677,16 @@ The Linux network runtime must:
 The gateway must implement ordinary HTTP proxying, HTTP `CONNECT`, and SOCKS5
 `CONNECT` without re-resolving an authorized hostname. A malformed request,
 empty DNS result, private-address violation, target outside the captured
-resolution, bridge failure, or unsupported protocol fails closed. Product
+resolution, bridge failure, or unsupported protocol fails closed.
+
+Gateway shutdown is bounded. If the runtime thread does not exit within the
+cleanup deadline, the launch transfers the thread and private socket directory
+to a recovery owner; that owner joins the thread later, and the socket
+directory is retained until the join completes. A caller must never delete the
+directory or release the gateway as though shutdown were confirmed while the
+thread may still accept authenticated traffic.
+
+Product
 features such as MITM, credential injection, audit upload, and remote policy
 reload remain outside this backend.
 

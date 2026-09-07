@@ -223,6 +223,11 @@ Gateway sockets, authentication state, connection limits, timeout state, and
 cleanup handles are owned by each launch. Separate instances therefore use
 independent network policies and lifecycle limits.
 
+Gateway shutdown has a bounded cleanup wait. If the gateway thread does not
+confirm exit within that interval, a recovery owner retains the thread and its
+launch-owned runtime until it exits; cleanup does not release the boundary as
+if shutdown had already been confirmed.
+
 ## Process lifecycle and errors
 
 `MacosChild` exposes the child identifier, configured standard-stream pipes,

@@ -409,6 +409,11 @@ only when callers deliberately give multiple instances the same writable host
 path; coordination for the same protected missing path is UID-scoped so one
 instance cannot remove another instance's active protection.
 
+Gateway shutdown has a bounded cleanup wait. If the gateway thread does not
+confirm exit within that interval, a recovery owner retains the thread and its
+private socket directory and joins it later; the directory is not removed while
+the gateway may still be serving authenticated connections.
+
 ## Process lifecycle and errors
 
 `LinuxChild` exposes the child identifier, configured pipe handles, `try_wait`,

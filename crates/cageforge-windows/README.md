@@ -362,6 +362,11 @@ Cageforge HTTP or SOCKS5 gateway, which rechecks the exact resolved destination
 at connect time. A process cannot use another instance's route SID or gateway
 credential.
 
+Ingress shutdown has a bounded cleanup wait. If the shared ingress thread does
+not confirm exit within that interval, a recovery owner retains the thread,
+Winsock session, and retiring ports until the thread exits; another setup cannot
+reuse those ports while the old ingress may still be alive.
+
 ## Process lifecycle and errors
 
 `WindowsChild` exposes the child identifier, configured standard-stream pipes,
@@ -369,6 +374,9 @@ credential.
 boundary, private desktop, Job Object relationship, filesystem enforcement,
 network route, and active-child lease. Completion releases the route and ACL
 resources only after the process boundary and runner lifecycle have finished.
+`kill` reports success only after the complete Job boundary is confirmed empty;
+an unconfirmed termination retains the resources for the per-instance recovery
+owner instead of releasing enforcement early.
 
 The parent does not parse runner `stdout` or `stderr` as a protocol. The
 authenticated runner reports `Ready`, `Spawned`, `Exited`, and typed `Failed`

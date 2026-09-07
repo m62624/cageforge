@@ -38,14 +38,17 @@ const MAX_PRE_ATTRIBUTION_CONNECTIONS: usize = 256;
 const MAX_ROUTE_SID_ATTEMPTS: usize = 64;
 const WINSOCK_VERSION_2_2: u16 = 0x0202;
 const PROXY_INGRESS_THREAD_NAME: &str = "cageforge-windows-proxy-ingress";
+const PROXY_INGRESS_RECOVERY_THREAD_NAME: &str = "cageforge-windows-proxy-recovery";
 const INGRESS_STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const INGRESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const INGRESS_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 pub(crate) struct WindowsProxyIngress {
     identity: IngressIdentity,
     routes: RouteRegistry,
     thread: Mutex<Option<JoinHandle<Result<(), WindowsNetworkRuntimeFailure>>>>,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
-    _winsock: WinsockSession,
+    winsock: Option<WinsockSession>,
 }
 
 pub(crate) struct WindowsProxyRoute {
@@ -90,6 +93,12 @@ struct SharedIngressRegistry {
     ingresses: HashMap<IngressIdentity, Weak<WindowsProxyIngress>>,
     retiring_ports: HashSet<u16>,
     starting: HashSet<IngressIdentity>,
+}
+
+struct WindowsIngressRecovery {
+    thread: Option<JoinHandle<Result<(), WindowsNetworkRuntimeFailure>>>,
+    ports: [u16; 2],
+    winsock: Option<WinsockSession>,
 }
 
 /// Failure while constructing the shared Windows ingress or one isolated route.
@@ -245,6 +254,13 @@ pub enum WindowsNetworkRuntimeError {
     /// The ingress runtime thread panicked.
     #[error("Windows proxy ingress runtime thread panicked")]
     Panicked,
+    /// The ingress runtime did not finish shutting down within the bounded
+    /// cleanup interval. Its owner must retain the runtime and retry cleanup.
+    #[error("Windows proxy ingress did not shut down within {timeout_ms} ms")]
+    ShutdownTimeout {
+        /// Maximum time allowed for one ingress shutdown attempt.
+        timeout_ms: u128,
+    },
 }
 
 /// A typed failure produced by the process-wide Windows ingress thread.
@@ -509,6 +525,52 @@ impl WindowsProxyIngress {
         }
     }
 
+    fn shutdown_with_timeout(&self, timeout: Duration) -> Result<(), WindowsNetworkRuntimeError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let finished = {
+                let thread = self
+                    .thread
+                    .lock()
+                    .map_err(|_| WindowsNetworkRuntimeError::StatePoisoned)?;
+                let Some(thread) = thread.as_ref() else {
+                    return Ok(());
+                };
+                thread.is_finished()
+            };
+            if finished {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(WindowsNetworkRuntimeError::ShutdownTimeout {
+                    timeout_ms: timeout.as_millis(),
+                });
+            }
+            std::thread::sleep(INGRESS_SHUTDOWN_POLL_INTERVAL);
+        }
+
+        let thread = self
+            .thread
+            .lock()
+            .map_err(|_| WindowsNetworkRuntimeError::StatePoisoned)?
+            .take();
+        let Some(thread) = thread else {
+            return Ok(());
+        };
+        match thread.join() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(source)) => Err(WindowsNetworkRuntimeError::Failed { source }),
+            Err(_) => Err(WindowsNetworkRuntimeError::Panicked),
+        }
+    }
+
+    fn take_thread(&mut self) -> Option<JoinHandle<Result<(), WindowsNetworkRuntimeFailure>>> {
+        match self.thread.get_mut() {
+            Ok(thread) => thread.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        }
+    }
+
     fn start(identity: IngressIdentity) -> Result<Self, WindowsNetworkGatewayError> {
         let winsock = initialize_winsock()?;
         let http = exclusive_listener(ProxyProtocol::Http, identity.addresses.http)?;
@@ -523,23 +585,33 @@ impl WindowsProxyIngress {
                 move || run_ingress(http, socks, routes, ready_sender, shutdown_receiver)
             })
             .map_err(|source| WindowsNetworkGatewayError::ThreadSpawn { source })?;
-        match ready_receiver.recv() {
+        let ports = [
+            identity.addresses.http.port(),
+            identity.addresses.socks.port(),
+        ];
+        match ready_receiver.recv_timeout(INGRESS_STARTUP_WAIT_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
                 identity,
                 routes,
                 thread: Mutex::new(Some(thread)),
                 shutdown: Mutex::new(Some(shutdown_sender)),
-                _winsock: winsock,
+                winsock: Some(winsock),
             }),
             Ok(Err(source)) => {
-                let _ = thread.join();
+                let _ = shutdown_sender.send(());
+                retain_ingress_thread(thread, ports, Some(winsock));
                 Err(WindowsNetworkGatewayError::RuntimeStartup { source })
             }
-            Err(_) => match thread.join() {
-                Ok(Err(source)) => Err(WindowsNetworkGatewayError::RuntimeStartup { source }),
-                Ok(Ok(())) => Err(WindowsNetworkGatewayError::StartupChannelClosed),
-                Err(_) => Err(WindowsNetworkGatewayError::StartupThreadPanicked),
-            },
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = shutdown_sender.send(());
+                retain_ingress_thread(thread, ports, Some(winsock));
+                Err(WindowsNetworkGatewayError::StartupChannelClosed)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = shutdown_sender.send(());
+                retain_ingress_thread(thread, ports, Some(winsock));
+                Err(WindowsNetworkGatewayError::StartupWaitTimeout)
+            }
         }
     }
 }
@@ -582,17 +654,61 @@ impl Drop for WindowsProxyIngress {
         if let Some(sender) = shutdown_sender {
             let _ = sender.send(());
         }
-        let thread = match self.thread.get_mut() {
-            Ok(thread) => thread.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        };
-        if let Some(thread) = thread {
+        let _ = self.shutdown_with_timeout(INGRESS_SHUTDOWN_TIMEOUT);
+        if let Some(thread) = self.take_thread() {
+            retain_ingress_thread(thread, ports, self.winsock.take());
+        } else if let Ok(mut registry) = SHARED_INGRESSES.0.lock() {
+            remove_retiring_ports(&mut registry, ports);
+        }
+    }
+}
+
+fn retain_ingress_thread(
+    thread: JoinHandle<Result<(), WindowsNetworkRuntimeFailure>>,
+    ports: [u16; 2],
+    winsock: Option<WinsockSession>,
+) {
+    // The ingress thread owns the listeners and may still accept connections.
+    // Keep its Winsock session and reserved port names alive until the thread
+    // has exited, otherwise a replacement could impersonate the old gateway.
+    if let Ok(mut registry) = SHARED_INGRESSES.0.lock() {
+        registry.retiring_ports.extend(ports);
+    }
+    let recovery = WindowsIngressRecovery {
+        thread: Some(thread),
+        ports,
+        winsock,
+    };
+    let _ = std::thread::Builder::new()
+        .name(PROXY_INGRESS_RECOVERY_THREAD_NAME.to_owned())
+        .spawn(move || recovery.join());
+}
+
+fn remove_retiring_ports(registry: &mut SharedIngressRegistry, ports: [u16; 2]) {
+    for port in ports {
+        registry.retiring_ports.remove(&port);
+    }
+}
+
+impl WindowsIngressRecovery {
+    fn join(mut self) {
+        if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
         if let Ok(mut registry) = SHARED_INGRESSES.0.lock() {
-            for port in ports {
-                registry.retiring_ports.remove(&port);
-            }
+            remove_retiring_ports(&mut registry, self.ports);
+        }
+        self.winsock.take();
+    }
+}
+
+impl Drop for WindowsIngressRecovery {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            // A failed recovery-thread spawn must not release a live listener,
+            // its Winsock session, or its reserved ports.
+            std::mem::forget(self.thread.take());
+            std::mem::forget(self.winsock.take());
         }
     }
 }
@@ -1092,9 +1208,9 @@ mod tests {
     use super::{
         IngressIdentity, ProxyAddresses, ProxyProtocol, RouteServices, SHARED_INGRESSES,
         SharedIngressRegistry, WindowsNetworkGatewayError, WindowsNetworkIngressError,
-        WindowsProxyIngress, exclusive_listener, initialize_winsock, random_route_sid,
-        registered_route_for_sids, remove_route_if_owned, verify_protocol_while_admitted,
-        wait_for_starting_ingress,
+        WindowsNetworkRuntimeError, WindowsProxyIngress, WinsockSession, exclusive_listener,
+        initialize_winsock, random_route_sid, registered_route_for_sids, remove_route_if_owned,
+        verify_protocol_while_admitted, wait_for_starting_ingress,
     };
 
     #[test]
@@ -1199,7 +1315,7 @@ mod tests {
             routes: Arc::new(Mutex::new(HashMap::new())),
             thread: Mutex::new(Some(runtime)),
             shutdown: Mutex::new(Some(shutdown_sender)),
-            _winsock: winsock,
+            winsock: Some(winsock),
         });
         SHARED_INGRESSES
             .0
@@ -1239,6 +1355,54 @@ mod tests {
             WindowsProxyIngress::shared(&format!("{replacement_identity}-after"), &ports)
                 .expect("replacement ingress starts after old listeners close");
         drop(replacement);
+    }
+
+    #[test]
+    fn ingress_shutdown_has_a_bounded_join_and_retains_the_runtime() {
+        let (release_sender, release_receiver) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            release_receiver.recv().expect("release test ingress");
+            Ok(())
+        });
+        let addresses =
+            ProxyAddresses::from_setup_ports(&[49_154, 49_155]).expect("test ingress ports");
+        let mut ingress = WindowsProxyIngress {
+            identity: IngressIdentity {
+                owner_sid: "bounded-shutdown-test".to_string(),
+                addresses,
+            },
+            routes: Arc::new(Mutex::new(HashMap::new())),
+            thread: Mutex::new(Some(thread)),
+            shutdown: Mutex::new(None),
+            winsock: Some(initialize_winsock().expect("Winsock for bounded shutdown test")),
+        };
+
+        let error = ingress
+            .shutdown_with_timeout(Duration::from_millis(20))
+            .expect_err("a blocked ingress join must be bounded");
+        assert!(matches!(
+            error,
+            WindowsNetworkRuntimeError::ShutdownTimeout { timeout_ms: 20 }
+        ));
+        assert!(
+            ingress
+                .thread
+                .lock()
+                .expect("ingress thread state")
+                .is_some()
+        );
+
+        release_sender.send(()).expect("release test ingress");
+        ingress
+            .shutdown_with_timeout(Duration::from_secs(1))
+            .expect("released ingress shutdown");
+        assert!(
+            ingress
+                .thread
+                .lock()
+                .expect("ingress thread state")
+                .is_none()
+        );
     }
 
     #[test]

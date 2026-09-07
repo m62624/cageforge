@@ -3,6 +3,7 @@
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::os::unix::net::UnixStream;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -10,8 +11,11 @@ use cageforge_command::EnvironmentSpec;
 use cageforge_network_proxy::GatewayConfig;
 use cageforge_policy::{FilesystemPolicy, NetworkPolicy, SandboxPolicy};
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
+use tempfile::TempDir;
+use tokio::sync::oneshot;
 
-use super::GatewayRuntime;
+use super::{BridgeIngressToken, GatewayRuntime};
+use crate::error::{LinuxBackendError, NetworkGatewayRuntimeError};
 
 fn effective_network() -> cageforge_policy_compose::EffectiveNetworkPolicy {
     let environment = EnvironmentSpec::inherit_all();
@@ -54,6 +58,50 @@ fn dropping_the_runtime_removes_its_private_socket_directory() {
     assert!(directory.join("gateway.sock").exists());
     drop(runtime);
     assert!(!directory.exists());
+}
+
+#[test]
+fn gateway_shutdown_has_a_bounded_join_and_retains_the_runtime() {
+    let (release_sender, release_receiver) = mpsc::channel();
+    let thread = thread::spawn(move || {
+        release_receiver
+            .recv()
+            .expect("test gateway release signal");
+        Ok(())
+    });
+    let (shutdown, _receiver) = oneshot::channel();
+    let directory = TempDir::new().expect("gateway directory");
+    let mut runtime = GatewayRuntime {
+        directory: Some(directory),
+        socket_directory: std::path::PathBuf::new(),
+        bridge_token: BridgeIngressToken::generate().expect("bridge token"),
+        shutdown: Some(shutdown),
+        thread: Some(thread),
+    };
+
+    let error = runtime
+        .shutdown_with_timeout(Duration::from_millis(20))
+        .expect_err("a blocked gateway join must be bounded");
+    assert!(matches!(
+        error,
+        LinuxBackendError::NetworkGatewayRuntimeFailed(
+            NetworkGatewayRuntimeError::ShutdownTimeout { timeout_ms: 20 }
+        )
+    ));
+    assert!(
+        runtime.thread.is_some(),
+        "the live thread must remain owned"
+    );
+    assert!(
+        runtime.directory.is_some(),
+        "the socket directory must remain owned"
+    );
+
+    release_sender.send(()).expect("release test gateway");
+    runtime
+        .shutdown_with_timeout(Duration::from_secs(1))
+        .expect("released gateway shutdown");
+    assert!(runtime.thread.is_none());
 }
 
 #[test]
