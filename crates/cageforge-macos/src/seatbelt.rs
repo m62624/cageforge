@@ -704,7 +704,7 @@ fn translate_glob_stars(characters: &[char], index: &mut usize, regex: &mut Stri
         && at_component_boundary
         && characters
             .get(*index)
-            .map_or(true, |character| matches!(character, '}' | ','))
+            .is_none_or(|character| matches!(character, '}' | ','))
     {
         regex.push_str(".*");
     } else {
