@@ -164,7 +164,7 @@ impl GatewayRuntime {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let _ = shutdown.send(());
-                retain_startup_thread(thread);
+                retain_gateway_thread(thread);
                 Err(MacosNetworkError::StartupTimeout {
                     timeout_ms: GATEWAY_STARTUP_TIMEOUT.as_millis(),
                 })
@@ -231,15 +231,20 @@ impl GatewayRuntime {
 
 impl Drop for GatewayRuntime {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        if self.shutdown().is_err()
+            && let Some(thread) = self.thread.take()
+        {
+            retain_gateway_thread(thread);
+        }
     }
 }
 
-fn retain_startup_thread(thread: JoinHandle<Result<(), MacosNetworkError>>) {
-    // The startup thread is already detached if the recovery owner cannot be
-    // created. It owns no sandbox boundary and its listener remains
-    // authenticated, so retaining it is safer than joining indefinitely in
-    // the caller while still reporting the bounded startup failure.
+fn retain_gateway_thread(thread: JoinHandle<Result<(), MacosNetworkError>>) {
+    // The gateway thread remains the owner of its listener and runtime until
+    // it exits. Keep joining it in a recovery owner instead of blocking the
+    // caller; if that owner cannot be created, dropping the JoinHandle is the
+    // final non-blocking fallback and the shutdown signal has already been
+    // sent.
     let _ = thread::Builder::new()
         .name(NETWORK_GATEWAY_RECOVERY_THREAD_NAME.to_owned())
         .spawn(move || {
