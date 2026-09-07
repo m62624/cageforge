@@ -3,6 +3,7 @@
 //! Per-instance macOS network lowering and authenticated proxy gateway.
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -11,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use cageforge_backend_api::{PreparedBackendRequest, SandboxBackend};
 use cageforge_network_proxy::{GatewayConfig, GatewayIngressKey, NetworkGateway, SystemResolver};
-use cageforge_path::NativePathKey;
+use cageforge_path::{NativePathKey, normalize_lexical_path};
 use cageforge_policy::{NetworkDecision, NetworkMode, UnixSocketMode};
 use cageforge_policy_compose::EffectiveNetworkLowering;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -315,8 +316,9 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
             let path = rule.path().to_path_buf();
             match prepared.network_decision_for_unix_socket(backend, &path)? {
                 NetworkDecision::Allow => {
-                    if !allow_all && allowed_keys.insert(NativePathKey::new(&path)) {
-                        allowed.push(path);
+                    let native_path = normalize_unix_socket_path(&path);
+                    if !allow_all && allowed_keys.insert(NativePathKey::new(&native_path)) {
+                        allowed.push(native_path);
                     }
                 }
                 NetworkDecision::Deny => {
@@ -334,6 +336,13 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
     }
     allowed.sort_by_key(|path| NativePathKey::new(path));
     Ok(MacosUnixSocketPlan { allow_all, allowed })
+}
+
+fn normalize_unix_socket_path(path: &std::path::Path) -> PathBuf {
+    let lexical = normalize_lexical_path(path).into_owned();
+    fs::canonicalize(&lexical)
+        .map(|canonical| normalize_lexical_path(&canonical).into_owned())
+        .unwrap_or(lexical)
 }
 
 fn run_gateway(
@@ -469,14 +478,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
     use std::sync::Arc;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
+    use tempfile::TempDir;
     use tokio::sync::oneshot;
 
-    use super::{GatewayRuntime, try_admission};
+    use super::{GatewayRuntime, normalize_unix_socket_path, try_admission};
     use crate::error::MacosNetworkError;
 
     #[test]
@@ -562,5 +574,24 @@ mod tests {
         assert!(try_admission(&admission).is_none());
         drop(first);
         assert!(try_admission(&admission).is_some());
+    }
+
+    #[test]
+    fn existing_unix_socket_alias_is_canonicalized_before_seatbelt_lowering() {
+        let directory = TempDir::new().expect("socket directory");
+        let target = directory.path().join("target.sock");
+        let alias = directory.path().join("alias.sock");
+        let _listener = UnixListener::bind(&target).expect("socket fixture");
+        symlink(&target, &alias).expect("socket alias");
+
+        assert_eq!(normalize_unix_socket_path(&alias), target);
+    }
+
+    #[test]
+    fn missing_unix_socket_keeps_its_lexical_path_for_later_creation() {
+        let directory = TempDir::new().expect("socket directory");
+        let path = directory.path().join("created-after-preflight.sock");
+
+        assert_eq!(normalize_unix_socket_path(&path), path);
     }
 }

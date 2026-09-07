@@ -1514,6 +1514,37 @@ fn restricted_unix_socket_policy_allows_an_explicit_path() {
 }
 
 #[test]
+fn restricted_unix_socket_policy_allows_an_existing_symlink_alias() {
+    use std::os::unix::fs::symlink;
+
+    let socket_directory = TempDir::new().expect("Unix socket directory");
+    let target = socket_directory.path().join("target.sock");
+    let alias = socket_directory.path().join("alias.sock");
+    let server = start_unix_server(&target);
+    symlink(&target, &alias).expect("Unix socket alias");
+    let workspace = TempDir::new().expect("workspace");
+    let network = NetworkPolicy::enabled()
+        .with_local_network_access(LocalNetworkAccess::Allow)
+        .with_unix_socket_mode(UnixSocketMode::Restricted)
+        .with_unix_socket(&alias, DomainAccess::Allow)
+        .expect("allowed Unix socket alias");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
+    let (command, effective, context) =
+        unix_network_request(workspace.path(), &policy, "unix", &alias);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0));
+    server
+        .join()
+        .expect("Unix server")
+        .expect("Unix server I/O");
+}
+
+#[test]
 fn enabled_unix_socket_policy_rejects_an_explicit_denial() {
     let socket_directory = TempDir::new().expect("Unix socket directory");
     let denied = socket_directory.path().join("denied.sock");

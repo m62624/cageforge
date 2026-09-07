@@ -145,6 +145,10 @@ For network enforcement:
   socket mode require a separate portable deny capability; macOS does not
   advertise that capability and therefore rejects that combination during
   common preflight. The backend never silently permits all sockets.
+  Existing allowed socket paths are canonicalized before they become Seatbelt
+  filters, matching the upstream alias-handling boundary; a path that does not
+  exist during preflight retains its validated lexical form for a later socket
+  creator.
 
 Each proxy ingress and gateway owns its policy, key, listener, and limits.
 Dropping one child closes and joins only its own runtime. A second instance
@@ -210,6 +214,7 @@ Native macOS black-box tests cover at least:
 - disabled networking blocks direct connections;
 - enabled unrestricted networking preserves direct connections;
 - restricted networking reaches only exact authorized gateway targets;
+- an existing Unix-socket symlink alias is lowered to its canonical target;
 - a gateway ingress port remains unavailable until confirmed runtime cleanup;
 - separate simultaneous instances retain separate policies and gateway keys;
 - unrelated inherited file descriptors do not cross the launch boundary;
