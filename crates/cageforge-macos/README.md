@@ -16,6 +16,30 @@ The backend object is reusable: callers may prepare and run multiple commands
 concurrently with different policies. Each instance has its own native policy,
 process lifecycle, timeout, and network enforcement state.
 
+## Sandbox model
+
+Each `spawn` creates one Seatbelt boundary around one command and its complete
+descendant process tree. The boundary is intended for potentially untrusted
+commands, agents, plugins, build scripts, and mods. A reusable backend and
+policy can serve many commands, while every command receives independent
+native enforcement and cleanup state.
+
+| Protection | macOS enforcement |
+|---|---|
+| Process boundary | Closed-by-default Seatbelt profile inherited by descendants, with a dedicated process group and parent-death watcher. |
+| Filesystem | Explicit read/write scopes, read-only carve-outs, protected paths, and deny globs; native path validation rejects unsafe symlink traversal before launch. |
+| Runtime visibility | Only the fixed read-only system paths required by ordinary command-line runtimes and the explicitly requested scopes are visible. |
+| Network | Disabled networking, direct networking, or a private authenticated per-instance gateway with exact resolved-target authorization. |
+| Local IPC | Pathname Unix-socket access is disabled, restricted to exact allowed paths, or rejected as an unsupported policy; it is never widened silently. |
+| Environment | The selected inherited base, filters, and overrides are validated and applied to the sandboxed command only. |
+| Streams and descriptors | Inherit, null, or pipe modes are explicit; unrelated inherited descriptors are closed before `exec`. |
+| Timeout and cleanup | Per-command timeout, process-group termination, bounded gateway cleanup, and a recovery owner prevent a failed cleanup from releasing a live boundary. |
+
+The backend may be shared between threads. Three calls to `spawn` create three
+independent sandbox instances, even when they use the same backend and policy.
+If one command launches a shell, compiler, or build script, those descendants
+remain inside that command's same boundary.
+
 ## Workspace role
 
 | Crate | Role |
