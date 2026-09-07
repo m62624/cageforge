@@ -150,7 +150,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
                             pattern: pattern.as_str().to_owned(),
                         });
                     }
-                    self.collect_glob(pattern.as_str(), pattern.is_absolute());
+                    self.collect_glob(pattern.as_str(), pattern.is_absolute())?;
                 }
             }
         }
@@ -198,7 +198,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         Ok(())
     }
 
-    fn collect_glob(&mut self, pattern: &str, absolute: bool) {
+    fn collect_glob(&mut self, pattern: &str, absolute: bool) -> Result<(), MacosFilesystemError> {
         if absolute {
             let pattern = normalize_macos_system_alias(PathBuf::from(pattern))
                 .to_string_lossy()
@@ -207,14 +207,23 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         } else {
             for root in self.context.workspace_roots() {
                 let root = normalize_macos_system_alias(root.clone());
+                let root_string = root
+                    .to_str()
+                    .ok_or_else(|| MacosFilesystemError::GlobRootNotUtf8 { path: root.clone() })?;
                 let joined = if pattern.is_empty() {
-                    root.to_string_lossy().into_owned()
+                    root_string.to_owned()
                 } else {
-                    root.join(pattern).to_string_lossy().into_owned()
+                    root.join(pattern)
+                        .to_str()
+                        .ok_or_else(|| MacosFilesystemError::GlobRootNotUtf8 {
+                            path: root.clone(),
+                        })?
+                        .to_owned()
                 };
                 self.insert_denied_glob(joined);
             }
         }
+        Ok(())
     }
 
     fn insert_denied_glob(&mut self, pattern: String) {

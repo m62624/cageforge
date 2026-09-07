@@ -280,7 +280,7 @@ fn lower_unix_socket_plan<'request, B: SandboxBackend>(
     lowering: EffectiveNetworkLowering<'_>,
 ) -> Result<MacosUnixSocketPlan, MacosNetworkError> {
     let requirements = prepared.sandbox(backend)?.network().requirements();
-    if requirements.local_ipc_isolation() {
+    if requirements.mode() == NetworkMode::Disabled || requirements.local_ipc_isolation() {
         return Ok(MacosUnixSocketPlan::default());
     }
     // A rule does not itself change the default mode. Two `Enabled` layers

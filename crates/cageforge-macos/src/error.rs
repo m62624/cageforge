@@ -155,6 +155,13 @@ pub enum MacosFilesystemError {
         /// Rejected scope path.
         path: PathBuf,
     },
+    /// A workspace root could not be represented in the UTF-8 Seatbelt glob
+    /// expression required by the native lowering.
+    #[error("macOS filesystem glob root is not valid UTF-8: {path:?}")]
+    GlobRootNotUtf8 {
+        /// Workspace root that cannot be represented in a Seatbelt regex.
+        path: PathBuf,
+    },
     /// A filesystem glob had an access mode other than deny.
     #[error("macOS filesystem glob {pattern:?} must use deny access")]
     NonDenyGlob {

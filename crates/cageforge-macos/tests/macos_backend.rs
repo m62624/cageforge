@@ -2,9 +2,11 @@
 
 #![cfg(target_os = "macos")]
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -17,7 +19,7 @@ use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendContractError, BackendRequest, SandboxBackend,
 };
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
-use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError};
+use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError, MacosFilesystemError};
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
     NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
@@ -946,6 +948,29 @@ fn writable_workspace_cannot_escape_through_a_symlink() {
 }
 
 #[test]
+fn workspace_glob_rejects_a_non_utf8_root_before_launch() {
+    let parent = TempDir::new().expect("workspace parent");
+    let root = parent
+        .path()
+        .join(OsString::from_vec(vec![b'w', b'o', b'r', b'k', 0xff]));
+    fs::create_dir(&root).expect("non-UTF-8 workspace root");
+    let rule = FilesystemRule::workspace_glob("**/*.secret", AccessMode::Deny)
+        .expect("workspace deny glob");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([rule]),
+        NetworkPolicy::disabled(),
+    );
+    let (command, effective, context) = request_for(&root, &policy, shell_command(":"));
+    let error = backend()
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect_err("macOS Seatbelt glob lowering must reject lossy roots");
+    assert!(matches!(
+        error,
+        MacosBackendError::Filesystem(MacosFilesystemError::GlobRootNotUtf8 { path }) if path == root
+    ));
+}
+
+#[test]
 fn timeout_terminates_the_complete_seatbelt_process_group() {
     let workspace = TempDir::new().expect("workspace");
     let policy = restricted_policy(workspace.path());
@@ -1392,6 +1417,27 @@ fn disabled_network_denies_direct_loopback_connections() {
         listener.accept().is_err(),
         "disabled network reached target"
     );
+}
+
+#[test]
+fn disabled_network_accepts_irrelevant_unix_socket_rules() {
+    let socket_directory = TempDir::new().expect("Unix socket directory");
+    let denied = socket_directory.path().join("denied.sock");
+    let workspace = TempDir::new().expect("workspace");
+    let network = NetworkPolicy::disabled()
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
+        .with_unix_socket(&denied, DomainAccess::Allow)
+        .expect("irrelevant Unix socket rule");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
+    let (command, effective, runtime) =
+        unix_network_request(workspace.path(), &policy, "unix-denied", &denied);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("disabled network must not reject irrelevant socket rules");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0));
 }
 
 #[test]

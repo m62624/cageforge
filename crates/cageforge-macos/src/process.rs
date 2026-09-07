@@ -92,7 +92,12 @@ impl MacosChild {
 
     /// Checks whether the boundary has exited, enforcing its timeout.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, MacosBackendError> {
-        self.check_gateway_health()?;
+        if let Err(error) = self.check_gateway_health() {
+            if self.terminate_after_boundary_failure() {
+                let _ = self.cleanup_boundaries();
+            }
+            return Err(error);
+        }
         if self
             .deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -138,6 +143,10 @@ impl MacosChild {
             return Ok(());
         };
         gateway.check_health().map_err(MacosBackendError::Network)
+    }
+
+    fn terminate_after_boundary_failure(&mut self) -> bool {
+        self.terminate_boundary().is_ok()
     }
 
     fn terminate_boundary(&mut self) -> Result<(), MacosBackendError> {
