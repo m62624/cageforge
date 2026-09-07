@@ -59,7 +59,7 @@ owned handoff for a process backend.
 
 | Type | Purpose |
 |---|---|
-| `CommandRequest` | Complete portable request passed to a future execution backend. |
+| `CommandRequest` | Complete portable request passed to an execution backend. |
 | `CommandSpec` | Native argv vector with a non-empty executable. |
 | `EnvironmentSpec` | All/core/none base environment plus validated filters and explicit set/remove overrides. |
 | `EnvironmentInput` | A validated backend-selected environment snapshot tagged as `All`, `Core`, or `None`. |
@@ -188,6 +188,10 @@ For a TOML-driven application, resolve the command through
 `EnvironmentSpec` directly and pass the resulting `CommandRequest` to the
 same adapter. This keeps the process boundary independent from the choice of
 configuration format.
+
+The `cageforge` facade re-exports this model, so an application can use the
+same validated command values with its target-native sandbox backend without
+depending on this crate name directly.
 
 API reference: [`cageforge-command` on docs.rs](https://docs.rs/cageforge-command/latest/cageforge_command/).
 

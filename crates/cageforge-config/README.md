@@ -60,6 +60,7 @@ result before execution.
 | `cageforge-command` | Supplies the validated command and environment request model. |
 | `cageforge-network-proxy` | Supplies gateway runtime settings without enabling its async runtime in this dependency path. |
 | `cageforge-policy-compose` | Optionally narrows resolved values with an outer policy ceiling. |
+| `cageforge` | Re-exports the resolved values and passes them to the selected native backend. |
 | Backend integrations | Resolve declared roots and consume the resulting policy and command values. |
 
 The config crate consumes only the public APIs of the model crates. It does not

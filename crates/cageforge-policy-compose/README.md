@@ -43,6 +43,7 @@ does not know how Linux, macOS, or Windows will enforce the result.
 | `cageforge-policy` | Supplies filesystem and network constraints to compose. |
 | `cageforge-command` | Supplies the environment specification used during composition. |
 | `cageforge-config` | Optionally provides requested values from TOML; it is not a dependency of this crate. |
+| `cageforge` | Re-exports composition types for the application-facing sandbox flow. |
 | Backend integrations | Inspect effective constraints and lower them to native execution APIs. |
 
 The dependency direction is deliberate: composition does not depend on a

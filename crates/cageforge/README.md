@@ -31,6 +31,20 @@ On Linux, use `linux-bundled-bubblewrap` when the application deliberately
 wants the backend's embedded, verified Bubblewrap resource instead of the
 system or externally staged executable selection.
 
+The feature surface is explicit:
+
+| Feature | Adds | Use it when |
+| --- | --- | --- |
+| `linux` | Linux backend API | The program runs on Linux |
+| `linux-bundled-bubblewrap` | Embedded verified Bubblewrap resource | The Linux binary should carry its fallback resource |
+| `windows` | Windows backend API | The program runs on Windows |
+| `macos` | macOS backend API | The program runs on macOS |
+| `config` | TOML profile API | Configuration is supplied as named profiles |
+| `network-runtime` | Gateway and resolver runtime | The application uses the standalone gateway API |
+
+The default feature set is empty. The portable API is available without an OS
+feature, while a native backend feature must match the compilation target.
+
 ## Run a command
 
 The facade keeps the preparation and launch steps explicit so the effective

@@ -46,6 +46,7 @@ an operating-system sandbox.
 | `cageforge-path` | Supplies shared lexical path equality, containment, and case semantics. |
 | `cageforge-config` | Builds validated policies from a configuration format. |
 | `cageforge-policy-compose` | Narrows policy decisions with an outer policy ceiling. |
+| `cageforge` | Re-exports the policy model for the unified application-facing API. |
 | Backend integrations | Consume the validated policy and lower it to native enforcement. |
 
 The crate is the shared policy value between those layers. A project can pair

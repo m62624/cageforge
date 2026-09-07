@@ -38,6 +38,7 @@ mount, and TOCTOU-safe enforcement.
 | `cageforge-config` | Validates configured workspace-root declarations. |
 | `cageforge-policy-compose` | Deduplicates and compares effective workspace roots. |
 | `cageforge-upstream-review` | Validates repository-relative review paths. |
+| `cageforge` | Re-exports the path model through the application-facing facade. |
 
 The helpers define lexical relationships only. A backend still owns filesystem
 I/O, symlink resolution, canonicalization, and platform capability checks.

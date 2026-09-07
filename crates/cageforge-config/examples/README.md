@@ -1,5 +1,10 @@
 # `cageforge-config` examples
 
+These examples belong to one of the 13 Cargo packages in the Cageforge
+workspace. They document the configuration layer used by the portable crates
+and by the `cageforge` facade; native sandbox setup remains in the platform
+backend guides.
+
 These TOML files are copyable documentation for the configuration boundary.
 Each one can be loaded with `Config::from_file` or embedded with
 `Config::from_toml`, then resolved through `resolve_default` or `resolve`.

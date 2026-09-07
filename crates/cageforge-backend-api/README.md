@@ -148,8 +148,8 @@ The native backend owns:
 - platform-specific core environment selection; and
 - process launch, stdio, timeout, cancellation, and lifecycle handling.
 
-`cageforge` provides the ergonomic facade and backend selection that
-connect this contract to a concrete execution flow.
+`cageforge` provides the ergonomic facade and target-specific backend
+selection that connect this contract to a concrete execution flow.
 
 ## Workspace role
 
@@ -160,7 +160,8 @@ connect this contract to a concrete execution flow.
 | `cageforge-policy` | Supplies portable policy values and decision types used during lowering. |
 | `cageforge-path` | Supplies the shared lexical path semantics used by policy and native integrations. |
 | `cageforge-config` | Produces validated TOML-backed command and policy values for the handoff. |
-| Native backend crates | Implement OS enforcement and process launch after preflight. |
+| `cageforge` | Re-exports this contract and exposes the common `Sandbox` launch shape. |
+| `cageforge-linux`, `cageforge-macos`, `cageforge-windows` | Implement OS enforcement and process launch after preflight. |
 
 The complete API is documented on
 [docs.rs](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/).
