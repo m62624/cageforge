@@ -180,7 +180,9 @@ does not release a live boundary's policy resources as if cleanup succeeded.
 When the group leader has already been reaped, cleanup enumerates the remaining
 members and re-checks each member's current process group before sending
 `SIGKILL`; it does not perform a destructive group-wide signal using a numeric
-PGID that could have been reused by an unrelated group.
+PGID that could have been reused by an unrelated group. Every child termination
+path, including a retry after another boundary resource failed to clean up,
+preserves the reaped state and never calls `wait` again for that leader.
 
 The command timeout is per prepared command and is distinct from gateway
 handshake/relay limits. Backend construction and one command's timeout do not

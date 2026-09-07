@@ -153,6 +153,13 @@ impl MacosChild {
     }
 
     fn terminate_boundary(&mut self) -> Result<(), MacosBackendError> {
+        if self.child.is_none() {
+            return Ok(());
+        }
+        if self.child_reaped {
+            terminate_exited_process_group(self.process_group_id)?;
+            return confirm_process_group_gone(self.process_group_id);
+        }
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
@@ -717,5 +724,31 @@ mod tests {
 
         assert!(recovery.completed);
         assert!(recovery.child.is_none());
+    }
+
+    #[test]
+    fn child_termination_does_not_wait_again_after_the_leader_was_reaped() {
+        let parent_death = super::ParentDeathChannel::new().expect("parent-death channel");
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        super::configure_process_group(&mut command, parent_death.read_fd());
+        let mut process = command.spawn().expect("reap fixture");
+        let process_group_id = process.id();
+        let parent_death = parent_death.into_writer();
+        process.wait().expect("reap fixture");
+
+        let mut child = super::MacosChild {
+            child: Some(process),
+            child_reaped: true,
+            process_group_id,
+            parent_death: Some(parent_death),
+            gateway: None,
+            deadline: None,
+            recovery_attempted: false,
+        };
+
+        child
+            .terminate_boundary()
+            .expect("reaped child cleanup must not call wait again");
     }
 }
