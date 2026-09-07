@@ -19,16 +19,25 @@ native enforcement, and a correct Cageforge implementation.
 ## Start with the facade
 
 Most applications should begin with [`cageforge`](https://docs.rs/cageforge/latest/cageforge/).
-Enable only the native backend feature for the target platform:
+Supported operating systems are:
+
+- Linux — enable the `linux` feature;
+- Windows — enable the `windows` feature; and
+- macOS — enable the `macos` feature.
+
+Choose the feature that matches the target operating system:
 
 ```toml
 [dependencies]
 cageforge = { version = "0.1.0", features = ["linux"] }
 ```
 
-Use `windows` on Windows or `macos` on macOS. Add `config` when profiles
-should come from TOML. On Linux, `linux-bundled-bubblewrap` additionally
-selects the verified embedded Bubblewrap resource.
+Add `config` when profiles should come from TOML.
+
+On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
+not want to build or provide Bubblewrap separately. It includes Cageforge's
+verified, fixed Bubblewrap `v0.11.2` resource; the embedded version is not
+selected dynamically.
 
 The normal flow is explicit:
 

@@ -16,20 +16,27 @@ native enforcement, and a correct Cageforge implementation.
 
 ## Add the crate
 
-Select only the native backend for the target platform. Add `config` when the
-application wants to load TOML profiles. The standalone network gateway is
-available through the optional `network-runtime` feature:
+Supported operating systems are:
+
+- Linux — enable the `linux` feature;
+- Windows — enable the `windows` feature; and
+- macOS — enable the `macos` feature.
+
+Choose the feature that matches the target operating system:
 
 ```toml
 [dependencies]
 cageforge = { version = "0.1.0", features = ["linux", "config"] }
 ```
 
-Use `windows` on Windows or `macos` on macOS instead of `linux`. The portable
-model is available without an OS feature; native dependencies are optional.
-On Linux, use `linux-bundled-bubblewrap` when the application deliberately
-wants the backend's embedded, verified Bubblewrap resource instead of the
-system or externally staged executable selection.
+The portable model is available without an OS feature. Add `config` when the
+application wants to load TOML profiles. The standalone network gateway is
+available through the optional `network-runtime` feature.
+
+On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
+not want to build or provide Bubblewrap separately. It includes Cageforge's
+verified, fixed Bubblewrap `v0.11.2` resource; the embedded version is not
+selected dynamically.
 
 The feature surface is explicit:
 
