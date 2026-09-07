@@ -1,6 +1,6 @@
 # Specification 0015: Bundled Bubblewrap Build and Resources
 
-Status: accepted
+Status: accepted; implemented build and resource contract
 
 ## Purpose
 

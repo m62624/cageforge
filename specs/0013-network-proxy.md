@@ -1,7 +1,6 @@
 # Specification 0013: Network Proxy
 
-Status: accepted for implementation; required by native backends that enforce
-restricted outbound TCP policy
+Status: accepted; implemented for the current gateway contract
 
 ## 1. Purpose
 
