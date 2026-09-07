@@ -694,7 +694,7 @@ fn translate_glob_alternation(characters: &[char], index: &mut usize, regex: &mu
 fn push_regex_literal(regex: &mut String, character: char) {
     if matches!(
         character,
-        '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '\\'
+        '[' | ']' | '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '\\'
     ) {
         regex.push('\\');
     }
