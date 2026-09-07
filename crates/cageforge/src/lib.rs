@@ -23,6 +23,12 @@ use std::process::ExitStatus;
 
 pub use cageforge_backend_api::*;
 pub use cageforge_command::*;
+pub use cageforge_network_proxy::{GatewayConfig, GatewayConfigError};
+#[cfg(feature = "network-runtime")]
+pub use cageforge_network_proxy::{
+    GatewayError, GatewayIngressKey, NetworkGateway, NetworkResolver, SystemResolver,
+    UnsupportedNetworkRequirement,
+};
 pub use cageforge_path::*;
 pub use cageforge_policy::*;
 pub use cageforge_policy_compose::*;

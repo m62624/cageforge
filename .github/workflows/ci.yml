@@ -366,9 +366,11 @@ jobs:
           set -euo pipefail
           cargo clippy -p cageforge --no-default-features --all-targets -- -D warnings
           cargo clippy -p cageforge --features config --all-targets -- -D warnings
+          cargo clippy -p cageforge --features network-runtime --all-targets -- -D warnings
           cargo clippy -p cageforge --all-features --all-targets -- -D warnings
           cargo test -p cageforge --no-default-features --all-targets
           cargo test -p cageforge --features config --all-targets
+          cargo test -p cageforge --features network-runtime --all-targets
           cargo test -p cageforge --all-features --all-targets
           cargo test -p cageforge-network-proxy --no-default-features --all-targets
           cargo test -p cageforge-network-proxy --features runtime --all-targets

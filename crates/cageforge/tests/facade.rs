@@ -4,7 +4,19 @@ use cageforge::{CommandSpec, SandboxPolicy};
 fn portable_types_and_facade_traits_are_available_from_the_root_crate() {
     let command = CommandSpec::new("cargo").expect("valid command");
     let _policy = SandboxPolicy::workspace();
+    let _gateway_config = cageforge::GatewayConfig::new();
     assert_eq!(command.program(), "cargo");
+}
+
+#[cfg(feature = "network-runtime")]
+#[test]
+fn network_runtime_public_api_is_available_from_the_root_crate() {
+    use cageforge::{NetworkGateway, NetworkResolver, SystemResolver};
+
+    fn assert_resolver<R: NetworkResolver>() {}
+
+    let _: Option<NetworkGateway<SystemResolver>> = None;
+    assert_resolver::<SystemResolver>();
 }
 
 #[cfg(all(feature = "linux", target_os = "linux"))]

@@ -22,6 +22,7 @@ targets = [
 [features]
 default = []
 config = ["dep:cageforge-config"]
+network-runtime = ["cageforge-network-proxy/runtime"]
 linux = ["dep:cageforge-linux"]
 linux-bundled-bubblewrap = ["linux", "cageforge-linux/bundled-bubblewrap"]
 windows = ["dep:cageforge-windows"]
@@ -30,6 +31,7 @@ macos = ["dep:cageforge-macos"]
 [dependencies]
 cageforge-backend-api.workspace = true
 cageforge-command.workspace = true
+cageforge-network-proxy = { workspace = true, default-features = false }
 cageforge-path.workspace = true
 cageforge-policy.workspace = true
 cageforge-policy-compose.workspace = true

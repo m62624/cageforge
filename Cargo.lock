@@ -177,6 +177,7 @@ dependencies = [
  "cageforge-config",
  "cageforge-linux",
  "cageforge-macos",
+ "cageforge-network-proxy",
  "cageforge-path",
  "cageforge-policy",
  "cageforge-policy-compose",

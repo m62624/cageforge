@@ -1,6 +1,6 @@
 # Specification 0018: Cageforge Facade Crate
 
-Status: draft; required before facade implementation
+Status: accepted
 
 ## Purpose
 
@@ -34,6 +34,7 @@ The package exposes these features:
 | `windows` | `cageforge-windows` | Windows |
 | `macos` | `cageforge-macos` | macOS |
 | `config` | `cageforge-config` and TOML profile re-exports | all targets |
+| `network-runtime` | `cageforge-network-proxy` runtime | all targets |
 
 The default feature set is empty. Portable model crates are always available;
 the config and native backend crates are optional. Native dependencies remain
@@ -60,15 +61,24 @@ same names:
 - `cageforge-path`;
 - `cageforge-command`;
 - `cageforge-policy`;
-- `cageforge-policy-compose`; and
-- `cageforge-backend-api`.
+- `cageforge-policy-compose`;
+- `cageforge-backend-api`; and
+- the configuration-only public API of `cageforge-network-proxy`.
 
 When `config` is enabled, it also re-exports the public `cageforge-config`
-types. Native backend types, configuration, child types, and typed errors are
+types. When `network-runtime` is enabled, it re-exports the complete public
+network gateway API. Selecting a native backend does not implicitly make the
+standalone gateway API part of the facade's public feature surface. Native
+backend types, configuration, child types, and typed errors are
 re-exported only when their matching feature and target are active. The root
 documentation links to each native crate README and docs.rs page for the
 platform-specific setup and enforcement details instead of repeating those
 implementation inventories.
+
+`cageforge-bwrap` remains a separate Linux build and resource crate. It is not
+part of the application-facing facade API; `linux-bundled-bubblewrap` enables
+the Linux backend to consume its verified resource without exposing the
+third-party build surface through `cageforge`.
 
 ## Unified execution contract
 
@@ -129,8 +139,9 @@ the matching feature:
 - macOS runner: `cageforge --features macos`.
 
 Portable checks also run the facade with `config` and its supported portable
-feature combinations. The Linux Bubblewrap source build remains in its
-existing dedicated job and is not duplicated by the facade check.
+feature combinations, including `network-runtime`. The Linux Bubblewrap source
+build remains in its existing dedicated job and is not duplicated by the
+facade check.
 
 ## Security and compatibility invariants
 

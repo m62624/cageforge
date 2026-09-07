@@ -17,7 +17,8 @@ native enforcement, and a correct Cageforge implementation.
 ## Add the crate
 
 Select only the native backend for the target platform. Add `config` when the
-application wants to load TOML profiles:
+application wants to load TOML profiles. The standalone network gateway is
+available through the optional `network-runtime` feature:
 
 ```toml
 [dependencies]
@@ -119,6 +120,11 @@ The root module re-exports the portable public APIs from
 [`cageforge-policy-compose`](https://docs.rs/cageforge-policy-compose/latest/cageforge_policy_compose/),
 [`cageforge-path`](https://docs.rs/cageforge-path/latest/cageforge_path/), and
 [`cageforge-backend-api`](https://docs.rs/cageforge-backend-api/latest/cageforge_backend_api/).
+The public configuration types from
+[`cageforge-network-proxy`](https://docs.rs/cageforge-network-proxy/latest/cageforge_network_proxy/)
+are always re-exported; enable `network-runtime` to expose its standalone
+gateway and resolver runtime as well. Native backends use that runtime
+internally when their effective policy requires routed networking.
 The `config` feature additionally re-exports
 [`cageforge-config`](https://docs.rs/cageforge-config/latest/cageforge_config/).
 The matching OS feature re-exports that backend's configuration, child, and
@@ -138,3 +144,6 @@ For complete platform-specific behavior and native setup, see the
 documentation for [`cageforge-linux`](https://docs.rs/cageforge-linux/latest/cageforge_linux/),
 [`cageforge-windows`](https://docs.rs/cageforge-windows/latest/cageforge_windows/),
 and [`cageforge-macos`](https://docs.rs/cageforge-macos/latest/cageforge_macos/).
+The same guides are available directly in the repository: [Linux README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-linux/README.md),
+[Windows README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-windows/README.md),
+and [macOS README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-macos/README.md).
