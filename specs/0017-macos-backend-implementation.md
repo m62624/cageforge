@@ -221,6 +221,8 @@ Native macOS black-box tests cover at least:
 - timeout, explicit kill, drop, and parent death terminate the complete group;
 - a reaped group leader cannot leave a running descendant and cleanup does not
   target a reused numeric process-group ID;
+- recovery of a previously reaped leader never calls `waitpid` on that child
+  again;
 - every expected setup, policy, launch, and lifecycle failure is typed; and
 - every enabled feature combination passes formatting, Clippy, tests, and
   documentation checks.

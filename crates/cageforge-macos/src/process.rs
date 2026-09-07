@@ -37,6 +37,7 @@ pub(crate) struct ParentDeathChannel {
 /// A command running inside one macOS Seatbelt boundary.
 pub struct MacosChild {
     child: Option<Child>,
+    child_reaped: bool,
     process_group_id: u32,
     parent_death: Option<OwnedFd>,
     gateway: Option<GatewayRuntime>,
@@ -46,6 +47,7 @@ pub struct MacosChild {
 
 struct MacosBoundaryRecovery {
     child: Option<Child>,
+    child_reaped: bool,
     process_group_id: u32,
     parent_death: Option<OwnedFd>,
     gateway: Option<GatewayRuntime>,
@@ -62,6 +64,7 @@ impl MacosChild {
     ) -> Self {
         Self {
             child: Some(child),
+            child_reaped: false,
             process_group_id,
             parent_death: Some(parent_death),
             gateway,
@@ -153,10 +156,23 @@ impl MacosChild {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
-        terminate_process_group(child, self.process_group_id)
+        match terminate_process_group(child, self.process_group_id) {
+            Ok(()) => {
+                self.child_reaped = true;
+                Ok(())
+            }
+            Err(error) => {
+                self.child_reaped |= error.child_reaped;
+                Err(error.source)
+            }
+        }
     }
 
     fn finish(&mut self, status: ExitStatus) -> Result<ExitStatus, MacosBackendError> {
+        // `try_wait` already reaped the group leader before calling `finish`.
+        // Keep that fact across a later gateway-cleanup failure so recovery
+        // never calls waitpid on an already collected child.
+        self.child_reaped = true;
         if self.process_group_id != 0 {
             terminate_exited_process_group(self.process_group_id)?;
             confirm_process_group_gone(self.process_group_id)?;
@@ -185,6 +201,7 @@ impl MacosChild {
         };
         let mut recovery = MacosBoundaryRecovery {
             child: Some(child),
+            child_reaped: self.child_reaped,
             process_group_id: self.process_group_id,
             parent_death: self.parent_death.take(),
             gateway: self.gateway.take(),
@@ -213,10 +230,15 @@ pub(crate) fn command_deadline(
 impl MacosBoundaryRecovery {
     fn recover_until_terminated(&mut self) {
         loop {
-            let boundary_terminated = self
-                .child
-                .as_mut()
-                .is_some_and(|child| terminate_process_group(child, self.process_group_id).is_ok());
+            let boundary_terminated = if self.child_reaped {
+                terminate_exited_process_group(self.process_group_id)
+                    .and_then(|()| confirm_process_group_gone(self.process_group_id))
+                    .is_ok()
+            } else {
+                self.child.as_mut().is_some_and(|child| {
+                    terminate_process_group(child, self.process_group_id).is_ok()
+                })
+            };
             let gateway_terminated = boundary_terminated
                 && self
                     .gateway
@@ -421,17 +443,44 @@ pub(crate) fn stream(mode: StdioMode) -> std::process::Stdio {
 fn terminate_process_group(
     child: &mut Child,
     process_group_id: u32,
-) -> Result<(), MacosBackendError> {
-    terminate_process_group_if_present(process_group_id)?;
+) -> Result<(), ProcessGroupTerminationError> {
+    terminate_process_group_if_present(process_group_id).map_err(|source| {
+        ProcessGroupTerminationError {
+            child_reaped: false,
+            source,
+        }
+    })?;
     let deadline = Instant::now() + BOUNDARY_WAIT_TIMEOUT;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return confirm_process_group_gone(process_group_id),
+            Ok(Some(_)) => {
+                return confirm_process_group_gone(process_group_id).map_err(|source| {
+                    ProcessGroupTerminationError {
+                        child_reaped: true,
+                        source,
+                    }
+                });
+            }
             Ok(None) if Instant::now() < deadline => thread::sleep(BOUNDARY_POLL_INTERVAL),
-            Ok(None) => return Err(MacosBackendError::BoundaryTerminationUnconfirmed),
-            Err(source) => return Err(MacosBackendError::ProcessWait { source }),
+            Ok(None) => {
+                return Err(ProcessGroupTerminationError {
+                    child_reaped: false,
+                    source: MacosBackendError::BoundaryTerminationUnconfirmed,
+                });
+            }
+            Err(source) => {
+                return Err(ProcessGroupTerminationError {
+                    child_reaped: false,
+                    source: MacosBackendError::ProcessWait { source },
+                });
+            }
         }
     }
+}
+
+struct ProcessGroupTerminationError {
+    child_reaped: bool,
+    source: MacosBackendError,
 }
 
 fn terminate_exited_process_group(process_group_id: u32) -> Result<(), MacosBackendError> {
@@ -587,6 +636,7 @@ fn confirm_process_group_gone(pid: u32) -> Result<(), MacosBackendError> {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::process::Command;
     use std::time::Duration;
 
     use super::{MacosChild, command_deadline, signal_process_group_members};
@@ -596,6 +646,7 @@ mod tests {
     fn recovery_owned_boundary_is_reported_as_a_typed_state() {
         let mut child = MacosChild {
             child: None,
+            child_reaped: false,
             process_group_id: 1,
             parent_death: None,
             gateway: None,
@@ -640,5 +691,31 @@ mod tests {
             error,
             MacosBackendError::TimeoutOutOfRange { timeout_ms } if timeout_ms == Duration::MAX.as_millis()
         ));
+    }
+
+    #[test]
+    fn recovery_does_not_wait_again_after_the_leader_was_reaped() {
+        let parent_death = super::ParentDeathChannel::new().expect("parent-death channel");
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        super::configure_process_group(&mut command, parent_death.read_fd());
+        let mut child = command.spawn().expect("recovery fixture");
+        let process_group_id = child.id();
+        let parent_death = parent_death.into_writer();
+        child.wait().expect("reap recovery fixture");
+
+        let mut recovery = super::MacosBoundaryRecovery {
+            child: Some(child),
+            child_reaped: true,
+            process_group_id,
+            parent_death: Some(parent_death),
+            gateway: None,
+            completed: false,
+        };
+
+        recovery.recover_until_terminated();
+
+        assert!(recovery.completed);
+        assert!(recovery.child.is_none());
     }
 }
