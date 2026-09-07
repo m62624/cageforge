@@ -223,11 +223,15 @@ impl MacosBoundaryRecovery {
 impl Drop for MacosBoundaryRecovery {
     fn drop(&mut self) {
         if !self.completed {
-            // A failed thread spawn drops the closure and therefore this
-            // owner. Continue recovery synchronously so the boundary never
-            // becomes an unowned detached process. The same path also runs
-            // during unwinding if the recovery closure unexpectedly panics.
-            self.recover_until_terminated();
+            // A failed reaper-thread spawn must not block the caller while a
+            // boundary may be stuck. Keep the child and every enforcement
+            // resource owned until an external recovery path can address it;
+            // dropping any of them would release protection while the
+            // boundary may still be alive. This is the same fail-closed policy
+            // used by the Linux backend.
+            std::mem::forget(self.child.take());
+            std::mem::forget(self.parent_death.take());
+            std::mem::forget(self.gateway.take());
         }
     }
 }
@@ -507,27 +511,16 @@ fn signal_process_group_members(
     Ok(signalled)
 }
 
-#[allow(unsafe_code)]
 pub(crate) fn process_group_id(pid: u32) -> Result<u32, MacosBackendError> {
-    let pid = libc::pid_t::try_from(pid)
-        .map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
-    // SAFETY: getpgid only reads process-group state for the freshly spawned
-    // boundary process and does not retain any pointer.
-    let process_group_id = unsafe { libc::getpgid(pid) };
-    if process_group_id == -1 {
-        return Err(MacosBackendError::ProcessGroup {
-            source: io::Error::last_os_error(),
-        });
-    }
-    if process_group_id == 0 {
+    if pid == 0 {
         return Err(MacosBackendError::ProcessGroupIdInvalid);
     }
-    u32::try_from(process_group_id).map_err(|_| MacosBackendError::ProcessGroup {
-        source: io::Error::new(
-            io::ErrorKind::InvalidData,
-            "macOS sandbox process group ID is outside the public range",
-        ),
-    })
+    libc::pid_t::try_from(pid).map_err(|_| MacosBackendError::ProcessGroupPidOutOfRange { pid })?;
+    // `configure_process_group` makes the boundary call setpgid(0, 0) in
+    // pre_exec. Therefore the leader PID is the group ID, and using it
+    // directly avoids a getpgid race when a short-lived leader exits before
+    // the parent observes it.
+    Ok(pid)
 }
 
 #[allow(unsafe_code)]
@@ -602,5 +595,10 @@ mod tests {
             super::confirm_process_group_gone(0),
             Err(MacosBackendError::ProcessGroupIdInvalid)
         ));
+    }
+
+    #[test]
+    fn process_group_id_is_the_pre_exec_boundary_pid() {
+        assert_eq!(super::process_group_id(42).expect("valid process ID"), 42);
     }
 }

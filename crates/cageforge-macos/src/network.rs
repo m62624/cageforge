@@ -269,7 +269,11 @@ impl GatewayThreadRecovery {
 impl Drop for GatewayThreadRecovery {
     fn drop(&mut self) {
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            // A failed reaper-thread spawn must not block the caller while a
+            // gateway may be stuck. Keep the live runtime owned so its
+            // listener and policy cannot be released as if shutdown had been
+            // confirmed. This mirrors the process-boundary recovery policy.
+            std::mem::forget(thread);
         }
     }
 }
