@@ -3,9 +3,6 @@
 > **Independent project:** Cageforge is not affiliated with, sponsored by, or
 > endorsed by OpenAI.
 
-> **Development status:** Cageforge is under active development and has not
-> published its first `0.1.0` release yet.
-
 Cageforge is a reusable Rust toolkit for running potentially untrusted
 commands, agents, plugins, build scripts, and mods inside an OS-enforced
 process boundary. It describes and validates command, filesystem, environment,
@@ -158,17 +155,63 @@ my-tool cargo test --workspace
 The wrapper constructs a `CommandRequest`, applies its policy, and starts
 Cargo through `spawn`.
 
-## Configuration and references
+## Isolation model and references
+
+Cageforge is an OS-enforced process sandbox for an explicitly launched
+program. The application supplies a command and a policy describing the
+filesystem scopes, environment, network destinations, and runtime limits that
+the program needs. Cageforge validates that intent, narrows it with the
+optional safety ceiling, and asks the selected operating system backend to
+create the boundary. The root process and every descendant it creates remain
+inside that boundary.
+
+This is different from a virtual machine: Cageforge does not boot a guest
+kernel or provide a second operating system. It is also different from a
+Docker container: the library does not build an image or require a container
+daemon; it uses the host's native process, filesystem, and network controls.
+That makes startup and integration lightweight for an embedding application,
+while the protection necessarily depends on the host OS, its native security
+mechanisms, and a correct Cageforge implementation. A program must be started
+through Cageforge for the boundary to apply.
+
+The idea for Cageforge's common command-sandbox API across Linux, Windows, and
+macOS grew from studying the process-boundary design described in OpenAI's
+[Building a safe, effective sandbox to enable Codex on
+Windows](https://openai.com/index/building-codex-windows-sandbox/) article and
+the relevant open-source [Codex](https://github.com/openai/codex) components.
+The article was the starting point for the Windows direction; Cageforge then
+applied the same security principles through native backends for all three
+supported operating systems.
+That work reaches the same broad Windows conclusion used here: a useful
+boundary needs native process identities and restricted tokens, filesystem
+permissions, and OS-enforced network controls rather than advisory filters.
+Cageforge generalizes that security model across Linux, Windows, and macOS as
+an independent library with its own public API and multiple independent
+sandbox instances; Codex product protocols and runtime integrations are not
+part of this API.
+
+The protection is layered:
+
+| Protection layer | What the sandbox enforces |
+| --- | --- |
+| Command boundary | One explicitly launched root command and its complete descendant process tree share the selected boundary. |
+| Filesystem | The effective policy grants only declared scopes and modes, with native checks for symlinks, mounts, reparse points, and TOCTOU-sensitive operations. |
+| Environment | The command receives the validated environment selected for the instance; it cannot use environment changes to widen native permissions. |
+| Network | Direct, disabled, and routed access are lowered by the selected backend, with authorization tied to the exact resolved destination where applicable. |
+| Lifecycle | Timeouts and termination apply to the complete process tree, and native resources are released only after the boundary reaches a confirmed terminal state. |
+| Descriptors and handles | Only explicitly authorized standard streams and other transport handles cross the launch boundary. |
+| Native enforcement | Linux uses namespaces, mounts, seccomp, and Bubblewrap; Windows uses restricted tokens, ACLs, Job Objects, and firewall/WFP; macOS uses Seatbelt profiles and native process controls. |
+
+This is an OS-enforced library boundary, not a promise that every possible
+host or application failure is harmless. Its guarantees depend on a correct
+host OS, functioning native mechanisms, and a correct Cageforge
+implementation.
 
 The TOML examples are in
 [`crates/cageforge-config/examples`](crates/cageforge-config/examples/README.md).
 The complete public API is available on [docs.rs](https://docs.rs/cageforge/latest/cageforge/)
 and in the package README files linked above.
-
-Cageforge is independently implemented. Its design and security boundaries
-are reviewed against relevant open-source sandboxing code in
-[OpenAI Codex](https://github.com/openai/codex), without exposing Codex
-protocols or making Codex a runtime dependency. The legal and provenance
-records are maintained in [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
+The legal and provenance records are maintained in
+[`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
 [`NOTICE`](NOTICE), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and
 [`UPSTREAM.md`](UPSTREAM.md).

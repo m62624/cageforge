@@ -4,6 +4,14 @@
 > crate adapts sandbox design ideas from open-source OpenAI Codex into an
 > independent library API and contains no copied Codex source.
 
+The Windows design was informed by OpenAI's [Building a safe, effective
+sandbox to enable Codex on
+Windows](https://openai.com/index/building-codex-windows-sandbox/) article,
+which describes the same native direction of dedicated process identities,
+restricted tokens, filesystem permissions, and firewall enforcement. This
+crate implements that behavior independently for Cageforge's reusable backend
+API.
+
 The sandbox isolates processes using the host operating system's native
 enforcement mechanisms. Its guarantees depend on a correct host OS, correct
 native enforcement, and a correct Cageforge implementation.
