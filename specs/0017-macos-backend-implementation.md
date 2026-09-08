@@ -220,6 +220,17 @@ uninstallation must reject active boundaries and remove only owned resources.
 These are admission requirements for a provisioned architecture, not evidence
 that installing a privileged helper itself provides descendant containment.
 
+A launchd-owned helper channel must authenticate the originating process from
+kernel-supplied message identity, including the PID generation. A claimed PID,
+service label, or request field is not authentication. A named Mach service
+must belong to the exact registered job; another job must not be able to check
+in under that service name. Standard-stream and listener descriptors are
+transferred explicitly, not discovered through inherited descriptors or caller
+paths. The helper must reject an unrelated client without preventing the
+authorized client from using its own channel. Native transport admission
+checks precede integration with the launch lifecycle; a successful transport
+test alone is not evidence that descendants are contained.
+
 The backend maps `StdioSpec` to explicit inherited, null, or piped standard
 streams. The child API owns all pipe endpoints and never uses stdout or stderr
 as a control protocol. Setup and launch failures are typed library errors.

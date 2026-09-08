@@ -31,6 +31,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+block2.workspace = true
 tempfile.workspace = true
 
 [lints]
