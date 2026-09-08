@@ -58,13 +58,12 @@ The feature surface is explicit:
 The default feature set is empty. The portable API is available without an OS
 feature, while a native backend feature must match the compilation target.
 
-## Shared execution API (next release)
+## Shared execution API
 
 `native_sandbox()` creates the backend for the current operating system and
 enabled Cargo feature. It returns `Box<dyn DynSandbox>`, so the rest of an
 application can launch commands without naming a Linux, Windows, or macOS
-backend type. The dynamic API in this checkout is intended for the next
-release; the published `0.1.0` uses the concrete preparation API shown below.
+backend type. The concrete preparation API is also available below.
 
 ```rust,no_run
 use std::process::ExitStatus;

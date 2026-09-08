@@ -48,7 +48,6 @@ not want to build or provide Bubblewrap separately. It includes Cageforge's
 verified, fixed Bubblewrap `v0.11.2` resource; the embedded version is not
 selected dynamically.
 
-The shared execution API in this checkout is intended for the next release.
 `native_sandbox()` chooses the backend for the current OS and enabled Cargo
 feature, returning `Box<dyn DynSandbox>`. The command-running part of an
 application uses the same API on all three operating systems:
@@ -67,7 +66,7 @@ builders or a resolved TOML profile. Use `native_sandbox_with(config)` for
 native configuration and `Arc<dyn DynSandbox>` to share one reusable backend
 between threads. Windows provisioning remains an explicit preceding step.
 The [facade README](crates/cageforge/README.md) includes examples and the
-concrete `prepare`/`spawn` API available in `0.1.0`.
+concrete `prepare`/`spawn` API.
 
 The execution flow is:
 
