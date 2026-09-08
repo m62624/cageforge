@@ -61,7 +61,10 @@ jobs:
           git add -A
           git commit -m "build: prepare Cageforge v$VERSION" || true
           git push --force origin "$RC_BRANCH"
-          git push origin ":refs/tags/${GITHUB_REF_NAME}"
+          # The trigger tag may already have been removed manually or by a
+          # retry. Its absence must not turn an otherwise prepared release
+          # into a failed setup step.
+          git push origin ":refs/tags/${GITHUB_REF_NAME}" || true
 
   tests:
     name: CI on release candidate
