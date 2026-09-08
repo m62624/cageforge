@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendIdentity, BackendRequest,
-    PreparedBackendRequest, SandboxBackend,
+    PreparedBackendRequest, Sandbox, SandboxBackend,
 };
 use cageforge_command::{EnvironmentBase, EnvironmentInput, StdioMode};
 use cageforge_policy::NetworkMode;
@@ -430,6 +430,26 @@ impl LinuxBackend {
             }
             EnvironmentBase::None => Ok(EnvironmentInput::empty()),
         }
+    }
+}
+
+impl Sandbox for LinuxBackend {
+    type Child = LinuxChild;
+    type Error = LinuxBackendError;
+
+    fn prepare<'a>(
+        &self,
+        request: BackendRequest<'a>,
+        context: &cageforge_policy::PathResolutionContext,
+    ) -> Result<PreparedBackendRequest<'a, Self>, Self::Error> {
+        LinuxBackend::prepare(self, request, context)
+    }
+
+    fn spawn<'a>(
+        &self,
+        prepared: PreparedBackendRequest<'a, Self>,
+    ) -> Result<Self::Child, Self::Error> {
+        LinuxBackend::spawn(self, prepared)
     }
 }
 

@@ -18,6 +18,21 @@ and returns a prepared request or an actionable typed error.
 
 ## The handoff model
 
+`Sandbox` and `SandboxChild` define shared preparation, launch, streams, and
+child lifecycle operations. Each native crate implements these traits
+directly; applications can use them through this crate or through the
+`cageforge` facade. The concrete child and error types remain available.
+
+`DynSandbox` supports a runtime-selected implementation behind
+`Box<dyn DynSandbox>` or a shared `Arc<dyn DynSandbox>`. Its `launch` method
+prepares and spawns on the same backend instance. It returns an owned child
+with the common `SandboxChild` interface. `SandboxExecutionError` preserves
+the failing operation and original native error; child destruction follows
+the same native cleanup path as a concrete child.
+
+These execution traits and dynamic dispatch are part of the next release;
+the published `0.1.0` backend-api provides the capability and preflight layer.
+
 ```text
 CommandRequest + EffectiveSandbox
                  │
@@ -137,6 +152,7 @@ The crate owns:
 - `BackendCapability` and `BackendCapabilities`;
 - `BackendRequest` and the opaque `PreparedBackendRequest`;
 - the synchronous `SandboxBackend` capability contract and common preflight;
+- `Sandbox`, `DynSandbox`, and `SandboxChild` execution contracts;
 - common unsupported-capability and preparation errors.
 
 The native backend owns:

@@ -48,26 +48,45 @@ not want to build or provide Bubblewrap separately. It includes Cageforge's
 verified, fixed Bubblewrap `v0.11.2` resource; the embedded version is not
 selected dynamically.
 
-The normal flow is explicit:
+The shared execution API in this checkout is intended for the next release.
+`native_sandbox()` chooses the backend for the current OS and enabled Cargo
+feature, returning `Box<dyn DynSandbox>`. The command-running part of an
+application uses the same API on all three operating systems:
+
+```rust,ignore
+let sandbox = cageforge::native_sandbox()?;
+let mut child = sandbox.launch(
+    cageforge::BackendRequest::new(&command, &effective_policy),
+    &context,
+)?;
+let status = child.wait()?;
+```
+
+`command`, `effective_policy`, and `context` come from Cageforge's portable
+builders or a resolved TOML profile. Use `native_sandbox_with(config)` for
+native configuration and `Arc<dyn DynSandbox>` to share one reusable backend
+between threads. Windows provisioning remains an explicit preceding step.
+The [facade README](crates/cageforge/README.md) includes examples and the
+concrete `prepare`/`spawn` API available in `0.1.0`.
+
+The execution flow is:
 
 ```text
 CommandRequest + SandboxPolicy
              │
              ▼
-  optional policy composition
+       policy composition
              │
              ▼
-       prepare(request)
-             │
-             ▼
-          spawn()
+   launch(request, context)
+       prepare → spawn
              │
              ▼
   one boundary for the command
   and all of its descendants
 ```
 
-Each `spawn` creates an independent sandbox instance. A reusable backend and
+Each `launch` or concrete `spawn` creates an independent sandbox instance. A reusable backend and
 policy can prepare several commands, while every instance owns its own native
 process boundary, timeout, lifecycle, and network state. If Cargo starts
 `rustc`, `build.rs`, or a linker, those descendants remain inside the same

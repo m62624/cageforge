@@ -1167,6 +1167,37 @@ fn ordinary_bin_true_is_not_reserved_by_the_backend() {
 }
 
 #[test]
+fn shared_dynamic_backend_enforces_each_concurrent_policy() {
+    let temp = TempDir::new().expect("temporary workspace");
+    let backend: Arc<dyn cageforge_backend_api::DynSandbox> = Arc::new(backend());
+    thread::scope(|scope| {
+        let workers: Vec<_> = [SandboxPolicy::workspace(), SandboxPolicy::read_only()]
+            .into_iter()
+            .enumerate()
+            .map(|(index, policy)| {
+                let backend = Arc::clone(&backend);
+                let workspace = temp.path();
+                scope.spawn(move || {
+                    let command = CommandSpec::new("/bin/sh")
+                        .expect("shell")
+                        .with_args(["-c", ": > dynamic-probe"])
+                        .expect("args");
+                    let (command, effective, context) = request(workspace, policy, command);
+                    let mut child = backend
+                        .launch(BackendRequest::new(&command, &effective), &context)
+                        .expect("dynamic launch");
+                    assert_eq!(child.wait().expect("wait").success(), index == 0);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("dynamic worker");
+        }
+    });
+    assert!(temp.path().join("dynamic-probe").exists());
+}
+
+#[test]
 fn hardening_helper_uses_immutable_snapshot_across_spawns() {
     let temporary = TempDir::new().expect("temporary workspace");
     let helper = temporary.path().join("cageforge-linux-helper");

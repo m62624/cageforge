@@ -217,8 +217,9 @@ support on each OS.
 ## Architecture and documentation
 
 The execution sequence is `Config::from_file` → profile resolution → policy
-composition → native backend `prepare` → native backend `spawn` → typed child
-lifecycle. The CLI does not duplicate any enforcement logic.
+composition → `native_sandbox_with` → `DynSandbox::launch` → child lifecycle.
+The shared launch operation performs native preparation and spawn. The CLI
+passes its configured gateway and platform resources through the facade.
 
 For native behavior and host requirements, see the [Linux backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-linux/README.md),
 [Windows backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-windows/README.md),

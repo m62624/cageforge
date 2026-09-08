@@ -1177,6 +1177,24 @@ fn restricted_command_can_start_a_native_runtime_program() {
         "restricted native runtime probe failed: {status:?}; setup root: {:?}",
         details.state_directory()
     );
+    let backend: Arc<dyn cageforge_backend_api::DynSandbox> = Arc::new(backend);
+    thread::scope(|scope| {
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let backend = Arc::clone(&backend);
+                let request = BackendRequest::new(&request, &effective);
+                let context = &context;
+                scope.spawn(move || {
+                    let mut child = backend.launch(request, context).expect("dynamic launch");
+                    assert!(child.wait().expect("dynamic wait").success());
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("dynamic worker");
+        }
+    });
+    drop(backend);
     drop(cleanup);
 }
 

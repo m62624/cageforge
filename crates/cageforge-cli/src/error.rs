@@ -10,6 +10,12 @@ use thiserror::Error;
 /// Failure while parsing, preparing, or running a CLI request.
 #[derive(Debug, Error)]
 pub enum CliError {
+    /// The selected native backend could not be initialized.
+    #[error(transparent)]
+    NativeSandbox(#[from] cageforge::NativeSandboxError),
+    /// Preparation, launch, or lifecycle failed through the shared execution API.
+    #[error(transparent)]
+    Execution(#[from] cageforge::SandboxExecutionError),
     /// The config feature is required for `run`.
     #[error("the CLI was built without the `config` feature; rebuild with one matching OS feature")]
     ConfigFeatureRequired,

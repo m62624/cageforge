@@ -33,6 +33,7 @@ windows = ["dep:cageforge-windows"]
 macos = ["dep:cageforge-macos"]
 
 [dependencies]
+thiserror.workspace = true
 cageforge-backend-api.workspace = true
 cageforge-command.workspace = true
 cageforge-network-proxy = { workspace = true, default-features = false }

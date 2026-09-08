@@ -34,6 +34,38 @@ pub struct LinuxChild {
     recovery_attempted: bool,
 }
 
+impl cageforge_backend_api::SandboxChild for LinuxChild {
+    type Error = LinuxBackendError;
+
+    fn id(&self) -> u32 {
+        LinuxChild::id(self)
+    }
+
+    fn stdin(&mut self) -> Option<&mut dyn std::io::Write> {
+        LinuxChild::stdin(self).map(|stream| stream as &mut dyn std::io::Write)
+    }
+
+    fn stdout(&mut self) -> Option<&mut dyn std::io::Read> {
+        LinuxChild::stdout(self).map(|stream| stream as &mut dyn std::io::Read)
+    }
+
+    fn stderr(&mut self) -> Option<&mut dyn std::io::Read> {
+        LinuxChild::stderr(self).map(|stream| stream as &mut dyn std::io::Read)
+    }
+
+    fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {
+        LinuxChild::try_wait(self)
+    }
+
+    fn wait(&mut self) -> Result<ExitStatus, Self::Error> {
+        LinuxChild::wait(self)
+    }
+
+    fn kill(&mut self) -> Result<(), Self::Error> {
+        LinuxChild::kill(self)
+    }
+}
+
 impl LinuxChild {
     pub(crate) fn new(
         child: Child,

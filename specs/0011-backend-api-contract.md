@@ -46,17 +46,19 @@ The crate will expose the following independent concepts:
   backend instance;
 - `BackendContractError`: common failures such as unsupported capabilities,
   invalid runtime context, or invalid environment preparation; and
-- `SandboxBackend`: a synchronous preparation trait implemented by native
-  backends.
+- `SandboxBackend`: capability discovery and stable backend identity;
+- `Sandbox` and `SandboxChild`: static execution and lifecycle contracts; and
+- `DynSandbox`: object-safe launch through the same native implementation.
 
 `BackendRequest::prepare_for` performs preparation using the capabilities
 advertised by the supplied `SandboxBackend` and a backend-supplied runtime
 `PathResolutionContext`. The trait itself exposes only
 capability discovery, so an implementation cannot override the common
 preflight algorithm and validate against a broader, self-selected capability
-set. The API does not define a common process type, async runtime, PTY, signal
-model, cancellation model, or process-tree lifecycle. A native backend owns
-those concerns in its own API and error type.
+set. Execution traits delegate native preparation, launch, and child lifecycle
+to the backend. They introduce no process runtime, PTY, or native enforcement
+implementation. The static API preserves the native child and error type;
+dynamic launch owns that same child behind its shared lifecycle interface.
 
 The prepared handoff is bound to the concrete backend type `B` at compile time
 and stores a runtime `BackendIdentity` for the exact instance passed to

@@ -182,6 +182,7 @@ dependencies = [
  "cageforge-policy",
  "cageforge-policy-compose",
  "cageforge-windows",
+ "thiserror",
 ]
 
 [[package]]
