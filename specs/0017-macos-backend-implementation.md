@@ -200,6 +200,19 @@ The backend maps `StdioSpec` to explicit inherited, null, or piped standard
 streams. The child API owns all pipe endpoints and never uses stdout or stderr
 as a control protocol. Setup and launch failures are typed library errors.
 
+The pre-exec descriptor sweep must reject failed or malformed native snapshots
+before launching the command. Apple's `proc_pidinfo` wrapper reports failure
+with zero while preserving `errno`; zero is not proof of an empty descriptor
+table. Snapshot lengths must contain whole `proc_fdinfo` records. When the
+stack snapshot fills, the sweep obtains the native descriptor-table extent
+using the null-buffer `PROC_PIDLISTFDS` query, as in upstream
+`codex-rs/utils/pty/src/pty.rs::close_inherited_fds_except`. Existing descriptors
+may lie above a subsequently lowered `RLIMIT_NOFILE` soft limit; that limit
+must not truncate the sweep. Unlike the upstream best-effort helper, Cageforge
+returns a startup error if either native query fails. All of this work remains
+allocation-free after fork, and the close-on-exec spawn-error pipe stays open
+until exec so the caller receives the failure.
+
 The Seatbelt boundary is placed in its own process group. A timeout, explicit
 kill, parent drop, or launch failure terminates the complete process group and
 waits for confirmation before releasing gateway and child resources. If a

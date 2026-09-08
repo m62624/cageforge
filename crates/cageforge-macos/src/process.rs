@@ -481,7 +481,11 @@ fn close_inherited_fds_except(preserved_fds: &[RawFd]) -> io::Result<()> {
                 libc::getpid(),
                 libc::PROC_PIDLISTFDS,
                 0,
-                descriptors.as_mut_ptr().cast(),
+                if descriptors.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    descriptors.as_mut_ptr().cast()
+                },
                 std::mem::size_of_val(descriptors) as libc::c_int,
             )
         }
@@ -491,15 +495,21 @@ fn close_inherited_fds_except(preserved_fds: &[RawFd]) -> io::Result<()> {
 #[allow(unsafe_code)]
 fn close_inherited_fds_with_query(
     preserved_fds: &[RawFd],
-    query: impl FnOnce(&mut [libc::proc_fdinfo]) -> libc::c_int,
+    mut query: impl FnMut(&mut [libc::proc_fdinfo]) -> libc::c_int,
 ) -> io::Result<()> {
     let mut descriptors = [libc::proc_fdinfo {
         proc_fd: 0,
         proc_fdtype: 0,
     }; 1024];
     let bytes = query(&mut descriptors);
-    if bytes < 0 {
+    // libproc converts a failing proc_info syscall from -1 to zero and leaves
+    // errno intact. A zero result must not skip the sweep and permit exec.
+    if bytes <= 0 {
         return Err(io::Error::last_os_error());
+    }
+    let record_size = std::mem::size_of::<libc::proc_fdinfo>();
+    if !(bytes as usize).is_multiple_of(record_size) {
+        return Err(io::ErrorKind::InvalidData.into());
     }
     let close_inheritable = |fd: RawFd| {
         if fd <= libc::STDERR_FILENO || preserved_fds.contains(&fd) {
@@ -525,18 +535,19 @@ fn close_inherited_fds_with_query(
         return Ok(());
     }
 
-    // The fixed stack buffer was not sufficient. Scan the complete descriptor
-    // range from the process limit; descriptor numbers are not required to be
-    // dense, so the number of records returned above is not an upper fd value.
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit writes into the stack-owned resource-limit structure.
-    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+    // XNU's null-buffer query returns the allocated descriptor-table extent
+    // plus a margin, not just the number of occupied entries. Existing high
+    // descriptors remain valid even if RLIMIT_NOFILE was lowered afterwards.
+    // No other thread can extend this post-fork child's descriptor table.
+    let table_bytes = query(&mut []);
+    if table_bytes <= 0 {
         return Err(io::Error::last_os_error());
     }
-    let upper_bound = limit.rlim_cur.min(RawFd::MAX as _) as RawFd;
+    if table_bytes < bytes || !(table_bytes as usize).is_multiple_of(record_size) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    // table_bytes is a positive c_int; dividing it cannot overflow RawFd.
+    let upper_bound = (table_bytes as usize / record_size) as RawFd;
     for fd in libc::STDERR_FILENO + 1..upper_bound {
         close_inheritable(fd);
     }
@@ -926,6 +937,39 @@ mod tests {
     fn incomplete_fd_snapshot_record_is_rejected() {
         let result = super::close_inherited_fds_with_query(&[], |_| 1);
         assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::InvalidData));
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn failed_fd_table_extent_query_is_not_ignored() {
+        let mut calls = 0;
+        let result = super::close_inherited_fds_with_query(&[], |descriptors| {
+            calls += 1;
+            if !descriptors.is_empty() {
+                return std::mem::size_of_val(descriptors) as libc::c_int;
+            }
+            // Force libproc's real zero/EINVAL failure on the fallback query.
+            unsafe { libc::proc_pidinfo(libc::getpid(), -1, 0, std::ptr::null_mut(), 0) }
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(
+            result.expect_err("failed table query").raw_os_error(),
+            Some(libc::EINVAL)
+        );
+    }
+
+    #[test]
+    fn truncated_or_partial_fd_table_extent_is_rejected() {
+        for extent in [1, std::mem::size_of::<libc::proc_fdinfo>() as libc::c_int] {
+            let result = super::close_inherited_fds_with_query(&[], |descriptors| {
+                if descriptors.is_empty() {
+                    extent
+                } else {
+                    std::mem::size_of_val(descriptors) as libc::c_int
+                }
+            });
+            assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::InvalidData));
+        }
     }
 
     #[test]
