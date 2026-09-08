@@ -14,6 +14,8 @@ static SIGNAL_WITH_AUDIT_TOKEN: OnceLock<Option<SignalWithAuditToken>> = OnceLoc
 pub(super) struct ProcessIdentity {
     pid: libc::pid_t,
     version: u32,
+    #[cfg(test)]
+    unique_id: u64,
 }
 
 #[repr(C)]
@@ -61,11 +63,23 @@ impl ProcessIdentity {
         Ok(Some(Self {
             pid,
             version: native.version as u32,
+            #[cfg(test)]
+            unique_id: native.unique_id,
         }))
     }
 
     pub(super) fn signal(&self, signal: libc::c_int) -> io::Result<bool> {
         signal_identity(self.pid, self.version, signal)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pid(&self) -> libc::pid_t {
+        self.pid
+    }
+
+    #[cfg(test)]
+    pub(super) fn same_generation(&self, other: &Self) -> bool {
+        self.pid == other.pid && self.version == other.version && self.unique_id == other.unique_id
     }
 }
 
@@ -156,6 +170,7 @@ mod tests {
         let stale = ProcessIdentity {
             pid: current.pid,
             version: current.version ^ 1,
+            unique_id: current.unique_id,
         };
         // Deliberately reuse the *live owned child's* PID with another
         // generation, rather than depending on nondeterministic OS PID reuse.

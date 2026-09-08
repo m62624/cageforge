@@ -15,6 +15,12 @@ use crate::network::GatewayRuntime;
 
 #[path = "process/identity.rs"]
 pub(crate) mod identity;
+// Exercise the replacement ownership primitive natively before switching the
+// public child lifecycle to the launchd helper. The legacy regression remains
+// enabled until that integration is complete.
+#[cfg(test)]
+#[path = "process/coalition.rs"]
+mod coalition;
 #[path = "process/timeout.rs"]
 mod timeout;
 

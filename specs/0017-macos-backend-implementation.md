@@ -185,6 +185,15 @@ fork, exec, reparenting, and group/session changes. Termination must not target
 an unrelated process after PID reuse or affect another sandbox instance.
 An enumeration that misses an in-flight fork is not proof of an empty boundary.
 
+For coalition ownership, only the executing helper may interpret a kernel
+active-task count of one as completed descendant cleanup: that one task is
+itself. External recovery must require zero tasks, including the helper.
+Looking up the helper's PID or generation externally is insufficient to
+subtract it from a count: process-record lifetime and live-task lifetime are
+not the same, and its exit can race the count query. Acquiring a coalition
+requires generation-checked helper and application identities and must reject
+the application's own shared coalition before signalling anything.
+
 Individual lifecycle signals must bind the PID to its kernel generation before
 inspecting membership and preserve that generation through signal delivery.
 A second numeric `kill(pid, signal)` after `getpgid` cannot enforce this: the
