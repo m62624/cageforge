@@ -76,19 +76,25 @@ fn dropping_an_unsent_request_releases_its_descriptor_reservation() {
             "iteration {iteration}"
         );
         drop(request);
-        observer.set_nonblocking(false).expect("blocking EOF probe");
-        observer
-            .set_read_timeout(Some(TEST_TIMEOUT))
-            .expect("bounded descriptor release probe");
-        assert_eq!(
-            observer
-                .read_to_end(&mut bytes)
-                .unwrap_or_else(|error| panic!(
-                    "request Drop must release its endpoint, iteration {iteration}: {error}"
-                )),
-            0,
-            "the unsent request cannot produce payload bytes"
-        );
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            match observer.read_to_end(&mut bytes) {
+                Ok(0) => break,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "request Drop retained its endpoint, iteration {iteration}: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                result => panic!("unexpected endpoint result, iteration {iteration}: {result:?}"),
+            }
+        }
     }
 }
 
