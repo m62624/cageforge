@@ -17,6 +17,12 @@ caller gives it a validated command, a composed effective policy, and the
 runtime paths needed to resolve that policy; the backend returns a
 backend-bound prepared request or a typed error before the command starts.
 
+For most applications, start with [`cageforge`](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
+the unified library API for Linux, macOS, and Windows. Enable its `macos`
+feature to use this backend through the shared execution API while retaining
+native configuration options. You can also use `cageforge-macos` directly, as
+shown below.
+
 ## Sandbox model
 
 Each `spawn` creates one sandbox boundary around one command and its complete

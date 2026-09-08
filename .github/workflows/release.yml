@@ -181,31 +181,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             build-essential pkg-config libcap-dev
-      - name: Select crates.io publication mode
-        id: publication-mode
-        shell: bash
-        env:
-          BOOTSTRAP_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$BOOTSTRAP_TOKEN" ]]; then
-            echo "mode=bootstrap" >> "$GITHUB_OUTPUT"
-            echo "Using the one-time crates.io bootstrap token."
-          else
-            echo "mode=trusted" >> "$GITHUB_OUTPUT"
-            echo "Using crates.io Trusted Publishing."
-          fi
       - name: Authenticate with crates.io trusted publishing
         id: auth
-        if: steps.publication-mode.outputs.mode == 'trusted'
         uses: rust-lang/crates-io-auth-action@v1
-      - name: Publish with one-time bootstrap token
-        if: steps.publication-mode.outputs.mode == 'bootstrap'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --workspace --locked
       - name: Publish with trusted publishing token
-        if: steps.publication-mode.outputs.mode == 'trusted'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --workspace --locked
