@@ -5,12 +5,14 @@
 use std::{
     process::{Child, ExitStatus},
     sync::{Arc, Mutex, mpsc},
-    thread::{self, JoinHandle},
-    time::Instant,
+    thread::JoinHandle,
 };
+#[cfg(test)]
+use std::{thread, time::Instant};
 
 use crate::error::MacosBackendError;
 
+#[cfg(test)]
 const TIMEOUT_THREAD_NAME: &str = "cageforge-macos-timeout";
 
 pub(super) struct TimeoutWatchdog {
@@ -26,6 +28,7 @@ struct TimeoutState {
 }
 
 impl TimeoutWatchdog {
+    #[cfg(test)]
     pub(super) fn start(
         process_group_id: u32,
         deadline: Instant,
@@ -121,6 +124,7 @@ impl Drop for TimeoutWatchdog {
     }
 }
 
+#[cfg(test)]
 fn expire(state: &Mutex<TimeoutState>, process_group_id: u32) {
     // Collection takes the same guard and disarms signalling before releasing
     // it. An unreaped direct child reserves the numeric PID/PGID even when it

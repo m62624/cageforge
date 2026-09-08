@@ -14,7 +14,6 @@ static SIGNAL_WITH_AUDIT_TOKEN: OnceLock<Option<SignalWithAuditToken>> = OnceLoc
 pub(super) struct ProcessIdentity {
     pid: libc::pid_t,
     version: u32,
-    #[cfg(test)]
     unique_id: u64,
 }
 
@@ -63,7 +62,6 @@ impl ProcessIdentity {
         Ok(Some(Self {
             pid,
             version: native.version as u32,
-            #[cfg(test)]
             unique_id: native.unique_id,
         }))
     }
@@ -72,14 +70,25 @@ impl ProcessIdentity {
         signal_identity(self.pid, self.version, signal)
     }
 
-    #[cfg(test)]
     pub(super) fn pid(&self) -> libc::pid_t {
         self.pid
     }
 
-    #[cfg(test)]
     pub(super) fn same_generation(&self, other: &Self) -> bool {
         self.pid == other.pid && self.version == other.version && self.unique_id == other.unique_id
+    }
+
+    pub(super) fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub(super) fn authenticated(pid: u32, version: u32) -> io::Result<Self> {
+        let pid = libc::pid_t::try_from(pid).map_err(|_| io::ErrorKind::InvalidInput)?;
+        let identity = Self::capture(pid)?.ok_or(io::ErrorKind::NotFound)?;
+        if identity.version != version {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        Ok(identity)
     }
 }
 

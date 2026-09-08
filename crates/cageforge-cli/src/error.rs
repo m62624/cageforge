@@ -73,6 +73,10 @@ pub enum CliError {
     #[cfg(all(feature = "macos", target_os = "macos"))]
     #[error("macOS backend: {0}")]
     Macos(#[from] cageforge::MacosBackendError),
+    /// macOS helper configuration could not be validated.
+    #[cfg(all(feature = "macos", target_os = "macos"))]
+    #[error(transparent)]
+    MacosConfig(#[from] cageforge::MacosBackendConfigError),
 }
 
 impl CliError {

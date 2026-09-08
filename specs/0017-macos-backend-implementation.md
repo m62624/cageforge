@@ -56,7 +56,7 @@ The behavior review is against commit
 | `codex-rs/sandboxing/src/seatbelt_network_policy.sbpl` | Minimal network service allowances needed by macOS clients | Re-authored and composed only with the selected effective network mode |
 | `codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl` | Minimal system/framework visibility for restricted commands | Re-authored as Cageforge's fixed read-only runtime policy; it is never used to grant workspace access |
 | `codex-rs/sandboxing/src/manager.rs` and `src/spawn.rs` | Platform selection and process handoff | Replaced by `SandboxBackend`, backend-bound preparation, and `MacosChild`; PTY remains outside the portable API |
-| `codex-rs/utils/pty/src/process_group.rs` | macOS process-group member enumeration and per-member fallback after `EPERM` | Retained for Cageforge's `SIGKILL` cleanup; the fallback validates each member's current group before signalling it |
+| `codex-rs/utils/pty/src/process_group.rs` | macOS process-group member enumeration and per-member fallback after `EPERM` | Replaced for command ownership by an isolated launchd coalition and generation-bound member signalling; group membership alone cannot retain detached descendants |
 
 Every retained behavior must have an allowed and denied black-box test on a
 macOS runner. Any Seatbelt rule whose effect cannot be demonstrated on the
@@ -292,18 +292,31 @@ returns a startup error if either native query fails. All of this work remains
 allocation-free after fork, and the close-on-exec spawn-error pipe stays open
 until exec so the caller receives the failure.
 
-The Seatbelt boundary is placed in its own process group. A timeout, explicit
-kill, parent drop, or launch failure terminates the complete process group and
-waits for confirmation before releasing gateway and child resources. If a
-bounded cleanup attempt cannot confirm termination, a detached recovery owner
-retains the child and all enforcement resources and retries termination; it
-does not release a live boundary's policy resources as if cleanup succeeded.
-When the group leader has already been reaped, cleanup enumerates the remaining
-members and re-checks each member's current process group before sending
-`SIGKILL`; it does not perform a destructive group-wide signal using a numeric
-PGID that could have been reused by an unrelated group. Every child termination
-path, including a retry after another boundary resource failed to clean up,
-preserves the reaped state and never calls `wait` again for that leader.
+Each launch registers an unprivileged user-domain launchd helper, authenticates
+its XPC response, and adopts its separate coalition before sending the lowered
+Seatbelt command. The helper is a sibling executable selected by native
+configuration or an internal dispatch mode embedded in the CLI executable.
+This architecture requires neither a privileged installation nor recurring
+administrative elevation. Missing helper or native coalition support is a typed
+failure, not admission to the older group-only lifecycle.
+
+The helper owns direct-child reaping, an independent deadline, and the ingress
+reservation. Its parent-death check uses the application's kernel PID version,
+not numeric PID existence alone. The application owns a separate recovery
+handle for the same immutable coalition. Before accepting a zero-task count it
+must remove the launchd registration, so a remaining Mach service cannot
+reactivate a helper after that observation. Removal failure still requires a
+termination attempt and retains recovery ownership. Gateway shutdown follows
+confirmed coalition termination, never precedes it.
+
+A timeout, explicit kill, drop, launch failure, or application death must
+terminate all owned tasks, including descendants that change their group or
+session. Bounded cleanup failure transfers ownership to recovery; an
+unconfirmed boundary retains its enforcement resources. Successful direct-child
+reaping is cached and must not be repeated during cleanup retries. Per-launch
+service files must be cleaned after normal and abrupt application termination;
+uncertain or replaced filesystem objects must not be recursively removed as
+though they were proven owned files.
 
 The command timeout is per prepared command and is distinct from gateway
 handshake/relay limits. Backend construction and one command's timeout do not
@@ -313,13 +326,12 @@ Timeout enforcement must run independently of the caller's `wait`, `try_wait`,
 and standard-stream reads. As in upstream `core/src/exec.rs::consume_output`,
 the deadline and output consumption are concurrent responsibilities. The
 library owns the timer instead of requiring a CLI or async runtime to poll it.
-A watchdog may signal the original process group only while the direct child
-has not been reaped. Child collection and watchdog signalling must share one
-per-launch synchronization boundary; after collection, the watchdog must not
-signal a potentially reused numeric process-group identity. Cleanup cancels
-and joins the watchdog outside that synchronization guard. A failed watchdog
-startup must terminate or transfer the already-created child and gateway to
-recovery, not return an unowned running process.
+The trusted helper advances that deadline independently of application polling
+or output consumption. All helper-side child collection and termination occur
+in one lifecycle loop. No delayed numeric process-group signal may target a
+reused group identity after the root process has been collected. A failed
+helper exchange after launch approval transfers the coalition and gateway to
+recovery rather than returning an unowned running command.
 
 ## 6. Capabilities
 
@@ -353,7 +365,7 @@ Native macOS black-box tests cover at least:
 - a gateway ingress port remains unavailable until confirmed runtime cleanup;
 - separate simultaneous instances retain separate policies and gateway keys;
 - unrelated inherited file descriptors do not cross the launch boundary;
-- timeout, explicit kill, drop, and parent death terminate the complete group;
+- timeout, explicit kill, drop, and parent death terminate the complete coalition;
 - a reaped group leader cannot leave a running descendant and cleanup does not
   target a reused numeric process-group ID;
 - recovery of a previously reaped leader never calls `waitpid` on that child

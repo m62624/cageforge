@@ -19,40 +19,89 @@ pub(super) struct Coalition {
     helper: ProcessIdentity,
 }
 
+/// Failure to acquire, observe, or terminate a kernel-accounted process family.
 #[derive(Debug, Error)]
-pub(super) enum CoalitionError {
+pub enum CoalitionError {
+    /// The host does not expose the required accounting interface.
     #[error("coalition resource accounting is unavailable")]
     AccountingUnavailable,
+    /// Reading one process's kernel metadata failed.
     #[error("failed to inspect process {pid}: {source}")]
-    Process { pid: libc::pid_t, source: io::Error },
+    Process {
+        /// Process being inspected.
+        pid: libc::pid_t,
+        /// Original native failure.
+        source: io::Error,
+    },
+    /// The kernel returned an incompatible native structure size.
     #[error("process {pid} returned {actual} coalition bytes instead of {expected}")]
     RecordSize {
+        /// Process being inspected.
         pid: libc::pid_t,
+        /// Required native record length.
         expected: libc::c_int,
+        /// Returned native record length.
         actual: libc::c_int,
     },
+    /// A process has no usable resource coalition.
     #[error("process {pid} did not have a resource coalition")]
-    MissingMembership { pid: libc::pid_t },
+    MissingMembership {
+        /// Process with missing membership.
+        pid: libc::pid_t,
+    },
+    /// The authenticated helper no longer has the acquired generation.
     #[error("the helper generation changed while acquiring its coalition")]
     HelperChanged,
+    /// The authenticated application no longer has the acquired generation.
     #[error("the authenticated application generation changed while acquiring the coalition")]
     ApplicationChanged,
+    /// A caller tried to exclude the helper from cleanup outside that helper.
     #[error("only the executing helper may exclude itself from coalition cleanup")]
     WrongCleanupOwner,
+    /// The purported sandbox family is the application's own family.
     #[error("the helper shares the application's coalition")]
     SharedApplicationCoalition,
+    /// Reading the kernel's family-wide counters failed.
     #[error("failed to read coalition {id} accounting: {source}")]
-    Accounting { id: u64, source: io::Error },
+    Accounting {
+        /// Acquired resource coalition identity.
+        id: u64,
+        /// Original native failure.
+        source: io::Error,
+    },
+    /// Counter values cannot describe a valid live-task count.
     #[error("coalition {id} has more exited tasks ({exited}) than started tasks ({started})")]
-    InconsistentAccounting { id: u64, started: u64, exited: u64 },
+    InconsistentAccounting {
+        /// Acquired resource coalition identity.
+        id: u64,
+        /// Total tasks started.
+        started: u64,
+        /// Total tasks exited.
+        exited: u64,
+    },
+    /// Enumerating candidate process identifiers failed.
     #[error("failed to enumerate native processes: {source}")]
-    Enumeration { source: io::Error },
+    Enumeration {
+        /// Original native failure.
+        source: io::Error,
+    },
+    /// The required snapshot cannot fit the native API's length representation.
     #[error("the native PID snapshot exceeds the representable buffer size")]
     SnapshotSize,
+    /// Allocating a complete candidate snapshot failed.
     #[error("could not allocate the PID snapshot: {source}")]
-    SnapshotAllocation { source: TryReserveError },
+    SnapshotAllocation {
+        /// Original allocation failure.
+        source: TryReserveError,
+    },
+    /// Delivering a generation-bound termination signal failed.
     #[error("failed to signal owned process {pid}: {source}")]
-    Signal { pid: libc::pid_t, source: io::Error },
+    Signal {
+        /// Acquired process identifier.
+        pid: libc::pid_t,
+        /// Original native failure.
+        source: io::Error,
+    },
 }
 
 #[repr(C)]

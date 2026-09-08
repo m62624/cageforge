@@ -12,6 +12,9 @@ use thiserror::Error;
 /// Errors returned by the macOS backend.
 #[derive(Debug, Error)]
 pub enum MacosBackendError {
+    /// Authenticated helper launch or complete-coalition cleanup failed.
+    #[error(transparent)]
+    Helper(#[from] crate::process::launchd::LaunchError),
     /// Portable capability or prepared-handoff validation failed.
     #[error(transparent)]
     Contract(#[from] BackendContractError),

@@ -3,26 +3,28 @@
 //! macOS process-group lifecycle for one Seatbelt child.
 
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+#[cfg(test)]
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{OwnedFd, RawFd};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cageforge_command::StdioMode;
-
 use crate::error::MacosBackendError;
 use crate::network::GatewayRuntime;
 
+#[path = "process/coalition.rs"]
+pub(crate) mod coalition;
 #[path = "process/identity.rs"]
 pub(crate) mod identity;
-// Exercise the replacement ownership primitive natively before switching the
-// public child lifecycle to the launchd helper. The legacy regression remains
-// enabled until that integration is complete.
-#[cfg(test)]
-#[path = "process/coalition.rs"]
-mod coalition;
+#[path = "process/launchd.rs"]
+pub(crate) mod launchd;
+#[path = "process/protocol.rs"]
+pub(crate) mod protocol;
 #[path = "process/timeout.rs"]
 mod timeout;
+#[path = "process/transport.rs"]
+pub(crate) mod transport;
 
 use identity::ProcessIdentity;
 use timeout::TimeoutWatchdog;
@@ -32,17 +34,10 @@ const BOUNDARY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 const BOUNDARY_RECOVERY_THREAD_NAME: &str = "cageforge-macos-boundary-recovery";
 const PROCESS_GROUP_MEMBER_INITIAL_CAPACITY: usize = 16;
+#[cfg(test)]
 const PARENT_DEATH_FD: RawFd = libc::STDERR_FILENO + 1;
-pub(crate) const PARENT_DEATH_WRAPPER: &str = "(
-    while read _ <&3; do
-        :
-    done
-    kill -KILL -$$ 2>/dev/null
-) 3<&3 </dev/null >/dev/null 2>&1 &
-exec 3<&-
-exec \"$@\"
-";
 
+#[cfg(test)]
 pub(crate) struct ParentDeathChannel {
     read: OwnedFd,
     write: OwnedFd,
@@ -50,6 +45,7 @@ pub(crate) struct ParentDeathChannel {
 
 /// A command running inside one macOS Seatbelt boundary.
 pub struct MacosChild {
+    session: Option<launchd::Session>,
     child: Option<Child>,
     child_reaped: bool,
     process_group_id: u32,
@@ -108,54 +104,61 @@ impl cageforge_backend_api::SandboxChild for MacosChild {
 }
 
 impl MacosChild {
-    pub(crate) fn new(
-        child: Child,
-        process_group_id: u32,
-        parent_death: OwnedFd,
-        gateway: Option<GatewayRuntime>,
-        deadline: Option<Instant>,
-    ) -> Self {
+    pub(crate) fn from_session(session: launchd::Session) -> Self {
         Self {
-            child: Some(child),
+            session: Some(session),
+            child: None,
             child_reaped: false,
-            process_group_id,
-            parent_death: Some(parent_death),
-            gateway,
-            deadline,
+            process_group_id: 0,
+            parent_death: None,
+            gateway: None,
+            deadline: None,
             timeout_watchdog: None,
             recovery_attempted: false,
         }
     }
 
-    pub(crate) fn start_timeout(&mut self) -> Result<(), MacosBackendError> {
-        if let Some(deadline) = self.deadline {
-            self.timeout_watchdog = Some(TimeoutWatchdog::start(self.process_group_id, deadline)?);
-        }
-        Ok(())
-    }
-
     /// Returns the process identifier of the Seatbelt boundary.
     pub fn id(&self) -> u32 {
+        if let Some(session) = self.session.as_ref() {
+            return session.id();
+        }
         self.child.as_ref().map_or(0, Child::id)
     }
 
     /// Returns the child's standard input pipe, if one was requested.
     pub fn stdin(&mut self) -> Option<&mut ChildStdin> {
+        if let Some(session) = self.session.as_mut() {
+            return session.stdin();
+        }
         self.child.as_mut().and_then(|child| child.stdin.as_mut())
     }
 
     /// Returns the child's standard output pipe, if one was requested.
     pub fn stdout(&mut self) -> Option<&mut ChildStdout> {
+        if let Some(session) = self.session.as_mut() {
+            return session.stdout();
+        }
         self.child.as_mut().and_then(|child| child.stdout.as_mut())
     }
 
     /// Returns the child's standard error pipe, if one was requested.
     pub fn stderr(&mut self) -> Option<&mut ChildStderr> {
+        if let Some(session) = self.session.as_mut() {
+            return session.stderr();
+        }
         self.child.as_mut().and_then(|child| child.stderr.as_mut())
     }
 
     /// Checks whether the boundary has exited, enforcing its timeout.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, MacosBackendError> {
+        if let Some(session) = self.session.as_mut() {
+            return match session.try_wait()? {
+                Some((_, true)) => Err(MacosBackendError::ProcessTimedOut),
+                Some((status, false)) => Ok(Some(status)),
+                None => Ok(None),
+            };
+        }
         if let Some(watchdog) = self.timeout_watchdog.as_ref()
             && let Err(error) = watchdog.check_health()
         {
@@ -201,6 +204,9 @@ impl MacosChild {
 
     /// Terminates the complete process group and confirms its disappearance.
     pub fn kill(&mut self) -> Result<(), MacosBackendError> {
+        if let Some(session) = self.session.as_mut() {
+            return session.kill().map_err(Into::into);
+        }
         self.terminate_boundary()?;
         self.cleanup_boundaries()
     }
@@ -300,6 +306,7 @@ impl MacosChild {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn command_deadline(
     timeout: Option<Duration>,
 ) -> Result<Option<Instant>, MacosBackendError> {
@@ -384,6 +391,9 @@ impl Drop for MacosBoundaryRecovery {
 
 impl Drop for MacosChild {
     fn drop(&mut self) {
+        if self.session.is_some() {
+            return;
+        }
         if self.child.is_none() {
             let _ = self.cleanup_boundaries();
             return;
@@ -396,6 +406,7 @@ impl Drop for MacosChild {
 }
 
 #[allow(unsafe_code)]
+#[cfg(test)]
 pub(crate) fn configure_process_group(command: &mut std::process::Command, parent_death_fd: RawFd) {
     use std::os::unix::process::CommandExt;
     // SAFETY: pre_exec runs in the child between fork and exec; setpgid
@@ -433,6 +444,7 @@ pub(crate) fn configure_process_group(command: &mut std::process::Command, paren
     }
 }
 
+#[cfg(test)]
 impl ParentDeathChannel {
     #[allow(unsafe_code)]
     pub(crate) fn new() -> io::Result<Self> {
@@ -462,6 +474,7 @@ impl ParentDeathChannel {
 }
 
 #[allow(unsafe_code)]
+#[cfg(test)]
 fn move_fd_above_standard_streams(fd: OwnedFd) -> io::Result<OwnedFd> {
     if fd.as_raw_fd() > libc::STDERR_FILENO {
         return Ok(fd);
@@ -561,14 +574,6 @@ fn close_inherited_fds_with_query(
         close_inheritable(fd);
     }
     Ok(())
-}
-
-pub(crate) fn stream(mode: StdioMode) -> std::process::Stdio {
-    match mode {
-        StdioMode::Inherit => std::process::Stdio::inherit(),
-        StdioMode::Null => std::process::Stdio::null(),
-        StdioMode::Pipe => std::process::Stdio::piped(),
-    }
 }
 
 fn terminate_process_group(
@@ -725,6 +730,7 @@ fn signal_process_group_members(
     Ok(signalled)
 }
 
+#[cfg(test)]
 pub(crate) fn process_group_id(pid: u32) -> Result<u32, MacosBackendError> {
     if pid == 0 {
         return Err(MacosBackendError::ProcessGroupIdInvalid);
@@ -780,6 +786,7 @@ mod tests {
     #[test]
     fn recovery_owned_boundary_is_reported_as_a_typed_state() {
         let mut child = MacosChild {
+            session: None,
             child: None,
             child_reaped: false,
             process_group_id: 1,
@@ -892,6 +899,7 @@ mod tests {
         process.wait().expect("reap fixture");
 
         let mut child = super::MacosChild {
+            session: None,
             child: Some(process),
             child_reaped: true,
             process_group_id,

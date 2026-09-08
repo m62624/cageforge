@@ -19,6 +19,10 @@ targets = ["x86_64-apple-darwin", "aarch64-apple-darwin"]
 name = "cageforge_macos"
 path = "src/lib.rs"
 
+[[bin]]
+name = "cageforge-macos-helper"
+path = "src/bin/cageforge-macos-helper.rs"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cageforge-backend-api.workspace = true
 cageforge-command.workspace = true
@@ -27,11 +31,14 @@ cageforge-path.workspace = true
 cageforge-policy.workspace = true
 cageforge-policy-compose.workspace = true
 libc.workspace = true
+block2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-block2.workspace = true
 tempfile.workspace = true
 
 [lints]

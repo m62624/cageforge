@@ -121,7 +121,13 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
         PROTOCOL_VERSION
     );
     assert_eq!(
-        reply.number(c"result").expect("typed reply number"),
+        u64::from_le_bytes(
+            reply
+                .data(c"payload")
+                .expect("typed result bytes")
+                .try_into()
+                .expect("result length")
+        ),
         ACCEPTED
     );
     assert_eq!(
@@ -197,7 +203,13 @@ fn launchd_transport_parent() {
         PROTOCOL_VERSION
     );
     assert_eq!(
-        reply.number(c"result").expect("typed reply number"),
+        u64::from_le_bytes(
+            reply
+                .data(c"payload")
+                .expect("typed result bytes")
+                .try_into()
+                .expect("result length")
+        ),
         ACCEPTED
     );
     fs::write(
@@ -217,9 +229,12 @@ fn launchd_transport_lifecycle_helper() {
     let root = fixture_root();
     let owner = declared_owner();
     let (sender, receiver) = mpsc::sync_channel(2);
-    let _listener =
-        transport::Connection::listener(&CString::new(service).expect("service"), sender)
-            .expect("listener");
+    let _listener = transport::Connection::authenticated_listener(
+        &CString::new(service).expect("service"),
+        sender,
+        owner,
+    )
+    .expect("listener");
     let mut peers = Vec::new();
     let deadline = Instant::now() + TEST_TIMEOUT;
     let request = loop {
@@ -234,7 +249,9 @@ fn launchd_transport_lifecycle_helper() {
                 {
                     break message;
                 }
-                message.reply(REJECTED).expect("reject unrelated peer");
+                message
+                    .reply_data(&REJECTED.to_le_bytes())
+                    .expect("reject unrelated peer");
             }
         }
     };
@@ -258,7 +275,7 @@ fn launchd_transport_lifecycle_helper() {
     );
     wait_for_marker(&root, "child-ready");
     request
-        .reply(ACCEPTED)
+        .reply_data(&ACCEPTED.to_le_bytes())
         .expect("confirm acquired reservation");
     let deadline = Instant::now() + TEST_TIMEOUT;
     while native::process_identity(owner.0).expect("query actual owner identity") == Some(owner) {
@@ -398,16 +415,10 @@ fn launchd_transport_impostor() {
     let owner = declared_owner();
     let connection = transport::Connection::client(&CString::new(service).expect("service name"))
         .expect("create client");
-    let reply = connection
-        .request(fixture_request(owner, None))
-        .expect("receive typed rejection");
-    assert_eq!(
-        reply.number(c"version").expect("typed reply number"),
-        PROTOCOL_VERSION
-    );
-    assert_eq!(
-        reply.number(c"result").expect("typed reply number"),
-        REJECTED
+    let result = connection.request(fixture_request(owner, None));
+    assert!(
+        matches!(result, Err(error) if error.kind() == io::ErrorKind::ConnectionAborted),
+        "an unrelated kernel identity must be disconnected before command admission"
     );
 }
 
@@ -418,9 +429,12 @@ fn launchd_transport_helper() {
     };
     let owner = declared_owner();
     let (sender, receiver) = mpsc::sync_channel(2);
-    let _listener =
-        transport::Connection::listener(&CString::new(service).expect("service name"), sender)
-            .expect("listener");
+    let _listener = transport::Connection::authenticated_listener(
+        &CString::new(service).expect("service name"),
+        sender,
+        owner,
+    )
+    .expect("listener");
     let mut peers = Vec::new();
     let deadline = std::time::Instant::now() + TEST_TIMEOUT;
     loop {
@@ -435,7 +449,7 @@ fn launchd_transport_helper() {
                     actual == owner && matches!(message.number(c"version"), Ok(PROTOCOL_VERSION));
                 if authorized && native::has_unrelated_fd(&message) {
                     message
-                        .reply(UNRELATED_FD_LEAKED)
+                        .reply_data(&UNRELATED_FD_LEAKED.to_le_bytes())
                         .expect("report descriptor leak");
                     return;
                 }
@@ -451,7 +465,7 @@ fn launchd_transport_helper() {
                         .expect("write through explicit FD");
                 }
                 message
-                    .reply(if authorized { ACCEPTED } else { REJECTED })
+                    .reply_data(&(if authorized { ACCEPTED } else { REJECTED }).to_le_bytes())
                     .expect("flush typed response");
                 if authorized {
                     return;

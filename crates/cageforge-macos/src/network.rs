@@ -130,6 +130,10 @@ impl MacosUnixSocketPlan {
 }
 
 impl GatewayRuntime {
+    pub(crate) fn reservation_fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        self._port_reservation.as_raw_fd()
+    }
     pub(crate) fn start(
         policy: cageforge_policy_compose::EffectiveNetworkPolicy,
         config: GatewayConfig,

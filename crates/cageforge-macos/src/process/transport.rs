@@ -33,28 +33,49 @@ pub struct Request(Object);
 pub struct Message(Object);
 struct Object(*mut c_void);
 
+/// Invalid native field in an authenticated macOS helper message.
 #[derive(Debug, Error)]
 pub enum FieldError {
+    /// A required field was absent.
     #[error("helper message is missing field {key:?}")]
-    Missing { key: &'static CStr },
+    Missing {
+        /// Required protocol field.
+        key: &'static CStr,
+    },
+    /// A field had a different native XPC type.
     #[error("helper message field {key:?} must be {expected:?}")]
     WrongType {
+        /// Rejected protocol field.
         key: &'static CStr,
+        /// Required native field type.
         expected: FieldKind,
     },
+    /// A byte payload exceeded the checked IPC bound.
     #[error("helper message field {key:?} has {actual} bytes, exceeding {maximum}")]
     TooLarge {
+        /// Rejected protocol field.
         key: &'static CStr,
+        /// Received or attempted payload length.
         actual: usize,
+        /// Maximum payload length.
         maximum: usize,
     },
+    /// A nonempty native byte object lacked backing storage.
     #[error("helper message field {key:?} has a null data pointer for {length} bytes")]
-    InvalidDataPointer { key: &'static CStr, length: usize },
+    InvalidDataPointer {
+        /// Rejected protocol field.
+        key: &'static CStr,
+        /// Reported native payload length.
+        length: usize,
+    },
 }
 
+/// Native XPC type required for a helper control field.
 #[derive(Debug)]
 pub enum FieldKind {
+    /// An explicitly encoded unsigned 64-bit integer.
     UnsignedInteger,
+    /// An immutable byte buffer.
     Data,
 }
 
@@ -77,6 +98,7 @@ unsafe extern "C" {
     );
     fn xpc_connection_resume(connection: *mut c_void);
     fn xpc_connection_cancel(connection: *mut c_void);
+    fn xpc_connection_get_audit_token(connection: *mut c_void, token: *mut [u32; 8]);
     fn xpc_connection_send_message(connection: *mut c_void, message: *mut c_void);
     fn xpc_connection_send_message_with_reply(
         connection: *mut c_void,
@@ -127,7 +149,19 @@ impl Connection {
         Ok(Self(Object(object)))
     }
 
-    pub fn listener(name: &CStr, sender: SyncSender<Event>) -> io::Result<Self> {
+    pub fn authenticated_listener(
+        name: &CStr,
+        sender: SyncSender<Event>,
+        owner: (u32, u32),
+    ) -> io::Result<Self> {
+        Self::listen(name, sender, Some(owner))
+    }
+
+    fn listen(
+        name: &CStr,
+        sender: SyncSender<Event>,
+        owner: Option<(u32, u32)>,
+    ) -> io::Result<Self> {
         let object = unsafe {
             xpc_connection_create_mach_service(
                 name.as_ptr(),
@@ -141,6 +175,14 @@ impl Connection {
         let handler = RcBlock::new(move |peer: *mut c_void| unsafe {
             if xpc_get_type(peer) != (&raw const _xpc_type_connection).cast() {
                 return;
+            }
+            if let Some(owner) = owner {
+                let mut token = [0; 8];
+                xpc_connection_get_audit_token(peer, &mut token);
+                if (token[5], token[7]) != owner {
+                    xpc_connection_cancel(peer);
+                    return;
+                }
             }
             let messages = sender.clone();
             let incoming = RcBlock::new(move |message: *mut c_void| {
@@ -280,7 +322,12 @@ impl Message {
         Ok(file)
     }
 
-    pub fn reply(&self, status: u64) -> io::Result<()> {
+    pub fn reply_data(&self, bytes: &[u8]) -> io::Result<()> {
+        check_frame_length(c"payload", bytes.len()).map_err(io::Error::other)?;
+        self.send_reply(0, Some(bytes))
+    }
+
+    fn send_reply(&self, status: u64, bytes: Option<&[u8]>) -> io::Result<()> {
         let raw = unsafe { xpc_dictionary_create_reply(self.0.0) };
         if raw.is_null() {
             return Err(io::ErrorKind::InvalidData.into());
@@ -297,6 +344,14 @@ impl Message {
         unsafe {
             xpc_dictionary_set_uint64(reply.0, c"version".as_ptr(), PROTOCOL_VERSION);
             xpc_dictionary_set_uint64(reply.0, c"result".as_ptr(), status);
+            if let Some(bytes) = bytes {
+                xpc_dictionary_set_data(
+                    reply.0,
+                    c"payload".as_ptr(),
+                    bytes.as_ptr().cast(),
+                    bytes.len(),
+                );
+            }
             xpc_connection_send_message(remote, reply.0);
             xpc_connection_send_barrier(remote, &flushed);
         }

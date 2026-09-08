@@ -291,6 +291,8 @@ dependencies = [
  "cageforge-policy",
  "cageforge-policy-compose",
  "libc",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
