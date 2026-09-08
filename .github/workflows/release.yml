@@ -111,7 +111,7 @@ jobs:
 
   release-notes:
     name: Create draft GitHub release
-    needs: [prepare, dist]
+    needs: [prepare, dist, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,7 +153,7 @@ jobs:
 
   publish-release:
     name: Publish completed GitHub release
-    needs: [prepare, dist, release-notes]
+    needs: [prepare, dist, release-notes, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write

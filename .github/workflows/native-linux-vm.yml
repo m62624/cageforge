@@ -18,6 +18,11 @@ on:
         description: Branch or commit to test when no PR number is supplied
         required: false
         type: string
+      full:
+        description: Run the native Linux test for a release candidate
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       pr_number:
@@ -32,6 +37,11 @@ on:
         description: Branch or commit to test when no PR number is supplied
         required: false
         type: string
+      full:
+        description: Run the native Linux test for a release candidate
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -48,7 +58,7 @@ concurrency:
 jobs:
   native-linux-vm:
     name: Linux native tests in disposable QEMU/KVM VM
-    if: inputs.pr_number != '' || github.ref == 'refs/heads/main'
+    if: inputs.full || inputs.pr_number != '' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
