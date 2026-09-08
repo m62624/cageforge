@@ -38,6 +38,15 @@ struct LaunchdTestJob {
     label: String,
 }
 
+struct FixtureParent(std::process::Child);
+
+impl Drop for FixtureParent {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 impl LaunchdTestJob {
     fn remove(&self) -> std::process::Output {
         Command::new("/bin/launchctl")
@@ -448,28 +457,62 @@ fn parent_death_child_harness() {
     )
     .expect("publish parent-death child PID");
     let _ = marker;
-    std::process::exit(0);
+    // The controller sends SIGKILL after observing the live registration.
+    // No application destructor is involved in the recovery being tested.
+    thread::sleep(Duration::from_secs(30));
+    panic!("parent-death controller did not terminate the fixture");
 }
 
 #[test]
-fn parent_process_death_terminates_the_complete_seatbelt_process_group() {
+fn parent_process_death_terminates_the_boundary_and_removes_owned_registration() {
     let temporary = TempDir::new().expect("parent-death temporary root");
     let workspace = temporary.path().join("workspace");
     let child_pid = temporary.path().join("child.pid");
     let marker = workspace.join("marker-after-boundary");
-    let parent = Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "parent_death_child_harness", "--nocapture"])
-        .env(PARENT_DEATH_ROOT, &workspace)
-        .env(PARENT_DEATH_CHILD, &child_pid)
-        .spawn()
-        .expect("spawn parent-death harness");
-    let status = parent
-        .wait_with_output()
-        .expect("wait parent-death harness");
-    assert!(
-        status.status.success(),
-        "parent-death harness failed: {status:?}"
+    let runtime = temporary.path().join("helper-runtime");
+    fs::create_dir(&runtime).expect("private runtime test scope");
+    let mut parent = FixtureParent(
+        Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "parent_death_child_harness", "--nocapture"])
+            .env(PARENT_DEATH_ROOT, &workspace)
+            .env(PARENT_DEATH_CHILD, &child_pid)
+            .env("TMPDIR", &runtime)
+            .spawn()
+            .expect("spawn parent-death harness"),
     );
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    while !child_pid.exists() {
+        assert!(
+            parent.0.try_wait().expect("fixture status").is_none(),
+            "fixture exited before publishing a child"
+        );
+        assert!(
+            Instant::now() < ready_deadline,
+            "fixture did not publish its child"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let entries = fs::read_dir(&runtime)
+        .expect("runtime entries")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("runtime directory listing");
+    assert_eq!(entries.len(), 1, "one runtime registration per launch");
+    let label = format!(
+        "dev.cageforge.{}",
+        entries[0].file_name().to_str().expect("registration name")
+    );
+    #[allow(unsafe_code)]
+    let target = format!("user/{}/{label}", unsafe { libc::geteuid() });
+    assert!(
+        Command::new("/bin/launchctl")
+            .args(["print", &target])
+            .output()
+            .expect("live registration")
+            .status
+            .success()
+    );
+    parent.0.kill().expect("abruptly terminate application");
+    parent.0.wait().expect("confirm application death");
     let pid = fs::read_to_string(&child_pid)
         .expect("read parent-death child PID")
         .trim()
@@ -490,6 +533,27 @@ fn parent_process_death_terminates_the_complete_seatbelt_process_group() {
     }
     thread::sleep(Duration::from_secs(2));
     assert!(!marker.exists(), "parent death left a descendant running");
+    let cleanup_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let files_gone = fs::read_dir(&runtime)
+            .expect("runtime cleanup listing")
+            .next()
+            .is_none();
+        let job_gone = !Command::new("/bin/launchctl")
+            .args(["print", &target])
+            .output()
+            .expect("registration cleanup status")
+            .status
+            .success();
+        if files_gone && job_gone {
+            break;
+        }
+        assert!(
+            Instant::now() < cleanup_deadline,
+            "emergency cleanup incomplete: files_gone={files_gone}, job_gone={job_gone}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]

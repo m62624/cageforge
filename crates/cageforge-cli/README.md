@@ -135,6 +135,15 @@ This command removes the system setup, not the CLI executable. Uninstall the
 CLI separately through Installed apps, Homebrew, Cargo, or manual binary
 removal as described above.
 
+### macOS launch resources
+
+On macOS the CLI embeds its helper and registers a temporary, unprivileged
+launchd service for each command. No `sudo` or `setup install` step is needed.
+The service supervises the command's descendants, including after the CLI is
+killed. After confirmed termination it removes the per-launch registration and
+known files; unfamiliar or replaced files are left untouched. There are no
+persistent sandbox accounts to uninstall on macOS.
+
 ## Build from source and select the backend
 
 Build the binary with exactly one feature matching its target:

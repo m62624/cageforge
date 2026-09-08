@@ -111,9 +111,11 @@ serialize the commands for their whole lifetime.
 
 Use `native_sandbox_with(NativeSandboxConfig::new()...)` for custom native
 settings. `NativeSandboxConfig` exposes the matching backend's existing
-configuration builders, including Linux helper selection and Windows setup
+configuration builders, including Linux/macOS helper selection and Windows setup
 location. On Windows, explicitly install setup through `WindowsSetup` first;
 backend construction verifies that installation without requesting UAC.
+macOS uses a per-launch unprivileged helper beside the application, or at the
+explicitly configured path; the CLI embeds it and requires no setup command.
 Missing features or native prerequisites produce `NativeSandboxError`.
 `SandboxExecutionError` identifies the failed execution operation and retains
 the concrete native error in its source chain.

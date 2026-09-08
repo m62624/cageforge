@@ -186,9 +186,11 @@ not install an uninstaller; remove the installed binary manually from
 `~/.cargo/bin/cageforge-cli` on Linux/macOS or
 `%USERPROFILE%\.cargo\bin\cageforge-cli.exe` on Windows.
 
-The Linux release binary is self-contained: its authenticated hardening-helper
-entry point is included in the same executable, so a separate helper binary is
-not installed.
+The Linux and macOS release binaries embed their native helper entry points, so
+a separate helper executable is not installed. macOS registers an unprivileged
+per-launch service and requires no administrative setup. Windows requires the
+explicit first-time `cageforge-cli setup install` step described in the
+[CLI README](crates/cageforge-cli/README.md#windows-first-time-setup).
 
 For the CLI command reference, see the [`cageforge-cli` README](crates/cageforge-cli/README.md).
 

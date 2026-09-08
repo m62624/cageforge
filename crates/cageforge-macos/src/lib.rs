@@ -30,7 +30,7 @@ pub use process::MacosChild;
 pub use process::coalition::CoalitionError as MacosCoalitionError;
 pub use process::launchd::{
     LaunchError as MacosHelperError, MACOS_HELPER_ARGUMENT, Operation as MacosHelperOperation,
-    helper_entry as run_macos_helper,
+    StorageError as MacosHelperStorageError, helper_entry as run_macos_helper,
 };
 pub use process::protocol::{ProtocolError as MacosHelperProtocolError, Stage as MacosHelperStage};
 pub use process::transport::{

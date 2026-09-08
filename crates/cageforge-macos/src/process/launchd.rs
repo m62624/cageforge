@@ -8,7 +8,7 @@ use std::{
     io,
     os::fd::{AsRawFd, OwnedFd},
     os::unix::{
-        fs::OpenOptionsExt,
+        fs::{OpenOptionsExt, PermissionsExt},
         process::{CommandExt, ExitStatusExt},
     },
     path::{Path, PathBuf},
@@ -19,8 +19,11 @@ use std::{
 };
 
 use cageforge_command::{StdioMode, StdioSpec};
-use tempfile::TempDir;
 use thiserror::Error;
+
+#[path = "launchd/storage.rs"]
+mod storage;
+pub use storage::StorageError;
 
 use super::{
     coalition::{Coalition, CoalitionError},
@@ -61,7 +64,7 @@ struct Streams {
 }
 
 struct Job {
-    root: TempDir,
+    root: storage::Directory,
     target: String,
     service: CString,
     removed: bool,
@@ -80,6 +83,9 @@ struct HelperBoundary {
 /// Failure while registering, authenticating, or supervising a per-launch helper.
 #[derive(Debug, Error)]
 pub enum LaunchError {
+    /// Owned registration files could not be acquired or safely removed.
+    #[error(transparent)]
+    Storage(#[from] StorageError),
     /// A native operation failed with its original operating-system error.
     #[error("macOS helper {operation:?} failed: {source}")]
     Io {
@@ -335,6 +341,9 @@ impl Resources {
         }
         self.gateway = None;
         self.connection = None;
+        if let Some(job) = self.job.as_ref() {
+            job.root.cleanup()?;
+        }
         self.finished = true;
         Ok(())
     }
@@ -388,6 +397,7 @@ impl Job {
             })?;
         let root = tempfile::Builder::new()
             .prefix("cageforge-macos-launch-")
+            .permissions(fs::Permissions::from_mode(0o700))
             .tempdir()
             .map_err(|source| fail(Operation::Bootstrap, source))?;
         let suffix = root
@@ -400,32 +410,36 @@ impl Job {
             CString::new(service_text.as_bytes()).map_err(|_| LaunchError::UnexpectedResponse)?;
         #[allow(unsafe_code)]
         let target = format!("user/{}/{service_text}", unsafe { libc::geteuid() });
-        let mut job = Self {
-            root,
-            target,
-            service,
-            removed: false,
-        };
         let args = [
             helper_text.to_owned(),
             MACOS_HELPER_ARGUMENT.to_owned(),
             service_text.clone(),
             owner.pid().to_string(),
             owner.version().to_string(),
-            job.target.clone(),
+            target.clone(),
+            root.path()
+                .to_str()
+                .ok_or(LaunchError::UnexpectedResponse)?
+                .to_owned(),
         ];
         let arguments = args
             .iter()
             .map(|arg| format!("<string>{}</string>", xml(arg)))
             .collect::<String>();
-        let log = job.root.path().join("helper.log");
+        let log = root.path().join(storage::LOG_NAME);
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&log)
+            .map_err(|source| fail(Operation::Bootstrap, source))?;
         let log = log.to_str().ok_or(LaunchError::UnexpectedResponse)?;
         let plist = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Label</key><string>{service_text}</string><key>ProgramArguments</key><array>{arguments}</array><key>MachServices</key><dict><key>{service_text}</key><true/></dict><key>LimitLoadToSessionType</key><string>Background</string><key>RunAtLoad</key><true/><key>StandardOutPath</key><string>{}</string><key>StandardErrorPath</key><string>{}</string></dict></plist>",
             xml(log),
             xml(log)
         );
-        let path = job.root.path().join("helper.plist");
+        let path = root.path().join(storage::PLIST_NAME);
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -434,6 +448,16 @@ impl Job {
             .map_err(|source| fail(Operation::Bootstrap, source))?;
         io::Write::write_all(&mut file, plist.as_bytes())
             .map_err(|source| fail(Operation::Bootstrap, source))?;
+        let directory = storage::Directory::capture(root.path())?;
+        // From this point cleanup is non-recursive and checks recorded inode
+        // identities. TempDir must not remove unexpected command-created data.
+        let _ = root.keep();
+        let mut job = Self {
+            root: directory,
+            target,
+            service,
+            removed: false,
+        };
         let domain = job
             .target
             .rsplit_once('/')
@@ -465,7 +489,9 @@ impl Job {
 
 impl Drop for Job {
     fn drop(&mut self) {
-        let _ = self.remove();
+        if self.remove().is_ok() {
+            let _ = self.root.cleanup();
+        }
     }
 }
 
@@ -616,7 +642,7 @@ pub fn helper_entry() -> ExitCode {
 
 fn serve() -> Result<(), LaunchError> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    let [mode, service, owner_pid, owner_version, target] = arguments.as_slice() else {
+    let [mode, service, owner_pid, owner_version, target, root] = arguments.as_slice() else {
         return Err(LaunchError::UnexpectedResponse);
     };
     if mode != MACOS_HELPER_ARGUMENT {
@@ -636,6 +662,10 @@ fn serve() -> Result<(), LaunchError> {
     let service = CString::new(std::os::unix::ffi::OsStrExt::as_bytes(service.as_os_str()))
         .map_err(|_| LaunchError::UnexpectedResponse)?;
     let coalition = Coalition::from_authenticated_parent(owner)?;
+    // Capture exact file identities before accepting any untrusted command.
+    // This owner lives outside the application's address space and therefore
+    // survives its SIGKILL without relying on application destructors.
+    let directory = storage::Directory::capture(Path::new(root))?;
     let (sender, receiver) = mpsc::sync_channel(8);
     let listener = Connection::authenticated_listener(&service, sender, owner_id)
         .map_err(|source| fail(Operation::Transport, source))?;
@@ -705,6 +735,12 @@ fn serve() -> Result<(), LaunchError> {
     drop(boundary);
     drop(peers);
     drop(listener);
+    if let Err(error) = directory.cleanup() {
+        // The owning application is gone, so no authenticated reporting
+        // channel remains. Preserve unfamiliar files, but still deregister
+        // the now-empty job instead of leaving an activatable Mach service.
+        eprintln!("{HELPER_NAME}: {error}");
+    }
     // Replace this last trusted task only after all untrusted tasks are gone;
     // do not create another descendant merely to remove the registered job.
     let source = Command::new(LAUNCHCTL)
