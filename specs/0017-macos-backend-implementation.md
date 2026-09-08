@@ -278,6 +278,10 @@ but does not replace, the detached-descendant ownership tests.
 The backend maps `StdioSpec` to explicit inherited, null, or piped standard
 streams. The child API owns all pipe endpoints and never uses stdout or stderr
 as a control protocol. Setup and launch failures are typed library errors.
+Successful lifecycle cleanup closes command-side writers but preserves the
+application's piped stdout/stderr readers, so buffered output can still be read
+after `wait` returns. Those read endpoints do not retain process or policy
+authority and must not postpone enforcement cleanup.
 
 The pre-exec descriptor sweep must reject failed or malformed native snapshots
 before launching the command. Apple's `proc_pidinfo` wrapper reports failure

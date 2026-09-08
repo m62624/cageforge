@@ -274,7 +274,9 @@ impl Session {
                 let result = (ExitStatus::from_raw(raw_status), timed_out);
                 resources.finish()?;
                 self.completed = Some(result);
-                self.streams = Streams::empty();
+                // Preserve buffered output after wait, just like std::Child.
+                // Read endpoints carry no live enforcement authority.
+                self.streams.stdin = None;
                 Ok(Some(result))
             }
             _ => Err(LaunchError::UnexpectedResponse),
@@ -290,7 +292,7 @@ impl Session {
         }
         // Do not depend on an answering helper to terminate its coalition.
         resources.finish()?;
-        self.streams = Streams::empty();
+        self.streams.stdin = None;
         Ok(())
     }
 }
@@ -360,14 +362,6 @@ impl Drop for Resources {
 }
 
 impl Streams {
-    fn empty() -> Self {
-        Self {
-            stdin: None,
-            stdout: None,
-            stderr: None,
-        }
-    }
-
     fn prepare(spec: &StdioSpec) -> io::Result<(Self, [File; 3])> {
         let (stdin, child_in) = input(spec.stdin())?;
         let (stdout, child_out) = output(spec.stdout(), libc::STDOUT_FILENO)?;

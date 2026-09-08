@@ -443,6 +443,40 @@ fn exiting_marker_child(
 }
 
 #[test]
+fn completed_wait_preserves_both_piped_output_streams() {
+    let workspace = TempDir::new().expect("output fixture workspace");
+    let backend = backend();
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args(["-c", "printf stdout; printf stderr >&2"])
+        .expect("explicit arguments");
+    let (command, effective, context) = request_for(
+        workspace.path(),
+        &restricted_policy(workspace.path()),
+        command,
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert!(child.wait().expect("wait before reading output").success());
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout()
+        .expect("stdout retained after wait")
+        .read_to_string(&mut stdout)
+        .expect("stdout EOF");
+    child
+        .stderr()
+        .expect("stderr retained after wait")
+        .read_to_string(&mut stderr)
+        .expect("stderr EOF");
+    assert_eq!(stdout, "stdout");
+    assert_eq!(stderr, "stderr");
+}
+
+#[test]
 fn parent_death_child_harness() {
     let Some(root) = std::env::var_os(PARENT_DEATH_ROOT) else {
         return;
