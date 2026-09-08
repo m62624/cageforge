@@ -10,6 +10,7 @@ use std::{
     fs::{self, File},
     io::Write,
     os::fd::AsRawFd,
+    os::unix::fs::MetadataExt,
     process::Command,
     sync::mpsc,
     time::Duration,
@@ -23,6 +24,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const PROTOCOL_VERSION: u64 = 1;
 const ACCEPTED: u64 = 1;
 const REJECTED: u64 = 2;
+const UNRELATED_FD_LEAKED: u64 = 3;
 
 struct LaunchdJob {
     target: String,
@@ -46,6 +48,10 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
         suffix.to_string_lossy()
     );
     let owner = native::own_identity().expect("parent kernel identity");
+    let unrelated = File::create(temporary.path().join("unrelated-parent-file"))
+        .expect("unrelated descriptor fixture");
+    native::make_inheritable(unrelated.as_raw_fd()).expect("inheritable parent-only descriptor");
+    let unrelated_metadata = unrelated.metadata().expect("descriptor object identity");
     let domain = format!("user/{}", native::user_id());
     let _job = LaunchdJob {
         target: format!("{domain}/{service}"),
@@ -63,6 +69,7 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
 <key>{SERVICE_ENV}</key><string>{service}</string>
 <key>{OWNER_ENV}</key><string>{pid}:{version}</string></dict>
 <key>MachServices</key><dict><key>{service}</key><true/></dict>
+<key>LimitLoadToSessionType</key><string>Background</string>
 <key>RunAtLoad</key><true/>
 <key>StandardOutPath</key><string>{log}</string>
 <key>StandardErrorPath</key><string>{log}</string>
@@ -74,12 +81,52 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
     );
     let plist_path = temporary.path().join("helper.plist");
     fs::write(&plist_path, plist).expect("write owned launchd fixture");
+    let validation = Command::new("/usr/bin/plutil")
+        .arg("-lint")
+        .arg(&plist_path)
+        .output()
+        .expect("validate native plist");
+    assert!(
+        validation.status.success(),
+        "plist validation: {validation:?}"
+    );
     let bootstrap = Command::new("/bin/launchctl")
         .args(["bootstrap", &domain])
         .arg(&plist_path)
         .output()
         .expect("bootstrap user Mach service");
-    assert!(bootstrap.status.success(), "bootstrap: {bootstrap:?}");
+    if !bootstrap.status.success() {
+        let metadata = fs::metadata(&plist_path).expect("fixture plist metadata");
+        eprintln!(
+            "plist uid={} gid={} mode={:o}; caller uid={}",
+            metadata.uid(),
+            metadata.gid(),
+            metadata.mode(),
+            native::user_id()
+        );
+        for scope in [&domain, &format!("gui/{}", native::user_id())] {
+            let state = Command::new("/bin/launchctl")
+                .args(["print", scope])
+                .output()
+                .expect("inspect available bootstrap domain");
+            // Do not dump domain environments or other users' job definitions.
+            eprintln!("bootstrap domain {scope}: {}", state.status);
+        }
+        let predicate = format!("process == 'launchd' AND eventMessage CONTAINS '{service}'");
+        let log = Command::new("/usr/bin/log")
+            .args([
+                "show",
+                "--last",
+                "1m",
+                "--style",
+                "compact",
+                "--predicate",
+                &predicate,
+            ])
+            .output()
+            .expect("read diagnostics for this fixture label only");
+        panic!("bootstrap: {bootstrap:?}; scoped launchd log: {log:?}");
+    }
 
     // This client knows the service and can copy the declared owner fields.
     // Only the kernel's message identity is authoritative.
@@ -99,6 +146,11 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
     let output = File::create(&output_path).expect("explicitly transferred output");
     let client = native::Connection::client(&CString::new(service).expect("service name"));
     let request = native::Message::request(owner, Some(output.as_raw_fd()));
+    request.describe_unrelated_fd(
+        unrelated.as_raw_fd(),
+        unrelated_metadata.dev(),
+        unrelated_metadata.ino(),
+    );
     let reply = client.request(&request).expect("authenticated FD transfer");
     assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
     assert_eq!(reply.number(c"result"), ACCEPTED);
@@ -142,6 +194,12 @@ fn launchd_transport_helper() {
             native::Event::Message(message) => {
                 let actual = message.sender_identity();
                 let authorized = actual == owner && message.number(c"version") == PROTOCOL_VERSION;
+                if authorized && message.has_unrelated_fd() {
+                    message
+                        .reply(UNRELATED_FD_LEAKED)
+                        .expect("report descriptor leak");
+                    return;
+                }
                 if authorized {
                     let mut output = message
                         .take_fd()
@@ -353,6 +411,27 @@ mod native {
             unsafe { xpc_dictionary_get_uint64(self.0.0, key.as_ptr()) }
         }
 
+        pub fn describe_unrelated_fd(&self, fd: RawFd, device: u64, inode: u64) {
+            // Send identity metadata only, not an XPC descriptor object.
+            unsafe {
+                xpc_dictionary_set_uint64(self.0.0, c"unrelated-fd".as_ptr(), fd as u64);
+                xpc_dictionary_set_uint64(self.0.0, c"unrelated-device".as_ptr(), device);
+                xpc_dictionary_set_uint64(self.0.0, c"unrelated-inode".as_ptr(), inode);
+            }
+        }
+
+        pub fn has_unrelated_fd(&self) -> bool {
+            let fd = RawFd::try_from(self.number(c"unrelated-fd")).expect("fixture FD number");
+            let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+                return false;
+            }
+            let stat = unsafe { stat.assume_init() };
+            // An unrelated object reusing the same numeric FD is not a leak.
+            stat.st_dev as u64 == self.number(c"unrelated-device")
+                && stat.st_ino == self.number(c"unrelated-inode")
+        }
+
         pub fn sender_identity(&self) -> (u32, u32) {
             let mut audit = [0u32; 8];
             unsafe { xpc_dictionary_get_audit_token(self.0.0, &mut audit) };
@@ -420,5 +499,13 @@ mod native {
 
     pub fn user_id() -> u32 {
         unsafe { libc::geteuid() }
+    }
+
+    pub fn make_inheritable(fd: RawFd) -> io::Result<()> {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 }
