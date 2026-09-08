@@ -62,7 +62,7 @@
         Id='*'
         Name='cageforge-cli'
         UpgradeCode='0C5C83B7-454A-4128-A1D9-2980AF6F09E8'
-        Manufacturer='m62624'
+        Manufacturer='Mansur Azatbek'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
@@ -70,7 +70,7 @@
         <Package Id='*'
             Keywords='Installer'
             Description='Command-line adapter for running programs through Cageforge sandboxes'
-            Manufacturer='m62624'
+            Manufacturer='Mansur Azatbek'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'

@@ -3,6 +3,7 @@ name = "cageforge-policy-compose"
 description = "Pure intersection of requested Cageforge sandbox policy and a portable ceiling"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true

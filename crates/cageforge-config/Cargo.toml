@@ -2,6 +2,7 @@
 name = "cageforge-config"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Strict TOML profile resolution for Cageforge policies and commands"

@@ -20,6 +20,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+authors = ["Mansur Azatbek <mansur62624@gmail.com>"]
 license = "Apache-2.0"
 repository = "https://github.com/m62624/cageforge"
 homepage = "https://github.com/m62624/cageforge"

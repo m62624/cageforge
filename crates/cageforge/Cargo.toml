@@ -2,6 +2,7 @@
 name = "cageforge"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Unified ergonomic facade for Cageforge sandbox backends"

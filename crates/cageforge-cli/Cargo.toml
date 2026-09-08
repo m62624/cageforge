@@ -2,7 +2,7 @@
 name = "cageforge-cli"
 version.workspace = true
 edition.workspace = true
-authors = ["m62624"]
+authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Command-line adapter for running programs through Cageforge sandboxes"
