@@ -15,6 +15,11 @@ The sandbox isolates processes using the host operating system's native
 enforcement mechanisms. Its guarantees depend on a correct host OS, correct
 native enforcement, and a correct Cageforge implementation.
 
+Use this crate as a library when sandboxed execution is part of your Rust
+application. If you need a ready-to-use terminal wrapper for launching an
+explicit program, install `cageforge-cli`; it uses this facade and the same
+native backend instead of implementing a separate sandbox.
+
 ## Add the crate
 
 Supported operating systems are:

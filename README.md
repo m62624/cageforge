@@ -3,11 +3,23 @@
 > **Independent project:** Cageforge is not affiliated with, sponsored by, or
 > endorsed by OpenAI.
 
+**[What Cageforge is](#what-cageforge-is) · [Use it as a library](#start-with-the-facade) ·
+[Install the CLI](#install-the-command-line-adapter) · [Workspace packages](#workspace-packages) ·
+[Portable layers](#portable-layers) · [Isolation model](#isolation-model-and-references) ·
+[License](#license)**
+
+## What Cageforge is
+
 Cageforge is a reusable Rust toolkit for running potentially untrusted
 commands, agents, plugins, build scripts, and mods inside an OS-enforced
 process boundary. It describes and validates command, filesystem, environment,
 and network intent, narrows that intent with an optional safety ceiling, and
 hands the result to a native Linux, macOS, or Windows backend.
+
+Use the project as a Rust library when you are integrating sandboxed execution
+into an application. Install `cageforge-cli` when you want a ready-to-use
+terminal command that reads a profile and launches one explicitly selected
+program through the same library and native backend.
 
 The sandbox isolates processes using the host operating system's native
 enforcement mechanisms. Its guarantees depend on a correct host OS, correct
@@ -157,13 +169,10 @@ Cargo through `spawn`.
 
 ## Isolation model and references
 
-Cageforge is an OS-enforced process sandbox for an explicitly launched
-program. The application supplies a command and a policy describing the
-filesystem scopes, environment, network destinations, and runtime limits that
-the program needs. Cageforge validates that intent, narrows it with the
-optional safety ceiling, and asks the selected operating system backend to
-create the boundary. The root process and every descendant it creates remain
-inside that boundary.
+At runtime, the application supplies the command and policy to `prepare`,
+which validates the request and narrows it with the optional safety ceiling.
+`spawn` then asks the selected native backend to create the boundary around the
+root process and every descendant it creates.
 
 This is different from a virtual machine: Cageforge does not boot a guest
 kernel or provide a second operating system. It is also different from a
@@ -215,3 +224,10 @@ The legal and provenance records are maintained in
 [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
 [`NOTICE`](NOTICE), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and
 [`UPSTREAM.md`](UPSTREAM.md).
+
+## License
+
+Cageforge's Rust code is Apache-2.0. The separately maintained Bubblewrap
+component retains its LGPL-2.0-or-later license; see the
+[`cageforge-bwrap` README](crates/cageforge-bwrap/README.md) and
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
