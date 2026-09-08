@@ -34,6 +34,29 @@ const UNIX_SOCKET_TEST_PATH: &str = "CAGEFORGE_MACOS_UNIX_SOCKET_TEST_PATH";
 const GROUP_CHANGE_MODE: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_MODE";
 const GROUP_CHANGE_ROOT: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_ROOT";
 
+struct LaunchdTestJob {
+    label: String,
+}
+
+impl LaunchdTestJob {
+    fn remove(&self) -> std::process::Output {
+        Command::new("/bin/launchctl")
+            .args(["remove", &self.label])
+            .output()
+            .expect("remove this test's launchd job")
+    }
+}
+
+impl Drop for LaunchdTestJob {
+    fn drop(&mut self) {
+        // The label belongs only to this fixture. Cleanup also runs when an
+        // assertion detects an unexpected successful sandboxed registration.
+        let _ = Command::new("/bin/launchctl")
+            .args(["remove", &self.label])
+            .output();
+    }
+}
+
 fn context(workspace: &Path) -> PathResolutionContext {
     PathResolutionContext::new()
         .with_root(PathBuf::from("/"))
@@ -485,6 +508,91 @@ fn host_accepts_the_backend_seatbelt_profile() {
         status.success(),
         "backend Seatbelt probe failed: {status:?}"
     );
+}
+
+#[test]
+fn sandboxed_commands_cannot_delegate_execution_to_launchd() {
+    let workspace = TempDir::new().expect("launchd fixture workspace");
+    let suffix = workspace.path().file_name().expect("unique fixture suffix");
+    let backend = backend();
+    for (mode, policy) in [
+        ("restricted", writable_policy(workspace.path())),
+        ("unrestricted", SandboxPolicy::full_access()),
+    ] {
+        let job = LaunchdTestJob {
+            label: format!(
+                "cageforge-test-delegation-{}-{}-{mode}",
+                std::process::id(),
+                suffix.to_string_lossy()
+            ),
+        };
+        let marker = workspace.path().join(format!("{mode}-delegated"));
+        let arguments: Vec<OsString> = ["submit", "-l", &job.label, "--", "/usr/bin/touch"]
+            .into_iter()
+            .map(OsString::from)
+            .chain([marker.clone().into_os_string()])
+            .collect();
+
+        // Prove that this user/session can register exactly this finite job.
+        // Otherwise a host configuration error could look like a sandbox deny.
+        let positive = Command::new("/bin/launchctl")
+            .args(&arguments)
+            .output()
+            .expect("submit unsandboxed positive control");
+        assert!(positive.status.success(), "positive control: {positive:?}");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "positive control did not execute"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let removed = job.remove();
+        assert!(
+            removed.status.success(),
+            "remove positive control: {removed:?}"
+        );
+        fs::remove_file(&marker).expect("remove positive-control marker");
+
+        let command = CommandSpec::new("/bin/launchctl")
+            .expect("launchctl executable")
+            .with_args(arguments)
+            .expect("launchctl arguments");
+        let (command, effective, context) = request_for(workspace.path(), &policy, command);
+        let command = command.with_timeout(Duration::from_secs(5));
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &context)
+            .expect("prepare launchd delegation probe");
+        let mut child = backend
+            .spawn(prepared)
+            .expect("spawn launchctl inside sandbox");
+        let mut stderr = File::from(
+            child
+                .stderr()
+                .expect("launchctl stderr")
+                .as_fd()
+                .try_clone_to_owned()
+                .expect("retain diagnostics across wait"),
+        );
+        let status = child.wait().expect("wait for launchctl delegation probe");
+        let mut diagnostic = Vec::new();
+        read_pipe_until_eof(&mut stderr, |bytes| {
+            diagnostic.extend_from_slice(bytes);
+            Ok(())
+        })
+        .expect("bounded diagnostic read");
+        let registered = Command::new("/bin/launchctl")
+            .args(["list", &job.label])
+            .output()
+            .expect("check exact fixture job registration");
+        assert!(
+            !status.success() && !registered.status.success() && !marker.exists(),
+            "{mode} command delegated execution outside Seatbelt: status={status:?}; \
+             registration={registered:?}; stderr={}",
+            String::from_utf8_lossy(&diagnostic)
+        );
+    }
 }
 
 #[test]

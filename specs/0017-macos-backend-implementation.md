@@ -185,6 +185,15 @@ fork, exec, reparenting, and group/session changes. Termination must not target
 an unrelated process after PID reuse or affect another sandbox instance.
 An enumeration that misses an in-flight fork is not proof of an empty boundary.
 
+Filesystem or network unrestricted mode must not authorize delegating process
+creation to an unsandboxed host service. In particular, a sandboxed
+`launchctl submit` must not register a new launchd job, even when its executable
+and output paths are otherwise writable and executable. The closed-by-default
+process/service boundary follows upstream `seatbelt_base_policy.sbpl`; broad
+filesystem grants must not become a general `allow default` rule. Native
+verification must include an unsandboxed positive control with the same job
+arguments, so an unavailable launchd session cannot masquerade as enforcement.
+
 System provisioning is acceptable only if the native mechanism satisfies this
 ownership contract on an ordinary supported macOS installation. Installation
 must be an explicit API/CLI operation which performs its own authenticated
