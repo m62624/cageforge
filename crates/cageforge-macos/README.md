@@ -73,8 +73,11 @@ configured executable exists, is a regular file, and is not a symbolic link.
 An application with a different trusted package layout may select another
 absolute executable with `MacosBackendConfig`.
 
-The macOS host must provide Seatbelt and the native process-group and file
-descriptor operations used by the backend. Cross-target compilation checks the
+The macOS host must provide Seatbelt, generation-bound process signalling
+(`proc_signal_with_audittoken`), and the native process-group and file
+descriptor operations used by the backend. Backend construction checks that
+the versioned signalling API is available before any command is launched.
+Cross-target compilation checks the
 Rust API surface; native enforcement is exercised on a macOS runner. A
 missing executable or native operation is returned as a typed
 `MacosBackendError`; the backend does not silently fall back to an ordinary

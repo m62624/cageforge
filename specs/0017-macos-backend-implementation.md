@@ -194,6 +194,11 @@ owned fixture PID and also prove successful delivery to its exact generation.
 This strengthens the numeric member-signalling fallback in upstream
 `utils/pty/src/process_group.rs`; it does not make process-group membership an
 immutable boundary or solve reuse of a previously reaped group identifier.
+Delivery uses `proc_signal_with_audittoken`, whose kernel implementation holds
+the target process reference while comparing its PID version and signalling
+it. Its libproc wrapper returns an errno value directly. The backend verifies
+the system symbol is available before launching any command; an unavailable
+API is a typed construction failure, never a fallback to numeric signalling.
 
 Filesystem or network unrestricted mode must not authorize delegating process
 creation to an unsandboxed host service. In particular, a sandboxed

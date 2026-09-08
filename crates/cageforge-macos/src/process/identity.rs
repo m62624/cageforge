@@ -3,9 +3,13 @@
 //! Kernel process identity for individual lifecycle signals.
 
 use std::io;
+use std::sync::OnceLock;
+
+use crate::error::MacosBackendError;
 
 // Apple XNU bsd/sys/proc_info_private.h: proc_uniqidentifierinfo.
 const PROC_PIDUNIQIDENTIFIERINFO: libc::c_int = 17;
+static SIGNAL_WITH_AUDIT_TOKEN: OnceLock<Option<SignalWithAuditToken>> = OnceLock::new();
 
 pub(super) struct ProcessIdentity {
     pid: libc::pid_t,
@@ -22,6 +26,8 @@ struct NativeProcessIdentity {
     reserved: u32,
     reserved_more: [u64; 2],
 }
+
+type SignalWithAuditToken = unsafe extern "C" fn(*mut [u32; 8], libc::c_int) -> libc::c_int;
 
 impl ProcessIdentity {
     #[allow(unsafe_code)]
@@ -63,18 +69,43 @@ impl ProcessIdentity {
     }
 }
 
+pub(crate) fn verify_available() -> Result<(), MacosBackendError> {
+    native_signal()
+        .map(|_| ())
+        .ok_or(MacosBackendError::VersionedProcessSignallingUnavailable)
+}
+
 #[allow(unsafe_code)]
-fn signal_identity(pid: libc::pid_t, _version: u32, signal: libc::c_int) -> io::Result<bool> {
-    // Preserve the existing syscall here so the native regression below can
-    // demonstrate whether a numeric PID honors the captured generation.
-    if unsafe { libc::kill(pid, signal) } == 0 {
-        return Ok(true);
-    }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(false)
-    } else {
-        Err(error)
+fn native_signal() -> Option<SignalWithAuditToken> {
+    *SIGNAL_WITH_AUDIT_TOKEN.get_or_init(|| {
+        // Resolve the optional system API before spawning, rather than making
+        // older macOS versions fail in the dynamic loader. libSystem remains
+        // loaded for the process lifetime, so this function address is stable.
+        let address =
+            unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"proc_signal_with_audittoken".as_ptr()) };
+        if address.is_null() {
+            None
+        } else {
+            // SAFETY: Apple libproc declares this symbol with this C ABI and
+            // audit_token_t is exactly eight uint32_t words.
+            Some(unsafe { std::mem::transmute::<*mut libc::c_void, SignalWithAuditToken>(address) })
+        }
+    })
+}
+
+#[allow(unsafe_code)]
+fn signal_identity(pid: libc::pid_t, version: u32, signal: libc::c_int) -> io::Result<bool> {
+    let deliver = native_signal().ok_or(io::ErrorKind::Unsupported)?;
+    let mut token = [0u32; 8];
+    token[5] = pid as u32;
+    token[7] = version;
+    // SAFETY: XNU takes its own process reference, validates PID/version and
+    // permissions, then delivers the signal while retaining that reference.
+    // Unlike kill(2), this libproc wrapper returns an errno value, not -1.
+    match unsafe { deliver(&mut token, signal) } {
+        0 => Ok(true),
+        libc::ESRCH => Ok(false),
+        code => Err(io::Error::from_raw_os_error(code)),
     }
 }
 
@@ -133,7 +164,11 @@ mod tests {
             "a stale process identity delivered SIGKILL to the replacement"
         );
         assert!(child.0.try_wait().expect("child remains alive").is_none());
-        assert!(current.signal(0).expect("live identity remains valid"));
+        assert!(
+            current
+                .signal(libc::SIGCONT)
+                .expect("live identity remains valid")
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::error::MacosBackendError;
 use crate::network::GatewayRuntime;
 
 #[path = "process/identity.rs"]
-mod identity;
+pub(crate) mod identity;
 #[path = "process/timeout.rs"]
 mod timeout;
 

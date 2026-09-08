@@ -82,6 +82,12 @@ pub enum MacosBackendError {
         #[source]
         source: io::Error,
     },
+    /// The host lacks the native API needed to signal an exact process
+    /// generation without risking delivery to a reused PID.
+    #[error(
+        "macOS does not provide proc_signal_with_audittoken for generation-bound process cleanup"
+    )]
+    VersionedProcessSignallingUnavailable,
     /// The process identifier cannot be represented by the native `pid_t`.
     #[error("macOS sandbox process ID {pid} is outside the native pid_t range")]
     ProcessGroupPidOutOfRange {

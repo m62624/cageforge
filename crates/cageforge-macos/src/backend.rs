@@ -59,6 +59,7 @@ impl MacosBackend {
         if !metadata.is_file() {
             return Err(MacosBackendError::SeatbeltExecutableNotRegular { path });
         }
+        crate::process::identity::verify_available()?;
         Ok(Self {
             config,
             identity: BackendIdentity::new(),
