@@ -484,6 +484,7 @@ jobs:
     with:
       pr_number: ${{ github.event.pull_request.number || '' }}
       expected_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      source_ref: ${{ inputs.ref || github.sha }}
 
   native-linux-arm64:
     name: "Linux sandbox (cross-build target: ARM64)"
@@ -492,6 +493,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
@@ -522,6 +525,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -597,6 +602,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -636,6 +643,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
