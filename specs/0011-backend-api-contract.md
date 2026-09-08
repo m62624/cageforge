@@ -236,6 +236,42 @@ backend API logic must maintain at least 90% line coverage. Native enforcement
 tests belong to each native backend's operating-system CI runner and are not
 replaced by this crate's portable tests.
 
+## Execution trait stabilization
+
+The next API revision moves the existing `Sandbox` and `SandboxChild` traits
+from the facade into this crate. Native crates implement them directly; the
+facade re-exports the same contracts. Capability-only `SandboxBackend`
+implementations remain valid. Native child ownership and native error types
+remain available through the statically dispatched traits.
+
+An additional object-safe `DynSandbox` contract supports `Box<dyn DynSandbox>`
+and `Arc<dyn DynSandbox>` without specifying a platform child or error type.
+Its `launch` operation takes the existing `BackendRequest` and
+`PathResolutionContext`, prepares through the selected native backend, and
+spawns through that same instance. No unbound prepared handoff crosses the
+dynamic interface. The implementation is provided for thread-safe `Sandbox`
+implementations whose children can be transferred between threads.
+
+Dynamic lifecycle errors identify the failing operation and retain the actual
+native error as their source, including downcasting. They must not replace
+native errors with display strings. The dynamic child owns the native child;
+dropping it invokes the original native destructor and recovery machinery.
+Sharing a backend does not serialize command lifetimes or change policies.
+
+Verification must exercise capability rejection before launch, failed native
+preparation and spawn, source-error recovery, every child operation, exactly
+once child destruction, and parallel calls through a shared trait object.
+Native CI must demonstrate the trait on each real operating-system backend.
+Existing concrete `prepare`/`spawn` APIs remain usable.
+
+The upstream comparison for this change covers
+`codex-rs/sandboxing/src/manager.rs::SandboxManager::{select_initial,transform}`
+and `codex-rs/sandboxing/src/spawn.rs::spawn_process` in the checkout named by
+UPSTREAM.md. Upstream selects a native launch path using its product request;
+Cageforge retains composed policies and instance-bound preparation and exposes
+library-owned execution traits instead of product request or PTY types.
+This adapter does not change native enforcement, setup, or cleanup behavior.
+
 ## Relationship to Codex
 
 The contract is behaviorally informed by the execution boundary in
