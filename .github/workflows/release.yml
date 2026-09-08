@@ -1,7 +1,9 @@
 name: Release
 
-# A release starts only from an explicit pin tag. The RC branch is tested by
-# the same reusable CI as normal changes before the final version tag exists.
+# Push an explicit pin/vX.Y.Z tag to start the release. The workflow prepares
+# and tests an RC branch, creates the final tag only after the gates pass,
+# builds the CLI artifacts, publishes the draft release, publishes workspace
+# crates, and opens the version-sync PR.
 on:
   push:
     tags:
@@ -9,7 +11,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: read
 
 concurrency:
   group: cageforge-release-${{ github.ref }}
@@ -17,18 +18,18 @@ concurrency:
 
 jobs:
   prepare:
-    name: Prepare CLI release
-    runs-on: ubuntu-24.04
+    name: Prepare release
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.info.outputs.version }}
       tag: ${{ steps.info.outputs.tag }}
-      rc_ref: ${{ steps.info.outputs.rc_ref }}
+      rc_branch: ${{ steps.info.outputs.rc_branch }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - id: info
-        name: Validate release pin
+      - name: Extract release information
+        id: info
         shell: bash
         run: |
           set -euo pipefail
@@ -41,44 +42,44 @@ jobs:
           {
             echo "version=$version"
             echo "tag=v$version"
-            echo "rc_ref=refs/heads/rc/v$version"
+            echo "rc_branch=rc/v$version"
           } >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
-      - name: Create tested RC commit
-        id: commit
+      - uses: Swatinem/rust-cache@v2
+      - name: Prepare and push the release candidate branch
         shell: bash
         env:
           VERSION: ${{ steps.info.outputs.version }}
-          RC_REF: ${{ steps.info.outputs.rc_ref }}
+          RC_BRANCH: ${{ steps.info.outputs.rc_branch }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "${RC_REF#refs/heads/}"
+          git checkout -B "$RC_BRANCH"
           cargo install cargo-edit --locked
           cargo set-version --workspace "$VERSION"
           git add -A
-          git commit -m "build: prepare cageforge-cli v$VERSION" || true
-          git push --force origin "${RC_REF#refs/heads/}"
+          git commit -m "build: prepare Cageforge v$VERSION" || true
+          git push --force origin "$RC_BRANCH"
           git push origin ":refs/tags/${GITHUB_REF_NAME}"
 
   tests:
-    name: Full CI on release candidate
+    name: CI on release candidate
     needs: prepare
     uses: ./.github/workflows/ci.yml
     with:
-      ref: ${{ needs.prepare.outputs.rc_ref }}
+      ref: ${{ needs.prepare.outputs.rc_branch }}
 
   tag:
-    name: Create final CLI tag
+    name: Create release tag
     needs: [prepare, tests]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.prepare.outputs.rc_ref }}
+          ref: ${{ needs.prepare.outputs.rc_branch }}
           fetch-depth: 0
-      - name: Tag tested commit
+      - name: Tag the tested RC commit
         shell: bash
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -89,15 +90,14 @@ jobs:
           git tag -fa "$TAG" -m "Release $TAG"
           git push --force origin "$TAG"
 
-  build:
-    name: "CLI artifact (${{ matrix.target }})"
+  dist:
+    name: Build CLI artifact (${{ matrix.target }})
     needs: [prepare, tag]
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Native sandbox validation uses its own deliberately pinned runners
-          # in ci.yml; this is the approved CLI artifact matrix.
+          # Native sandbox validation has a separate matrix in ci.yml.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-24.04
             zig: false
@@ -160,10 +160,11 @@ jobs:
               --no-default-features --features "$FEATURE")
           fi
           "${build[@]}"
-          mkdir -p "package/cageforge-cli-$TARGET"
+          package="package/cageforge-cli-$TARGET"
+          mkdir -p "$package"
           cli_binary="cageforge-cli"
           [[ "$TARGET" == *-pc-windows-msvc ]] && cli_binary+=".exe"
-          cp "target/$TARGET/release/$cli_binary" "package/cageforge-cli-$TARGET/"
+          cp "target/$TARGET/release/$cli_binary" "$package/"
           if [[ "$HELPER" == linux ]]; then
             helper_build=(cargo build --locked --release -p cageforge-linux --target "$TARGET" \
               --no-default-features --bin cageforge-linux-helper)
@@ -172,17 +173,14 @@ jobs:
                 --no-default-features --bin cageforge-linux-helper)
             fi
             "${helper_build[@]}"
-            cp "target/$TARGET/release/cageforge-linux-helper" \
-              "package/cageforge-cli-$TARGET/"
+            cp "target/$TARGET/release/cageforge-linux-helper" "$package/"
           elif [[ "$HELPER" == windows ]]; then
             cargo build --locked --release -p cageforge-windows --target "$TARGET" \
               --features bundled-helpers --bin cageforge-windows-setup
             cargo build --locked --release -p cageforge-windows --target "$TARGET" \
               --features bundled-helpers --bin cageforge-windows-command-runner
-            cp "target/$TARGET/release/cageforge-windows-setup.exe" \
-              "package/cageforge-cli-$TARGET/"
-            cp "target/$TARGET/release/cageforge-windows-command-runner.exe" \
-              "package/cageforge-cli-$TARGET/"
+            cp "target/$TARGET/release/cageforge-windows-setup.exe" "$package/"
+            cp "target/$TARGET/release/cageforge-windows-command-runner.exe" "$package/"
           fi
           tar -czf "cageforge-cli-$TARGET.tar.gz" -C package "cageforge-cli-$TARGET"
       - uses: actions/upload-artifact@v7
@@ -191,10 +189,10 @@ jobs:
           path: cageforge-cli-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
-  publish:
-    name: Publish draft CLI release
-    needs: [prepare, build]
-    runs-on: ubuntu-24.04
+  release-notes:
+    name: Create draft GitHub release
+    needs: [prepare, dist]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -207,7 +205,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
-      - name: Generate release text and publish draft
+      - name: Generate notes and create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -219,5 +217,73 @@ jobs:
           [[ -n "$previous" ]] && args+=(-f previous_tag_name="$previous")
           gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
             "${args[@]}" --jq .body > release-notes.md
-          gh release create "$TAG" --draft --title "Cageforge CLI $TAG" \
-            --notes-file release-notes.md release-assets/*.tar.gz
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Cageforge $TAG" --notes-file release-notes.md --draft
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "Cageforge $TAG" --notes-file release-notes.md
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" \
+            release-assets/*.tar.gz --clobber
+
+  publish-release:
+    name: Publish completed GitHub release
+    needs: [prepare, dist, release-notes]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  publish-crates:
+    name: Publish workspace crates
+    needs: [prepare, dist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Authenticate with crates.io trusted publishing
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish all publishable workspace crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --workspace --locked
+
+  sync:
+    name: Open version-sync PR
+    needs: [prepare, dist, publish-crates]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.rc_branch }}
+          fetch-depth: 0
+      - name: Open the RC-to-main sync PR
+        env:
+          RC_BRANCH: ${{ needs.prepare.outputs.rc_branch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          base="${{ github.event.repository.default_branch }}"
+          existing="$(gh pr list --head "$RC_BRANCH" --base "$base" --state open --json number --jq 'length')"
+          if [[ "$existing" == 0 ]]; then
+            gh pr create --head "$RC_BRANCH" --base "$base" \
+              --title "release: sync Cageforge v$VERSION to $base" \
+              --body "Created by the release workflow after the v$VERSION artifacts and crates were published."
+          fi

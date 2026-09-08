@@ -109,6 +109,13 @@ native sandbox is selected independently when its own implementation or
 dependency closure changes. Workflow concurrency cancels superseded runs for
 the same PR or ref.
 
+The release workflow follows the workspace release sequence: it prepares a
+versioned RC branch, runs reusable CI against that branch, creates the final
+tag only after CI succeeds, builds the CLI artifacts, creates and publishes the
+GitHub release, publishes the workspace's publishable crates, and opens a PR
+that synchronizes the RC version back to `main`. It has no skill, npm, or
+Python-package stages because this workspace does not ship those artifacts.
+
 Release artifacts are built by a tag-driven workflow from the CLI package only.
 The release workflow uses these six target/runner pairs:
 
