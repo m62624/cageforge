@@ -274,7 +274,27 @@ fn family_leaf(mode: &str, directory: &Path) -> Result<(), Box<dyn Error>> {
     }
     publish_pid(directory, mode)?;
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut expanded = false;
     while Instant::now() < deadline {
+        if !expanded && directory.join("grow").exists() {
+            expanded = true;
+            // Bounded fan-out: at most twelve additional sleepers per family,
+            // all with finite lifetimes. Never an unbounded fork workload.
+            for index in 0..4 {
+                drop(
+                    Command::new(std::env::current_exe()?)
+                        .arg("signal-target")
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()?,
+                );
+                if index == 0 {
+                    fs::write(directory.join(format!("growing-{mode}")), b"spawned")?;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         if directory.join("pulse").exists() {
             fs::write(directory.join(format!("pulse-{mode}")), b"alive")?;
         }
@@ -314,6 +334,19 @@ fn probe_families(first: &Path, second: &Path) -> Result<(), Box<dyn Error>> {
             "orphan families: independent coalitions {:?}, three descendants each",
             owned
         );
+        fs::write(first.join("grow"), b"create another generation")?;
+        wait_until(|| {
+            Ok(DETACH_MODES
+                .iter()
+                .all(|mode| first.join(format!("growing-{mode}")).exists()))
+        })?;
+        let expanded = coalition_active(owned[0])?;
+        if expanded < 6 {
+            return Err(
+                format!("new generation was not accounted for: {expanded} active tasks").into(),
+            );
+        }
+        println!("orphan families: first family grew to {expanded} tasks before cleanup");
         terminate_coalition_members(owned[0])?;
         if coalition_active(owned[1])? != 3 {
             return Err("terminating the first coalition affected the second".into());
