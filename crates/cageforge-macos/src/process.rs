@@ -473,21 +473,31 @@ fn move_fd_above_standard_streams(fd: OwnedFd) -> io::Result<OwnedFd> {
 
 #[allow(unsafe_code)]
 fn close_inherited_fds_except(preserved_fds: &[RawFd]) -> io::Result<()> {
+    close_inherited_fds_with_query(preserved_fds, |descriptors| {
+        // SAFETY: proc_pidinfo writes descriptor records into the stack-owned
+        // buffer and does not retain the pointer after returning.
+        unsafe {
+            libc::proc_pidinfo(
+                libc::getpid(),
+                libc::PROC_PIDLISTFDS,
+                0,
+                descriptors.as_mut_ptr().cast(),
+                std::mem::size_of_val(descriptors) as libc::c_int,
+            )
+        }
+    })
+}
+
+#[allow(unsafe_code)]
+fn close_inherited_fds_with_query(
+    preserved_fds: &[RawFd],
+    query: impl FnOnce(&mut [libc::proc_fdinfo]) -> libc::c_int,
+) -> io::Result<()> {
     let mut descriptors = [libc::proc_fdinfo {
         proc_fd: 0,
         proc_fdtype: 0,
     }; 1024];
-    // SAFETY: proc_pidinfo writes descriptor records into the stack-owned
-    // buffer and does not retain the pointer after returning.
-    let bytes = unsafe {
-        libc::proc_pidinfo(
-            libc::getpid(),
-            libc::PROC_PIDLISTFDS,
-            0,
-            descriptors.as_mut_ptr().cast(),
-            std::mem::size_of_val(&descriptors) as libc::c_int,
-        )
-    };
+    let bytes = query(&mut descriptors);
     if bytes < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -879,5 +889,99 @@ mod tests {
         child
             .terminate_boundary()
             .expect("reaped child cleanup must not call wait again");
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn failed_fd_snapshot_aborts_before_exec_with_native_error() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("/usr/bin/true");
+        // Inject a real libproc error at the native query boundary. The invalid
+        // flavor makes libproc return zero and preserve EINVAL, unlike a Unix
+        // syscall's usual -1. No unowned process or descriptor is modified.
+        unsafe {
+            command.pre_exec(|| {
+                super::close_inherited_fds_with_query(&[], |descriptors| {
+                    libc::proc_pidinfo(
+                        libc::getpid(),
+                        -1,
+                        0,
+                        descriptors.as_mut_ptr().cast(),
+                        std::mem::size_of_val(descriptors) as libc::c_int,
+                    )
+                })
+            });
+        }
+        match command.spawn() {
+            Err(error) => assert_eq!(error.raw_os_error(), Some(libc::EINVAL)),
+            Ok(mut child) => {
+                child.wait().expect("collect unexpectedly launched fixture");
+                panic!("FD query failure was treated as an empty descriptor list");
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_fd_snapshot_record_is_rejected() {
+        let result = super::close_inherited_fds_with_query(&[], |_| 1);
+        assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::InvalidData));
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn fd_cleanup_covers_descriptors_above_a_lowered_soft_limit() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("/usr/bin/true");
+        // All resource-limit changes and extra descriptors are confined to
+        // this post-fork child. The test runner and parallel tests are unchanged.
+        unsafe {
+            command.pre_exec(|| {
+                let mut limit = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                limit.rlim_cur = 4096;
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let source = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                if source < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                // Fill more records than the 1024-entry native snapshot while
+                // leaving low descriptor numbers available for exec machinery.
+                for _ in 0..1050 {
+                    if libc::fcntl(source, libc::F_DUPFD_CLOEXEC, 512) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                let inherited = libc::fcntl(source, libc::F_DUPFD, 2048);
+                if inherited < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                // Existing high descriptors remain valid after lowering the
+                // soft limit. It bounds new allocations, not the current table.
+                limit.rlim_cur = 256;
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                super::close_inherited_fds_except(&[])?;
+                if libc::fcntl(inherited, libc::F_GETFD) >= 0 {
+                    return Err(io::Error::from_raw_os_error(libc::EACCES));
+                }
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::EBADF) {
+                    return Err(error);
+                }
+                Ok(())
+            });
+        }
+        let status = command.status().expect("complete FD cleanup before exec");
+        assert!(status.success());
     }
 }
