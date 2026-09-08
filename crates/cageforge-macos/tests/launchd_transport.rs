@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native admission test for a launchd-owned helper transport. This is not yet
-//! the backend's launch path. Every job/client has a finite fixture lifetime.
+//! Native admission tests for the backend's launchd-owned helper transport.
+//! Every job/client has a finite fixture lifetime.
 
 #![cfg(target_os = "macos")]
 
 use std::{
     ffi::CString,
     fs::{self, File},
-    io::{self, Write},
+    io::{self, Read, Write},
     net::{SocketAddr, TcpListener},
     os::fd::AsRawFd,
     os::unix::fs::MetadataExt,
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::mpsc,
@@ -54,19 +55,41 @@ impl Drop for FixtureChild {
 
 #[test]
 fn dropping_an_unsent_request_releases_its_descriptor_reservation() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("owned reservation");
-    let address = listener.local_addr().expect("reserved address");
-    let mut request = transport::Request::new().expect("owned unsent request");
-    request.set_fd(c"output", listener.as_raw_fd());
-    drop(listener);
-    assert_eq!(
-        TcpListener::bind(address)
-            .expect_err("the XPC request must own its duplicated descriptor")
-            .kind(),
-        io::ErrorKind::AddrInUse
-    );
-    drop(request);
-    let _reused = TcpListener::bind(address).expect("request Drop releases its reservation");
+    // A TCP port is not an object identity: another test can claim it after
+    // release, and an immediate rebind also depends on native TCP cleanup.
+    // EOF on a private socket pair instead proves that the final reference to
+    // exactly the transferred endpoint has been released. Keep a finite wait
+    // for native teardown; a retained XPC reference must still fail this test.
+    for iteration in 0..32 {
+        let (endpoint, mut observer) = UnixStream::pair().expect("private descriptor pair");
+        observer.set_nonblocking(true).expect("ownership probe");
+        let mut request = transport::Request::new().expect("owned unsent request");
+        request.set_fd(c"output", endpoint.as_raw_fd());
+        drop(endpoint);
+        let mut bytes = Vec::new();
+        assert_eq!(
+            observer
+                .read_to_end(&mut bytes)
+                .expect_err("the XPC request must own its duplicated descriptor")
+                .kind(),
+            io::ErrorKind::WouldBlock,
+            "iteration {iteration}"
+        );
+        drop(request);
+        observer.set_nonblocking(false).expect("blocking EOF probe");
+        observer
+            .set_read_timeout(Some(TEST_TIMEOUT))
+            .expect("bounded descriptor release probe");
+        assert_eq!(
+            observer
+                .read_to_end(&mut bytes)
+                .unwrap_or_else(|error| panic!(
+                    "request Drop must release its endpoint, iteration {iteration}: {error}"
+                )),
+            0,
+            "the unsent request cannot produce payload bytes"
+        );
+    }
 }
 
 #[test]
