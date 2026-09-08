@@ -75,6 +75,9 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       ref: ${{ needs.prepare.outputs.rc_branch }}
+      # A release must validate every native backend and every CLI target.
+      # Release-branch version changes must never select a partial PR scope.
+      full: true
 
   tag:
     name: Create release tag

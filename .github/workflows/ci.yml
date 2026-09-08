@@ -28,6 +28,11 @@ on:
         description: Ref to check for release validation
         required: false
         type: string
+      full:
+        description: Run every native sandbox and CLI target for release validation
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -90,6 +95,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           MANUAL_SCOPE: ${{ inputs.scope }}
           MANUAL_SANDBOX: ${{ inputs.sandbox }}
+          FORCE_FULL: ${{ inputs.full || false }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
           set -euo pipefail
@@ -175,7 +181,12 @@ jobs:
             *) echo "Unknown sandbox lane: ${MANUAL_SANDBOX}" >&2; exit 1 ;;
           esac
 
-          if [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+          if [[ "$FORCE_FULL" == true ]]; then
+            linux_sandbox=true
+            macos_sandbox=true
+            windows_sandbox=true
+            mode=release
+          elif [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
