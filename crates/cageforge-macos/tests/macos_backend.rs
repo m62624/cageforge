@@ -1026,9 +1026,7 @@ fn command_timeout_closes_pipes_without_wait_or_polling() {
     let policy = restricted_policy(workspace.path());
     let (request, effective, context) =
         request_for(workspace.path(), &policy, shell_command("sleep 30 & wait"));
-    let request = request
-        .with_timeout(Duration::from_millis(200))
-        .expect("command timeout");
+    let request = request.with_timeout(Duration::from_millis(200));
     let backend = backend();
     let prepared = backend
         .prepare(BackendRequest::new(&request, &effective), &context)
