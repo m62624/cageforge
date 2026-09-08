@@ -13,6 +13,11 @@ use cageforge_command::StdioMode;
 use crate::error::MacosBackendError;
 use crate::network::GatewayRuntime;
 
+#[path = "process/timeout.rs"]
+mod timeout;
+
+use timeout::TimeoutWatchdog;
+
 const BOUNDARY_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const BOUNDARY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const BOUNDARY_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
@@ -42,6 +47,7 @@ pub struct MacosChild {
     parent_death: Option<OwnedFd>,
     gateway: Option<GatewayRuntime>,
     deadline: Option<Instant>,
+    timeout_watchdog: Option<TimeoutWatchdog>,
     recovery_attempted: bool,
 }
 
@@ -51,7 +57,13 @@ struct MacosBoundaryRecovery {
     process_group_id: u32,
     parent_death: Option<OwnedFd>,
     gateway: Option<GatewayRuntime>,
+    timeout_watchdog: Option<TimeoutWatchdog>,
     completed: bool,
+}
+
+struct ProcessGroupTerminationError {
+    child_reaped: bool,
+    source: MacosBackendError,
 }
 
 impl cageforge_backend_api::SandboxChild for MacosChild {
@@ -101,8 +113,16 @@ impl MacosChild {
             parent_death: Some(parent_death),
             gateway,
             deadline,
+            timeout_watchdog: None,
             recovery_attempted: false,
         }
+    }
+
+    pub(crate) fn start_timeout(&mut self) -> Result<(), MacosBackendError> {
+        if let Some(deadline) = self.deadline {
+            self.timeout_watchdog = Some(TimeoutWatchdog::start(self.process_group_id, deadline)?);
+        }
+        Ok(())
     }
 
     /// Returns the process identifier of the Seatbelt boundary.
@@ -127,6 +147,14 @@ impl MacosChild {
 
     /// Checks whether the boundary has exited, enforcing its timeout.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, MacosBackendError> {
+        if let Some(watchdog) = self.timeout_watchdog.as_ref()
+            && let Err(error) = watchdog.check_health()
+        {
+            if self.terminate_after_boundary_failure() {
+                let _ = self.cleanup_boundaries();
+            }
+            return Err(error);
+        }
         if let Err(error) = self.check_gateway_health() {
             if self.terminate_after_boundary_failure() {
                 let _ = self.cleanup_boundaries();
@@ -141,10 +169,11 @@ impl MacosChild {
             self.cleanup_boundaries()?;
             return Err(MacosBackendError::ProcessTimedOut);
         }
-        let status = self
-            .child_mut()?
-            .try_wait()
-            .map_err(|source| MacosBackendError::ProcessWait { source })?;
+        let child = self
+            .child
+            .as_mut()
+            .ok_or(MacosBackendError::BoundaryOwnedByRecovery)?;
+        let status = poll_child(child, self.timeout_watchdog.as_ref())?;
         match status {
             Some(status) => self.finish(status).map(Some),
             None => Ok(None),
@@ -165,12 +194,6 @@ impl MacosChild {
     pub fn kill(&mut self) -> Result<(), MacosBackendError> {
         self.terminate_boundary()?;
         self.cleanup_boundaries()
-    }
-
-    fn child_mut(&mut self) -> Result<&mut Child, MacosBackendError> {
-        self.child
-            .as_mut()
-            .ok_or(MacosBackendError::BoundaryOwnedByRecovery)
     }
 
     fn check_gateway_health(&mut self) -> Result<(), MacosBackendError> {
@@ -195,7 +218,8 @@ impl MacosChild {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
-        match terminate_process_group(child, self.process_group_id) {
+        match terminate_process_group(child, self.process_group_id, self.timeout_watchdog.as_ref())
+        {
             Ok(()) => {
                 self.child_reaped = true;
                 Ok(())
@@ -212,15 +236,29 @@ impl MacosChild {
         // Keep that fact across a later gateway-cleanup failure so recovery
         // never calls waitpid on an already collected child.
         self.child_reaped = true;
+        let timed_out = self
+            .timeout_watchdog
+            .as_ref()
+            .map(TimeoutWatchdog::timed_out)
+            .transpose()?
+            .unwrap_or(false);
         if self.process_group_id != 0 {
             terminate_exited_process_group(self.process_group_id)?;
             confirm_process_group_gone(self.process_group_id)?;
         }
         self.cleanup_boundaries()?;
-        Ok(status)
+        if timed_out {
+            Err(MacosBackendError::ProcessTimedOut)
+        } else {
+            Ok(status)
+        }
     }
 
     fn cleanup_boundaries(&mut self) -> Result<(), MacosBackendError> {
+        if let Some(watchdog) = self.timeout_watchdog.as_mut() {
+            watchdog.shutdown()?;
+        }
+        self.timeout_watchdog = None;
         if let Some(gateway) = self.gateway.as_mut() {
             gateway.shutdown().map_err(MacosBackendError::Network)?;
         }
@@ -244,6 +282,7 @@ impl MacosChild {
             process_group_id: self.process_group_id,
             parent_death: self.parent_death.take(),
             gateway: self.gateway.take(),
+            timeout_watchdog: self.timeout_watchdog.take(),
             completed: false,
         };
         let _ = thread::Builder::new()
@@ -276,6 +315,13 @@ impl MacosBoundaryRecovery {
                     .as_mut()
                     .is_none_or(|gateway| gateway.shutdown().is_ok());
             if gateway_terminated {
+                if let Some(watchdog) = self.timeout_watchdog.as_mut()
+                    && watchdog.shutdown().is_err()
+                {
+                    thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
+                    continue;
+                }
+                self.timeout_watchdog = None;
                 self.child = None;
                 self.parent_death = None;
                 self.gateway = None;
@@ -293,10 +339,9 @@ impl MacosBoundaryRecovery {
                 .is_ok();
         }
 
-        let result = self
-            .child
-            .as_mut()
-            .map(|child| terminate_process_group(child, self.process_group_id));
+        let result = self.child.as_mut().map(|child| {
+            terminate_process_group(child, self.process_group_id, self.timeout_watchdog.as_ref())
+        });
         match result {
             Some(Ok(())) => {
                 self.child_reaped = true;
@@ -323,6 +368,7 @@ impl Drop for MacosBoundaryRecovery {
             std::mem::forget(self.child.take());
             std::mem::forget(self.parent_death.take());
             std::mem::forget(self.gateway.take());
+            std::mem::forget(self.timeout_watchdog.take());
         }
     }
 }
@@ -498,6 +544,7 @@ pub(crate) fn stream(mode: StdioMode) -> std::process::Stdio {
 fn terminate_process_group(
     child: &mut Child,
     process_group_id: u32,
+    timeout_watchdog: Option<&TimeoutWatchdog>,
 ) -> Result<(), ProcessGroupTerminationError> {
     terminate_process_group_if_present(process_group_id).map_err(|source| {
         ProcessGroupTerminationError {
@@ -507,7 +554,7 @@ fn terminate_process_group(
     })?;
     let deadline = Instant::now() + BOUNDARY_WAIT_TIMEOUT;
     loop {
-        match child.try_wait() {
+        match poll_child(child, timeout_watchdog) {
             Ok(Some(_)) => {
                 return confirm_process_group_gone(process_group_id).map_err(|source| {
                     ProcessGroupTerminationError {
@@ -526,16 +573,23 @@ fn terminate_process_group(
             Err(source) => {
                 return Err(ProcessGroupTerminationError {
                     child_reaped: false,
-                    source: MacosBackendError::ProcessWait { source },
+                    source,
                 });
             }
         }
     }
 }
 
-struct ProcessGroupTerminationError {
-    child_reaped: bool,
-    source: MacosBackendError,
+fn poll_child(
+    child: &mut Child,
+    timeout_watchdog: Option<&TimeoutWatchdog>,
+) -> Result<Option<ExitStatus>, MacosBackendError> {
+    match timeout_watchdog {
+        Some(watchdog) => watchdog.try_wait(child),
+        None => child
+            .try_wait()
+            .map_err(|source| MacosBackendError::ProcessWait { source }),
+    }
 }
 
 fn terminate_exited_process_group(process_group_id: u32) -> Result<(), MacosBackendError> {
@@ -706,6 +760,7 @@ mod tests {
             parent_death: None,
             gateway: None,
             deadline: None,
+            timeout_watchdog: None,
             recovery_attempted: true,
         };
 
@@ -765,6 +820,7 @@ mod tests {
             process_group_id,
             parent_death: Some(parent_death),
             gateway: None,
+            timeout_watchdog: None,
             completed: false,
         };
 
@@ -790,6 +846,7 @@ mod tests {
             process_group_id,
             parent_death: Some(parent_death),
             gateway: None,
+            timeout_watchdog: None,
             completed: false,
         };
 
@@ -815,6 +872,7 @@ mod tests {
             parent_death: Some(parent_death),
             gateway: None,
             deadline: None,
+            timeout_watchdog: None,
             recovery_attempted: false,
         };
 

@@ -151,13 +151,17 @@ impl MacosBackend {
                 return Err(error);
             }
         };
-        Ok(MacosChild::new(
+        let mut child = MacosChild::new(
             child,
             process_group_id,
             parent_death.into_writer(),
             gateway.take(),
             deadline,
-        ))
+        );
+        // The child owns every enforcement resource before the fallible timer
+        // startup. Drop/recovery keeps that ownership if thread creation fails.
+        child.start_timeout()?;
+        Ok(child)
     }
 
     fn environment_input(

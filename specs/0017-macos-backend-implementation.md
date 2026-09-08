@@ -194,6 +194,18 @@ The command timeout is per prepared command and is distinct from gateway
 handshake/relay limits. Backend construction and one command's timeout do not
 serialize unrelated instances.
 
+Timeout enforcement must run independently of the caller's `wait`, `try_wait`,
+and standard-stream reads. As in upstream `core/src/exec.rs::consume_output`,
+the deadline and output consumption are concurrent responsibilities. The
+library owns the timer instead of requiring a CLI or async runtime to poll it.
+A watchdog may signal the original process group only while the direct child
+has not been reaped. Child collection and watchdog signalling must share one
+per-launch synchronization boundary; after collection, the watchdog must not
+signal a potentially reused numeric process-group identity. Cleanup cancels
+and joins the watchdog outside that synchronization guard. A failed watchdog
+startup must terminate or transfer the already-created child and gateway to
+recovery, not return an unowned running process.
+
 ## 6. Capabilities
 
 The backend advertises only capabilities implemented and tested on the native

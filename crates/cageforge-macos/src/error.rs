@@ -52,6 +52,19 @@ pub enum MacosBackendError {
     /// The command exceeded its prepared timeout.
     #[error("the macOS sandboxed command exceeded its prepared timeout")]
     ProcessTimedOut,
+    /// The independent command-timeout worker could not be created.
+    #[error("failed to start macOS command-timeout watchdog: {source}")]
+    TimeoutWatchdogSetup {
+        /// The operating-system thread creation failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The timeout worker failed while supervising its process group.
+    #[error("macOS command-timeout watchdog panicked")]
+    TimeoutWatchdogPanicked,
+    /// Watchdog signalling and child collection could not be synchronized.
+    #[error("macOS command-timeout watchdog synchronization is poisoned")]
+    TimeoutWatchdogLockPoisoned,
     /// The prepared timeout cannot be represented by the native monotonic
     /// deadline used by the child lifecycle.
     #[error("macOS sandbox timeout cannot be represented by a native deadline: {timeout_ms} ms")]
