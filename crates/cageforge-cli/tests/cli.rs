@@ -3,6 +3,8 @@
 use std::ffi::OsString;
 use std::process::Command as ProcessCommand;
 
+#[cfg(all(feature = "windows", target_os = "windows"))]
+use cageforge_cli::SetupCommand;
 use cageforge_cli::{Cli, Command, RunArgs};
 use clap::Parser;
 #[cfg(all(feature = "linux", target_os = "linux"))]
@@ -60,6 +62,25 @@ fn no_command_is_a_usage_error() {
         .output()
         .expect("run cageforge-cli");
     assert_eq!(output.status.code(), Some(2));
+}
+
+#[cfg(all(feature = "windows", target_os = "windows"))]
+#[test]
+fn parses_windows_setup_commands() {
+    for (arguments, expected) in [
+        (["cageforge-cli", "setup", "install"], SetupCommand::Install),
+        (["cageforge-cli", "setup", "status"], SetupCommand::Status),
+        (
+            ["cageforge-cli", "setup", "uninstall"],
+            SetupCommand::Uninstall,
+        ),
+    ] {
+        let cli = Cli::try_parse_from(arguments).expect("valid Windows setup command");
+        let Command::Setup(actual) = cli.command else {
+            panic!("expected Windows setup command");
+        };
+        assert_eq!(actual, expected);
+    }
 }
 
 #[cfg(all(feature = "linux", target_os = "linux"))]

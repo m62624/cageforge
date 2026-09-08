@@ -7,6 +7,8 @@ use std::ffi::OsString;
 #[cfg(feature = "config")]
 use std::path::{Path, PathBuf};
 
+#[cfg(all(feature = "windows", target_os = "windows"))]
+use crate::cli::SetupCommand;
 use crate::cli::{Cli, Command, RunArgs};
 use crate::error::CliError;
 
@@ -15,6 +17,8 @@ pub fn execute(cli: Cli) -> Result<u8, CliError> {
     match cli.command {
         Command::Run(args) => execute_run(args),
         Command::Schema => execute_schema(),
+        #[cfg(all(feature = "windows", target_os = "windows"))]
+        Command::Setup(operation) => execute_setup(operation),
     }
 }
 
@@ -46,7 +50,64 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
         context,
         gateway: profile.network_gateway().clone(),
     };
+    #[cfg(all(feature = "windows", target_os = "windows"))]
+    warn_if_windows_setup_is_unavailable();
     execute_native(invocation)
+}
+
+#[cfg(all(feature = "windows", target_os = "windows"))]
+fn execute_setup(operation: SetupCommand) -> Result<u8, CliError> {
+    let setup = cageforge::WindowsSetup::new(cageforge::WindowsSetupConfig::new());
+    match operation {
+        SetupCommand::Install => {
+            let details = setup.install()?;
+            println!(
+                "Windows Cageforge setup is ready (state directory: {:?})",
+                details.state_directory()
+            );
+        }
+        SetupCommand::Status => match setup.status()? {
+            cageforge::WindowsSetupStatus::Missing { marker_path } => {
+                println!("Windows Cageforge setup is missing ({marker_path:?})");
+            }
+            cageforge::WindowsSetupStatus::Stale {
+                marker_path,
+                reason,
+            } => {
+                println!("Windows Cageforge setup is stale ({marker_path:?}, reason: {reason:?})");
+            }
+            cageforge::WindowsSetupStatus::Ready(details) => {
+                println!(
+                    "Windows Cageforge setup is ready (version {}, state directory: {:?})",
+                    details.version(),
+                    details.state_directory()
+                );
+            }
+        },
+        SetupCommand::Uninstall => {
+            setup.uninstall()?;
+            println!("Windows Cageforge setup was removed");
+        }
+    }
+    Ok(0)
+}
+
+#[cfg(all(feature = "windows", target_os = "windows"))]
+fn warn_if_windows_setup_is_unavailable() {
+    let setup = cageforge::WindowsSetup::new(cageforge::WindowsSetupConfig::new());
+    match setup.status() {
+        Ok(cageforge::WindowsSetupStatus::Missing { .. }) => {
+            eprintln!(
+                "warning: Windows Cageforge setup is not installed; run `cageforge-cli setup install` before running a sandbox"
+            );
+        }
+        Ok(cageforge::WindowsSetupStatus::Stale { .. }) => {
+            eprintln!(
+                "warning: Windows Cageforge setup is stale; run `cageforge-cli setup install` to reconcile it"
+            );
+        }
+        Ok(cageforge::WindowsSetupStatus::Ready(_)) | Err(_) => {}
+    }
 }
 
 #[cfg(not(feature = "config"))]

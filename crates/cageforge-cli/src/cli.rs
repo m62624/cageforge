@@ -31,6 +31,22 @@ pub enum Command {
     Run(RunArgs),
     /// Print the JSON schema for Cageforge TOML profiles.
     Schema,
+    /// Provision, inspect, or remove the Windows-native Cageforge setup.
+    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[command(subcommand)]
+    Setup(SetupCommand),
+}
+
+/// Windows-native setup operations.
+#[cfg(all(feature = "windows", target_os = "windows"))]
+#[derive(Debug, Eq, PartialEq, Subcommand)]
+pub enum SetupCommand {
+    /// Create or reconcile the persistent elevated Windows setup.
+    Install,
+    /// Report whether the persistent Windows setup is ready.
+    Status,
+    /// Remove Cageforge-owned Windows setup objects after all children stop.
+    Uninstall,
 }
 
 /// Arguments for one sandbox instance.
@@ -57,4 +73,8 @@ pub struct RunArgs {
 
 const LONG_ABOUT: &str = "Run one explicitly selected program inside the native Cageforge sandbox.\n\nThe TOML profile supplies the access policy: system paths to read, application paths to write, environment rules, network destinations, and timeout. The command after `--` is passed as argv. One invocation creates one boundary around the program and all of its descendants.\n\nBuild this binary with one matching OS feature: `linux`, `windows`, or `macos`. On Linux, `linux-bundled-bubblewrap` also embeds the verified Bubblewrap resource. There is no unsandboxed fallback.";
 
+#[cfg(all(feature = "windows", target_os = "windows"))]
+const AFTER_HELP: &str = "EXAMPLES:\n  cageforge-cli run --config sandbox.toml --profile isolated -- untrusted-program --safe-mode\n  cageforge-cli run --config sandbox.toml --profile build -- cargo test --workspace\n  cageforge-cli setup status\n  cageforge-cli schema\n\nOn Windows, run `cageforge-cli setup install` once before the first `run`. It may request UAC and keeps the setup for later launches.\n\nThe CLI is a thin adapter. For native host requirements and the library API, see:\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-linux\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-windows\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-macos";
+
+#[cfg(not(all(feature = "windows", target_os = "windows")))]
 const AFTER_HELP: &str = "EXAMPLES:\n  cageforge-cli run --config sandbox.toml --profile isolated -- untrusted-program --safe-mode\n  cageforge-cli run --config sandbox.toml --profile build -- cargo test --workspace\n  cageforge-cli schema\n\nThe CLI is a thin adapter. For native host requirements and the library API, see:\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-linux\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-windows\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-macos";

@@ -19,6 +19,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+#[cfg(all(feature = "windows", target_os = "windows"))]
+pub use cli::SetupCommand;
 pub use cli::{Cli, Command, RunArgs};
 pub use error::CliError;
 pub use execution::execute;

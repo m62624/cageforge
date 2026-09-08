@@ -59,6 +59,10 @@ pub enum CliError {
     #[cfg(all(feature = "windows", target_os = "windows"))]
     #[error("Windows backend: {0}")]
     Windows(#[from] cageforge::WindowsBackendError),
+    /// Windows persistent setup provisioning or removal failed.
+    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[error("Windows setup: {0}")]
+    WindowsSetup(#[from] cageforge::WindowsSetupError),
     /// macOS native setup or execution failed.
     #[cfg(all(feature = "macos", target_os = "macos"))]
     #[error("macOS backend: {0}")]
