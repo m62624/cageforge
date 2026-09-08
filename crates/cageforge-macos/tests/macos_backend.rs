@@ -488,7 +488,7 @@ fn host_accepts_the_backend_seatbelt_profile() {
 fn restricted_command_can_start_a_native_runtime_program() {
     let workspace = TempDir::new().expect("workspace");
     let policy = restricted_policy(workspace.path());
-    let command = CommandSpec::new("/bin/true").expect("true");
+    let command = CommandSpec::new("/usr/bin/true").expect("true");
     let (command, effective, context) = request_for(workspace.path(), &policy, command);
     let backend = backend();
     let prepared = backend
@@ -496,9 +496,14 @@ fn restricted_command_can_start_a_native_runtime_program() {
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
     let status = child.wait().expect("wait");
+    let mut stderr = Vec::new();
+    if let Some(stream) = child.stderr() {
+        stream.read_to_end(&mut stderr).expect("read stderr");
+    }
     assert!(
         status.success(),
-        "restricted native runtime probe failed: {status:?}"
+        "restricted native runtime probe failed: {status:?}; stderr: {}",
+        String::from_utf8_lossy(&stderr)
     );
 }
 

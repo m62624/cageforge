@@ -1134,6 +1134,8 @@ fn restricted_command_can_start_a_native_runtime_program() {
     )
     .expect("native runtime backend");
     let workspace = tempfile::tempdir().expect("workspace");
+    let minimal_runtime = workspace.path().join(".cageforge-test-runtime");
+    fs::create_dir_all(&minimal_runtime).expect("minimal runtime fixture directory");
     let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
     let system32 = system_root.join("System32");
     let command = CommandSpec::new(system32.join("cmd.exe")).expect("cmd.exe");
@@ -1159,8 +1161,8 @@ fn restricted_command_can_start_a_native_runtime_program() {
     let context = PathResolutionContext::new()
         .with_workspace_root(workspace.path().to_path_buf())
         .expect("workspace root")
-        .with_minimal_path(system32)
-        .expect("System32 minimal path")
+        .with_minimal_path(minimal_runtime)
+        .expect("minimal runtime fixture directory")
         .with_current_directory(workspace.path().to_path_buf())
         .expect("current directory");
     let prepared = backend
