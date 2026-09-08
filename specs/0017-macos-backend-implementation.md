@@ -1,6 +1,6 @@
 # Specification 0017: macOS Backend Implementation
 
-Status: implemented; native verification complete for the reviewed revision
+Status: implementation contract
 
 ## 1. Purpose
 
@@ -172,6 +172,29 @@ runtime within the cleanup deadline, the owning child or recovery owner keeps
 the gateway handle and retries; it never treats an unjoined runtime as clean.
 
 ## 5. Process and lifecycle contract
+
+Process-group membership is not an immutable descendant identity. A successful
+cleanup of the original group alone must not be treated as proof that all
+descendants exited: `setsid`, `setpgid`, and `posix_spawn` group attributes can
+move a descendant out of that group without removing its inherited Seatbelt
+policy. Lifecycle verification must exercise all three paths, independently
+of filesystem and network inheritance tests.
+
+Any replacement ownership mechanism must retain per-launch membership across
+fork, exec, reparenting, and group/session changes. Termination must not target
+an unrelated process after PID reuse or affect another sandbox instance.
+An enumeration that misses an in-flight fork is not proof of an empty boundary.
+
+System provisioning is acceptable only if the native mechanism satisfies this
+ownership contract on an ordinary supported macOS installation. Installation
+must be an explicit API/CLI operation which performs its own authenticated
+administrative elevation, without manual service files, extra entitlements,
+or disabling host protections. Normal launches must not prompt for elevation
+or execute caller commands with administrative credentials. Status,
+verification, and explicit uninstallation must accompany installation;
+uninstallation must reject active boundaries and remove only owned resources.
+These are admission requirements for a provisioned architecture, not evidence
+that installing a privileged helper itself provides descendant containment.
 
 The backend maps `StdioSpec` to explicit inherited, null, or piped standard
 streams. The child API owns all pipe endpoints and never uses stdout or stderr
