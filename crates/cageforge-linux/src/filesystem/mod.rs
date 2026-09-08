@@ -123,7 +123,7 @@ pub(crate) fn lower<'a>(
     backend: &LinuxBackend,
     prepared: &PreparedBackendRequest<'a, LinuxBackend>,
     sandbox: &EffectiveSandbox,
-    gateway_mount: Option<&Path>,
+    gateway_mount: Option<&File>,
 ) -> Result<FilesystemPlan, LinuxBackendError> {
     let mode = sandbox.filesystem().requirements().mode();
     if mode == FilesystemMode::External {
@@ -672,7 +672,7 @@ fn append_shared_state_mask(args: &mut Vec<OsString>) {
 fn append_private_runtime(
     args: &mut Vec<OsString>,
     helper: &File,
-    gateway_mount: Option<&Path>,
+    gateway_mount: Option<&File>,
     preserved_files: &mut Vec<File>,
 ) -> Result<(), LinuxBackendError> {
     args.extend(["--dir".into(), PRIVATE_RUNTIME_ROOT.into()]);
@@ -691,13 +691,18 @@ fn append_private_runtime(
                 source: FilesystemLoweringError::GatewaySocketParentMissing,
             })?;
         args.extend(["--dir".into(), gateway_directory.as_os_str().into()]);
-        add_bind_fd(
-            args,
-            gateway_mount,
-            gateway_directory,
-            AccessMode::Read,
-            preserved_files,
-        )?;
+        let file = gateway_mount.try_clone().map_err(|source| {
+            LinuxBackendError::FilesystemLoweringFailed {
+                path: PathBuf::from(IN_SANDBOX_GATEWAY_SOCKET),
+                source: FilesystemLoweringError::OpenSource { source },
+            }
+        })?;
+        args.extend([
+            "--ro-bind-fd".into(),
+            file.as_raw_fd().to_string().into(),
+            IN_SANDBOX_GATEWAY_SOCKET.into(),
+        ]);
+        preserved_files.push(file);
     }
     Ok(())
 }

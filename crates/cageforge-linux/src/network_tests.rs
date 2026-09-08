@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use tokio::sync::oneshot;
 
 use super::{BridgeIngressToken, GatewayRuntime};
-use crate::error::{LinuxBackendError, NetworkGatewayRuntimeError};
+use crate::error::{LinuxBackendError, NetworkGatewayRuntimeError, NetworkGatewaySetupError};
 
 fn effective_network() -> cageforge_policy_compose::EffectiveNetworkPolicy {
     let environment = EnvironmentSpec::inherit_all();
@@ -31,7 +31,7 @@ fn effective_network() -> cageforge_policy_compose::EffectiveNetworkPolicy {
 fn private_socket_rejects_a_same_user_client_without_the_bridge_token() {
     let mut runtime =
         GatewayRuntime::start(effective_network(), GatewayConfig::new()).expect("gateway runtime");
-    let socket = runtime.mount_source().join("gateway.sock");
+    let socket = runtime.socket_directory.join("gateway.sock");
     let mut client = UnixStream::connect(socket).expect("private socket");
     client
         .set_read_timeout(Some(Duration::from_secs(1)))
@@ -54,10 +54,72 @@ fn private_socket_rejects_a_same_user_client_without_the_bridge_token() {
 fn dropping_the_runtime_removes_its_private_socket_directory() {
     let runtime =
         GatewayRuntime::start(effective_network(), GatewayConfig::new()).expect("gateway runtime");
-    let directory = runtime.mount_source().to_path_buf();
+    let directory = runtime.socket_directory.clone();
     assert!(directory.join("gateway.sock").exists());
     drop(runtime);
     assert!(!directory.exists());
+}
+
+#[test]
+fn detaching_gateway_names_is_idempotent_without_stopping_the_runtime() {
+    let mut runtime =
+        GatewayRuntime::start(effective_network(), GatewayConfig::new()).expect("gateway runtime");
+    let directory = runtime.socket_directory.clone();
+    runtime.detach_host_names().expect("detach owned names");
+    runtime
+        .detach_host_names()
+        .expect("repeat completed detachment");
+    assert!(!directory.exists());
+    assert!(
+        runtime.thread.is_some(),
+        "detachment must not stop enforcement"
+    );
+    runtime.shutdown().expect("gateway shutdown");
+}
+
+#[test]
+fn detaching_gateway_names_preserves_a_replaced_socket_entry() {
+    let mut runtime =
+        GatewayRuntime::start(effective_network(), GatewayConfig::new()).expect("gateway runtime");
+    let directory = runtime.socket_directory.clone();
+    let socket = directory.join(super::HOST_GATEWAY_SOCKET);
+    std::fs::remove_file(&socket).expect("remove original socket name");
+    std::fs::write(&socket, b"unrelated replacement").expect("replacement entry");
+    assert!(matches!(
+        runtime.detach_host_names(),
+        Err(LinuxBackendError::NetworkGatewaySetup {
+            source: NetworkGatewaySetupError::SocketChanged { .. }
+        })
+    ));
+    drop(runtime);
+    assert_eq!(
+        std::fs::read(&socket).expect("preserved replacement"),
+        b"unrelated replacement"
+    );
+    std::fs::remove_file(socket).expect("remove test replacement");
+    std::fs::remove_dir(directory).expect("remove empty test directory");
+}
+
+#[test]
+fn detaching_gateway_names_does_not_recursively_remove_unknown_entries() {
+    let mut runtime =
+        GatewayRuntime::start(effective_network(), GatewayConfig::new()).expect("gateway runtime");
+    let directory = runtime.socket_directory.clone();
+    let unknown = directory.join("unrelated");
+    std::fs::write(&unknown, b"preserve").expect("unknown entry");
+    assert!(matches!(
+        runtime.detach_host_names(),
+        Err(LinuxBackendError::NetworkGatewaySetup {
+            source: NetworkGatewaySetupError::DirectoryDetach { .. }
+        })
+    ));
+    drop(runtime);
+    assert_eq!(
+        std::fs::read(&unknown).expect("preserved entry"),
+        b"preserve"
+    );
+    std::fs::remove_file(unknown).expect("remove test entry");
+    std::fs::remove_dir(directory).expect("remove empty test directory");
 }
 
 #[test]
@@ -73,6 +135,7 @@ fn gateway_shutdown_has_a_bounded_join_and_retains_the_runtime() {
     let directory = TempDir::new().expect("gateway directory");
     let mut runtime = GatewayRuntime {
         directory: Some(directory),
+        socket_file: std::fs::File::open("/dev/null").expect("unused fixture socket pin"),
         socket_directory: std::path::PathBuf::new(),
         bridge_token: BridgeIngressToken::generate().expect("bridge token"),
         shutdown: Some(shutdown),
@@ -110,7 +173,7 @@ fn stalled_bridge_authentication_is_bounded_by_the_handshake_timeout() {
         .with_handshake_timeout(Duration::from_millis(20))
         .expect("handshake timeout");
     let mut runtime = GatewayRuntime::start(effective_network(), config).expect("gateway runtime");
-    let socket = runtime.mount_source().join("gateway.sock");
+    let socket = runtime.socket_directory.join("gateway.sock");
     let mut client = UnixStream::connect(socket).expect("private socket");
     client
         .set_read_timeout(Some(Duration::from_secs(1)))
@@ -128,7 +191,7 @@ fn unauthenticated_bridge_connections_share_the_instance_connection_limit() {
         .with_max_concurrent_connections(NonZeroUsize::new(1).expect("non-zero"))
         .expect("connection limit");
     let mut runtime = GatewayRuntime::start(effective_network(), config).expect("gateway runtime");
-    let socket = runtime.mount_source().join("gateway.sock");
+    let socket = runtime.socket_directory.join("gateway.sock");
     let _stalled = UnixStream::connect(&socket).expect("first private socket");
     thread::sleep(Duration::from_millis(20));
     let mut rejected = UnixStream::connect(socket).expect("second private socket");

@@ -2,11 +2,11 @@
 
 //! Host gateway lifecycle for a restricted Linux network namespace.
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -44,6 +44,7 @@ struct BridgeIngressToken(Arc<[u8; BRIDGE_TOKEN_BYTES]>);
 /// One independently budgeted host gateway owned by one launched process.
 pub(crate) struct GatewayRuntime {
     directory: Option<TempDir>,
+    socket_file: File,
     socket_directory: PathBuf,
     bridge_token: BridgeIngressToken,
     shutdown: Option<oneshot::Sender<()>>,
@@ -157,6 +158,16 @@ impl GatewayRuntime {
                 },
             }
         })?;
+        let socket_file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&socket_path)
+            .map_err(|source| LinuxBackendError::NetworkGatewaySetup {
+                source: NetworkGatewaySetupError::SocketPin {
+                    path: socket_path.clone(),
+                    source,
+                },
+            })?;
 
         let (shutdown, shutdown_rx) = oneshot::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -179,6 +190,7 @@ impl GatewayRuntime {
         match ready_rx.recv_timeout(NETWORK_GATEWAY_STARTUP_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
                 directory: Some(directory),
+                socket_file,
                 socket_directory,
                 bridge_token,
                 shutdown: Some(shutdown),
@@ -203,8 +215,38 @@ impl GatewayRuntime {
         }
     }
 
-    pub(crate) fn mount_source(&self) -> &Path {
-        &self.socket_directory
+    pub(crate) fn mount_source(&self) -> &File {
+        &self.socket_file
+    }
+
+    pub(crate) fn detach_host_names(&mut self) -> Result<(), LinuxBackendError> {
+        let Some(directory) = self.directory.take() else {
+            return Ok(());
+        };
+        // Never recursively remove entries introduced by another actor.
+        // Before command release the private mount already pins this inode.
+        let path = directory.keep();
+        let socket_path = path.join(HOST_GATEWAY_SOCKET);
+        let error = |source| LinuxBackendError::NetworkGatewaySetup {
+            source: NetworkGatewaySetupError::SocketDetach {
+                path: socket_path.clone(),
+                source,
+            },
+        };
+        let expected = self.socket_file.metadata().map_err(error)?;
+        let actual = fs::symlink_metadata(&socket_path).map_err(error)?;
+        if !expected.file_type().is_socket()
+            || (actual.dev(), actual.ino()) != (expected.dev(), expected.ino())
+        {
+            return Err(LinuxBackendError::NetworkGatewaySetup {
+                source: NetworkGatewaySetupError::SocketChanged { path: socket_path },
+            });
+        }
+        fs::remove_file(&socket_path).map_err(error)?;
+        fs::remove_dir(&path).map_err(|source| LinuxBackendError::NetworkGatewaySetup {
+            source: NetworkGatewaySetupError::DirectoryDetach { path, source },
+        })?;
+        Ok(())
     }
 
     pub(crate) fn write_bridge_token(

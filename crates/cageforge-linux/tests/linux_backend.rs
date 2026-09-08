@@ -524,8 +524,12 @@ fn multiprocess_synthetic_owner_fixture() {
              if mkdir .git 2>/dev/null; then exit 17; else exit 0; fi",
         ])
         .expect("fixture command");
+    let policy = SandboxPolicy::new(
+        SandboxPolicy::workspace().filesystem().clone(),
+        restricted_loopback_policy().network().clone(),
+    );
     let (command, effective, runtime) =
-        request_with_environment(&workspace, SandboxPolicy::workspace(), command, environment);
+        request_with_environment(&workspace, policy, command, environment);
     let backend = backend();
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &runtime)
@@ -1972,6 +1976,15 @@ fn abrupt_parent_death_preserves_a_live_instances_shared_mount_until_final_clean
     )));
     wait_for_marker(&second_ready);
     let first_process = first.0.as_mut().expect("first application");
+    let gateway_artifacts = fs::read_dir(state.path())
+        .expect("fixture runtime directory")
+        .map(|entry| entry.expect("runtime entry").file_name())
+        .filter(|name| name.as_bytes().starts_with(b".cageforge-network-"))
+        .collect::<Vec<_>>();
+    assert!(
+        gateway_artifacts.is_empty(),
+        "a launched gateway still depends on host cleanup after application death: {gateway_artifacts:?}"
+    );
     first_process
         .kill()
         .expect("SIGKILL owning application without Drop");
