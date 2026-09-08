@@ -11,6 +11,9 @@ on:
 
 permissions:
   contents: write
+  # The reusable CI workflow reads PR labels when it classifies changes. A
+  # called workflow cannot elevate permissions granted by this caller.
+  pull-requests: read
 
 concurrency:
   group: cageforge-release-${{ github.ref }}
