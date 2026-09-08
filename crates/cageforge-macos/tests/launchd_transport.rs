@@ -8,18 +8,21 @@
 use std::{
     ffi::CString,
     fs::{self, File},
-    io::Write,
+    io::{self, Write},
+    net::{SocketAddr, TcpListener},
     os::fd::AsRawFd,
     os::unix::fs::MetadataExt,
-    process::Command,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::mpsc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tempfile::TempDir;
 
 const SERVICE_ENV: &str = "CAGEFORGE_TRANSPORT_TEST_SERVICE";
 const OWNER_ENV: &str = "CAGEFORGE_TRANSPORT_TEST_OWNER";
+const ROOT_ENV: &str = "CAGEFORGE_TRANSPORT_TEST_ROOT";
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const PROTOCOL_VERSION: u64 = 1;
 const ACCEPTED: u64 = 1;
@@ -30,11 +33,20 @@ struct LaunchdJob {
     target: String,
 }
 
+struct FixtureChild(Child);
+
 impl Drop for LaunchdJob {
     fn drop(&mut self) {
         let _ = Command::new("/bin/launchctl")
             .args(["bootout", &self.target])
             .output();
+    }
+}
+
+impl Drop for FixtureChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -52,22 +64,215 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
         .expect("unrelated descriptor fixture");
     native::make_inheritable(unrelated.as_raw_fd()).expect("inheritable parent-only descriptor");
     let unrelated_metadata = unrelated.metadata().expect("descriptor object identity");
-    let domain = format!("user/{}", native::user_id());
-    let _job = LaunchdJob {
-        target: format!("{domain}/{service}"),
-    };
+    let _job = bootstrap_helper(
+        temporary.path(),
+        &service,
+        owner,
+        "launchd_transport_helper",
+    );
     let executable = std::env::current_exe().expect("test executable");
     let helper_log = temporary.path().join("helper.log");
+
+    // This client knows the service and can copy the declared owner fields.
+    // Only the kernel's message identity is authoritative.
+    let impostor = Command::new(&executable)
+        .args(["--exact", "launchd_transport_impostor", "--nocapture"])
+        .env(SERVICE_ENV, &service)
+        .env(OWNER_ENV, format!("{}:{}", owner.0, owner.1))
+        .output()
+        .expect("run independent impostor client");
+    assert!(
+        impostor.status.success(),
+        "impostor test: {impostor:?}; helper: {:?}",
+        fs::read_to_string(&helper_log)
+    );
+
+    let output_path = temporary.path().join("explicit-fd-output");
+    let output = File::create(&output_path).expect("explicitly transferred output");
+    let client = native::Connection::client(&CString::new(service).expect("service name"));
+    let request = native::Message::request(owner, Some(output.as_raw_fd()));
+    request.describe_unrelated_fd(
+        unrelated.as_raw_fd(),
+        unrelated_metadata.dev(),
+        unrelated_metadata.ino(),
+    );
+    let reply = client.request(&request).expect("authenticated FD transfer");
+    assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
+    assert_eq!(reply.number(c"result"), ACCEPTED);
+    assert_eq!(
+        fs::read(&output_path).expect("helper FD output"),
+        b"fd-proof"
+    );
+}
+
+#[test]
+fn helper_retains_the_ingress_port_after_parent_death_until_owned_process_exit() {
+    let temporary = TempDir::new().expect("lifecycle fixture root");
+    let root = temporary.path();
+    let service = format!(
+        "cageforge-test-port-{}-{}",
+        std::process::id(),
+        root.file_name().expect("unique fixture").to_string_lossy()
+    );
+    // The outer controller owns removal even when the application is killed
+    // without running its Drop implementations.
+    let _job = LaunchdJob {
+        target: format!("user/{}/{service}", native::user_id()),
+    };
+    let mut parent = FixtureChild(
+        Command::new(std::env::current_exe().expect("fixture executable"))
+            .args(["--exact", "launchd_transport_parent", "--nocapture"])
+            .env(SERVICE_ENV, &service)
+            .env(ROOT_ENV, root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(File::create(root.join("parent.log")).expect("parent diagnostics"))
+            .spawn()
+            .expect("own application fixture"),
+    );
+    wait_for_marker(root, "ready");
+    let address: SocketAddr = fs::read_to_string(root.join("ready"))
+        .expect("published listener address")
+        .parse()
+        .expect("native listener address");
+    assert!(parent.0.try_wait().expect("parent state").is_none());
+    parent.0.kill().expect("abrupt application death");
+    parent.0.wait().expect("confirm application death");
+    wait_for_marker(root, "owner-gone");
+    assert_eq!(
+        TcpListener::bind(address)
+            .expect_err("helper must retain the authorized port during cleanup")
+            .kind(),
+        io::ErrorKind::AddrInUse
+    );
+    // Hold the cleanup at a deterministic stage, instead of trying to hit a
+    // millisecond race between parent exit and the helper's child termination.
+    fs::write(root.join("release-cleanup"), b"terminate").expect("release helper cleanup");
+    wait_for_marker(root, "complete");
+    let _reused = TcpListener::bind(address).expect("port reusable after confirmed child exit");
+}
+
+#[test]
+fn launchd_transport_parent() {
+    let Ok(service) = std::env::var(SERVICE_ENV) else {
+        return;
+    };
+    let root = fixture_root();
+    let owner = native::own_identity().expect("owner identity");
+    let _job = bootstrap_helper(&root, &service, owner, "launchd_transport_lifecycle_helper");
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("fixture ingress");
+    let client = native::Connection::client(&CString::new(service).expect("service name"));
+    let request = native::Message::request(owner, Some(reservation.as_raw_fd()));
+    let reply = client
+        .request(&request)
+        .expect("transfer listener reservation");
+    assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
+    assert_eq!(reply.number(c"result"), ACCEPTED);
+    fs::write(
+        root.join("ready.staging"),
+        reservation.local_addr().expect("bound address").to_string(),
+    )
+    .expect("stage ready marker");
+    fs::rename(root.join("ready.staging"), root.join("ready")).expect("publish ready marker");
+    std::thread::sleep(TEST_TIMEOUT * 2);
+}
+
+#[test]
+fn launchd_transport_lifecycle_helper() {
+    let Ok(service) = std::env::var(SERVICE_ENV) else {
+        return;
+    };
+    let root = fixture_root();
+    let owner = declared_owner();
+    let (sender, receiver) = mpsc::sync_channel(2);
+    let _listener = native::Connection::listener(&CString::new(service).expect("service"), sender);
+    let mut peers = Vec::new();
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let request = loop {
+        match receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("authorized application request")
+        {
+            native::Event::Peer(peer) => peers.push(peer),
+            native::Event::Message(message) => {
+                if message.sender_identity() == owner
+                    && message.number(c"version") == PROTOCOL_VERSION
+                {
+                    break message;
+                }
+                message.reply(REJECTED).expect("reject unrelated peer");
+            }
+        }
+    };
+    let reservation = request.take_fd().expect("receive port reservation");
+    native::make_close_on_exec(reservation.as_raw_fd()).expect("helper-only reservation");
+    let mut child = FixtureChild(
+        Command::new(std::env::current_exe().expect("fixture executable"))
+            .args([
+                "--exact",
+                "launchd_transport_lifecycle_child",
+                "--nocapture",
+            ])
+            .env(ROOT_ENV, &root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("owned finite child"),
+    );
+    wait_for_marker(&root, "child-ready");
+    request
+        .reply(ACCEPTED)
+        .expect("confirm acquired reservation");
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    while native::process_identity(owner.0).expect("query actual owner identity") == Some(owner) {
+        assert!(Instant::now() < deadline, "application did not terminate");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(child.0.try_wait().expect("child is still active").is_none());
+    fs::write(root.join("owner-gone"), b"reservation retained").expect("cleanup stage marker");
+    wait_for_marker(&root, "release-cleanup");
+    child.0.kill().expect("terminate owned child");
+    child.0.wait().expect("confirm owned child exit");
+    drop(reservation);
+    // XPC dictionaries retain the descriptor object as well. Release the
+    // received message before asserting that the port can be reused.
+    drop(request);
+    fs::write(root.join("complete"), b"resources released").expect("completed cleanup marker");
+}
+
+#[test]
+fn launchd_transport_lifecycle_child() {
+    if std::env::var_os(ROOT_ENV).is_none() {
+        return;
+    }
+    // This transport test owns a direct child; detached grandchildren are
+    // exercised by the independent coalition test, not claimed by this one.
+    #[allow(unsafe_code)]
+    let session = unsafe { libc::setsid() };
+    assert!(session > 0, "start independent child session");
+    fs::write(fixture_root().join("child-ready"), b"active").expect("child readiness");
+    std::thread::sleep(TEST_TIMEOUT * 2);
+}
+
+fn bootstrap_helper(root: &Path, service: &str, owner: (u32, u32), fixture: &str) -> LaunchdJob {
+    let domain = format!("user/{}", native::user_id());
+    let job = LaunchdJob {
+        target: format!("{domain}/{service}"),
+    };
+    let executable = std::env::current_exe().expect("fixture executable");
+    let helper_log = root.join("helper.log");
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>{service}</string>
 <key>ProgramArguments</key><array><string>{executable}</string>
-<string>--exact</string><string>launchd_transport_helper</string><string>--nocapture</string></array>
+<string>--exact</string><string>{fixture}</string><string>--nocapture</string></array>
 <key>EnvironmentVariables</key><dict>
 <key>{SERVICE_ENV}</key><string>{service}</string>
-<key>{OWNER_ENV}</key><string>{pid}:{version}</string></dict>
+<key>{OWNER_ENV}</key><string>{pid}:{version}</string>
+<key>{ROOT_ENV}</key><string>{root}</string></dict>
 <key>MachServices</key><dict><key>{service}</key><true/></dict>
 <key>LimitLoadToSessionType</key><string>Background</string>
 <key>RunAtLoad</key><true/>
@@ -78,8 +283,9 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
         pid = owner.0,
         version = owner.1,
         log = xml_text(helper_log.to_str().expect("UTF-8 helper log")),
+        root = xml_text(root.to_str().expect("UTF-8 fixture root")),
     );
-    let plist_path = temporary.path().join("helper.plist");
+    let plist_path = root.join("helper.plist");
     fs::write(&plist_path, plist).expect("write owned launchd fixture");
     let validation = Command::new("/usr/bin/plutil")
         .arg("-lint")
@@ -128,36 +334,24 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
         panic!("bootstrap: {bootstrap:?}; scoped launchd log: {log:?}");
     }
 
-    // This client knows the service and can copy the declared owner fields.
-    // Only the kernel's message identity is authoritative.
-    let impostor = Command::new(&executable)
-        .args(["--exact", "launchd_transport_impostor", "--nocapture"])
-        .env(SERVICE_ENV, &service)
-        .env(OWNER_ENV, format!("{}:{}", owner.0, owner.1))
-        .output()
-        .expect("run independent impostor client");
-    assert!(
-        impostor.status.success(),
-        "impostor test: {impostor:?}; helper: {:?}",
-        fs::read_to_string(&helper_log)
-    );
+    job
+}
 
-    let output_path = temporary.path().join("explicit-fd-output");
-    let output = File::create(&output_path).expect("explicitly transferred output");
-    let client = native::Connection::client(&CString::new(service).expect("service name"));
-    let request = native::Message::request(owner, Some(output.as_raw_fd()));
-    request.describe_unrelated_fd(
-        unrelated.as_raw_fd(),
-        unrelated_metadata.dev(),
-        unrelated_metadata.ino(),
-    );
-    let reply = client.request(&request).expect("authenticated FD transfer");
-    assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
-    assert_eq!(reply.number(c"result"), ACCEPTED);
-    assert_eq!(
-        fs::read(&output_path).expect("helper FD output"),
-        b"fd-proof"
-    );
+fn fixture_root() -> PathBuf {
+    std::env::var_os(ROOT_ENV).expect("fixture root").into()
+}
+
+fn wait_for_marker(root: &Path, marker: &str) {
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    while !root.join(marker).exists() {
+        assert!(
+            Instant::now() < deadline,
+            "missing {marker}; parent: {:?}; helper: {:?}",
+            fs::read_to_string(root.join("parent.log")),
+            fs::read_to_string(root.join("helper.log")),
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]
@@ -479,9 +673,12 @@ mod native {
     }
 
     pub fn own_identity() -> io::Result<(u32, u32)> {
+        process_identity(std::process::id())?.ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+
+    pub fn process_identity(pid: u32) -> io::Result<Option<(u32, u32)>> {
         let mut info = NativeIdentity::default();
         let size = std::mem::size_of::<NativeIdentity>() as libc::c_int;
-        let pid = std::process::id();
         let written = unsafe {
             libc::proc_pidinfo(
                 pid as libc::pid_t,
@@ -491,10 +688,18 @@ mod native {
                 size,
             )
         };
-        if written != size {
-            return Err(io::Error::last_os_error());
+        if written <= 0 {
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == Some(libc::ESRCH) {
+                Ok(None)
+            } else {
+                Err(error)
+            };
         }
-        Ok((pid, info.version as u32))
+        if written != size {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        Ok(Some((pid, info.version as u32)))
     }
 
     pub fn user_id() -> u32 {
@@ -504,6 +709,14 @@ mod native {
     pub fn make_inheritable(fd: RawFd) -> io::Result<()> {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn make_close_on_exec(fd: RawFd) -> io::Result<()> {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())

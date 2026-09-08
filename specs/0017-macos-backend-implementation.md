@@ -231,6 +231,15 @@ authorized client from using its own channel. Native transport admission
 checks precede integration with the launch lifecycle; a successful transport
 test alone is not evidence that descendants are contained.
 
+The helper must acquire a duplicate of each authorized ingress listener before
+allowing a command to start. Abrupt loss of the application process must not
+release that port while the command remains alive. Cleanup retains the
+reservation until termination is confirmed, then releases it. Native admission
+tests must kill an owning application without running its destructors, observe
+the helper's reservation during cleanup, and verify eventual port reuse after
+the owned process exits. This transport/resource-lifetime check complements,
+but does not replace, the detached-descendant ownership tests.
+
 The backend maps `StdioSpec` to explicit inherited, null, or piped standard
 streams. The child API owns all pipe endpoints and never uses stdout or stderr
 as a control protocol. Setup and launch failures are typed library errors.
