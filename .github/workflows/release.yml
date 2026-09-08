@@ -1,0 +1,227 @@
+name: Release
+
+# A release starts only from an explicit pin tag. The RC branch is tested by
+# the same reusable CI as normal changes before the final version tag exists.
+on:
+  push:
+    tags:
+      - "pin/v*"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: cageforge-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare CLI release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      tag: ${{ steps.info.outputs.tag }}
+      rc_ref: ${{ steps.info.outputs.rc_ref }}
+      rc_sha: ${{ steps.commit.outputs.rc_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: info
+        name: Validate release pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${GITHUB_REF_NAME#pin/}"
+          version="${raw#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+            echo "::error::invalid release version: $version"
+            exit 64
+          }
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "rc_ref=refs/heads/rc/v$version"
+          } >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Create tested RC commit
+        id: commit
+        shell: bash
+        env:
+          VERSION: ${{ steps.info.outputs.version }}
+          RC_REF: ${{ steps.info.outputs.rc_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${RC_REF#refs/heads/}"
+          cargo install cargo-edit --locked
+          cargo set-version --workspace "$VERSION"
+          git add -A
+          git commit -m "build: prepare cageforge-cli v$VERSION" || true
+          git push --force origin "${RC_REF#refs/heads/}"
+          git push origin ":refs/tags/${GITHUB_REF_NAME}"
+          echo "rc_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  tests:
+    name: Full CI on release candidate
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.rc_ref }}
+      source_sha: ${{ needs.prepare.outputs.rc_sha }}
+
+  tag:
+    name: Create final CLI tag
+    needs: [prepare, tests]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.rc_ref }}
+          fetch-depth: 0
+      - name: Tag tested commit
+        shell: bash
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa "$TAG" -m "Release $TAG"
+          git push --force origin "$TAG"
+
+  build:
+    name: "CLI artifact (${{ matrix.target }})"
+    needs: [prepare, tag]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Keep this target/runner mapping synchronized with the release
+          # matrix in ../plugmem/.github/workflows/release.yml. Native sandbox
+          # validation uses its own deliberately pinned runners in ci.yml.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            zig: false
+            feature: linux-bundled-bubblewrap
+            helper: linux
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            zig: true
+            feature: linux-bundled-bubblewrap
+            helper: linux
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            zig: false
+            feature: windows
+            helper: windows
+          - target: aarch64-pc-windows-msvc
+            runner: windows-2025
+            zig: false
+            feature: windows
+            helper: windows
+          - target: x86_64-apple-darwin
+            runner: macos-26-intel
+            zig: false
+            feature: macos
+            helper: none
+          - target: aarch64-apple-darwin
+            runner: macos-26
+            zig: false
+            feature: macos
+            helper: none
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Zig for ARM64 Linux cross-build
+        if: matrix.zig
+        uses: mlugg/setup-zig@v2
+      - name: Install cargo-zigbuild for ARM64 Linux cross-build
+        if: matrix.zig
+        run: cargo install cargo-zigbuild --locked
+      - uses: Swatinem/rust-cache@v2
+      - name: Build CLI and native companion binaries
+        env:
+          TARGET: ${{ matrix.target }}
+          FEATURE: ${{ matrix.feature }}
+          HELPER: ${{ matrix.helper }}
+        run: |
+          set -euo pipefail
+          build=(cargo build --locked --release -p cageforge-cli --target "$TARGET" \
+            --no-default-features --features "$FEATURE")
+          if [[ "${{ matrix.zig }}" == true ]]; then
+            build=(cargo zigbuild --locked --release -p cageforge-cli --target "$TARGET" \
+              --no-default-features --features "$FEATURE")
+          fi
+          "${build[@]}"
+          mkdir -p "package/cageforge-cli-$TARGET"
+          cli_binary="cageforge-cli"
+          [[ "$TARGET" == *-pc-windows-msvc ]] && cli_binary+=".exe"
+          cp "target/$TARGET/release/$cli_binary" "package/cageforge-cli-$TARGET/"
+          if [[ "$HELPER" == linux ]]; then
+            helper_build=(cargo build --locked --release -p cageforge-linux --target "$TARGET" \
+              --no-default-features --bin cageforge-linux-helper)
+            if [[ "${{ matrix.zig }}" == true ]]; then
+              helper_build=(cargo zigbuild --locked --release -p cageforge-linux --target "$TARGET" \
+                --no-default-features --bin cageforge-linux-helper)
+            fi
+            "${helper_build[@]}"
+            cp "target/$TARGET/release/cageforge-linux-helper" \
+              "package/cageforge-cli-$TARGET/"
+          elif [[ "$HELPER" == windows ]]; then
+            cargo build --locked --release -p cageforge-windows --target "$TARGET" \
+              --features bundled-helpers --bin cageforge-windows-setup
+            cargo build --locked --release -p cageforge-windows --target "$TARGET" \
+              --features bundled-helpers --bin cageforge-windows-command-runner
+            cp "target/$TARGET/release/cageforge-windows-setup.exe" \
+              "package/cageforge-cli-$TARGET/"
+            cp "target/$TARGET/release/cageforge-windows-command-runner.exe" \
+              "package/cageforge-cli-$TARGET/"
+          fi
+          tar -czf "cageforge-cli-$TARGET.tar.gz" -C package "cageforge-cli-$TARGET"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cageforge-cli-${{ matrix.target }}
+          path: cageforge-cli-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish draft CLI release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cageforge-cli-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+      - name: Generate release text and publish draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous="$(git tag --list 'v*' --sort=-v:refname | grep -vx "$TAG" | head -n1 || true)"
+          args=(-f tag_name="$TAG")
+          [[ -n "$previous" ]] && args+=(-f previous_tag_name="$previous")
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            "${args[@]}" --jq .body > release-notes.md
+          gh release create "$TAG" --draft --title "Cageforge CLI $TAG" \
+            --notes-file release-notes.md release-assets/*.tar.gz

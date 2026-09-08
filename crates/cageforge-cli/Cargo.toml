@@ -1,0 +1,29 @@
+[package]
+name = "cageforge-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Command-line adapter for running programs through Cageforge sandboxes"
+repository.workspace = true
+readme = "README.md"
+
+[package.metadata.dist]
+dist = true
+
+[features]
+default = []
+config = ["cageforge/config"]
+linux = ["config", "cageforge/linux"]
+linux-bundled-bubblewrap = ["linux", "cageforge/linux-bundled-bubblewrap"]
+windows = ["config", "cageforge/windows"]
+macos = ["config", "cageforge/macos"]
+
+[dependencies]
+cageforge.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

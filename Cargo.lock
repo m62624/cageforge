@@ -208,6 +208,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cageforge-cli"
+version = "0.1.0"
+dependencies = [
+ "cageforge",
+ "clap",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "cageforge-command"
 version = "0.1.0"
 dependencies = [

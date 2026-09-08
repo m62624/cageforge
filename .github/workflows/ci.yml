@@ -22,6 +22,16 @@ on:
         default: none
         type: choice
         options: [none, linux, macos, windows, all]
+  workflow_call:
+    inputs:
+      ref:
+        description: Ref to check for release validation
+        required: false
+        type: string
+      source_sha:
+        description: Exact commit for native release validation
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -42,13 +52,12 @@ concurrency:
 #   Linux ARM64     — cross-build on ubuntu-24.04
 #   Windows x64     — windows-2025
 #
-# Reserved runner labels for future native backends and release builds:
+# Release CLI artifact matrix (synchronized with ../plugmem release.yml):
 #   ubuntu-24.04       — Linux x64
-#   ubuntu-24.04-arm   — Linux ARM64
+#   ubuntu-24.04 + Zig  — Linux ARM64
 #   macos-26-intel     — macOS Intel
 #   macos-26           — macOS Apple Silicon
-#   windows-2025       — Windows x64/release host
-#   windows-11-arm     — Windows ARM64
+#   windows-2025       — Windows x64 and ARM64 targets
 #
 # CI routing algorithm:
 # 1. Main is the full quality gate: common components and their feature
@@ -72,16 +81,18 @@ jobs:
       linux_sandbox: ${{ steps.classify.outputs.linux_sandbox }}
       macos_sandbox: ${{ steps.classify.outputs.macos_sandbox }}
       windows_sandbox: ${{ steps.classify.outputs.windows_sandbox }}
+      cli: ${{ steps.classify.outputs.cli }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
       - id: classify
         name: Classify changed paths
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           MANUAL_SCOPE: ${{ inputs.scope }}
           MANUAL_SANDBOX: ${{ inputs.sandbox }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
@@ -92,12 +103,29 @@ jobs:
           linux_sandbox=false
           macos_sandbox=false
           windows_sandbox=false
+          cli=false
           shared_change=false
           changed_paths=()
           manual_linux=false
           manual_macos=false
           manual_windows=false
           root_manifest_change=false
+
+          cli_packages=(
+            cageforge-cli
+            cageforge
+            cageforge-bwrap
+            cageforge-linux
+            cageforge-macos
+            cageforge-windows
+            cageforge-config
+            cageforge-backend-api
+            cageforge-command
+            cageforge-network-proxy
+            cageforge-path
+            cageforge-policy
+            cageforge-policy-compose
+          )
 
           # Explicit workspace-package -> native-lane map. Keep this table
           # synchronized with each backend manifest, including its test-only
@@ -169,7 +197,14 @@ jobs:
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
+            cli=true
             mode=main
+          elif [[ "$EVENT_NAME" == "workflow_call" ]]; then
+            linux_sandbox=true
+            macos_sandbox=true
+            windows_sandbox=true
+            cli=true
+            mode=called
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
               full)
@@ -220,7 +255,7 @@ jobs:
                       native-windows)
                         windows_sandbox=true
                         ;;
-                      changes|common-components|ci-pass|coverage-portable)
+                      changes|common-components|cli|ci-pass|coverage-portable)
                         shared_change=true
                         ;;
                       *)
@@ -254,6 +289,7 @@ jobs:
               package_in_list "$package" "${linux_sandbox_packages[@]}" && linux_sandbox=true
               package_in_list "$package" "${windows_sandbox_packages[@]}" && windows_sandbox=true
               package_in_list "$package" "${macos_sandbox_packages[@]}" && macos_sandbox=true
+              package_in_list "$package" "${cli_packages[@]}" && cli=true
             fi
           done
 
@@ -268,6 +304,7 @@ jobs:
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
+            cli=true
             mode=shared
           elif [[ "$mode" == default && ("$linux_sandbox" == true || "$macos_sandbox" == true || "$windows_sandbox" == true) ]]; then
             mode=native
@@ -285,6 +322,7 @@ jobs:
             echo "linux_sandbox=${linux_sandbox}"
             echo "macos_sandbox=${macos_sandbox}"
             echo "windows_sandbox=${windows_sandbox}"
+            echo "cli=${cli}"
           } >> "$GITHUB_OUTPUT"
 
   common-components:
@@ -306,6 +344,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -326,6 +366,7 @@ jobs:
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
+          -p cageforge-cli
           -- --check
       - name: Clippy for common components
         run: >-
@@ -339,6 +380,7 @@ jobs:
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
+          -p cageforge-cli
           --all-targets -- -D warnings
       - name: Test common components
         run: >-
@@ -352,6 +394,7 @@ jobs:
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
+          -p cageforge-cli
       # Keep every public feature mode explicit. Workspace feature unification
       # can otherwise make a nominal --no-default-features check inherit the
       # proxy runtime from another selected package.
@@ -361,6 +404,8 @@ jobs:
           cargo clippy -p cageforge-network-proxy --no-default-features --all-targets -- -D warnings
           cargo clippy -p cageforge-network-proxy --features runtime --all-targets -- -D warnings
           cargo clippy -p cageforge-network-proxy --all-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-cli --no-default-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-cli --no-default-features --features config --all-targets -- -D warnings
       - name: Test common component feature combinations
         run: |
           set -euo pipefail
@@ -375,6 +420,8 @@ jobs:
           cargo test -p cageforge-network-proxy --no-default-features --all-targets
           cargo test -p cageforge-network-proxy --features runtime --all-targets
           cargo test -p cageforge-network-proxy --all-features --all-targets
+          cargo test -p cageforge-cli --no-default-features --all-targets
+          cargo test -p cageforge-cli --no-default-features --features config --all-targets
       - name: Check common component documentation
         if: matrix.target == 'Linux'
         env:
@@ -390,7 +437,60 @@ jobs:
           -p cageforge-policy
           -p cageforge-policy-compose
           -p cageforge-upstream-review
+          -p cageforge-cli
           --no-deps
+
+  cli:
+    name: "Cageforge CLI (build target: ${{ matrix.target }})"
+    needs: [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows]
+    if: ${{ always() && needs.changes.outputs.cli == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Linux
+            runner: ubuntu-24.04
+            feature: linux
+          - target: macOS
+            runner: macos-15
+            feature: macos
+          - target: Windows
+            runner: windows-2025
+            feature: windows
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check CLI formatting
+        if: matrix.target == 'Linux'
+        run: cargo fmt -p cageforge-cli -- --check
+      - name: Check CLI portable feature combinations
+        run: |
+          set -euo pipefail
+          cargo clippy -p cageforge-cli --no-default-features --all-targets -- -D warnings
+          cargo clippy -p cageforge-cli --no-default-features --features config --all-targets -- -D warnings
+          cargo test -p cageforge-cli --no-default-features --all-targets
+          cargo test -p cageforge-cli --no-default-features --features config --all-targets
+      - name: Check CLI with the matching native feature
+        run: |
+          set -euo pipefail
+          cargo clippy -p cageforge-cli --no-default-features --features "${{ matrix.feature }}" --all-targets -- -D warnings
+          cargo test -p cageforge-cli --no-default-features --features "${{ matrix.feature }}" --all-targets
+          cargo doc -p cageforge-cli --no-default-features --features "${{ matrix.feature }}" --no-deps
+      - name: Check the bundled Bubblewrap CLI feature
+        if: matrix.target == 'Linux'
+        run: |
+          set -euo pipefail
+          cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets -- -D warnings
+          cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets
 
   native-linux:
     name: Linux sandbox (QEMU/KVM)
@@ -400,6 +500,7 @@ jobs:
     with:
       pr_number: ${{ github.event.pull_request.number || '' }}
       expected_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      source_sha: ${{ inputs.source_sha || '' }}
 
   native-linux-arm64:
     name: "Linux sandbox (cross-build target: ARM64)"
@@ -718,7 +819,7 @@ jobs:
     name: CI passed
     if: ${{ always() }}
     needs:
-      [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
+      [changes, common-components, cli, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

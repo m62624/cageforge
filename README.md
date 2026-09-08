@@ -69,12 +69,13 @@ blocking preparation, spawning, and waiting in its blocking-task facility.
 
 ## Workspace packages
 
-The workspace currently contains 13 Cargo packages: 12 reusable library or
-resource packages and one internal upstream-review tool.
+The workspace currently contains 14 Cargo packages: 13 reusable library,
+resource, or CLI packages and one internal upstream-review tool.
 
 | Package | Role | Native target or feature |
 | --- | --- | --- |
 | [`cageforge`](crates/cageforge/README.md) | Unified application-facing facade | `linux`, `windows`, or `macos` |
+| [`cageforge-cli`](crates/cageforge-cli/README.md) | Explicit command-line adapter over the facade | Matching OS feature |
 | [`cageforge-backend-api`](crates/cageforge-backend-api/README.md) | Capability preflight and backend-bound handoff | Portable |
 | [`cageforge-command`](crates/cageforge-command/README.md) | Validated command, environment, stdio, and timeout values | Portable |
 | [`cageforge-config`](crates/cageforge-config/README.md) | TOML profiles and inheritance resolution | Portable, optional facade feature `config` |
