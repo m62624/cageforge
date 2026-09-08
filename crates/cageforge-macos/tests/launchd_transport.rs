@@ -23,8 +23,10 @@ use tempfile::TempDir;
 const SERVICE_ENV: &str = "CAGEFORGE_TRANSPORT_TEST_SERVICE";
 const OWNER_ENV: &str = "CAGEFORGE_TRANSPORT_TEST_OWNER";
 const ROOT_ENV: &str = "CAGEFORGE_TRANSPORT_TEST_ROOT";
-const TEST_TIMEOUT: Duration = Duration::from_secs(10);
-const PROTOCOL_VERSION: u64 = 1;
+#[path = "../src/process/transport.rs"]
+mod transport;
+use transport::{EXCHANGE_TIMEOUT, PROTOCOL_VERSION};
+const TEST_TIMEOUT: Duration = EXCHANGE_TIMEOUT;
 const ACCEPTED: u64 = 1;
 const REJECTED: u64 = 2;
 const UNRELATED_FD_LEAKED: u64 = 3;
@@ -48,6 +50,23 @@ impl Drop for FixtureChild {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[test]
+fn dropping_an_unsent_request_releases_its_descriptor_reservation() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("owned reservation");
+    let address = listener.local_addr().expect("reserved address");
+    let mut request = transport::Request::new().expect("owned unsent request");
+    request.set_fd(c"output", listener.as_raw_fd());
+    drop(listener);
+    assert_eq!(
+        TcpListener::bind(address)
+            .expect_err("the XPC request must own its duplicated descriptor")
+            .kind(),
+        io::ErrorKind::AddrInUse
+    );
+    drop(request);
+    let _reused = TcpListener::bind(address).expect("request Drop releases its reservation");
 }
 
 #[test]
@@ -89,14 +108,14 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
 
     let output_path = temporary.path().join("explicit-fd-output");
     let output = File::create(&output_path).expect("explicitly transferred output");
-    let client = native::Connection::client(&CString::new(service).expect("service name"));
-    let request = native::Message::request(owner, Some(output.as_raw_fd()));
-    request.describe_unrelated_fd(
-        unrelated.as_raw_fd(),
-        unrelated_metadata.dev(),
-        unrelated_metadata.ino(),
-    );
-    let reply = client.request(&request).expect("authenticated FD transfer");
+    let client = transport::Connection::client(&CString::new(service).expect("service name"))
+        .expect("create client");
+    let mut request = fixture_request(owner, Some(output.as_raw_fd()));
+    // Metadata only: do not attach the parent-only descriptor as an XPC FD.
+    request.set_number(c"unrelated-fd", unrelated.as_raw_fd() as u64);
+    request.set_number(c"unrelated-device", unrelated_metadata.dev());
+    request.set_number(c"unrelated-inode", unrelated_metadata.ino());
+    let reply = client.request(request).expect("authenticated FD transfer");
     assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
     assert_eq!(reply.number(c"result"), ACCEPTED);
     assert_eq!(
@@ -161,10 +180,11 @@ fn launchd_transport_parent() {
     let owner = native::own_identity().expect("owner identity");
     let _job = bootstrap_helper(&root, &service, owner, "launchd_transport_lifecycle_helper");
     let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("fixture ingress");
-    let client = native::Connection::client(&CString::new(service).expect("service name"));
-    let request = native::Message::request(owner, Some(reservation.as_raw_fd()));
+    let client = transport::Connection::client(&CString::new(service).expect("service name"))
+        .expect("create client");
+    let request = fixture_request(owner, Some(reservation.as_raw_fd()));
     let reply = client
-        .request(&request)
+        .request(request)
         .expect("transfer listener reservation");
     assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
     assert_eq!(reply.number(c"result"), ACCEPTED);
@@ -185,7 +205,9 @@ fn launchd_transport_lifecycle_helper() {
     let root = fixture_root();
     let owner = declared_owner();
     let (sender, receiver) = mpsc::sync_channel(2);
-    let _listener = native::Connection::listener(&CString::new(service).expect("service"), sender);
+    let _listener =
+        transport::Connection::listener(&CString::new(service).expect("service"), sender)
+            .expect("listener");
     let mut peers = Vec::new();
     let deadline = Instant::now() + TEST_TIMEOUT;
     let request = loop {
@@ -193,8 +215,8 @@ fn launchd_transport_lifecycle_helper() {
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("authorized application request")
         {
-            native::Event::Peer(peer) => peers.push(peer),
-            native::Event::Message(message) => {
+            transport::Event::Peer(peer) => peers.push(peer),
+            transport::Event::Message(message) => {
                 if message.sender_identity() == owner
                     && message.number(c"version") == PROTOCOL_VERSION
                 {
@@ -204,8 +226,10 @@ fn launchd_transport_lifecycle_helper() {
             }
         }
     };
-    let reservation = request.take_fd().expect("receive port reservation");
-    native::make_close_on_exec(reservation.as_raw_fd()).expect("helper-only reservation");
+    let reservation = request
+        .take_fd(c"output")
+        .expect("receive port reservation");
+    assert!(native::is_close_on_exec(reservation.as_raw_fd()).expect("helper-only reservation"));
     let mut child = FixtureChild(
         Command::new(std::env::current_exe().expect("fixture executable"))
             .args([
@@ -360,9 +384,10 @@ fn launchd_transport_impostor() {
         return;
     };
     let owner = declared_owner();
-    let connection = native::Connection::client(&CString::new(service).expect("service name"));
+    let connection = transport::Connection::client(&CString::new(service).expect("service name"))
+        .expect("create client");
     let reply = connection
-        .request(&native::Message::request(owner, None))
+        .request(fixture_request(owner, None))
         .expect("receive typed rejection");
     assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
     assert_eq!(reply.number(c"result"), REJECTED);
@@ -376,7 +401,8 @@ fn launchd_transport_helper() {
     let owner = declared_owner();
     let (sender, receiver) = mpsc::sync_channel(2);
     let _listener =
-        native::Connection::listener(&CString::new(service).expect("service name"), sender);
+        transport::Connection::listener(&CString::new(service).expect("service name"), sender)
+            .expect("listener");
     let mut peers = Vec::new();
     let deadline = std::time::Instant::now() + TEST_TIMEOUT;
     loop {
@@ -384,11 +410,11 @@ fn launchd_transport_helper() {
             .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
             .expect("bounded helper exchange");
         match event {
-            native::Event::Peer(peer) => peers.push(peer),
-            native::Event::Message(message) => {
+            transport::Event::Peer(peer) => peers.push(peer),
+            transport::Event::Message(message) => {
                 let actual = message.sender_identity();
                 let authorized = actual == owner && message.number(c"version") == PROTOCOL_VERSION;
-                if authorized && message.has_unrelated_fd() {
+                if authorized && native::has_unrelated_fd(&message) {
                     message
                         .reply(UNRELATED_FD_LEAKED)
                         .expect("report descriptor leak");
@@ -396,8 +422,11 @@ fn launchd_transport_helper() {
                 }
                 if authorized {
                     let mut output = message
-                        .take_fd()
+                        .take_fd(c"output")
                         .expect("explicit FD in authorized request");
+                    assert!(
+                        native::is_close_on_exec(output.as_raw_fd()).expect("received FD flags")
+                    );
                     output
                         .write_all(b"fd-proof")
                         .expect("write through explicit FD");
@@ -411,6 +440,16 @@ fn launchd_transport_helper() {
             }
         }
     }
+}
+
+fn fixture_request(owner: (u32, u32), fd: Option<std::os::fd::RawFd>) -> transport::Request {
+    let mut request = transport::Request::new().expect("request dictionary");
+    request.set_number(c"claimed-pid", owner.0.into());
+    request.set_number(c"claimed-generation", owner.1.into());
+    if let Some(fd) = fd {
+        request.set_fd(c"output", fd);
+    }
+    request
 }
 
 fn declared_owner() -> (u32, u32) {
@@ -431,29 +470,8 @@ fn xml_text(value: &str) -> String {
 
 #[allow(unsafe_code)]
 mod native {
-    use super::{PROTOCOL_VERSION, TEST_TIMEOUT};
-    use block2::{Block, RcBlock};
-    use std::{
-        ffi::{CStr, c_void},
-        fs::File,
-        io,
-        os::fd::{FromRawFd, RawFd},
-        ptr,
-        sync::mpsc::{self, SyncSender},
-    };
-
-    const XPC_CONNECTION_MACH_SERVICE_LISTENER: u64 = 1;
+    use std::{io, os::fd::RawFd};
     const PROC_PIDUNIQIDENTIFIERINFO: libc::c_int = 17;
-
-    pub enum Event {
-        Peer(Connection),
-        Message(Message),
-    }
-
-    pub struct Connection(Object);
-    pub struct Message(Object);
-    struct Object(*mut c_void);
-
     #[repr(C)]
     #[derive(Default)]
     struct NativeIdentity {
@@ -463,213 +481,6 @@ mod native {
         version: i32,
         reserved: u32,
         reserved_more: [u64; 2],
-    }
-
-    unsafe extern "C" {
-        static _xpc_type_connection: u8;
-        static _xpc_type_dictionary: u8;
-        fn xpc_retain(object: *mut c_void) -> *mut c_void;
-        fn xpc_release(object: *mut c_void);
-        fn xpc_get_type(object: *mut c_void) -> *const c_void;
-        fn xpc_connection_create_mach_service(
-            name: *const libc::c_char,
-            queue: *mut c_void,
-            flags: u64,
-        ) -> *mut c_void;
-        fn xpc_connection_set_event_handler(
-            connection: *mut c_void,
-            block: &Block<dyn Fn(*mut c_void)>,
-        );
-        fn xpc_connection_resume(connection: *mut c_void);
-        fn xpc_connection_cancel(connection: *mut c_void);
-        fn xpc_connection_send_message(connection: *mut c_void, message: *mut c_void);
-        fn xpc_connection_send_message_with_reply(
-            connection: *mut c_void,
-            message: *mut c_void,
-            queue: *mut c_void,
-            block: &Block<dyn Fn(*mut c_void)>,
-        );
-        fn xpc_connection_send_barrier(connection: *mut c_void, block: &Block<dyn Fn()>);
-        fn xpc_dictionary_create(
-            keys: *const *const libc::c_char,
-            values: *const *mut c_void,
-            count: usize,
-        ) -> *mut c_void;
-        fn xpc_dictionary_set_uint64(message: *mut c_void, key: *const libc::c_char, value: u64);
-        fn xpc_dictionary_get_uint64(message: *mut c_void, key: *const libc::c_char) -> u64;
-        fn xpc_dictionary_set_fd(message: *mut c_void, key: *const libc::c_char, fd: RawFd);
-        fn xpc_dictionary_dup_fd(message: *mut c_void, key: *const libc::c_char) -> RawFd;
-        fn xpc_dictionary_get_audit_token(message: *mut c_void, token: *mut [u32; 8]);
-        fn xpc_dictionary_create_reply(message: *mut c_void) -> *mut c_void;
-        fn xpc_dictionary_get_remote_connection(message: *mut c_void) -> *mut c_void;
-    }
-
-    // Retained XPC references may move between threads. No Rust reference to
-    // mutable dictionary state is shared; incoming dictionaries are read-only.
-    unsafe impl Send for Object {}
-
-    impl Connection {
-        pub fn client(name: &CStr) -> Self {
-            let object =
-                unsafe { xpc_connection_create_mach_service(name.as_ptr(), ptr::null_mut(), 0) };
-            assert!(!object.is_null(), "create fixture connection");
-            let handler = RcBlock::new(|_event: *mut c_void| {});
-            unsafe {
-                xpc_connection_set_event_handler(object, &handler);
-                xpc_connection_resume(object);
-            }
-            Self(Object(object))
-        }
-
-        pub fn listener(name: &CStr, sender: SyncSender<Event>) -> Self {
-            let object = unsafe {
-                xpc_connection_create_mach_service(
-                    name.as_ptr(),
-                    ptr::null_mut(),
-                    XPC_CONNECTION_MACH_SERVICE_LISTENER,
-                )
-            };
-            assert!(!object.is_null(), "create fixture listener");
-            let handler = RcBlock::new(move |peer: *mut c_void| unsafe {
-                if xpc_get_type(peer) != (&raw const _xpc_type_connection).cast() {
-                    return;
-                }
-                let messages = sender.clone();
-                let incoming = RcBlock::new(move |message: *mut c_void| {
-                    if xpc_get_type(message) == (&raw const _xpc_type_dictionary).cast() {
-                        let event = Event::Message(Message(Object(xpc_retain(message))));
-                        let _ = messages.try_send(event);
-                    }
-                });
-                let owned = Connection(Object(xpc_retain(peer)));
-                xpc_connection_set_event_handler(peer, &incoming);
-                // Queue ownership before enabling message delivery. A full
-                // queue drops/cancels only this newly received connection.
-                if sender.try_send(Event::Peer(owned)).is_ok() {
-                    xpc_connection_resume(peer);
-                }
-            });
-            unsafe {
-                xpc_connection_set_event_handler(object, &handler);
-                xpc_connection_resume(object);
-            }
-            Self(Object(object))
-        }
-
-        pub fn request(&self, request: &Message) -> io::Result<Message> {
-            let (sender, receiver) = mpsc::sync_channel(1);
-            let handler = RcBlock::new(move |reply: *mut c_void| unsafe {
-                let result = if xpc_get_type(reply) == (&raw const _xpc_type_dictionary).cast() {
-                    Ok(Message(Object(xpc_retain(reply))))
-                } else {
-                    Err(io::ErrorKind::ConnectionAborted.into())
-                };
-                let _ = sender.try_send(result);
-            });
-            unsafe {
-                xpc_connection_send_message_with_reply(
-                    self.0.0,
-                    request.0.0,
-                    ptr::null_mut(),
-                    &handler,
-                )
-            };
-            receiver
-                .recv_timeout(TEST_TIMEOUT)
-                .map_err(|_| io::ErrorKind::TimedOut)?
-        }
-    }
-
-    impl Drop for Connection {
-        fn drop(&mut self) {
-            unsafe { xpc_connection_cancel(self.0.0) };
-        }
-    }
-
-    impl Message {
-        pub fn request(owner: (u32, u32), fd: Option<RawFd>) -> Self {
-            let raw = unsafe { xpc_dictionary_create(ptr::null(), ptr::null(), 0) };
-            assert!(!raw.is_null(), "create request dictionary");
-            unsafe {
-                xpc_dictionary_set_uint64(raw, c"version".as_ptr(), PROTOCOL_VERSION);
-                xpc_dictionary_set_uint64(raw, c"claimed-pid".as_ptr(), owner.0.into());
-                xpc_dictionary_set_uint64(raw, c"claimed-generation".as_ptr(), owner.1.into());
-                if let Some(fd) = fd {
-                    xpc_dictionary_set_fd(raw, c"output".as_ptr(), fd);
-                }
-            }
-            Self(Object(raw))
-        }
-
-        pub fn number(&self, key: &CStr) -> u64 {
-            unsafe { xpc_dictionary_get_uint64(self.0.0, key.as_ptr()) }
-        }
-
-        pub fn describe_unrelated_fd(&self, fd: RawFd, device: u64, inode: u64) {
-            // Send identity metadata only, not an XPC descriptor object.
-            unsafe {
-                xpc_dictionary_set_uint64(self.0.0, c"unrelated-fd".as_ptr(), fd as u64);
-                xpc_dictionary_set_uint64(self.0.0, c"unrelated-device".as_ptr(), device);
-                xpc_dictionary_set_uint64(self.0.0, c"unrelated-inode".as_ptr(), inode);
-            }
-        }
-
-        pub fn has_unrelated_fd(&self) -> bool {
-            let fd = RawFd::try_from(self.number(c"unrelated-fd")).expect("fixture FD number");
-            let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-            if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
-                return false;
-            }
-            let stat = unsafe { stat.assume_init() };
-            // An unrelated object reusing the same numeric FD is not a leak.
-            stat.st_dev as u64 == self.number(c"unrelated-device")
-                && stat.st_ino == self.number(c"unrelated-inode")
-        }
-
-        pub fn sender_identity(&self) -> (u32, u32) {
-            let mut audit = [0u32; 8];
-            unsafe { xpc_dictionary_get_audit_token(self.0.0, &mut audit) };
-            (audit[5], audit[7])
-        }
-
-        pub fn take_fd(&self) -> io::Result<File> {
-            let fd = unsafe { xpc_dictionary_dup_fd(self.0.0, c"output".as_ptr()) };
-            if fd < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(unsafe { File::from_raw_fd(fd) })
-        }
-
-        pub fn reply(&self, status: u64) -> io::Result<()> {
-            let raw = unsafe { xpc_dictionary_create_reply(self.0.0) };
-            if raw.is_null() {
-                return Err(io::ErrorKind::InvalidData.into());
-            }
-            let reply = Object(raw);
-            let remote = unsafe { xpc_dictionary_get_remote_connection(self.0.0) };
-            if remote.is_null() {
-                return Err(io::ErrorKind::NotConnected.into());
-            }
-            let (sender, receiver) = mpsc::sync_channel(1);
-            let flushed = RcBlock::new(move || {
-                let _ = sender.try_send(());
-            });
-            unsafe {
-                xpc_dictionary_set_uint64(reply.0, c"version".as_ptr(), PROTOCOL_VERSION);
-                xpc_dictionary_set_uint64(reply.0, c"result".as_ptr(), status);
-                xpc_connection_send_message(remote, reply.0);
-                xpc_connection_send_barrier(remote, &flushed);
-            }
-            receiver
-                .recv_timeout(TEST_TIMEOUT)
-                .map_err(|_| io::ErrorKind::TimedOut.into())
-        }
-    }
-
-    impl Drop for Object {
-        fn drop(&mut self) {
-            unsafe { xpc_release(self.0) };
-        }
     }
 
     pub fn own_identity() -> io::Result<(u32, u32)> {
@@ -714,11 +525,22 @@ mod native {
         Ok(())
     }
 
-    pub fn make_close_on_exec(fd: RawFd) -> io::Result<()> {
+    pub fn is_close_on_exec(fd: RawFd) -> io::Result<bool> {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        if flags < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(())
+        Ok(flags & libc::FD_CLOEXEC != 0)
+    }
+    pub fn has_unrelated_fd(message: &super::transport::Message) -> bool {
+        let fd = RawFd::try_from(message.number(c"unrelated-fd")).expect("fixture FD number");
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+            return false;
+        }
+        let stat = unsafe { stat.assume_init() };
+        // An unrelated object reusing the same numeric FD is not a leak.
+        stat.st_dev as u64 == message.number(c"unrelated-device")
+            && stat.st_ino == message.number(c"unrelated-inode")
     }
 }

@@ -240,6 +240,14 @@ authorized client from using its own channel. Native transport admission
 checks precede integration with the launch lifecycle; a successful transport
 test alone is not evidence that descendants are contained.
 
+An outgoing XPC request must move into the exchange, with no remaining mutable
+dictionary access in its caller, even when the exchange times out while native
+delivery is pending. Received messages are a separate read-only type. Unsent
+request destruction releases its duplicated descriptors; received message
+ownership may retain an additional descriptor reference until that message is
+dropped. Channel disconnection and elapsed exchange deadlines remain distinct
+errors rather than being reported interchangeably as timeouts.
+
 The helper must acquire a duplicate of each authorized ingress listener before
 allowing a command to start. Abrupt loss of the application process must not
 release that port while the command remains alive. Cleanup retains the
