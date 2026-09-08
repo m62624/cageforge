@@ -80,6 +80,18 @@ The CLI uses inherited standard streams so interactive tools and build output
 remain visible. Applications needing captured output should use
 `CommandRequest` and `SandboxChild` directly.
 
+On Windows, the CLI exposes `setup install`, `setup status`, and
+`setup uninstall` only when built with the `windows` feature for a Windows
+target. `setup install` is the explicit administrator-approved provisioning
+step and may request UAC; it creates or reconciles the persistent
+owner-scoped Windows accounts, ACLs, firewall/WFP state, protected resources,
+and setup marker. `run` verifies that setup but never provisions it implicitly.
+When setup is missing or stale, `run` prints a warning and returns the typed
+Windows setup error. `setup uninstall` removes only Cageforge-owned setup
+objects after active backends and children have been released; it does not
+uninstall the CLI executable. Linux and macOS builds do not expose these
+subcommands.
+
 ## Resource and compatibility boundary
 
 The CLI can enforce the existing command timeout and network gateway bounds,

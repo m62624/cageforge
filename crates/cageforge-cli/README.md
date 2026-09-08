@@ -108,6 +108,33 @@ The Linux release binary is self-contained: its authenticated hardening-helper
 entry point is included in the same executable, so a separate helper binary is
 not installed.
 
+### Windows first-time setup
+
+Windows requires one administrator-approved provisioning step before the first
+sandbox run:
+
+```console
+> cageforge-cli setup install
+> cageforge-cli setup status
+```
+
+`setup install` may show a UAC prompt. It creates or verifies the persistent
+Windows sandbox accounts, ACLs, firewall/WFP rules, protected state, and helper
+resources. Later `cageforge-cli run` invocations only verify that setup and do
+not request UAC for every command. If setup is missing or stale, `run` prints a
+warning and then returns the typed Windows setup error.
+
+To remove Cageforge-owned Windows setup objects after all sandbox processes
+have stopped:
+
+```console
+> cageforge-cli setup uninstall
+```
+
+This command removes the system setup, not the CLI executable. Uninstall the
+CLI separately through Installed apps, Homebrew, Cargo, or manual binary
+removal as described above.
+
 ## Build from source and select the backend
 
 Build the binary with exactly one feature matching its target:
