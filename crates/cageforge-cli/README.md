@@ -17,51 +17,96 @@ it is never interpreted as shell text.
 
 ## Install the CLI
 
-Release builds are published for Linux, macOS, and Windows on both x86_64 and
-ARM64. The release page contains the target-labelled archives, checksums, and
-platform installers.
+Release binaries are built for Linux, macOS, and Windows on x86_64 and ARM64
+on every tagged release. Choose one installation method; each installs the
+same `cageforge-cli` binary. Release assets include target-labelled archives,
+checksums, shell and PowerShell installers, and Windows `.msi` packages.
 
-On macOS or Linux, Homebrew can install the latest published CLI:
+### Homebrew (macOS / Linux)
 
-```sh
-brew tap m62624/cageforge
-brew install m62624/cageforge/cageforge-cli
+From the [`m62624/homebrew-cageforge`](https://github.com/m62624/homebrew-cageforge)
+tap:
+
+```console
+$ brew install m62624/cageforge/cageforge-cli
 ```
 
-The release installers can also be used directly:
+### Installer script (no Rust toolchain)
 
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.sh | sh
+`latest` points to the newest published release:
+
+```console
+# Linux / macOS (POSIX sh)
+$ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.sh | sh
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.ps1 | iex"
+# Windows (PowerShell) — alternative to the .msi
+> powershell -ExecutionPolicy Bypass -c "irm https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.ps1 | iex"
 ```
 
-Windows users can install the matching `.msi` from the
-[latest Cageforge release](https://github.com/m62624/cageforge/releases/latest).
-The release asset name includes the target architecture, such as
-`x86_64-pc-windows-msvc` or `aarch64-pc-windows-msvc`.
+### Windows `.msi`
+
+Download `cageforge-cli-*.msi` from the
+[Cageforge releases page](https://github.com/m62624/cageforge/releases). Double-click
+the installer; Windows registers it for normal upgrades and uninstalls.
+
+### `cargo binstall`
+
+After the first crates.io release, [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall)
+can download the prebuilt binary instead of compiling it:
+
+```console
+$ cargo binstall cageforge-cli
+```
+
+### From source
+
+Source installation requires a Rust toolchain. After publication, use the
+feature matching the target operating system:
+
+```console
+# Linux, using a system Bubblewrap
+$ cargo install --locked cageforge-cli --no-default-features --features linux
+
+# Linux, with the verified embedded Bubblewrap resource
+$ cargo install --locked cageforge-cli --no-default-features --features linux-bundled-bubblewrap
+
+# Windows
+$ cargo install --locked cageforge-cli --no-default-features --features windows
+
+# macOS
+$ cargo install --locked cageforge-cli --no-default-features --features macos
+```
+
+From a local Cageforge checkout:
+
+```console
+$ cargo install --path crates/cageforge-cli --locked --no-default-features --features <matching-os-feature>
+```
+
+The native feature is explicit: `linux`, `linux-bundled-bubblewrap`, `windows`,
+or `macos`. There is no unsandboxed fallback when a matching feature is absent.
 
 The Linux CLI release is self-contained: the same executable contains the
 authenticated entry point used by the Linux backend as its private hardening
 helper. Users do not install or invoke a second helper executable.
 
-Until the first crates.io release, build from this repository. After publication,
-the same package can be installed with Cargo and an explicit native feature:
+### Uninstall
 
-```sh
-cargo install --locked cageforge-cli --features linux
+```console
+$ cargo uninstall cageforge-cli
 ```
 
-For a repository checkout, replace that with
-`cargo install --path crates/cageforge-cli --locked --features <os-feature>`.
-Choose the feature matching the target operating system as described below.
+For Homebrew use `brew uninstall cageforge-cli`. For an MSI, uninstall
+`Cageforge CLI` from Windows Installed apps. Shell and PowerShell installers do
+not install an uninstaller; remove the installed binary manually from
+`~/.cargo/bin/cageforge-cli` on Linux/macOS or
+`%USERPROFILE%\.cargo\bin\cageforge-cli.exe` on Windows.
 
-Remove a Homebrew installation with `brew uninstall cageforge-cli`; remove an
-MSI installation through Windows Installed apps. Script and Cargo installs place
-the executable in the user's Cargo binary directory and can be removed there.
+The Linux release binary is self-contained: its authenticated hardening-helper
+entry point is included in the same executable, so a separate helper binary is
+not installed.
 
 ## Build from source and select the backend
 
