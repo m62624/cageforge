@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Standalone CI experiment, not part of a published crate or enforcement path.
-//! Checks coalition inheritance and management privileges without signalling
-//! any process or changing the machine's accounts or security configuration.
+//! Checks coalition inheritance, management privileges, and versioned signals
+//! against directly owned fixture children. It does not change host accounts
+//! or security configuration and never signals an unrelated process.
 
 #![cfg(target_os = "macos")]
 
@@ -10,20 +11,37 @@ use std::{
     error::Error,
     ffi::{c_int, c_void},
     io,
-    os::unix::process::CommandExt,
-    process::{Command, Stdio},
+    os::unix::process::{CommandExt, ExitStatusExt},
+    process::{Child, Command, Stdio},
+    time::{Duration, Instant},
 };
 
 // Apple XNU bsd/sys/proc_info_private.h and osfmk/mach/coalition.h.
 const PROC_PIDCOALITIONINFO: c_int = 20;
+const PROC_PIDUNIQIDENTIFIERINFO: c_int = 17;
 const COALITION_RESOURCE_FLAGS: u32 = 0;
 const COALITION_JETSAM_FLAGS: u32 = 1 << 4;
+const SIGKILL: c_int = 9;
+const ESRCH: c_int = 3;
+
+struct FixtureChild(Child);
 
 #[repr(C)]
 #[derive(Default)]
 struct CoalitionInfo {
     ids: [u64; 2],
     reserved: [u64; 3],
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct ProcessIdentity {
+    uuid: [u8; 16],
+    unique_id: u64,
+    parent_unique_id: u64,
+    version: i32,
+    reserved: u32,
+    reserved_more: [u64; 2],
 }
 
 unsafe extern "C" {
@@ -34,10 +52,24 @@ unsafe extern "C" {
     fn geteuid() -> u32;
     fn setsid() -> c_int;
     fn setpgid(pid: c_int, pgid: c_int) -> c_int;
+    fn proc_signal_with_audittoken(token: *mut [u32; 8], signal: c_int) -> c_int;
+}
+
+impl Drop for FixtureChild {
+    fn drop(&mut self) {
+        // Only a direct child that has not been detached/reaped is owned here.
+        // Ensure a failed diagnostic cannot leave its finite sleeper behind.
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     if let Some(mode) = std::env::args().nth(1) {
+        if mode == "signal-target" {
+            std::thread::sleep(Duration::from_secs(20));
+            return Ok(());
+        }
         // Only this short-lived, directly owned fixture changes its group.
         let changed = match mode.as_str() {
             "setsid" => unsafe { setsid() },
@@ -82,8 +114,68 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     probe_management("resource", COALITION_RESOURCE_FLAGS)?;
     probe_management("jetsam", COALITION_JETSAM_FLAGS)?;
+    probe_versioned_signal()?;
     println!("probe complete");
     Ok(())
+}
+
+fn probe_versioned_signal() -> Result<(), Box<dyn Error>> {
+    let mut child = FixtureChild(
+        Command::new(std::env::current_exe()?)
+            .arg("signal-target")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?,
+    );
+    let pid = c_int::try_from(child.0.id())?;
+    let mut identity = ProcessIdentity::default();
+    let size = c_int::try_from(std::mem::size_of::<ProcessIdentity>())?;
+    // The API writes a fixed-layout process identity into the exact-size buffer.
+    let written = unsafe {
+        proc_pidinfo(
+            pid,
+            PROC_PIDUNIQIDENTIFIERINFO,
+            0,
+            (&mut identity as *mut ProcessIdentity).cast(),
+            size,
+        )
+    };
+    if written != size {
+        return Err(format!(
+            "identity read: {written} bytes; {}",
+            io::Error::last_os_error()
+        )
+        .into());
+    }
+    let mut token = [0u32; 8];
+    token[5] = child.0.id();
+    token[7] = identity.version as u32 ^ 1;
+    // XNU validates PID and version while holding the target process reference.
+    // The mismatched token must not deliver SIGKILL to the live direct child.
+    let stale_result = unsafe { proc_signal_with_audittoken(&mut token, SIGKILL) };
+    if stale_result != ESRCH || child.0.try_wait()?.is_some() {
+        return Err(format!("stale audit token was not rejected safely: {stale_result}").into());
+    }
+    token[7] = identity.version as u32;
+    let result = unsafe { proc_signal_with_audittoken(&mut token, SIGKILL) };
+    if result != 0 {
+        return Err(io::Error::from_raw_os_error(result).into());
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = child.0.try_wait()? {
+            if status.signal() != Some(SIGKILL) {
+                return Err(format!("unexpected signal-target exit: {status}").into());
+            }
+            println!("versioned signal: stale token rejected; exact child killed and reaped");
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("versioned signal did not terminate its direct target promptly".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn current_coalitions() -> io::Result<CoalitionInfo> {
