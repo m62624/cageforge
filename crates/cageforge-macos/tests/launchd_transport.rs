@@ -116,8 +116,14 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
     request.set_number(c"unrelated-device", unrelated_metadata.dev());
     request.set_number(c"unrelated-inode", unrelated_metadata.ino());
     let reply = client.request(request).expect("authenticated FD transfer");
-    assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
-    assert_eq!(reply.number(c"result"), ACCEPTED);
+    assert_eq!(
+        reply.number(c"version").expect("typed reply number"),
+        PROTOCOL_VERSION
+    );
+    assert_eq!(
+        reply.number(c"result").expect("typed reply number"),
+        ACCEPTED
+    );
     assert_eq!(
         fs::read(&output_path).expect("helper FD output"),
         b"fd-proof"
@@ -186,8 +192,14 @@ fn launchd_transport_parent() {
     let reply = client
         .request(request)
         .expect("transfer listener reservation");
-    assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
-    assert_eq!(reply.number(c"result"), ACCEPTED);
+    assert_eq!(
+        reply.number(c"version").expect("typed reply number"),
+        PROTOCOL_VERSION
+    );
+    assert_eq!(
+        reply.number(c"result").expect("typed reply number"),
+        ACCEPTED
+    );
     fs::write(
         root.join("ready.staging"),
         reservation.local_addr().expect("bound address").to_string(),
@@ -218,7 +230,7 @@ fn launchd_transport_lifecycle_helper() {
             transport::Event::Peer(peer) => peers.push(peer),
             transport::Event::Message(message) => {
                 if message.sender_identity() == owner
-                    && message.number(c"version") == PROTOCOL_VERSION
+                    && matches!(message.number(c"version"), Ok(PROTOCOL_VERSION))
                 {
                     break message;
                 }
@@ -389,8 +401,14 @@ fn launchd_transport_impostor() {
     let reply = connection
         .request(fixture_request(owner, None))
         .expect("receive typed rejection");
-    assert_eq!(reply.number(c"version"), PROTOCOL_VERSION);
-    assert_eq!(reply.number(c"result"), REJECTED);
+    assert_eq!(
+        reply.number(c"version").expect("typed reply number"),
+        PROTOCOL_VERSION
+    );
+    assert_eq!(
+        reply.number(c"result").expect("typed reply number"),
+        REJECTED
+    );
 }
 
 #[test]
@@ -413,7 +431,8 @@ fn launchd_transport_helper() {
             transport::Event::Peer(peer) => peers.push(peer),
             transport::Event::Message(message) => {
                 let actual = message.sender_identity();
-                let authorized = actual == owner && message.number(c"version") == PROTOCOL_VERSION;
+                let authorized =
+                    actual == owner && matches!(message.number(c"version"), Ok(PROTOCOL_VERSION));
                 if authorized && native::has_unrelated_fd(&message) {
                     message
                         .reply(UNRELATED_FD_LEAKED)
@@ -533,14 +552,25 @@ mod native {
         Ok(flags & libc::FD_CLOEXEC != 0)
     }
     pub fn has_unrelated_fd(message: &super::transport::Message) -> bool {
-        let fd = RawFd::try_from(message.number(c"unrelated-fd")).expect("fixture FD number");
+        let fd = RawFd::try_from(
+            message
+                .number(c"unrelated-fd")
+                .expect("fixture metadata number"),
+        )
+        .expect("fixture FD number");
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
         if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
             return false;
         }
         let stat = unsafe { stat.assume_init() };
         // An unrelated object reusing the same numeric FD is not a leak.
-        stat.st_dev as u64 == message.number(c"unrelated-device")
-            && stat.st_ino == message.number(c"unrelated-inode")
+        stat.st_dev as u64
+            == message
+                .number(c"unrelated-device")
+                .expect("fixture metadata number")
+            && stat.st_ino
+                == message
+                    .number(c"unrelated-inode")
+                    .expect("fixture metadata number")
     }
 }

@@ -248,6 +248,24 @@ ownership may retain an additional descriptor reference until that message is
 dropped. Channel disconnection and elapsed exchange deadlines remain distinct
 errors rather than being reported interchangeably as timeouts.
 
+The helper execution handoff is a typed state machine: identity exchange and
+coalition adoption precede launch approval; exactly one launch is accepted;
+running, terminating, and confirmed-exit states are distinct. Retrying a
+request must not create another command. The command payload preserves native
+argument, environment, and directory bytes without UTF-8 replacement. It
+contains the already-lowered executable and arguments, not a second policy
+interpreter or a shell command string. Standard streams and ingress listeners
+travel as explicitly named descriptors outside that byte payload.
+
+The transport envelope is limited to 8 MiB, matching the Windows runner's
+transport budget. This is an IPC allocation bound, not a limit on TOML input
+or policy size. Both the sender and receiver must reject larger frames before
+copying them into transport buffers. XPC integer/data fields must have their
+expected native types: the native integer getter's zero result for an absent
+or wrong-type field must never become a successful response. Unknown message
+tags, incompatible versions, truncated fields, trailing data, invalid native
+strings, and an impossible timeout must produce distinct typed failures.
+
 The helper must acquire a duplicate of each authorized ingress listener before
 allowing a command to start. Abrupt loss of the application process must not
 release that port while the command remains alive. Cleanup retains the

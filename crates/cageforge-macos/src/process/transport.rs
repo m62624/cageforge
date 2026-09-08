@@ -16,9 +16,11 @@ use std::{
     sync::mpsc::{self, SyncSender},
     time::Duration,
 };
+use thiserror::Error;
 
 pub(crate) const PROTOCOL_VERSION: u64 = 1;
 pub(crate) const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const MAX_HELPER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const XPC_CONNECTION_MACH_SERVICE_LISTENER: u64 = 1;
 
 pub enum Event {
@@ -31,9 +33,36 @@ pub struct Request(Object);
 pub struct Message(Object);
 struct Object(*mut c_void);
 
+#[derive(Debug, Error)]
+pub enum FieldError {
+    #[error("helper message is missing field {key:?}")]
+    Missing { key: &'static CStr },
+    #[error("helper message field {key:?} must be {expected:?}")]
+    WrongType {
+        key: &'static CStr,
+        expected: FieldKind,
+    },
+    #[error("helper message field {key:?} has {actual} bytes, exceeding {maximum}")]
+    TooLarge {
+        key: &'static CStr,
+        actual: usize,
+        maximum: usize,
+    },
+    #[error("helper message field {key:?} has a null data pointer for {length} bytes")]
+    InvalidDataPointer { key: &'static CStr, length: usize },
+}
+
+#[derive(Debug)]
+pub enum FieldKind {
+    UnsignedInteger,
+    Data,
+}
+
 unsafe extern "C" {
     static _xpc_type_connection: u8;
     static _xpc_type_dictionary: u8;
+    static _xpc_type_uint64: u8;
+    static _xpc_type_data: u8;
     fn xpc_retain(object: *mut c_void) -> *mut c_void;
     fn xpc_release(object: *mut c_void);
     fn xpc_get_type(object: *mut c_void) -> *const c_void;
@@ -63,6 +92,15 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn xpc_dictionary_set_uint64(message: *mut c_void, key: *const libc::c_char, value: u64);
     fn xpc_dictionary_get_uint64(message: *mut c_void, key: *const libc::c_char) -> u64;
+    fn xpc_dictionary_get_value(message: *mut c_void, key: *const libc::c_char) -> *mut c_void;
+    fn xpc_dictionary_set_data(
+        message: *mut c_void,
+        key: *const libc::c_char,
+        bytes: *const c_void,
+        length: usize,
+    );
+    fn xpc_data_get_length(data: *mut c_void) -> usize;
+    fn xpc_data_get_bytes_ptr(data: *mut c_void) -> *const c_void;
     fn xpc_dictionary_set_fd(message: *mut c_void, key: *const libc::c_char, fd: RawFd);
     fn xpc_dictionary_dup_fd(message: *mut c_void, key: *const libc::c_char) -> RawFd;
     fn xpc_dictionary_get_audit_token(message: *mut c_void, token: *mut [u32; 8]);
@@ -170,11 +208,54 @@ impl Request {
     pub fn set_fd(&mut self, key: &CStr, fd: RawFd) {
         unsafe { xpc_dictionary_set_fd(self.0.0, key.as_ptr(), fd) };
     }
+
+    pub fn set_data(&mut self, key: &'static CStr, bytes: &[u8]) -> Result<(), FieldError> {
+        check_frame_length(key, bytes.len())?;
+        // XPC copies the bytes before returning. The caller can release its
+        // buffer without changing the queued command payload.
+        unsafe {
+            xpc_dictionary_set_data(self.0.0, key.as_ptr(), bytes.as_ptr().cast(), bytes.len());
+        }
+        Ok(())
+    }
 }
 
 impl Message {
-    pub fn number(&self, key: &CStr) -> u64 {
-        unsafe { xpc_dictionary_get_uint64(self.0.0, key.as_ptr()) }
+    pub fn number(&self, key: &'static CStr) -> Result<u64, FieldError> {
+        self.field(key, FieldKind::UnsignedInteger)?;
+        Ok(unsafe { xpc_dictionary_get_uint64(self.0.0, key.as_ptr()) })
+    }
+
+    pub fn data(&self, key: &'static CStr) -> Result<&[u8], FieldError> {
+        let field = self.field(key, FieldKind::Data)?;
+        let length = unsafe { xpc_data_get_length(field) };
+        check_frame_length(key, length)?;
+        if length == 0 {
+            return Ok(&[]);
+        }
+        let pointer = unsafe { xpc_data_get_bytes_ptr(field) };
+        if pointer.is_null() {
+            return Err(FieldError::InvalidDataPointer { key, length });
+        }
+        // The immutable, retained dictionary owns this XPC data object. Its
+        // borrowed bytes cannot outlive the message; no receiver allocation
+        // occurs before checking the transport bound.
+        Ok(unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), length) })
+    }
+
+    fn field(&self, key: &'static CStr, expected: FieldKind) -> Result<*mut c_void, FieldError> {
+        let value = unsafe { xpc_dictionary_get_value(self.0.0, key.as_ptr()) };
+        if value.is_null() {
+            return Err(FieldError::Missing { key });
+        }
+        let expected_type = match expected {
+            FieldKind::UnsignedInteger => (&raw const _xpc_type_uint64).cast(),
+            FieldKind::Data => (&raw const _xpc_type_data).cast(),
+        };
+        if unsafe { xpc_get_type(value) } != expected_type {
+            return Err(FieldError::WrongType { key, expected });
+        }
+        Ok(value)
     }
 
     pub fn sender_identity(&self) -> (u32, u32) {
@@ -238,9 +319,115 @@ fn receive_error(error: mpsc::RecvTimeoutError) -> io::Error {
     }
 }
 
+fn check_frame_length(key: &'static CStr, actual: usize) -> Result<(), FieldError> {
+    if actual > MAX_HELPER_FRAME_BYTES {
+        Err(FieldError::TooLarge {
+            key,
+            actual,
+            maximum: MAX_HELPER_FRAME_BYTES,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{io, mpsc, receive_error};
+    use super::{
+        FieldError, FieldKind, MAX_HELPER_FRAME_BYTES, Message, Request, io, mpsc, receive_error,
+    };
+
+    #[test]
+    fn a_missing_or_wrong_type_result_is_not_a_successful_zero() {
+        let mut request = Request::new().expect("request");
+        request.set_number(c"zero", 0);
+        request
+            .set_data(c"wrong", &[0; 8])
+            .expect("wrong type fixture");
+        let message = Message(request.0);
+        assert!(matches!(
+            message.number(c"result"),
+            Err(FieldError::Missing { .. })
+        ));
+        assert!(matches!(
+            message.number(c"wrong"),
+            Err(FieldError::WrongType {
+                expected: FieldKind::UnsignedInteger,
+                ..
+            })
+        ));
+        assert_eq!(message.number(c"zero").expect("explicit native zero"), 0);
+        assert!(matches!(
+            message.data(c"zero"),
+            Err(FieldError::WrongType {
+                expected: FieldKind::Data,
+                ..
+            })
+        ));
+        assert!(matches!(
+            message.data(c"absent"),
+            Err(FieldError::Missing { .. })
+        ));
+    }
+
+    #[test]
+    fn command_bytes_are_owned_without_utf8_replacement() {
+        let mut request = Request::new().expect("request");
+        let mut payload = vec![b'/', 0xff, b'a', 0, b'b'];
+        request
+            .set_data(c"command", &payload)
+            .expect("command bytes");
+        request.set_data(c"empty", &[]).expect("empty native data");
+        payload.fill(42);
+        let message = Message(request.0);
+        assert_eq!(
+            message.data(c"command").expect("retained bytes"),
+            &[b'/', 0xff, b'a', 0, b'b']
+        );
+        assert!(message.data(c"empty").expect("empty bytes").is_empty());
+    }
+
+    #[test]
+    fn sender_and_receiver_check_the_frame_bound_independently() {
+        let mut request = Request::new().expect("request");
+        let mut payload = vec![0; MAX_HELPER_FRAME_BYTES];
+        request
+            .set_data(c"command", &payload)
+            .expect("exact maximum");
+        assert_eq!(
+            Message(request.0)
+                .data(c"command")
+                .expect("maximum frame")
+                .len(),
+            payload.len()
+        );
+        payload.push(0);
+        let mut request = Request::new().expect("request");
+        assert!(matches!(
+            request.set_data(c"command", &payload),
+            Err(FieldError::TooLarge { .. })
+        ));
+        assert!(matches!(
+            Message(request.0).data(c"command"),
+            Err(FieldError::Missing { .. })
+        ));
+
+        // Construct a hostile native message without going through the checked
+        // sender. The receiver must validate independently before copying.
+        let request = Request::new().expect("hostile request");
+        unsafe {
+            super::xpc_dictionary_set_data(
+                request.0.0,
+                c"command".as_ptr(),
+                payload.as_ptr().cast(),
+                payload.len(),
+            );
+        }
+        assert!(matches!(
+            Message(request.0).data(c"command"),
+            Err(FieldError::TooLarge { .. })
+        ));
+    }
 
     #[test]
     fn disconnected_response_channel_is_distinct_from_timeout() {
