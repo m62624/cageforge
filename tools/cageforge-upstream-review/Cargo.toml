@@ -9,6 +9,9 @@ repository.workspace = true
 readme = "../../README.md"
 publish = false
 
+[package.metadata.dist]
+dist = false
+
 [[bin]]
 name = "cageforge-review"
 path = "src/main.rs"

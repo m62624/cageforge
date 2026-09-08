@@ -133,6 +133,28 @@ architecture. Each artifact name includes its target triple. Normal feature
 work does not bump workspace or protocol versions; release preparation owns
 deliberate version changes.
 
+The release workflow is the stable cargo-dist orchestration kept in
+`.github/workflows/bin-release.yml`. It is based on the reviewed plugmem
+workflow shape and is intentionally maintained as a checked-in workflow rather
+than regenerated during ordinary changes. It contains only the Cageforge CLI
+release: target archives, checksums, shell and PowerShell installers, Windows
+MSI packages, and the Homebrew formula for `m62624/homebrew-cageforge`.
+There are no MCP, Skill, npm, Python, or native companion-binary release
+stages. The WiX template uses Cageforge-owned stable product and PATH-component
+GUIDs; these identifiers must not be copied from another project or changed
+between compatible MSI releases.
+
+The first crates.io publication is a one-time bootstrap. Trusted Publishing
+cannot be registered until a crate has an initial release. For that bootstrap,
+the release publisher temporarily adds a GitHub Actions secret named
+`CARGO_REGISTRY_TOKEN`, containing a narrowly scoped crates.io API token. The
+workflow detects that secret without exposing it and uses it only for the
+bootstrap publication. After each crate has its Trusted Publisher configured
+for repository `m62624/cageforge` and workflow `release.yml`, the bootstrap
+secret is removed; subsequent runs then use
+`rust-lang/crates-io-auth-action` with GitHub OIDC. `HOMEBREW_TAP_TOKEN` is a
+separate secret used only to push the generated formula to the Cageforge tap.
+
 ## Testing requirements
 
 Black-box CLI tests must cover profile loading, explicit command and argv

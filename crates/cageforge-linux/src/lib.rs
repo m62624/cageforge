@@ -13,12 +13,16 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(test), deny(clippy::expect_used, clippy::unwrap_used))]
 
+use std::ffi::OsString;
+use std::process::ExitCode;
+
 mod backend;
 mod bwrap;
 mod config;
 mod environment_transport;
 mod error;
 mod filesystem;
+mod hardening;
 mod hardening_error;
 mod helper_protocol;
 mod network;
@@ -43,3 +47,9 @@ pub use error::{
     SeccompBuildError, SetupHandshakeError, StatusFrameError,
 };
 pub use process::LinuxChild;
+
+/// Entry point used by the packaged CLI helper binary.
+#[doc(hidden)]
+pub fn run_hardening_helper(args: impl Iterator<Item = OsString>) -> ExitCode {
+    hardening::run_helper(args)
+}

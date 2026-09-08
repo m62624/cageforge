@@ -2,14 +2,25 @@
 name = "cageforge-cli"
 version.workspace = true
 edition.workspace = true
+authors = ["m62624"]
 license.workspace = true
 rust-version.workspace = true
 description = "Command-line adapter for running programs through Cageforge sandboxes"
 repository.workspace = true
+homepage.workspace = true
 readme = "README.md"
+keywords = ["sandbox", "security", "cli", "process", "isolation"]
+categories = ["command-line-utilities", "os"]
+
+[package.metadata.wix]
+upgrade-guid = "0C5C83B7-454A-4128-A1D9-2980AF6F09E8"
+path-guid = "A0A73124-2FEB-4865-B476-9E3D4868469F"
+license = false
+eula = false
 
 [package.metadata.dist]
 dist = true
+all-features = true
 
 [features]
 default = []
@@ -24,6 +35,9 @@ cageforge.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -675,12 +675,8 @@ fn append_private_runtime(
     gateway_mount: Option<&Path>,
     preserved_files: &mut Vec<File>,
 ) -> Result<(), LinuxBackendError> {
-    args.extend([
-        "--dir".into(),
-        PRIVATE_RUNTIME_ROOT.into(),
-        "--tmpfs".into(),
-        PRIVATE_RUNTIME_ROOT.into(),
-    ]);
+    args.extend(["--dir".into(), PRIVATE_RUNTIME_ROOT.into()]);
+    args.extend(["--chmod".into(), "0500".into(), PRIVATE_RUNTIME_ROOT.into()]);
     add_executable_snapshot(
         args,
         helper,
@@ -703,7 +699,6 @@ fn append_private_runtime(
             preserved_files,
         )?;
     }
-    args.extend(["--remount-ro".into(), PRIVATE_RUNTIME_ROOT.into()]);
     Ok(())
 }
 

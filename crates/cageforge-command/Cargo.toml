@@ -8,6 +8,9 @@ description = "Platform-independent command invocation and stdio request types"
 repository.workspace = true
 readme = "README.md"
 
+[package.metadata.dist]
+dist = false
+
 [lib]
 name = "cageforge_command"
 path = "src/lib.rs"

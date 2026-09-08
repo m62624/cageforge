@@ -18,6 +18,14 @@ failure before command launch.
 The crate is an independent implementation. It contains no Codex protocol,
 telemetry, PTY, product configuration, or copied source files.
 
+The Windows security design was initially informed by OpenAI's engineering
+article [Building a safe, effective sandbox to enable Codex on
+Windows](https://openai.com/index/building-codex-windows-sandbox/), together
+with the corresponding frozen Codex source review. The article is a behavioral
+design reference for the native Windows route—dedicated process identities,
+restricted tokens, filesystem permissions, and OS-enforced network controls—
+not a source-code dependency or a license for copying implementation text.
+
 ## 2. Platform and dependency boundary
 
 The crate is compiled only under `cfg(target_os = "windows")`. Its native

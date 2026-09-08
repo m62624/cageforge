@@ -14,6 +14,10 @@ on:
         description: Optional 40-character head SHA; fail if the PR moved
         required: false
         type: string
+      source_ref:
+        description: Branch or commit to test when no PR number is supplied
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       pr_number:
@@ -22,6 +26,10 @@ on:
         type: string
       expected_sha:
         description: Optional 40-character head SHA; fail if the PR moved
+        required: false
+        type: string
+      source_ref:
+        description: Branch or commit to test when no PR number is supplied
         required: false
         type: string
 
@@ -110,16 +118,27 @@ jobs:
             echo "HEAD_REPO=$head_repo"
           } >>"${GITHUB_ENV}"
 
-      - name: Resolve pushed main revision
+      - name: Resolve non-PR source revision
         if: inputs.pr_number == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref || github.sha }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "::error::GitHub returned an invalid pushed commit SHA"
+          if [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            head_sha="$SOURCE_REF"
+          elif [[ "$SOURCE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            head_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_REF}" --jq .sha)
+          else
+            echo "::error::source_ref contains invalid characters"
+            exit 65
+          fi
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::GitHub returned an invalid source commit SHA"
             exit 65
           }
           {
-            echo "HEAD_SHA=$GITHUB_SHA"
+            echo "HEAD_SHA=$head_sha"
             echo "HEAD_REPO=$GITHUB_REPOSITORY"
           } >>"${GITHUB_ENV}"
 

@@ -3,14 +3,23 @@
 > **Independent project:** Cageforge is not affiliated with, sponsored by, or
 > endorsed by OpenAI.
 
-> **Development status:** Cageforge is under active development and has not
-> published its first `0.1.0` release yet.
+**[What Cageforge is](#what-cageforge-is) · [Use it as a library](#start-with-the-facade) ·
+[Install the CLI](#install-the-command-line-adapter) · [Workspace packages](#workspace-packages) ·
+[Portable layers](#portable-layers) · [Isolation model](#isolation-model-and-references) ·
+[License](#license)**
+
+## What Cageforge is
 
 Cageforge is a reusable Rust toolkit for running potentially untrusted
 commands, agents, plugins, build scripts, and mods inside an OS-enforced
 process boundary. It describes and validates command, filesystem, environment,
 and network intent, narrows that intent with an optional safety ceiling, and
 hands the result to a native Linux, macOS, or Windows backend.
+
+Use the project as a Rust library when you are integrating sandboxed execution
+into an application. Install `cageforge-cli` when you want a ready-to-use
+terminal command that reads a profile and launches one explicitly selected
+program through the same library and native backend.
 
 The sandbox isolates processes using the host operating system's native
 enforcement mechanisms. Its guarantees depend on a correct host OS, correct
@@ -66,6 +75,104 @@ boundary as Cargo.
 
 The facade is synchronous. An application with an async runtime can execute
 blocking preparation, spawning, and waiting in its blocking-task facility.
+
+## Install the command-line adapter
+
+Applications can embed the `cageforge` facade directly, or install
+`cageforge-cli` when a standalone wrapper is more convenient. The CLI accepts a
+TOML profile that names the files, environment, network destinations, and
+timeout a program needs, then runs one explicit argv command inside the
+matching OS sandbox.
+
+CLI releases are built for Linux, macOS, and Windows on x86_64 and ARM64 on
+every tagged release. Choose one installation method; each method installs the
+same `cageforge-cli` binary. The release page contains target-labelled
+archives, checksums, shell and PowerShell installers, and Windows `.msi`
+packages.
+
+### Homebrew (macOS / Linux)
+
+From the [`m62624/homebrew-cageforge`](https://github.com/m62624/homebrew-cageforge)
+tap:
+
+```console
+$ brew install m62624/cageforge/cageforge-cli
+```
+
+### Installer script (no Rust toolchain)
+
+`latest` points to the newest published release:
+
+```console
+# Linux / macOS (POSIX sh)
+$ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.sh | sh
+```
+
+```powershell
+# Windows (PowerShell) — alternative to the .msi
+> powershell -ExecutionPolicy Bypass -c "irm https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.ps1 | iex"
+```
+
+### Windows `.msi`
+
+Download `cageforge-cli-*.msi` from the
+[Cageforge releases page](https://github.com/m62624/cageforge/releases). Double-click
+the installer; Windows registers it for normal upgrades and uninstalls.
+
+### `cargo binstall`
+
+After the first crates.io release, [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall)
+can download the prebuilt binary instead of compiling it:
+
+```console
+$ cargo binstall cageforge-cli
+```
+
+### From source
+
+Source installation requires a Rust toolchain. After publication, select the
+feature matching the target operating system:
+
+```console
+# Linux, using a system Bubblewrap
+$ cargo install --locked cageforge-cli --no-default-features --features linux
+
+# Linux, with the verified embedded Bubblewrap resource
+$ cargo install --locked cageforge-cli --no-default-features --features linux-bundled-bubblewrap
+
+# Windows
+$ cargo install --locked cageforge-cli --no-default-features --features windows
+
+# macOS
+$ cargo install --locked cageforge-cli --no-default-features --features macos
+```
+
+From a local Cageforge checkout, replace the package name with the path:
+
+```console
+$ cargo install --path crates/cageforge-cli --locked --no-default-features --features <matching-os-feature>
+```
+
+The native feature is explicit: `linux`, `linux-bundled-bubblewrap`, `windows`,
+or `macos`. There is no unsandboxed fallback when a matching feature is absent.
+
+### Uninstall
+
+```console
+$ cargo uninstall cageforge-cli
+```
+
+For Homebrew use `brew uninstall cageforge-cli`. For an MSI, uninstall
+`Cageforge CLI` from Windows Installed apps. Shell and PowerShell installers do
+not install an uninstaller; remove the installed binary manually from
+`~/.cargo/bin/cageforge-cli` on Linux/macOS or
+`%USERPROFILE%\.cargo\bin\cageforge-cli.exe` on Windows.
+
+The Linux release binary is self-contained: its authenticated hardening-helper
+entry point is included in the same executable, so a separate helper binary is
+not installed.
+
+For the CLI command reference, see the [`cageforge-cli` README](crates/cageforge-cli/README.md).
 
 ## Workspace packages
 
@@ -137,17 +244,67 @@ my-tool cargo test --workspace
 The wrapper constructs a `CommandRequest`, applies its policy, and starts
 Cargo through `spawn`.
 
-## Configuration and references
+## Isolation model and references
+
+At runtime, the application supplies the command and policy to `prepare`,
+which validates the request and narrows it with the optional safety ceiling.
+`spawn` then asks the selected native backend to create the boundary around the
+root process and every descendant it creates.
+
+This is different from a virtual machine: Cageforge does not boot a guest
+kernel or provide a second operating system. It is also different from a
+Docker container: the library does not build an image or require a container
+daemon; it uses the host's native process, filesystem, and network controls.
+That makes startup and integration lightweight for an embedding application,
+while the protection necessarily depends on the host OS, its native security
+mechanisms, and a correct Cageforge implementation. A program must be started
+through Cageforge for the boundary to apply.
+
+The idea for Cageforge's common command-sandbox API grew from studying the
+security model and protection mechanisms used by the open-source
+[Codex](https://github.com/openai/codex) sandbox, including the process-boundary
+design described in OpenAI's [Building a safe, effective sandbox to enable
+Codex on Windows](https://openai.com/index/building-codex-windows-sandbox/)
+article. Cageforge takes those sandbox principles and the corresponding
+mechanism inventory as its behavioral foundation, then realizes each part with
+the native enforcement facilities of Linux, Windows, and macOS. The backends
+are separate implementations for their operating systems, not one Windows
+mechanism transplanted unchanged to the others.
+
+Cageforge remains an independent library with its own public API and adapts
+that shared security model for multiple independent sandbox instances; Codex
+product protocols, runtime integrations, and source files are not part of this
+API.
+
+The protection is layered:
+
+| Protection layer | What the sandbox enforces |
+| --- | --- |
+| Command boundary | One explicitly launched root command and its complete descendant process tree share the selected boundary. |
+| Filesystem | The effective policy grants only declared scopes and modes, with native checks for symlinks, mounts, reparse points, and TOCTOU-sensitive operations. |
+| Environment | The command receives the validated environment selected for the instance; it cannot use environment changes to widen native permissions. |
+| Network | Direct, disabled, and routed access are lowered by the selected backend, with authorization tied to the exact resolved destination where applicable. |
+| Lifecycle | Timeouts and termination apply to the complete process tree, and native resources are released only after the boundary reaches a confirmed terminal state. |
+| Descriptors and handles | Only explicitly authorized standard streams and other transport handles cross the launch boundary. |
+| Native enforcement | Linux uses namespaces, mounts, seccomp, and Bubblewrap; Windows uses restricted tokens, ACLs, Job Objects, and firewall/WFP; macOS uses Seatbelt profiles and native process controls. |
+
+This is an OS-enforced library boundary, not a promise that every possible
+host or application failure is harmless. Its guarantees depend on a correct
+host OS, functioning native mechanisms, and a correct Cageforge
+implementation.
 
 The TOML examples are in
 [`crates/cageforge-config/examples`](crates/cageforge-config/examples/README.md).
 The complete public API is available on [docs.rs](https://docs.rs/cageforge/latest/cageforge/)
 and in the package README files linked above.
-
-Cageforge is independently implemented. Its design and security boundaries
-are reviewed against relevant open-source sandboxing code in
-[OpenAI Codex](https://github.com/openai/codex), without exposing Codex
-protocols or making Codex a runtime dependency. The legal and provenance
-records are maintained in [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
+The legal and provenance records are maintained in
+[`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
 [`NOTICE`](NOTICE), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and
 [`UPSTREAM.md`](UPSTREAM.md).
+
+## License
+
+Cageforge's Rust code is Apache-2.0. The separately maintained Bubblewrap
+component retains its LGPL-2.0-or-later license; see the
+[`cageforge-bwrap` README](crates/cageforge-bwrap/README.md) and
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

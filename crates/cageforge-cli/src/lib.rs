@@ -26,6 +26,17 @@ pub use execution::execute;
 /// Parses the process arguments, executes the selected command, and renders
 /// a concise diagnostic on failure.
 pub fn run() -> ExitCode {
+    #[cfg(all(feature = "linux", target_os = "linux"))]
+    {
+        let mut arguments = std::env::args_os();
+        arguments.next();
+        if arguments
+            .next()
+            .is_some_and(|argument| argument == "--apply-hardening")
+        {
+            return cageforge::run_hardening_helper(std::env::args_os().skip(1));
+        }
+    }
     let cli = Cli::parse();
     let mut stderr = io::stderr().lock();
     match execute(cli) {

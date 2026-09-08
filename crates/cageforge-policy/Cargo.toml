@@ -8,6 +8,9 @@ description = "Platform-independent filesystem and network sandbox policy types"
 repository.workspace = true
 readme = "README.md"
 
+[package.metadata.dist]
+dist = false
+
 [lib]
 name = "cageforge_policy"
 path = "src/lib.rs"

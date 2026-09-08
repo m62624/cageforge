@@ -363,6 +363,16 @@ cargo test -p cageforge-linux --all-features --locked
 
 echo 'Running the unified facade tests with the Linux feature.'
 cargo test -p cageforge --no-default-features --features linux --locked
+
+echo 'Running the CLI checks with the Linux feature.'
+cargo clippy -p cageforge-cli --no-default-features --features linux --all-targets --locked -- -D warnings
+cargo test -p cageforge-cli --no-default-features --features linux --locked
+cargo doc -p cageforge-cli --no-default-features --features linux --no-deps --locked
+
+echo 'Running the CLI checks with the bundled Bubblewrap feature.'
+cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets --locked -- -D warnings
+cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --locked
+cargo doc -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --no-deps --locked
 EOF
 result=$?
 set -e
