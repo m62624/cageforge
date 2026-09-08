@@ -9,6 +9,7 @@ use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::io::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, mpsc};
@@ -1146,12 +1147,17 @@ fn process_group_change_fixture() {
     let ready = root.join("ready");
     let release = root.join("release");
     if let Some(operation) = mode.strip_prefix("root-") {
-        let mut descendant = Command::new(std::env::current_exe().expect("fixture executable"))
+        let mut command = Command::new(std::env::current_exe().expect("fixture executable"));
+        command
             .args(["--exact", "process_group_change_fixture", "--nocapture"])
             .env(GROUP_CHANGE_MODE, operation)
-            .stdin(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn group-changing descendant");
+            .stdin(std::process::Stdio::null());
+        if operation == "spawn-group" {
+            // Also exercise native spawn attributes: denying only the direct
+            // setpgid/setsid syscalls cannot establish immutable membership.
+            command.process_group(0);
+        }
+        let mut descendant = command.spawn().expect("spawn group-changing descendant");
         let deadline = Instant::now() + Duration::from_secs(5);
         while !ready.exists() {
             assert!(
@@ -1173,6 +1179,7 @@ fn process_group_change_fixture() {
         let result = match mode.as_str() {
             "setsid" => libc::setsid(),
             "setpgid" => libc::setpgid(0, 0),
+            "spawn-group" => 0,
             other => panic!("unexpected group-change operation: {other}"),
         };
         (before, result, libc::getpgrp())
@@ -1202,7 +1209,7 @@ fn successful_wait_terminates_descendants_that_change_group_or_session() {
     let backend = backend();
     let executable = std::env::current_exe().expect("fixture executable");
     let mut survivors = Vec::new();
-    for operation in ["setsid", "setpgid"] {
+    for operation in ["setsid", "setpgid", "spawn-group"] {
         let workspace = TempDir::new().expect("workspace");
         let root = fs::canonicalize(workspace.path()).expect("canonical workspace");
         let environment = EnvironmentSpec::inherit_core()
