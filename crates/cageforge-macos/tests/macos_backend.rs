@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,6 +30,8 @@ use tempfile::TempDir;
 const PARENT_DEATH_ROOT: &str = "CAGEFORGE_MACOS_PARENT_DEATH_ROOT";
 const PARENT_DEATH_CHILD: &str = "CAGEFORGE_MACOS_PARENT_DEATH_CHILD";
 const UNIX_SOCKET_TEST_PATH: &str = "CAGEFORGE_MACOS_UNIX_SOCKET_TEST_PATH";
+const GROUP_CHANGE_MODE: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_MODE";
+const GROUP_CHANGE_ROOT: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_ROOT";
 
 fn context(workspace: &Path) -> PathResolutionContext {
     PathResolutionContext::new()
@@ -1125,6 +1127,144 @@ fn reaped_leader_does_not_leave_a_running_descendant() {
     assert!(
         !marker.exists(),
         "descendant {descendant} survived leader exit"
+    );
+}
+
+#[test]
+fn process_group_change_fixture() {
+    let Ok(mode) = std::env::var(GROUP_CHANGE_MODE) else {
+        return;
+    };
+    let root = PathBuf::from(std::env::var_os(GROUP_CHANGE_ROOT).expect("fixture root"));
+    let ready = root.join("ready");
+    let release = root.join("release");
+    if let Some(operation) = mode.strip_prefix("root-") {
+        let mut descendant = Command::new(std::env::current_exe().expect("fixture executable"))
+            .args(["--exact", "process_group_change_fixture", "--nocapture"])
+            .env(GROUP_CHANGE_MODE, operation)
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn group-changing descendant");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(
+                descendant.try_wait().expect("poll descendant").is_none(),
+                "descendant exited before readiness"
+            );
+            assert!(Instant::now() < deadline, "descendant readiness timeout");
+            thread::sleep(Duration::from_millis(2));
+        }
+        // Deliberately finish the root while its descendant is alive. The
+        // backend must complete descendant cleanup before wait() succeeds.
+        drop(descendant);
+        return;
+    }
+
+    #[allow(unsafe_code)]
+    let (before, result, after) = unsafe {
+        let before = libc::getpgrp();
+        let result = match mode.as_str() {
+            "setsid" => libc::setsid(),
+            "setpgid" => libc::setpgid(0, 0),
+            other => panic!("unexpected group-change operation: {other}"),
+        };
+        (before, result, libc::getpgrp())
+    };
+    fs::write(
+        ready,
+        format!("{mode}: before={before}, result={result}, after={after}"),
+    )
+    .expect("record group-change result");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !release.exists() {
+        // Bound the fixture's own lifetime even on a broken cleanup path.
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    fs::write(
+        root.join("survived"),
+        b"executed after backend wait completed",
+    )
+    .expect("record surviving descendant");
+}
+
+#[test]
+fn successful_wait_terminates_descendants_that_change_group_or_session() {
+    let backend = backend();
+    let executable = std::env::current_exe().expect("fixture executable");
+    let mut survivors = Vec::new();
+    for operation in ["setsid", "setpgid"] {
+        let workspace = TempDir::new().expect("workspace");
+        let root = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let environment = EnvironmentSpec::inherit_core()
+            .with_var(GROUP_CHANGE_MODE, format!("root-{operation}"))
+            .expect("fixture mode")
+            .with_var(GROUP_CHANGE_ROOT, root.as_os_str())
+            .expect("fixture root");
+        let policy = writable_policy(&root);
+        let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+        let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
+            .expect("compose policy");
+        let context = context(&root)
+            .with_minimal_path(executable.clone())
+            .expect("fixture runtime path");
+        let command = CommandRequest::new(
+            CommandSpec::new(&executable)
+                .expect("fixture program")
+                .with_args(["--exact", "process_group_change_fixture", "--nocapture"])
+                .expect("fixture arguments"),
+        )
+        .with_working_directory(root.clone())
+        .expect("working directory")
+        .with_environment(environment)
+        .with_timeout(Duration::from_secs(10))
+        .with_stdio(
+            StdioSpec::inherited()
+                .with_stdout(StdioMode::Pipe)
+                .with_stderr(StdioMode::Pipe),
+        );
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &context)
+            .expect("prepare group-change fixture");
+        let mut child = backend.spawn(prepared).expect("spawn group-change fixture");
+        // MacosChild closes its own stream handles at successful completion.
+        // Keep only reader duplicates to observe EOF after that cleanup.
+        let mut stdout = File::from(
+            child
+                .stdout()
+                .expect("stdout")
+                .as_fd()
+                .try_clone_to_owned()
+                .expect("stdout reader"),
+        );
+        let mut stderr = File::from(
+            child
+                .stderr()
+                .expect("stderr")
+                .as_fd()
+                .try_clone_to_owned()
+                .expect("stderr reader"),
+        );
+        let status = child.wait();
+        // Release the finite descendant only after the public boundary claims
+        // completion. On the broken implementation it records the violation
+        // and exits itself, leaving no unbounded orphan or host-side PID kill.
+        fs::write(root.join("release"), b"boundary wait returned").expect("release fixture");
+        wait_for_pipe_eof(&mut stdout).expect("descendant closes stdout after release");
+        let mut diagnostic = String::new();
+        stderr
+            .read_to_string(&mut diagnostic)
+            .expect("stderr diagnostic");
+        assert!(status.expect("wait for fixture").success(), "{diagnostic}");
+        if root.join("survived").exists() {
+            survivors.push(fs::read_to_string(root.join("ready")).expect("group-change record"));
+        }
+    }
+    assert!(
+        survivors.is_empty(),
+        "descendants survived successful boundary wait: {survivors:?}"
     );
 }
 
