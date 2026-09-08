@@ -485,6 +485,24 @@ fn host_accepts_the_backend_seatbelt_profile() {
 }
 
 #[test]
+fn restricted_command_can_start_a_native_runtime_program() {
+    let workspace = TempDir::new().expect("workspace");
+    let policy = restricted_policy(workspace.path());
+    let command = CommandSpec::new("/bin/true").expect("true");
+    let (command, effective, context) = request_for(workspace.path(), &policy, command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    assert!(
+        status.success(),
+        "restricted native runtime probe failed: {status:?}"
+    );
+}
+
+#[test]
 fn backend_is_send_sync_and_reusable_for_independent_instances() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Arc<MacosBackend>>();

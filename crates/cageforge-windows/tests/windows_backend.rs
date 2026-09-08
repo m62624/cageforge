@@ -1107,6 +1107,78 @@ fn elevated_setup_rejects_a_reparse_state_root_before_touching_its_target() {
 }
 
 #[test]
+fn restricted_command_can_start_a_native_runtime_program() {
+    let _setup_test_guard = setup_test_lock();
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let state_base_directory = temporary.path().join("state");
+    let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
+    let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
+    let config = WindowsSetupConfig::new()
+        .with_state_directory(&state_base_directory)
+        .expect("absolute state directory")
+        .with_setup_helper_path(helper)
+        .expect("absolute setup helper")
+        .with_command_runner_path(runner)
+        .expect("absolute command runner");
+    let setup = WindowsSetup::new(config);
+    let cleanup = SetupCleanup {
+        setup: &setup,
+        armed: true,
+    };
+    let details = setup.install().expect("native runtime setup");
+    let backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(Duration::from_secs(15))
+            .expect("bounded timeout"),
+    )
+    .expect("native runtime backend");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+    let system32 = system_root.join("System32");
+    let command = CommandSpec::new(system32.join("cmd.exe")).expect("cmd.exe");
+    let environment = EnvironmentSpec::inherit_core();
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective =
+        compose(CompositionRequest::new(&policy, &environment, &ceiling)).expect("compose policy");
+    let request = CommandRequest::new(
+        command
+            .with_args(["/d", "/c", "exit", "0"])
+            .expect("cmd.exe arguments"),
+    )
+    .with_working_directory(workspace.path().to_path_buf())
+    .expect("working directory")
+    .with_environment(environment);
+    let context = PathResolutionContext::new()
+        .with_workspace_root(workspace.path().to_path_buf())
+        .expect("workspace root")
+        .with_minimal_path(system32)
+        .expect("System32 minimal path")
+        .with_current_directory(workspace.path().to_path_buf())
+        .expect("current directory");
+    let prepared = backend
+        .prepare(BackendRequest::new(&request, &effective), &context)
+        .expect("prepare native runtime command");
+    let mut child = backend
+        .spawn(prepared)
+        .expect("spawn native runtime command");
+    let status = child.wait().expect("wait native runtime command");
+    assert!(
+        status.success(),
+        "restricted native runtime probe failed: {status:?}; setup root: {:?}",
+        details.state_directory()
+    );
+    drop(cleanup);
+}
+
+#[test]
 fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let _setup_test_guard = setup_test_lock();
     let temporary = tempfile::tempdir().expect("temporary directory");
