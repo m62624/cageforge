@@ -10,8 +10,9 @@
 use std::{
     error::Error,
     ffi::{c_int, c_void},
-    io,
+    fs, io,
     os::unix::process::{CommandExt, ExitStatusExt},
+    path::Path,
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -23,6 +24,7 @@ const COALITION_RESOURCE_FLAGS: u32 = 0;
 const COALITION_JETSAM_FLAGS: u32 = 1 << 4;
 const SIGKILL: c_int = 9;
 const ESRCH: c_int = 3;
+const DETACH_MODES: [&str; 3] = ["setsid", "setpgid", "spawn-group"];
 
 struct FixtureChild(Child);
 
@@ -44,6 +46,15 @@ struct ProcessIdentity {
     reserved_more: [u64; 2],
 }
 
+// Only the documented initial two counters are requested. XNU copies the
+// smaller of the caller's size and its complete resource-usage structure.
+#[repr(C)]
+#[derive(Default)]
+struct CoalitionCounts {
+    started: u64,
+    exited: u64,
+}
+
 unsafe extern "C" {
     fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buf: *mut c_void, size: c_int) -> c_int;
     fn coalition_create(id: *mut u64, flags: u32) -> c_int;
@@ -53,6 +64,8 @@ unsafe extern "C" {
     fn setsid() -> c_int;
     fn setpgid(pid: c_int, pgid: c_int) -> c_int;
     fn proc_signal_with_audittoken(token: *mut [u32; 8], signal: c_int) -> c_int;
+    fn proc_listallpids(buffer: *mut c_void, size: c_int) -> c_int;
+    fn coalition_info_resource_usage(id: u64, buffer: *mut c_void, size: usize) -> c_int;
 }
 
 impl Drop for FixtureChild {
@@ -65,6 +78,22 @@ impl Drop for FixtureChild {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let arguments: Vec<_> = std::env::args_os().collect();
+    match arguments.get(1).and_then(|value| value.to_str()) {
+        Some("family") if arguments.len() == 3 => {
+            return family_service(Path::new(&arguments[2]));
+        }
+        Some("family-leaf") if arguments.len() == 4 => {
+            return family_leaf(
+                arguments[2].to_str().ok_or("non-UTF-8 fixture mode")?,
+                Path::new(&arguments[3]),
+            );
+        }
+        Some("families") if arguments.len() == 4 => {
+            return probe_families(Path::new(&arguments[2]), Path::new(&arguments[3]));
+        }
+        _ => {}
+    }
     if let Some(mode) = std::env::args().nth(1) {
         if mode == "signal-target" {
             std::thread::sleep(Duration::from_secs(20));
@@ -89,7 +118,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // geteuid has no pointer arguments or preconditions.
     println!("uid={} coalitions={:?}", unsafe { geteuid() }, info.ids);
     let executable = std::env::current_exe()?;
-    for mode in ["setsid", "setpgid", "spawn-group"] {
+    for mode in DETACH_MODES {
         let mut command = Command::new(&executable);
         command.arg(mode).stdin(Stdio::null());
         if mode == "spawn-group" {
@@ -179,11 +208,15 @@ fn probe_versioned_signal() -> Result<(), Box<dyn Error>> {
 }
 
 fn current_coalitions() -> io::Result<CoalitionInfo> {
+    let pid =
+        c_int::try_from(std::process::id()).map_err(|_| io::Error::other("process ID overflow"))?;
+    process_coalitions(pid)
+}
+
+fn process_coalitions(pid: c_int) -> io::Result<CoalitionInfo> {
     let mut info = CoalitionInfo::default();
     let size = c_int::try_from(std::mem::size_of::<CoalitionInfo>())
         .map_err(|_| io::Error::other("coalition info size overflow"))?;
-    let pid =
-        c_int::try_from(std::process::id()).map_err(|_| io::Error::other("process ID overflow"))?;
     // The fixed flavor writes exactly proc_pidcoalitioninfo into a writable,
     // correctly aligned buffer of its declared size. Reject partial results.
     let written = unsafe {
@@ -202,6 +235,232 @@ fn current_coalitions() -> io::Result<CoalitionInfo> {
         return Err(io::Error::other("incomplete coalition info"));
     }
     Ok(info)
+}
+
+fn family_service(directory: &Path) -> Result<(), Box<dyn Error>> {
+    let executable = std::env::current_exe()?;
+    for mode in DETACH_MODES {
+        let mut command = Command::new(&executable);
+        command
+            .args(["family-leaf", mode])
+            .arg(directory)
+            .stdin(Stdio::null());
+        if mode == "spawn-group" {
+            command.process_group(0);
+        }
+        // Deliberately do not wait: the experiment needs orphaned descendants.
+        // Every leaf has its own finite deadline even if the controller fails.
+        drop(command.spawn()?);
+    }
+    wait_until(|| {
+        Ok(DETACH_MODES
+            .iter()
+            .all(|mode| directory.join(mode).exists()))
+    })?;
+    publish_pid(directory, "root")?;
+    wait_until(|| Ok(directory.join("root-exit").exists()))?;
+    Ok(())
+}
+
+fn family_leaf(mode: &str, directory: &Path) -> Result<(), Box<dyn Error>> {
+    let result = match mode {
+        "setsid" => unsafe { setsid() },
+        "setpgid" => unsafe { setpgid(0, 0) },
+        "spawn-group" => 0,
+        _ => return Err("unknown family fixture mode".into()),
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    publish_pid(directory, mode)?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if directory.join("pulse").exists() {
+            fs::write(directory.join(format!("pulse-{mode}")), b"alive")?;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+fn probe_families(first: &Path, second: &Path) -> Result<(), Box<dyn Error>> {
+    wait_until(|| Ok(first.join("root").exists() && second.join("root").exists()))?;
+    let own = current_coalitions()?.ids[0];
+    let mut owned = Vec::new();
+    for directory in [first, second] {
+        let pid: c_int = fs::read_to_string(directory.join("root"))?.parse()?;
+        let coalition = process_coalitions(pid)?.ids[0];
+        if coalition == 0 || coalition == own || owned.contains(&coalition) {
+            return Err("launchd did not create an independent coalition".into());
+        }
+        // Verify the experiment's whole finite family while its leader
+        // is alive; only these newly created launchd jobs can become targets.
+        for mode in DETACH_MODES {
+            let leaf: c_int = fs::read_to_string(directory.join(mode))?.parse()?;
+            if process_coalitions(leaf)?.ids[0] != coalition {
+                return Err(format!("{mode} did not belong to its launchd job").into());
+            }
+        }
+        owned.push(coalition);
+    }
+    let result = (|| -> Result<(), Box<dyn Error>> {
+        for directory in [first, second] {
+            fs::write(directory.join("root-exit"), b"exit")?;
+        }
+        // Wait for both original parents to leave while their three detached
+        // children remain accounted for by the kernel.
+        wait_until(|| Ok(coalition_active(owned[0])? == 3 && coalition_active(owned[1])? == 3))?;
+        println!(
+            "orphan families: independent coalitions {:?}, three descendants each",
+            owned
+        );
+        terminate_coalition_members(owned[0])?;
+        if coalition_active(owned[1])? != 3 {
+            return Err("terminating the first coalition affected the second".into());
+        }
+        fs::write(
+            second.join("pulse"),
+            b"reply after first family termination",
+        )?;
+        wait_until(|| {
+            Ok(DETACH_MODES
+                .iter()
+                .all(|mode| second.join(format!("pulse-{mode}")).exists()))
+        })?;
+        terminate_coalition_members(owned[1])?;
+        println!("orphan families: first empty; second remained responsive; second now empty");
+        Ok(())
+    })();
+    // On failure, cleanup is still limited to the verified experiment IDs.
+    // Finite leaf deadlines remain an independent backstop if this also fails.
+    for coalition in owned {
+        if let Err(error) = terminate_coalition_members(coalition) {
+            eprintln!("fixture coalition {coalition} cleanup: {error}");
+        }
+    }
+    result
+}
+
+fn coalition_active(id: u64) -> io::Result<u64> {
+    let mut counts = CoalitionCounts::default();
+    // The kernel accepts a prefix-sized buffer; no trailing fields are read.
+    let result = unsafe {
+        coalition_info_resource_usage(
+            id,
+            (&mut counts as *mut CoalitionCounts).cast(),
+            std::mem::size_of_val(&counts),
+        )
+    };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        // Only previously verified, monotonically allocated coalition IDs
+        // reach here. ESRCH means launchd has already reaped this empty job.
+        if error.raw_os_error() == Some(ESRCH) {
+            return Ok(0);
+        }
+        return Err(error);
+    }
+    counts
+        .started
+        .checked_sub(counts.exited)
+        .ok_or_else(|| io::Error::other("inconsistent coalition counts"))
+}
+
+fn process_identity(pid: c_int) -> io::Result<ProcessIdentity> {
+    let mut identity = ProcessIdentity::default();
+    let size = c_int::try_from(std::mem::size_of_val(&identity)).map_err(io::Error::other)?;
+    let bytes = unsafe {
+        proc_pidinfo(
+            pid,
+            PROC_PIDUNIQIDENTIFIERINFO,
+            0,
+            (&mut identity as *mut ProcessIdentity).cast(),
+            size,
+        )
+    };
+    if bytes <= 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if bytes != size {
+        return Err(io::Error::other("incomplete process identity"));
+    }
+    Ok(identity)
+}
+
+fn terminate_coalition_members(coalition: u64) -> io::Result<()> {
+    wait_until(|| {
+        let mut pids = vec![0 as c_int; 256];
+        loop {
+            let size = c_int::try_from(std::mem::size_of_val(pids.as_slice()))
+                .map_err(io::Error::other)?;
+            let count = unsafe { proc_listallpids(pids.as_mut_ptr().cast(), size) };
+            if count < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let count = usize::try_from(count).map_err(io::Error::other)?;
+            if count < pids.len() {
+                pids.truncate(count);
+                break;
+            }
+            pids.resize(
+                pids.len()
+                    .checked_mul(2)
+                    .ok_or_else(|| io::Error::other("PID buffer overflow"))?,
+                0,
+            );
+        }
+        for pid in pids.into_iter().filter(|pid| *pid > 0) {
+            let Ok(before) = process_identity(pid) else {
+                continue;
+            };
+            let Ok(info) = process_coalitions(pid) else {
+                continue;
+            };
+            if info.ids[0] != coalition {
+                continue;
+            }
+            let Ok(after) = process_identity(pid) else {
+                continue;
+            };
+            if before.unique_id != after.unique_id || before.version != after.version {
+                continue;
+            }
+            let mut token = [0u32; 8];
+            token[5] = u32::try_from(pid).map_err(io::Error::other)?;
+            token[7] = after.version as u32;
+            // Membership is immutable. Matching identities bracket its read,
+            // and the kernel checks the same version atomically with SIGKILL.
+            let result = unsafe { proc_signal_with_audittoken(&mut token, SIGKILL) };
+            if result != 0 && result != ESRCH {
+                return Err(io::Error::from_raw_os_error(result));
+            }
+        }
+        // A PID snapshot can miss a racing fork. Only kernel accounting, not
+        // the empty snapshot, can complete this experiment's termination loop.
+        Ok(coalition_active(coalition)? == 0)
+    })
+}
+
+fn wait_until(mut predicate: impl FnMut() -> io::Result<bool>) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if predicate()? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "lifecycle experiment deadline",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn publish_pid(directory: &Path, name: &str) -> io::Result<()> {
+    let staging = directory.join(format!("{name}.staging"));
+    fs::write(&staging, std::process::id().to_string())?;
+    fs::rename(staging, directory.join(name))
 }
 
 fn probe_management(kind: &str, flags: u32) -> io::Result<()> {
