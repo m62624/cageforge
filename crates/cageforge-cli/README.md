@@ -44,6 +44,10 @@ Windows users can install the matching `.msi` from the
 The release asset name includes the target architecture, such as
 `x86_64-pc-windows-msvc` or `aarch64-pc-windows-msvc`.
 
+The Linux CLI release is self-contained: the same executable contains the
+authenticated entry point used by the Linux backend as its private hardening
+helper. Users do not install or invoke a second helper executable.
+
 Until the first crates.io release, build from this repository. After publication,
 the same package can be installed with Cargo and an explicit native feature:
 

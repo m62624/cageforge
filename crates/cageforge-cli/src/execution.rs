@@ -120,6 +120,12 @@ fn runtime_context(
             .with_tmpdir(std::env::temp_dir())?
             .with_slash_tmp(PathBuf::from("/tmp"))?;
     }
+    #[cfg(target_os = "linux")]
+    {
+        for path in ["/bin", "/lib", "/lib64"] {
+            context = context.with_minimal_path(PathBuf::from(path))?;
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         context = context.with_tmpdir(std::env::temp_dir())?;
@@ -178,8 +184,11 @@ struct Invocation {
 
 #[cfg(all(feature = "config", feature = "linux", target_os = "linux"))]
 fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
+    let helper = std::env::current_exe()?;
     let backend = cageforge::LinuxBackend::new(
-        cageforge::LinuxBackendConfig::new().with_network_gateway(invocation.gateway),
+        cageforge::LinuxBackendConfig::new()
+            .with_hardening_helper_path(helper)
+            .with_network_gateway(invocation.gateway),
     )?;
     let prepared = backend.prepare(
         cageforge::BackendRequest::new(&invocation.command, &invocation.effective),
