@@ -13,9 +13,12 @@ use cageforge_command::StdioMode;
 use crate::error::MacosBackendError;
 use crate::network::GatewayRuntime;
 
+#[path = "process/identity.rs"]
+mod identity;
 #[path = "process/timeout.rs"]
 mod timeout;
 
+use identity::ProcessIdentity;
 use timeout::TimeoutWatchdog;
 
 const BOUNDARY_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -697,6 +700,9 @@ fn signal_process_group_members(
         if process_id <= 0 {
             continue;
         }
+        let Some(identity) = ProcessIdentity::capture(process_id)? else {
+            continue;
+        };
         let current_group_id = unsafe { libc::getpgid(process_id) };
         if current_group_id == -1 {
             let source = io::Error::last_os_error();
@@ -708,14 +714,7 @@ fn signal_process_group_members(
         if current_group_id != process_group_id {
             continue;
         }
-        if unsafe { libc::kill(process_id, signal) } == 0 {
-            signalled = true;
-            continue;
-        }
-        let source = io::Error::last_os_error();
-        if source.raw_os_error() != Some(libc::ESRCH) {
-            return Err(source);
-        }
+        signalled |= identity.signal(signal)?;
     }
     Ok(signalled)
 }

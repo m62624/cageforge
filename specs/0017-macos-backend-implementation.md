@@ -185,6 +185,16 @@ fork, exec, reparenting, and group/session changes. Termination must not target
 an unrelated process after PID reuse or affect another sandbox instance.
 An enumeration that misses an in-flight fork is not proof of an empty boundary.
 
+Individual lifecycle signals must bind the PID to its kernel generation before
+inspecting membership and preserve that generation through signal delivery.
+A second numeric `kill(pid, signal)` after `getpgid` cannot enforce this: the
+checked process may exit and the PID may name another process before delivery.
+The native regression must reject a mismatched generation for a live, directly
+owned fixture PID and also prove successful delivery to its exact generation.
+This strengthens the numeric member-signalling fallback in upstream
+`utils/pty/src/process_group.rs`; it does not make process-group membership an
+immutable boundary or solve reuse of a previously reaped group identifier.
+
 Filesystem or network unrestricted mode must not authorize delegating process
 creation to an unsandboxed host service. In particular, a sandboxed
 `launchctl submit` must not register a new launchd job, even when its executable
