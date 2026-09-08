@@ -173,6 +173,11 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Bubblewrap crate verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential pkg-config libcap-dev
       - name: Select crates.io publication mode
         id: publication-mode
         shell: bash
