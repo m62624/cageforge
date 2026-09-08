@@ -683,15 +683,27 @@ fn parent_watcher_does_not_retain_closed_stdout_or_stderr() {
     stderr_result.expect("parent watcher retained the closed stderr write end");
 }
 
-#[allow(unsafe_code)]
 fn wait_for_pipe_eof<T: Read + AsRawFd>(stream: &mut T) -> io::Result<()> {
+    read_pipe_until_eof(stream, |_| {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "closed standard-stream fixture produced output",
+        ))
+    })
+}
+
+#[allow(unsafe_code)]
+fn read_pipe_until_eof<T: Read + AsRawFd>(
+    stream: &mut T,
+    mut on_output: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<()> {
     let mut poll = libc::pollfd {
         fd: stream.as_raw_fd(),
         events: libc::POLLIN | libc::POLLHUP,
         revents: 0,
     };
     let deadline = Instant::now() + Duration::from_secs(3);
-    let mut byte = [0; 1];
+    let mut buffer = [0; 4096];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -715,14 +727,9 @@ fn wait_for_pipe_eof<T: Read + AsRawFd>(stream: &mut T) -> io::Result<()> {
                 "standard stream did not reach EOF",
             ));
         }
-        match stream.read(&mut byte) {
+        match stream.read(&mut buffer) {
             Ok(0) => return Ok(()),
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "closed standard-stream fixture produced output",
-                ));
-            }
+            Ok(read) => on_output(&buffer[..read])?,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
         }
@@ -1252,11 +1259,14 @@ fn successful_wait_terminates_descendants_that_change_group_or_session() {
         // completion. On the broken implementation it records the violation
         // and exits itself, leaving no unbounded orphan or host-side PID kill.
         fs::write(root.join("release"), b"boundary wait returned").expect("release fixture");
-        wait_for_pipe_eof(&mut stdout).expect("descendant closes stdout after release");
+        read_pipe_until_eof(&mut stdout, |_| Ok(()))
+            .expect("descendant closes stdout after release");
         let mut diagnostic = String::new();
-        stderr
-            .read_to_string(&mut diagnostic)
-            .expect("stderr diagnostic");
+        read_pipe_until_eof(&mut stderr, |chunk| {
+            diagnostic.push_str(&String::from_utf8_lossy(chunk));
+            Ok(())
+        })
+        .expect("stderr diagnostic");
         assert!(status.expect("wait for fixture").success(), "{diagnostic}");
         if root.join("survived").exists() {
             survivors.push(fs::read_to_string(root.join("ready")).expect("group-change record"));
