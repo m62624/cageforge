@@ -23,7 +23,6 @@ jobs:
       version: ${{ steps.info.outputs.version }}
       tag: ${{ steps.info.outputs.tag }}
       rc_ref: ${{ steps.info.outputs.rc_ref }}
-      rc_sha: ${{ steps.commit.outputs.rc_sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,7 +61,6 @@ jobs:
           git commit -m "build: prepare cageforge-cli v$VERSION" || true
           git push --force origin "${RC_REF#refs/heads/}"
           git push origin ":refs/tags/${GITHUB_REF_NAME}"
-          echo "rc_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   tests:
     name: Full CI on release candidate
@@ -70,7 +68,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       ref: ${{ needs.prepare.outputs.rc_ref }}
-      source_sha: ${{ needs.prepare.outputs.rc_sha }}
 
   tag:
     name: Create final CLI tag

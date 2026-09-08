@@ -14,10 +14,6 @@ on:
         description: Optional 40-character head SHA; fail if the PR moved
         required: false
         type: string
-      source_sha:
-        description: Exact repository commit for release-candidate validation
-        required: false
-        type: string
   workflow_dispatch:
     inputs:
       pr_number:
@@ -44,7 +40,7 @@ concurrency:
 jobs:
   native-linux-vm:
     name: Linux native tests in disposable QEMU/KVM VM
-    if: inputs.pr_number != '' || inputs.source_sha != '' || github.ref == 'refs/heads/main'
+    if: inputs.pr_number != '' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -115,7 +111,7 @@ jobs:
           } >>"${GITHUB_ENV}"
 
       - name: Resolve pushed main revision
-        if: inputs.pr_number == '' && inputs.source_sha == ''
+        if: inputs.pr_number == ''
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || {
@@ -124,21 +120,6 @@ jobs:
           }
           {
             echo "HEAD_SHA=$GITHUB_SHA"
-            echo "HEAD_REPO=$GITHUB_REPOSITORY"
-          } >>"${GITHUB_ENV}"
-
-      - name: Resolve explicit release revision
-        if: inputs.pr_number == '' && inputs.source_sha != ''
-        env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "::error::source_sha must be a lowercase 40-character commit SHA"
-            exit 64
-          }
-          {
-            echo "HEAD_SHA=$SOURCE_SHA"
             echo "HEAD_REPO=$GITHUB_REPOSITORY"
           } >>"${GITHUB_ENV}"
 

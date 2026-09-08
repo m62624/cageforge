@@ -28,10 +28,6 @@ on:
         description: Ref to check for release validation
         required: false
         type: string
-      source_sha:
-        description: Exact commit for native release validation
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -92,7 +88,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           MANUAL_SCOPE: ${{ inputs.scope }}
           MANUAL_SANDBOX: ${{ inputs.sandbox }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
