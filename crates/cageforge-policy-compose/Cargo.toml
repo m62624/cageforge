@@ -8,6 +8,9 @@ rust-version.workspace = true
 repository.workspace = true
 readme = "README.md"
 
+[package.metadata.dist]
+dist = false
+
 [dependencies]
 cageforge-command.workspace = true
 cageforge-path.workspace = true

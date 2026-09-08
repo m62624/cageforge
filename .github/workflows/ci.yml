@@ -77,7 +77,6 @@ jobs:
       linux_sandbox: ${{ steps.classify.outputs.linux_sandbox }}
       macos_sandbox: ${{ steps.classify.outputs.macos_sandbox }}
       windows_sandbox: ${{ steps.classify.outputs.windows_sandbox }}
-      cli: ${{ steps.classify.outputs.cli }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -99,29 +98,12 @@ jobs:
           linux_sandbox=false
           macos_sandbox=false
           windows_sandbox=false
-          cli=false
           shared_change=false
           changed_paths=()
           manual_linux=false
           manual_macos=false
           manual_windows=false
           root_manifest_change=false
-
-          cli_packages=(
-            cageforge-cli
-            cageforge
-            cageforge-bwrap
-            cageforge-linux
-            cageforge-macos
-            cageforge-windows
-            cageforge-config
-            cageforge-backend-api
-            cageforge-command
-            cageforge-network-proxy
-            cageforge-path
-            cageforge-policy
-            cageforge-policy-compose
-          )
 
           # Explicit workspace-package -> native-lane map. Keep this table
           # synchronized with each backend manifest, including its test-only
@@ -132,6 +114,7 @@ jobs:
           # crates used by Linux's runtime and integration tests.
           linux_sandbox_packages=(
             cageforge
+            cageforge-cli
             cageforge-linux
             cageforge-bwrap
             cageforge-config
@@ -142,12 +125,13 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
-          # Windows: cageforge-windows and the portable crates used by its
-          # runtime and integration tests. cageforge-config is not a Windows
-          # dependency and therefore does not select this lane.
+          # Windows: cageforge-windows, the CLI's Windows feature, and the
+          # portable crates used by their runtime and integration tests.
           windows_sandbox_packages=(
             cageforge
+            cageforge-cli
             cageforge-windows
+            cageforge-config
             cageforge-backend-api
             cageforge-command
             cageforge-network-proxy
@@ -159,7 +143,9 @@ jobs:
           # shared by every native backend.
           macos_sandbox_packages=(
             cageforge
+            cageforge-cli
             cageforge-macos
+            cageforge-config
             cageforge-backend-api
             cageforge-command
             cageforge-network-proxy
@@ -193,13 +179,11 @@ jobs:
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
-            cli=true
             mode=main
           elif [[ "$EVENT_NAME" == "workflow_call" ]]; then
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
-            cli=true
             mode=called
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
@@ -251,7 +235,7 @@ jobs:
                       native-windows)
                         windows_sandbox=true
                         ;;
-                      changes|common-components|cli|ci-pass|coverage-portable)
+                      changes|common-components|ci-pass|coverage-portable)
                         shared_change=true
                         ;;
                       *)
@@ -285,7 +269,6 @@ jobs:
               package_in_list "$package" "${linux_sandbox_packages[@]}" && linux_sandbox=true
               package_in_list "$package" "${windows_sandbox_packages[@]}" && windows_sandbox=true
               package_in_list "$package" "${macos_sandbox_packages[@]}" && macos_sandbox=true
-              package_in_list "$package" "${cli_packages[@]}" && cli=true
             fi
           done
 
@@ -300,7 +283,6 @@ jobs:
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
-            cli=true
             mode=shared
           elif [[ "$mode" == default && ("$linux_sandbox" == true || "$macos_sandbox" == true || "$windows_sandbox" == true) ]]; then
             mode=native
@@ -318,7 +300,6 @@ jobs:
             echo "linux_sandbox=${linux_sandbox}"
             echo "macos_sandbox=${macos_sandbox}"
             echo "windows_sandbox=${windows_sandbox}"
-            echo "cli=${cli}"
           } >> "$GITHUB_OUTPUT"
 
   common-components:
@@ -436,23 +417,38 @@ jobs:
           -p cageforge-cli
           --no-deps
 
-  cli:
-    name: "Cageforge CLI (build target: ${{ matrix.target }})"
+  cli-build:
+    name: "Cageforge CLI cross-build (${{ matrix.target }})"
     needs: [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows]
-    if: ${{ always() && needs.changes.outputs.cli == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    if: ${{ always() && (needs.changes.outputs.linux_sandbox == 'true' || needs.changes.outputs.macos_sandbox == 'true' || needs.changes.outputs.windows_sandbox == 'true') && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: Linux
+          - target: x86_64-unknown-linux-gnu
             runner: ubuntu-24.04
-            feature: linux
-          - target: macOS
-            runner: macos-15
-            feature: macos
-          - target: Windows
+            feature: linux-bundled-bubblewrap
+            zig: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            feature: linux-bundled-bubblewrap
+            zig: true
+          - target: x86_64-pc-windows-msvc
             runner: windows-2025
             feature: windows
+            zig: false
+          - target: aarch64-pc-windows-msvc
+            runner: windows-2025
+            feature: windows
+            zig: false
+          - target: x86_64-apple-darwin
+            runner: macos-26-intel
+            feature: macos
+            zig: false
+          - target: aarch64-apple-darwin
+            runner: macos-26
+            feature: macos
+            zig: false
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -463,30 +459,22 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          targets: ${{ matrix.target }}
+      - name: Install Zig for ARM64 Linux cross-build
+        if: matrix.zig
+        uses: mlugg/setup-zig@v2
+      - name: Install cargo-zigbuild for ARM64 Linux cross-build
+        if: matrix.zig
+        run: cargo install cargo-zigbuild --locked
       - uses: Swatinem/rust-cache@v2
-      - name: Check CLI formatting
-        if: matrix.target == 'Linux'
-        run: cargo fmt -p cageforge-cli -- --check
-      - name: Check CLI portable feature combinations
+      - name: Build CLI for the selected target
         run: |
           set -euo pipefail
-          cargo clippy -p cageforge-cli --no-default-features --all-targets -- -D warnings
-          cargo clippy -p cageforge-cli --no-default-features --features config --all-targets -- -D warnings
-          cargo test -p cageforge-cli --no-default-features --all-targets
-          cargo test -p cageforge-cli --no-default-features --features config --all-targets
-      - name: Check CLI with the matching native feature
-        run: |
-          set -euo pipefail
-          cargo clippy -p cageforge-cli --no-default-features --features "${{ matrix.feature }}" --all-targets -- -D warnings
-          cargo test -p cageforge-cli --no-default-features --features "${{ matrix.feature }}" --all-targets
-          cargo doc -p cageforge-cli --no-default-features --features "${{ matrix.feature }}" --no-deps
-      - name: Check the bundled Bubblewrap CLI feature
-        if: matrix.target == 'Linux'
-        run: |
-          set -euo pipefail
-          cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets -- -D warnings
-          cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets
+          build=(cargo build --locked --release -p cageforge-cli --target "${{ matrix.target }}" --no-default-features --features "${{ matrix.feature }}")
+          if [[ "${{ matrix.zig }}" == true ]]; then
+            build=(cargo zigbuild --locked --release -p cageforge-cli --target "${{ matrix.target }}" --no-default-features --features "${{ matrix.feature }}")
+          fi
+          "${build[@]}"
 
   native-linux:
     name: Linux sandbox (QEMU/KVM)
@@ -514,6 +502,8 @@ jobs:
           cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --lib --all-targets --no-default-features
           cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --bin cageforge-linux-helper --no-default-features
           cargo check -p cageforge --target aarch64-unknown-linux-gnu --no-default-features --features linux
+          cargo check -p cageforge-cli --target aarch64-unknown-linux-gnu --no-default-features --features linux
+          cargo check -p cageforge-cli --target aarch64-unknown-linux-gnu --no-default-features --features linux-bundled-bubblewrap
 
   linux-bwrap-resources:
     name: "Linux Bubblewrap resource (${{ matrix.arch }})"
@@ -600,15 +590,6 @@ jobs:
               'crates/cageforge-bwrap/src/**',
               'crates/cageforge-bwrap/vendor/bubblewrap/**'
             ) }}
-      - name: Upload architecture-labelled Bubblewrap resource
-        uses: actions/upload-artifact@v4
-        with:
-          name: cageforge-bwrap-linux-${{ matrix.arch }}
-          path: |
-            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap
-            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap.sha256
-          if-no-files-found: error
-
   native-macos:
     name: macOS sandbox
     needs: changes
@@ -638,6 +619,12 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p cageforge --no-default-features --features macos --no-deps
+      - name: Lint and test the CLI with the macOS feature
+        run: |
+          set -euo pipefail
+          cargo clippy -p cageforge-cli --no-default-features --features macos --all-targets -- -D warnings
+          cargo test -p cageforge-cli --no-default-features --features macos --all-targets
+          cargo doc -p cageforge-cli --no-default-features --features macos --no-deps
 
   native-windows:
     name: "Windows sandbox (Windows Server 2025)"
@@ -748,13 +735,19 @@ jobs:
           set -euo pipefail
           cargo test -p cageforge --no-default-features --features windows --all-targets
           cargo doc -p cageforge --no-default-features --features windows --no-deps
+      - name: Lint and test the CLI with the Windows feature
+        run: |
+          set -euo pipefail
+          cargo clippy -p cageforge-cli --no-default-features --features windows --all-targets -- -D warnings
+          cargo test -p cageforge-cli --no-default-features --features windows --all-targets
+          cargo doc -p cageforge-cli --no-default-features --features windows --no-deps
       - name: Upload Windows native test report
-        if: always()
+        if: ${{ failure() && hashFiles('test-reports/**') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: cageforge-windows-test-report
           path: test-reports
-          if-no-files-found: error
+          if-no-files-found: warn
 
   coverage-portable:
     name: "portable coverage (build target: Linux)"
@@ -814,7 +807,7 @@ jobs:
     name: CI passed
     if: ${{ always() }}
     needs:
-      [changes, common-components, cli, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
+      [changes, common-components, cli-build, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

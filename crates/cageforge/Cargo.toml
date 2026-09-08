@@ -8,6 +8,9 @@ description = "Unified ergonomic facade for Cageforge sandbox backends"
 repository.workspace = true
 readme = "README.md"
 
+[package.metadata.dist]
+dist = false
+
 [package.metadata.docs.rs]
 all-features = true
 targets = [

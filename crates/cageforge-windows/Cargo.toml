@@ -8,6 +8,9 @@ rust-version.workspace = true
 description = "Windows native backend for Cageforge process sandboxing"
 readme = "README.md"
 
+[package.metadata.dist]
+dist = false
+
 [package.metadata.docs.rs]
 targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 

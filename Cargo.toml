@@ -22,7 +22,30 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/m62624/cageforge"
+homepage = "https://github.com/m62624/cageforge"
 rust-version = "1.88"
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.31.0"
+ci = "github"
+installers = ["shell", "powershell", "homebrew", "msi"]
+tap = "m62624/homebrew-cageforge"
+publish-jobs = ["homebrew"]
+allow-dirty = ["ci"]
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+pr-run-mode = "plan"
+install-path = "CARGO_HOME"
+install-updater = false
+
+[workspace.metadata.dist.github-custom-runners]
+aarch64-pc-windows-msvc = "windows-2025"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -15,7 +15,51 @@ variables, an exact network policy, and a timeout. The CLI does not guess which
 files or hosts a program needs. The command after `--` is passed as native argv;
 it is never interpreted as shell text.
 
-## Install and select the backend
+## Install the CLI
+
+Release builds are published for Linux, macOS, and Windows on both x86_64 and
+ARM64. The release page contains the target-labelled archives, checksums, and
+platform installers.
+
+On macOS or Linux, Homebrew can install the latest published CLI:
+
+```sh
+brew tap m62624/cageforge
+brew install m62624/cageforge/cageforge-cli
+```
+
+The release installers can also be used directly:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.sh | sh
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.ps1 | iex"
+```
+
+Windows users can install the matching `.msi` from the
+[latest Cageforge release](https://github.com/m62624/cageforge/releases/latest).
+The release asset name includes the target architecture, such as
+`x86_64-pc-windows-msvc` or `aarch64-pc-windows-msvc`.
+
+Until the first crates.io release, build from this repository. After publication,
+the same package can be installed with Cargo and an explicit native feature:
+
+```sh
+cargo install --locked cageforge-cli --features linux
+```
+
+For a repository checkout, replace that with
+`cargo install --path crates/cageforge-cli --locked --features <os-feature>`.
+Choose the feature matching the target operating system as described below.
+
+Remove a Homebrew installation with `brew uninstall cageforge-cli`; remove an
+MSI installation through Windows Installed apps. Script and Cargo installs place
+the executable in the user's Cargo binary directory and can be removed there.
+
+## Build from source and select the backend
 
 Build the binary with exactly one feature matching its target:
 

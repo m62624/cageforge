@@ -9,6 +9,9 @@ repository.workspace = true
 readme = "README.md"
 build = "build.rs"
 
+[package.metadata.dist]
+dist = false
+
 [package.metadata.docs.rs]
 targets = []
 

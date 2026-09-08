@@ -1,6 +1,7 @@
 > ⚠️ **Independent project**
 >
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
+> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
+> crate is an independent facade over Cageforge's public sandbox API.
 
 # cageforge
 
@@ -109,29 +110,48 @@ the [Linux backend README](../cageforge-linux/README.md) and
 [macOS backend README](../cageforge-macos/README.md) describe their native
 requirements and configuration.
 
-## What happens to Cargo's child processes
+## How a sandbox instance works
 
-One `spawn` creates one sandbox boundary around the root command and its whole
-descendant tree:
+Each call to `spawn` starts one root command inside a new sandbox instance. The
+instance applies the effective filesystem, environment, network, timeout, and
+process-tree policy to that command and to every descendant it creates:
 
 ```text
-cageforge
-└── cargo build --release
+your application
+└── root command
+    ├── child process
+    ├── helper or worker
+    └── another descendant
+```
+
+The operating system carries the native restrictions through the process tree.
+The descendants can use their normal command-line options and APIs, but they
+cannot use them to grant themselves permissions outside the effective policy.
+When the root command exits, the child handle reports its typed status and the
+facade closes the instance's native resources. A timeout or explicit
+termination applies to the complete descendant tree.
+
+To run several independent operations, call `spawn` separately for each
+top-level command. Every call gets its own process boundary, timeout, and
+native enforcement state. If one root command deliberately starts a shell and
+runs several commands inside that shell, those commands share the same
+instance and policy.
+
+For example, an application can start Cargo through the facade in the same way
+it starts any other program:
+
+```text
+application
+└── cargo build --release       <- one sandbox instance
     ├── rustc
-    ├── build.rs
+    ├── build script
     └── linker
 ```
 
-Cargo keeps its normal command-line options. Its `rustc`, build scripts,
-linker, and other descendants inherit the same boundary and therefore the
-same effective filesystem, environment, and network permissions. A second
-top-level `spawn` creates a separate instance. If several commands are placed
-inside one explicitly launched shell, they intentionally share that one
-instance.
-
-The facade does not intercept commands launched outside the application. A
-CLI can wrap this API so that a user can run `my-tool cargo test`; the wrapper
-then creates the backend and starts Cargo through `spawn`.
+Cargo and its children retain their normal behavior while inheriting the
+permissions selected for that instance. A CLI can expose the same flow as
+`my-tool cargo test`: it builds a `CommandRequest`, prepares it with the
+selected policy, and starts it through `spawn`.
 
 ## Re-exported API
 

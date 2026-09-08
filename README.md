@@ -67,6 +67,27 @@ boundary as Cargo.
 The facade is synchronous. An application with an async runtime can execute
 blocking preparation, spawning, and waiting in its blocking-task facility.
 
+## Install the command-line adapter
+
+Applications can embed the `cageforge` facade directly, or install
+`cageforge-cli` when a standalone wrapper is more convenient. The CLI accepts a
+TOML profile that names the files, environment, network destinations, and
+timeout a program needs, then runs one explicit argv command inside the
+matching OS sandbox.
+
+CLI releases cover Linux, macOS, and Windows on x86_64 and ARM64. On macOS or
+Linux, install the Homebrew formula with:
+
+```sh
+brew tap m62624/cageforge
+brew install m62624/cageforge/cageforge-cli
+```
+
+The [latest release](https://github.com/m62624/cageforge/releases/latest) also
+contains target-labelled archives, checksums, shell and PowerShell installers,
+and Windows `.msi` packages. The CLI README contains the exact installer
+commands and source-build alternative.
+
 ## Workspace packages
 
 The workspace currently contains 14 Cargo packages: 13 reusable library,
