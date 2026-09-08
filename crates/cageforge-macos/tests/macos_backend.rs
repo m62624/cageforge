@@ -488,7 +488,7 @@ fn host_accepts_the_backend_seatbelt_profile() {
 fn restricted_command_can_start_a_native_runtime_program() {
     let workspace = TempDir::new().expect("workspace");
     let policy = restricted_policy(workspace.path());
-    let command = CommandSpec::new("/bin/true").expect("true");
+    let command = CommandSpec::new("/usr/bin/true").expect("true");
     let (command, effective, context) = request_for(workspace.path(), &policy, command);
     let backend = backend();
     let prepared = backend
