@@ -49,6 +49,12 @@ not portable backend API concepts.
 
 ## 3. Public API
 
+The native backend and child directly implement `Sandbox` and `SandboxChild`
+from `cageforge-backend-api`. Dynamic launch uses those implementations and
+retains the same setup verification, instance-bound preparation, native child,
+and recovery ownership. The dispatch review against upstream manager/spawn is
+recorded in Specification 0011; this changes no token, ACL, Job, or IPC rule.
+
 The public crate surface consists of:
 
 - `WindowsBackend`;

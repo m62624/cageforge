@@ -54,6 +54,38 @@ struct MacosBoundaryRecovery {
     completed: bool,
 }
 
+impl cageforge_backend_api::SandboxChild for MacosChild {
+    type Error = MacosBackendError;
+
+    fn id(&self) -> u32 {
+        MacosChild::id(self)
+    }
+
+    fn stdin(&mut self) -> Option<&mut dyn std::io::Write> {
+        MacosChild::stdin(self).map(|stream| stream as &mut dyn std::io::Write)
+    }
+
+    fn stdout(&mut self) -> Option<&mut dyn std::io::Read> {
+        MacosChild::stdout(self).map(|stream| stream as &mut dyn std::io::Read)
+    }
+
+    fn stderr(&mut self) -> Option<&mut dyn std::io::Read> {
+        MacosChild::stderr(self).map(|stream| stream as &mut dyn std::io::Read)
+    }
+
+    fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {
+        MacosChild::try_wait(self)
+    }
+
+    fn wait(&mut self) -> Result<ExitStatus, Self::Error> {
+        MacosChild::wait(self)
+    }
+
+    fn kill(&mut self) -> Result<(), Self::Error> {
+        MacosChild::kill(self)
+    }
+}
+
 impl MacosChild {
     pub(crate) fn new(
         child: Child,

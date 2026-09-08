@@ -82,14 +82,14 @@ third-party build surface through `cageforge`.
 
 ## Unified execution contract
 
-The facade defines `Sandbox`, a high-level trait implemented by each native
+The facade re-exports `Sandbox` from `cageforge-backend-api`, implemented by each native
 backend. It extends the portable capability-discovery contract and provides
 the same `prepare` and `spawn` operation shape for Linux, Windows, and macOS.
 The associated child and error types remain native, so the facade does not
 erase useful platform-specific diagnostics or force incompatible OS process
 models into one fake type.
 
-The facade also defines `SandboxChild` for the common lifecycle operations:
+The facade also re-exports `SandboxChild` for the common lifecycle operations:
 process identifier, standard streams, non-blocking status, blocking wait, and
 termination. All operations return the native backend's typed error.
 
@@ -103,6 +103,15 @@ The public facade is synchronous. Native network gateways may use hidden
 Tokio tasks or helper threads, but the caller does not need a particular async
 runtime. Async applications may run the blocking facade calls in their own
 blocking-task facility.
+
+`DynSandbox` adds object-safe `launch` over the same static contract.
+`native_sandbox()` selects the host backend through its matching opt-in feature
+and returns `Box<dyn DynSandbox>`. `native_sandbox_with` accepts the host's
+existing configuration type, re-exported as `NativeSandboxConfig`, without
+duplicating its builders. Missing features, unsupported platforms, and native
+initialization failures return separate `NativeSandboxError` variants.
+Windows setup remains explicit. `Arc<dyn DynSandbox>` allows backend sharing;
+each returned child retains its original native ownership and cleanup.
 
 ## Ergonomic usage
 

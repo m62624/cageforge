@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendIdentity, BackendRequest,
-    PreparedBackendRequest, SandboxBackend,
+    PreparedBackendRequest, Sandbox, SandboxBackend,
 };
 use cageforge_command::{
     CoreEnvironment, EnvironmentBase, EnvironmentInput, EnvironmentNameKey, TimeoutPolicy,
@@ -273,6 +273,26 @@ fn windows_capabilities() -> BackendCapabilities {
         BackendCapability::EnvironmentFilters,
         BackendCapability::EnvironmentOverrides,
     ])
+}
+
+impl Sandbox for WindowsBackend {
+    type Child = WindowsChild;
+    type Error = WindowsBackendError;
+
+    fn prepare<'a>(
+        &self,
+        request: BackendRequest<'a>,
+        context: &cageforge_policy::PathResolutionContext,
+    ) -> Result<PreparedBackendRequest<'a, Self>, Self::Error> {
+        WindowsBackend::prepare(self, request, context)
+    }
+
+    fn spawn<'a>(
+        &self,
+        prepared: PreparedBackendRequest<'a, Self>,
+    ) -> Result<Self::Child, Self::Error> {
+        WindowsBackend::spawn(self, prepared)
+    }
 }
 
 impl SandboxBackend for WindowsBackend {

@@ -35,6 +35,38 @@ struct WindowsBoundaryRecovery {
     released: bool,
 }
 
+impl cageforge_backend_api::SandboxChild for WindowsChild {
+    type Error = WindowsBackendError;
+
+    fn id(&self) -> u32 {
+        WindowsChild::id(self)
+    }
+
+    fn stdin(&mut self) -> Option<&mut dyn std::io::Write> {
+        WindowsChild::stdin(self)
+    }
+
+    fn stdout(&mut self) -> Option<&mut dyn std::io::Read> {
+        WindowsChild::stdout(self)
+    }
+
+    fn stderr(&mut self) -> Option<&mut dyn std::io::Read> {
+        WindowsChild::stderr(self)
+    }
+
+    fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {
+        WindowsChild::try_wait(self)
+    }
+
+    fn wait(&mut self) -> Result<ExitStatus, Self::Error> {
+        WindowsChild::wait(self)
+    }
+
+    fn kill(&mut self) -> Result<(), Self::Error> {
+        WindowsChild::kill(self)
+    }
+}
+
 impl WindowsChild {
     pub(crate) const fn new(
         session: RunnerSession,

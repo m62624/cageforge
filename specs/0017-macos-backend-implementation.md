@@ -21,6 +21,12 @@ is copied into this crate.
 
 ## 2. Platform and dependency boundary
 
+The native backend and child directly implement `Sandbox` and `SandboxChild`
+from `cageforge-backend-api`. Dynamic launch delegates to these implementations
+without replacing Seatbelt lowering or child/recovery ownership. The upstream
+manager/spawn correspondence for shared dispatch is recorded in Specification
+0011.
+
 The native implementation and native integration tests use the exact guard:
 
 ```rust

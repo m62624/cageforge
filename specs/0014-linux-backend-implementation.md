@@ -5,6 +5,12 @@ Status: implemented; the behavior and security contract for the current
 
 ## 1. Purpose
 
+The native backend and child directly implement the execution traits owned by
+`cageforge-backend-api`. The dynamic adapter delegates preparation, spawn,
+streams, wait, and termination to these same native methods and retains the
+original child destructor. Its upstream handoff comparison is recorded in
+Specification 0011; no Bubblewrap or lifecycle mechanism changes with dispatch.
+
 This specification defines the first native Cageforge backend: Linux process
 execution with operating-system filesystem and process isolation. It turns the
 portable values produced by `cageforge-config`, `cageforge-command`,

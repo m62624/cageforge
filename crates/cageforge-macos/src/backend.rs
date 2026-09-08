@@ -8,7 +8,7 @@ use std::fs;
 
 use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendIdentity, BackendRequest,
-    PreparedBackendRequest, SandboxBackend,
+    PreparedBackendRequest, Sandbox, SandboxBackend,
 };
 use cageforge_command::{CoreEnvironment, EnvironmentBase, EnvironmentInput};
 use cageforge_policy::PathResolutionContext;
@@ -192,6 +192,26 @@ impl MacosBackend {
             }
             EnvironmentBase::None => Ok(EnvironmentInput::empty()),
         }
+    }
+}
+
+impl Sandbox for MacosBackend {
+    type Child = MacosChild;
+    type Error = MacosBackendError;
+
+    fn prepare<'a>(
+        &self,
+        request: BackendRequest<'a>,
+        context: &cageforge_policy::PathResolutionContext,
+    ) -> Result<PreparedBackendRequest<'a, Self>, Self::Error> {
+        MacosBackend::prepare(self, request, context)
+    }
+
+    fn spawn<'a>(
+        &self,
+        prepared: PreparedBackendRequest<'a, Self>,
+    ) -> Result<Self::Child, Self::Error> {
+        MacosBackend::spawn(self, prepared)
     }
 }
 

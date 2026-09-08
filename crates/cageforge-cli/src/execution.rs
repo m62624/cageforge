@@ -12,6 +12,14 @@ use crate::cli::SetupCommand;
 use crate::cli::{Cli, Command, RunArgs};
 use crate::error::CliError;
 
+#[cfg(feature = "config")]
+struct Invocation {
+    command: cageforge::CommandRequest,
+    effective: cageforge::EffectiveSandbox,
+    context: cageforge::PathResolutionContext,
+    gateway: cageforge::GatewayConfig,
+}
+
 /// Executes a parsed CLI request and returns the process exit code.
 pub fn execute(cli: Cli) -> Result<u8, CliError> {
     match cli.command {
@@ -235,53 +243,23 @@ fn platform_minimal_root(current_directory: &Path) -> PathBuf {
     }
 }
 
-#[cfg(feature = "config")]
-struct Invocation {
-    command: cageforge::CommandRequest,
-    effective: cageforge::EffectiveSandbox,
-    context: cageforge::PathResolutionContext,
-    gateway: cageforge::GatewayConfig,
-}
-
-#[cfg(all(feature = "config", feature = "linux", target_os = "linux"))]
+#[cfg(all(
+    feature = "config",
+    any(
+        all(feature = "linux", target_os = "linux"),
+        all(feature = "windows", target_os = "windows"),
+        all(feature = "macos", target_os = "macos"),
+    )
+))]
 fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
-    let helper = std::env::current_exe()?;
-    let backend = cageforge::LinuxBackend::new(
-        cageforge::LinuxBackendConfig::new()
-            .with_hardening_helper_path(helper)
-            .with_network_gateway(invocation.gateway),
-    )?;
-    let prepared = backend.prepare(
+    let config = cageforge::NativeSandboxConfig::new().with_network_gateway(invocation.gateway);
+    #[cfg(all(feature = "linux", target_os = "linux"))]
+    let config = config.with_hardening_helper_path(std::env::current_exe()?);
+    let backend = cageforge::native_sandbox_with(config)?;
+    let mut child = backend.launch(
         cageforge::BackendRequest::new(&invocation.command, &invocation.effective),
         &invocation.context,
     )?;
-    let mut child = backend.spawn(prepared)?;
-    Ok(child.wait()?.code().unwrap_or(1) as u8)
-}
-
-#[cfg(all(feature = "config", feature = "windows", target_os = "windows"))]
-fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
-    let backend = cageforge::WindowsBackend::new(
-        cageforge::WindowsBackendConfig::new().with_network_gateway(invocation.gateway),
-    )?;
-    let prepared = backend.prepare(
-        cageforge::BackendRequest::new(&invocation.command, &invocation.effective),
-        &invocation.context,
-    )?;
-    let mut child = backend.spawn(prepared)?;
-    Ok(child.wait()?.code().unwrap_or(1) as u8)
-}
-
-#[cfg(all(feature = "config", feature = "macos", target_os = "macos"))]
-fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
-    let backend = cageforge::MacosBackend::new(
-        cageforge::MacosBackendConfig::new().with_network_gateway(invocation.gateway),
-    )?;
-    let prepared = backend.prepare(
-        cageforge::BackendRequest::new(&invocation.command, &invocation.effective),
-        &invocation.context,
-    )?;
-    let mut child = backend.spawn(prepared)?;
     Ok(child.wait()?.code().unwrap_or(1) as u8)
 }
 

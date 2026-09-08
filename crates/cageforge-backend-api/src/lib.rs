@@ -4,8 +4,9 @@
 //!
 //! This crate is the typed boundary between [`cageforge_command`] and
 //! [`cageforge_policy_compose`] values and a native execution backend. It does
-//! not launch processes, perform filesystem or network I/O, resolve DNS, or
-//! select an operating-system sandbox.
+//! not implement native filesystem or network I/O, resolve DNS, or select an
+//! operating-system sandbox. [`Sandbox`] and [`DynSandbox`] delegate execution
+//! to the selected native backend while [`SandboxChild`] exposes its lifecycle.
 //!
 //! Start with [`BackendRequest`] and [`BackendCapabilities`]. A native backend
 //! implements [`SandboxBackend`], advertises the capabilities it can enforce,
@@ -17,6 +18,7 @@
 #![deny(missing_docs)]
 
 mod capability;
+mod execution;
 mod requirements;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,6 +40,8 @@ use cageforge_policy_compose::{
     EnvironmentInput,
 };
 mod model;
+
+pub use execution::{DynSandbox, Sandbox, SandboxChild, SandboxExecutionError};
 
 pub use model::{
     BackendCapabilities, BackendCapability, BackendContractError, BackendIdentity, BackendRequest,

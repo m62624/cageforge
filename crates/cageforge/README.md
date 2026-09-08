@@ -8,7 +8,7 @@
 `cageforge` is the unified Rust facade for running potentially untrusted
 commands, agents, plugins, build scripts, and mods inside an OS-enforced
 sandbox. It re-exports Cageforge's portable command, policy, composition, and
-backend-contract APIs, then exposes the same `Sandbox` and `SandboxChild`
+backend-contract APIs, then exposes the same `Sandbox`, `DynSandbox`, and `SandboxChild`
 operations for the native Linux, Windows, and macOS backends.
 
 The sandbox isolates processes using the host operating system's native
@@ -58,7 +58,68 @@ The feature surface is explicit:
 The default feature set is empty. The portable API is available without an OS
 feature, while a native backend feature must match the compilation target.
 
-## Run a command
+## Shared execution API (next release)
+
+`native_sandbox()` creates the backend for the current operating system and
+enabled Cargo feature. It returns `Box<dyn DynSandbox>`, so the rest of an
+application can launch commands without naming a Linux, Windows, or macOS
+backend type. The dynamic API in this checkout is intended for the next
+release; the published `0.1.0` uses the concrete preparation API shown below.
+
+```rust,no_run
+use std::process::ExitStatus;
+use cageforge::{
+    native_sandbox, BackendRequest, CommandRequest, EffectiveSandbox,
+    PathResolutionContext,
+};
+
+fn run(
+    command: &CommandRequest,
+    effective_policy: &EffectiveSandbox,
+    context: &PathResolutionContext,
+) -> Result<ExitStatus, Box<dyn std::error::Error>> {
+    let sandbox = native_sandbox()?;
+    let mut child = sandbox.launch(
+        BackendRequest::new(command, effective_policy),
+        context,
+    )?;
+    Ok(child.wait()?)
+}
+```
+
+Create `command`, `effective_policy`, and `context` with the existing portable
+builders or a resolved TOML profile. `launch` checks the selected backend's
+capabilities, prepares the complete effective policy, and starts one command
+tree. Unsupported requests return an error before launch. The child exposes
+standard streams, `try_wait`, `wait`, and `kill`; dropping it uses the native
+backend's termination and recovery lifecycle.
+
+Create the backend once when running several commands. To share it across
+threads, convert the box into `Arc<dyn DynSandbox>`:
+
+```rust,no_run
+use std::sync::Arc;
+use cageforge::{native_sandbox, DynSandbox, NativeSandboxError};
+
+fn shared_backend() -> Result<Arc<dyn DynSandbox>, NativeSandboxError> {
+    Ok(native_sandbox()?.into())
+}
+```
+
+Each thread supplies its own command and effective policy to `launch`; each
+returned child owns an independent sandbox instance. Backend sharing does not
+serialize the commands for their whole lifetime.
+
+Use `native_sandbox_with(NativeSandboxConfig::new()...)` for custom native
+settings. `NativeSandboxConfig` exposes the matching backend's existing
+configuration builders, including Linux helper selection and Windows setup
+location. On Windows, explicitly install setup through `WindowsSetup` first;
+backend construction verifies that installation without requesting UAC.
+Missing features or native prerequisites produce `NativeSandboxError`.
+`SandboxExecutionError` identifies the failed execution operation and retains
+the concrete native error in its source chain.
+
+## Explicit preparation
 
 The facade keeps the preparation and launch steps explicit so the effective
 policy is checked before the operating-system backend starts a process:

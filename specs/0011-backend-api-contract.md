@@ -46,17 +46,19 @@ The crate will expose the following independent concepts:
   backend instance;
 - `BackendContractError`: common failures such as unsupported capabilities,
   invalid runtime context, or invalid environment preparation; and
-- `SandboxBackend`: a synchronous preparation trait implemented by native
-  backends.
+- `SandboxBackend`: capability discovery and stable backend identity;
+- `Sandbox` and `SandboxChild`: static execution and lifecycle contracts; and
+- `DynSandbox`: object-safe launch through the same native implementation.
 
 `BackendRequest::prepare_for` performs preparation using the capabilities
 advertised by the supplied `SandboxBackend` and a backend-supplied runtime
 `PathResolutionContext`. The trait itself exposes only
 capability discovery, so an implementation cannot override the common
 preflight algorithm and validate against a broader, self-selected capability
-set. The API does not define a common process type, async runtime, PTY, signal
-model, cancellation model, or process-tree lifecycle. A native backend owns
-those concerns in its own API and error type.
+set. Execution traits delegate native preparation, launch, and child lifecycle
+to the backend. They introduce no process runtime, PTY, or native enforcement
+implementation. The static API preserves the native child and error type;
+dynamic launch owns that same child behind its shared lifecycle interface.
 
 The prepared handoff is bound to the concrete backend type `B` at compile time
 and stores a runtime `BackendIdentity` for the exact instance passed to
@@ -235,6 +237,42 @@ capability sets to verify monotonicity and fail-closed behavior. Portable
 backend API logic must maintain at least 90% line coverage. Native enforcement
 tests belong to each native backend's operating-system CI runner and are not
 replaced by this crate's portable tests.
+
+## Execution trait stabilization
+
+The next API revision moves the existing `Sandbox` and `SandboxChild` traits
+from the facade into this crate. Native crates implement them directly; the
+facade re-exports the same contracts. Capability-only `SandboxBackend`
+implementations remain valid. Native child ownership and native error types
+remain available through the statically dispatched traits.
+
+An additional object-safe `DynSandbox` contract supports `Box<dyn DynSandbox>`
+and `Arc<dyn DynSandbox>` without specifying a platform child or error type.
+Its `launch` operation takes the existing `BackendRequest` and
+`PathResolutionContext`, prepares through the selected native backend, and
+spawns through that same instance. No unbound prepared handoff crosses the
+dynamic interface. The implementation is provided for thread-safe `Sandbox`
+implementations whose children can be transferred between threads.
+
+Dynamic lifecycle errors identify the failing operation and retain the actual
+native error as their source, including downcasting. They must not replace
+native errors with display strings. The dynamic child owns the native child;
+dropping it invokes the original native destructor and recovery machinery.
+Sharing a backend does not serialize command lifetimes or change policies.
+
+Verification must exercise capability rejection before launch, failed native
+preparation and spawn, source-error recovery, every child operation, exactly
+once child destruction, and parallel calls through a shared trait object.
+Native CI must demonstrate the trait on each real operating-system backend.
+Existing concrete `prepare`/`spawn` APIs remain usable.
+
+The upstream comparison for this change covers
+`codex-rs/sandboxing/src/manager.rs::SandboxManager::{select_initial,transform}`
+and `codex-rs/sandboxing/src/spawn.rs::spawn_process` in the checkout named by
+UPSTREAM.md. Upstream selects a native launch path using its product request;
+Cageforge retains composed policies and instance-bound preparation and exposes
+library-owned execution traits instead of product request or PTY types.
+This adapter does not change native enforcement, setup, or cleanup behavior.
 
 ## Relationship to Codex
 

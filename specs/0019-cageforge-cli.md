@@ -67,9 +67,11 @@ The adapter performs this sequence:
    workspace roots;
 3. compose the requested profile with an equal outer ceiling owned by this
    CLI invocation;
-4. construct the matching native backend and pass its gateway configuration;
-5. call `prepare` with the backend-bound `BackendRequest`; and
-6. call `spawn` and wait for the typed native child result.
+4. construct the matching native backend with `native_sandbox_with` and pass
+   its gateway configuration (and the CLI helper identity on Linux);
+5. call `DynSandbox::launch` with `BackendRequest`, which performs native
+   preparation and spawn on the same instance; and
+6. wait for the common child result with the native error preserved as a source.
 
 The CLI reports configuration, composition, missing-feature, and native
 backend failures to stderr and returns a nonzero exit code. A child that
