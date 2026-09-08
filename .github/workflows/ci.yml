@@ -52,7 +52,7 @@ concurrency:
 #   Linux ARM64     — cross-build on ubuntu-24.04
 #   Windows x64     — windows-2025
 #
-# Release CLI artifact matrix (synchronized with ../plugmem release.yml):
+# Release CLI artifact matrix:
 #   ubuntu-24.04       — Linux x64
 #   ubuntu-24.04 + Zig  — Linux ARM64
 #   macos-26-intel     — macOS Intel

@@ -110,8 +110,7 @@ dependency closure changes. Workflow concurrency cancels superseded runs for
 the same PR or ref.
 
 Release artifacts are built by a tag-driven workflow from the CLI package only.
-The six target/runner pairs are kept synchronized with the current release
-matrix in `../plugmem/.github/workflows/release.yml`:
+The release workflow uses these six target/runner pairs:
 
 | Target | Release runner | CLI feature |
 |---|---|---|

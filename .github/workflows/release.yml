@@ -99,9 +99,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Keep this target/runner mapping synchronized with the release
-          # matrix in ../plugmem/.github/workflows/release.yml. Native sandbox
-          # validation uses its own deliberately pinned runners in ci.yml.
+          # Native sandbox validation uses its own deliberately pinned runners
+          # in ci.yml; this is the approved CLI artifact matrix.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-24.04
             zig: false
