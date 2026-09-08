@@ -604,3 +604,41 @@ fn exit_status(exit_code: u32) -> ExitStatus {
 
     ExitStatus::from_raw(exit_code)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_a_watchdog_cancels_and_joins_with_another_sender_alive() {
+        let (cancel, receiver) = mpsc::sync_channel(1);
+        let retained_cancel = cancel.clone();
+        let (done, completion) = mpsc::channel();
+        let join = std::thread::spawn(move || {
+            let result = receiver.recv();
+            done.send(result).expect("record watchdog cancellation");
+        });
+        let watchdog = TimeoutWatchdog {
+            cancel,
+            join: Some(join),
+        };
+
+        drop(watchdog);
+        // Drop must have joined: this is a completed-state observation, not
+        // a scheduling deadline. Retain the dispatcher's sender so dropping
+        // the watchdog's sender alone cannot accidentally satisfy the test.
+        let observed = completion.try_recv();
+        if observed.is_err() {
+            // Also clean up the worker when running against the broken owner.
+            let _ = retained_cancel.try_send(());
+            completion
+                .recv_timeout(Duration::from_secs(5))
+                .expect("clean up detached regression worker")
+                .expect("cleanup cancellation");
+        }
+        assert!(
+            matches!(observed, Ok(Ok(()))),
+            "watchdog Drop must cancel and join its worker: {observed:?}"
+        );
+    }
+}
