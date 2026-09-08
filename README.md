@@ -174,21 +174,21 @@ while the protection necessarily depends on the host OS, its native security
 mechanisms, and a correct Cageforge implementation. A program must be started
 through Cageforge for the boundary to apply.
 
-The idea for Cageforge's common command-sandbox API across Linux, Windows, and
-macOS grew from studying the process-boundary design described in OpenAI's
-[Building a safe, effective sandbox to enable Codex on
-Windows](https://openai.com/index/building-codex-windows-sandbox/) article and
-the relevant open-source [Codex](https://github.com/openai/codex) components.
-The article was the starting point for the Windows direction; Cageforge then
-applied the same security principles through native backends for all three
-supported operating systems.
-That work reaches the same broad Windows conclusion used here: a useful
-boundary needs native process identities and restricted tokens, filesystem
-permissions, and OS-enforced network controls rather than advisory filters.
-Cageforge generalizes that security model across Linux, Windows, and macOS as
-an independent library with its own public API and multiple independent
-sandbox instances; Codex product protocols and runtime integrations are not
-part of this API.
+The idea for Cageforge's common command-sandbox API grew from studying the
+security model and protection mechanisms used by the open-source
+[Codex](https://github.com/openai/codex) sandbox, including the process-boundary
+design described in OpenAI's [Building a safe, effective sandbox to enable
+Codex on Windows](https://openai.com/index/building-codex-windows-sandbox/)
+article. Cageforge takes those sandbox principles and the corresponding
+mechanism inventory as its behavioral foundation, then realizes each part with
+the native enforcement facilities of Linux, Windows, and macOS. The backends
+are separate implementations for their operating systems, not one Windows
+mechanism transplanted unchanged to the others.
+
+Cageforge remains an independent library with its own public API and adapts
+that shared security model for multiple independent sandbox instances; Codex
+product protocols, runtime integrations, and source files are not part of this
+API.
 
 The protection is layered:
 
