@@ -664,6 +664,15 @@ owned when their cleanup returns an error; a detached recovery owner retries
 termination and cleanup. A failed cleanup must not clear a guard while the
 associated boundary or host-side protection may still exist.
 
+Abrupt application death bypasses these Rust destructors. The retained upstream
+`--die-with-parent` and PID-namespace boundary must still terminate its owned
+processes. Shared synthetic-target recovery must discard the dead process's
+generation-bound marker without removing a target held by another live
+instance; the last live owner's cleanup then removes the exact empty target.
+Native verification must kill one of two independent owning applications,
+observe the first boundary's exit through a pinned pidfd, and prove that the
+second instance remains protected and can complete its own cleanup.
+
 ### 7.5 Network lowering
 
 Network namespace isolation implements all-network-disabled behavior. Narrower
