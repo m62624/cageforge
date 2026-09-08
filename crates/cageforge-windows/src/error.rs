@@ -883,6 +883,20 @@ pub enum WindowsBackendError {
     /// The sandboxed command exceeded its prepared timeout.
     #[error("the sandboxed Windows command exceeded its prepared timeout")]
     ProcessTimedOut,
+    /// The trusted parent could not create its lifecycle response thread.
+    #[error("failed to create the Windows runner lifecycle dispatcher: {source}")]
+    RunnerDispatcherStart {
+        /// Native thread-creation failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The trusted parent could not create its independent command timer.
+    #[error("failed to create the Windows command timeout watchdog: {source}")]
+    TimeoutWatchdogStart {
+        /// Native thread-creation failure.
+        #[source]
+        source: io::Error,
+    },
     /// The authenticated runner lifecycle failed outside a typed child operation.
     #[error("Windows command lifecycle failed: {source}")]
     RunnerLifecycle {
@@ -942,6 +956,10 @@ impl WindowsBackendError {
                 detail,
             },
             RunnerSessionError::TimedOut => Self::ProcessTimedOut,
+            RunnerSessionError::DispatcherStart { source } => {
+                Self::RunnerDispatcherStart { source }
+            }
+            RunnerSessionError::WatchdogStart { source } => Self::TimeoutWatchdogStart { source },
             source => Self::RunnerLifecycle {
                 source: Box::new(source),
             },
