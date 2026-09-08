@@ -66,26 +66,3 @@ Each native backend must add tests on its own operating-system runner for:
 - unsupported capability paths returning typed errors.
 
 These tests cannot be replaced by portable lexical unit tests.
-
-## Cross-platform review after the shared execution API
-
-Status: in progress, based on main revision `5eb208f`.
-
-The review covers Linux, macOS, Windows, and their shared execution adapters
-in one audit branch. A passing build is not evidence for an unexecuted native
-security boundary. Findings require a reproducing test and a fix; retain
-diagnostics until the affected native tests pass.
-
-| Boundary | Required evidence | Review state |
-| --- | --- | --- |
-| Provisioning and executable discovery | Windows install/verify/uninstall and active leases; Linux system/bundled Bubblewrap and authenticated helper; macOS system launcher; missing prerequisites fail closed | Pending |
-| Process lifecycle | Spawn failure at each ownership transfer, descendants, timeout, parent death, repeated wait/kill, Drop and recovery; no premature enforcement cleanup | Pending |
-| Concurrent instances | Shared backend with distinct filesystem/network policies; no inherited authority, descriptor/handle leak, route crossover or cleanup interference | Pending |
-| Filesystem | Complete policy/ceiling lowering, runtime grants, symlink/reparse and replacement races, denied paths, ACL rollback and mount lifetime | Pending |
-| Network | Disabled/direct/proxy modes, exact resolved destination, authentication and route identity, cancellation and bounded transport | Pending |
-| Memory and resource safety | Native pointer/length contracts, checked frame sizes and arithmetic, hostile input, process-memory access; distinguish isolation from CPU/RAM quotas | Pending |
-| Integration | Facade and CLI preserve native setup, errors and ownership; native CI for all three operating systems and supported feature combinations | Pending |
-
-Each completed row must identify the reviewed code and concrete test results.
-This audit does not claim a proof against every possible attack, a kernel
-vulnerability, or host resource exhaustion without an enforced quota.

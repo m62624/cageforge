@@ -1021,6 +1021,36 @@ fn workspace_glob_rejects_a_non_utf8_root_before_launch() {
 }
 
 #[test]
+fn command_timeout_closes_pipes_without_wait_or_polling() {
+    let workspace = TempDir::new().expect("workspace");
+    let policy = restricted_policy(workspace.path());
+    let (request, effective, context) =
+        request_for(workspace.path(), &policy, shell_command("sleep 30 & wait"));
+    let request = request
+        .with_timeout(Duration::from_millis(200))
+        .expect("command timeout");
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&request, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    // Observe only the pipe. Calling wait/try_wait here would hide a deadline
+    // that is enforced only when the embedding application polls the child.
+    // The observer itself is bounded so a broken watchdog cannot hang CI.
+    let stdout_eof = wait_for_pipe_eof(child.stdout().expect("stdout pipe"));
+    let stderr_eof = wait_for_pipe_eof(child.stderr().expect("stderr pipe"));
+    let result = child.wait();
+
+    stdout_eof.expect("command timeout must close stdout without lifecycle polling");
+    stderr_eof.expect("command timeout must close stderr without lifecycle polling");
+    assert!(
+        matches!(result, Err(MacosBackendError::ProcessTimedOut)),
+        "timeout must retain its typed result: {result:?}"
+    );
+}
+
+#[test]
 fn timeout_terminates_the_complete_seatbelt_process_group() {
     let workspace = TempDir::new().expect("workspace");
     let policy = restricted_policy(workspace.path());
