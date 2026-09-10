@@ -33,6 +33,7 @@ const PARENT_DEATH_CHILD: &str = "CAGEFORGE_MACOS_PARENT_DEATH_CHILD";
 const UNIX_SOCKET_TEST_PATH: &str = "CAGEFORGE_MACOS_UNIX_SOCKET_TEST_PATH";
 const GROUP_CHANGE_MODE: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_MODE";
 const GROUP_CHANGE_ROOT: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_ROOT";
+const MARKER_DELAY_SECONDS: u64 = 30;
 
 struct LaunchdTestJob {
     label: String,
@@ -379,7 +380,7 @@ fn delayed_marker_child(
         .with_arg("-c")
         .expect("shell option")
         .with_arg(
-            "(sleep 1; touch \"$1\") & descendant=$!; ".to_owned()
+            format!("(sleep {MARKER_DELAY_SECONDS}; touch \"$1\") & descendant=$!; ")
                 + "printf 'ready:%s\\n' \"$descendant\"; wait",
         )
         .expect("shell script")
@@ -425,7 +426,7 @@ fn exiting_marker_child(
         .with_arg("-c")
         .expect("shell option")
         .with_arg(
-            "(sleep 1; touch \"$1\") & descendant=$!; ".to_owned()
+            format!("(sleep {MARKER_DELAY_SECONDS}; touch \"$1\") & descendant=$!; ")
                 + "printf 'ready:%s\\n' \"$descendant\"; exit 0",
         )
         .expect("shell script")
