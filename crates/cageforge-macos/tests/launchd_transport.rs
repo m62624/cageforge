@@ -118,6 +118,7 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
         owner,
         "launchd_transport_helper",
     );
+    wait_for_marker(temporary.path(), "ready");
     let executable = std::env::current_exe().expect("test executable");
     let helper_log = temporary.path().join("helper.log");
 
@@ -456,6 +457,7 @@ fn launchd_transport_helper() {
     let Ok(service) = std::env::var(SERVICE_ENV) else {
         return;
     };
+    let root = fixture_root();
     let owner = declared_owner();
     let (sender, receiver) = mpsc::sync_channel(2);
     let _listener = transport::Connection::authenticated_listener(
@@ -464,6 +466,8 @@ fn launchd_transport_helper() {
         owner,
     )
     .expect("listener");
+    fs::write(root.join("ready.staging"), b"listener ready").expect("stage listener marker");
+    fs::rename(root.join("ready.staging"), root.join("ready")).expect("publish listener marker");
     let mut peers = Vec::new();
     let deadline = std::time::Instant::now() + TEST_TIMEOUT;
     loop {
