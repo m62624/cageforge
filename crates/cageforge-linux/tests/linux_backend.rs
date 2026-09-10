@@ -74,6 +74,17 @@ struct SessionKey {
     identifier: libc::c_long,
 }
 
+struct SyntheticOwnerProcess(Option<std::process::Child>);
+
+impl Drop for SyntheticOwnerProcess {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 impl SysvSharedMemory {
     fn new() -> Self {
         #[allow(unsafe_code)]
@@ -513,14 +524,20 @@ fn multiprocess_synthetic_owner_fixture() {
              if mkdir .git 2>/dev/null; then exit 17; else exit 0; fi",
         ])
         .expect("fixture command");
+    let policy = SandboxPolicy::new(
+        SandboxPolicy::workspace().filesystem().clone(),
+        restricted_loopback_policy().network().clone(),
+    );
     let (command, effective, runtime) =
-        request_with_environment(&workspace, SandboxPolicy::workspace(), command, environment);
+        request_with_environment(&workspace, policy, command, environment);
     let backend = backend();
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &runtime)
         .expect("fixture preflight");
     let mut child = backend.spawn(prepared).expect("fixture spawn");
-    std::fs::write(ready, b"ready").expect("fixture ready marker");
+    let pending = ready.with_extension("pending");
+    std::fs::write(&pending, child.id().to_string()).expect("fixture boundary PID");
+    std::fs::rename(pending, ready).expect("atomic fixture ready marker");
 
     assert_eq!(child.wait().expect("fixture wait").code(), Some(0));
 }
@@ -1920,6 +1937,111 @@ fn concurrent_sandboxes_share_missing_protected_target_without_early_cleanup() {
     );
     assert_eq!(second_child.wait().expect("second wait").code(), Some(0));
     assert!(!git.exists(), "the final owner left a synthetic host path");
+}
+
+#[test]
+fn abrupt_parent_death_preserves_a_live_instances_shared_mount_until_final_cleanup() {
+    let workspace = TempDir::new().expect("shared workspace");
+    let state = TempDir::new().expect("fixture coordination");
+    let first_ready = state.path().join("first.ready");
+    let second_ready = state.path().join("second.ready");
+    let first_release = workspace.path().join("first.release");
+    let second_release = workspace.path().join("second.release");
+    let mut first = SyntheticOwnerProcess(Some(spawn_synthetic_owner_fixture(
+        workspace.path(),
+        state.path(),
+        &first_ready,
+        &first_release,
+    )));
+    wait_for_marker(&first_ready);
+    let pid = fs::read_to_string(&first_ready)
+        .expect("boundary PID")
+        .parse::<u32>()
+        .expect("numeric PID");
+    #[allow(unsafe_code)]
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    assert!(
+        fd >= 0,
+        "pin exact boundary process: {}",
+        io::Error::last_os_error()
+    );
+    #[allow(unsafe_code)]
+    let pidfd = unsafe { fs::File::from_raw_fd(fd as i32) };
+
+    let mut second = SyntheticOwnerProcess(Some(spawn_synthetic_owner_fixture(
+        workspace.path(),
+        state.path(),
+        &second_ready,
+        &second_release,
+    )));
+    wait_for_marker(&second_ready);
+    let first_process = first.0.as_mut().expect("first application");
+    let gateway_artifacts = fs::read_dir(state.path())
+        .expect("fixture runtime directory")
+        .map(|entry| entry.expect("runtime entry").file_name())
+        .filter(|name| name.as_bytes().starts_with(b".cageforge-network-"))
+        .collect::<Vec<_>>();
+    assert!(
+        gateway_artifacts.is_empty(),
+        "a launched gateway still depends on host cleanup after application death: {gateway_artifacts:?}"
+    );
+    first_process
+        .kill()
+        .expect("SIGKILL owning application without Drop");
+    first_process
+        .wait()
+        .expect("confirm owning application death");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut event = libc::pollfd {
+            fd: pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        #[allow(unsafe_code)]
+        let result = unsafe { libc::poll(&mut event, 1, 50) };
+        if result > 0 && event.revents & libc::POLLIN != 0 {
+            break;
+        }
+        if result < 0 {
+            assert_eq!(
+                io::Error::last_os_error().kind(),
+                io::ErrorKind::Interrupted,
+                "pidfd poll"
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "application death left its Bubblewrap boundary running"
+        );
+    }
+    assert!(
+        second
+            .0
+            .as_mut()
+            .expect("second application")
+            .try_wait()
+            .expect("neighbor status")
+            .is_none()
+    );
+    let git = workspace.path().join(".git");
+    assert!(
+        git.is_dir(),
+        "dead owner removed the live instance's mount target"
+    );
+    fs::write(second_release, b"release").expect("finish live instance");
+    assert_fixture_success(
+        second
+            .0
+            .take()
+            .expect("second application")
+            .wait_with_output()
+            .expect("live instance output"),
+    );
+    assert!(
+        !git.exists(),
+        "final cleanup retained a dead owner's synthetic target"
+    );
 }
 
 #[test]

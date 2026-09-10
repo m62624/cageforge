@@ -553,6 +553,20 @@ returned immediately, while those owners are released only after the Job is
 empty and the runner has exited. A failed `spawn` therefore cannot expose an
 early setup-cleanup window merely because no public child value was produced.
 
+Parent lifecycle workers are part of that fallible startup transaction. Failure
+to create either the timeout watchdog or response dispatcher must return a
+distinct typed error, never panic past the boundary-recovery handoff. A watchdog
+owns its cancellation and join even before the session is fully constructed;
+dropping that partial owner cancels and joins it despite other cancellation
+senders remaining alive. Explicit shutdown and Drop are idempotent. No shared
+boundary lock may be held while joining a worker.
+
+The frozen upstream `windows-sandbox-rs/src/process.rs::read_handle_loop` and
+`src/stdio_bridge.rs` use infallible thread spawning for CLI stream forwarding.
+Cageforge instead exposes direct standard-stream handles and fallible,
+session-owned lifecycle workers: embedding applications must receive startup
+errors without losing the native enforcement and recovery owners.
+
 The trusted parent queries `JobObjectBasicAccountingInformation` after every
 normal, explicit-kill, timeout, failure, and drop termination path and does not
 release the active-child lease until `ActiveProcesses` is zero. A successful

@@ -58,13 +58,12 @@ The feature surface is explicit:
 The default feature set is empty. The portable API is available without an OS
 feature, while a native backend feature must match the compilation target.
 
-## Shared execution API (next release)
+## Shared execution API
 
 `native_sandbox()` creates the backend for the current operating system and
 enabled Cargo feature. It returns `Box<dyn DynSandbox>`, so the rest of an
 application can launch commands without naming a Linux, Windows, or macOS
-backend type. The dynamic API in this checkout is intended for the next
-release; the published `0.1.0` uses the concrete preparation API shown below.
+backend type. The concrete preparation API is also available below.
 
 ```rust,no_run
 use std::process::ExitStatus;
@@ -112,9 +111,11 @@ serialize the commands for their whole lifetime.
 
 Use `native_sandbox_with(NativeSandboxConfig::new()...)` for custom native
 settings. `NativeSandboxConfig` exposes the matching backend's existing
-configuration builders, including Linux helper selection and Windows setup
+configuration builders, including Linux/macOS helper selection and Windows setup
 location. On Windows, explicitly install setup through `WindowsSetup` first;
 backend construction verifies that installation without requesting UAC.
+macOS uses a per-launch unprivileged helper beside the application, or at the
+explicitly configured path; the CLI embeds it and requires no setup command.
 Missing features or native prerequisites produce `NativeSandboxError`.
 `SandboxExecutionError` identifies the failed execution operation and retains
 the concrete native error in its source chain.

@@ -255,6 +255,8 @@ fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
     let config = cageforge::NativeSandboxConfig::new().with_network_gateway(invocation.gateway);
     #[cfg(all(feature = "linux", target_os = "linux"))]
     let config = config.with_hardening_helper_path(std::env::current_exe()?);
+    #[cfg(all(feature = "macos", target_os = "macos"))]
+    let config = config.with_helper_executable(std::env::current_exe()?)?;
     let backend = cageforge::native_sandbox_with(config)?;
     let mut child = backend.launch(
         cageforge::BackendRequest::new(&invocation.command, &invocation.effective),

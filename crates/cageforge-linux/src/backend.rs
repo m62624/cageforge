@@ -201,7 +201,7 @@ impl LinuxBackend {
     pub(crate) fn lower<'a>(
         &self,
         prepared: &PreparedBackendRequest<'a, Self>,
-        gateway_mount: Option<&Path>,
+        gateway_mount: Option<&File>,
     ) -> Result<LinuxLaunchPlan, LinuxBackendError> {
         let sandbox = prepared.sandbox(self)?;
         let network_mode = network_mode(sandbox)?;
@@ -370,6 +370,12 @@ impl LinuxBackend {
         }
         if let Err(source) = read_setup_result(&mut auth_writer) {
             return Err(setup_handshake_error(&mut child, source));
+        }
+        if let Some(runtime) = gateway_runtime.as_mut()
+            && let Err(error) = runtime.detach_host_names()
+        {
+            terminate_failed_setup(&mut child);
+            return Err(error);
         }
         let timeout_watchdog = match timeout {
             Some(timeout) => match TimeoutWatchdog::start(child.id(), timeout) {

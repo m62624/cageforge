@@ -30,9 +30,6 @@ with the common `SandboxChild` interface. `SandboxExecutionError` preserves
 the failing operation and original native error; child destruction follows
 the same native cleanup path as a concrete child.
 
-These execution traits and dynamic dispatch are part of the next release;
-the published `0.1.0` backend-api provides the capability and preflight layer.
-
 ```text
 CommandRequest + EffectiveSandbox
                  │

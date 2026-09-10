@@ -17,6 +17,12 @@ caller gives it a validated command, a composed effective policy, and the
 runtime paths needed to resolve that policy; the backend returns a
 backend-bound prepared request or a typed error before the command starts.
 
+For most applications, start with [`cageforge`](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
+the unified library API for Linux, macOS, and Windows. Enable its `macos`
+feature to use this backend through the shared execution API while retaining
+native configuration options. You can also use `cageforge-macos` directly, as
+shown below.
+
 ## Sandbox model
 
 Each `spawn` creates one sandbox boundary around one command and its complete
@@ -30,7 +36,7 @@ descendant process tree. The boundary:
 - supports multiple independent instances at the same time.
 
 `MacosBackend` and the policy can be reused for several commands, while every
-spawn receives its own Seatbelt profile, process group, timeout, gateway, and
+spawn receives its own Seatbelt profile, launchd coalition, timeout, gateway, and
 cleanup lifecycle. Several backend instances and children may run
 concurrently with different policies.
 
@@ -73,8 +79,19 @@ configured executable exists, is a regular file, and is not a symbolic link.
 An application with a different trusted package layout may select another
 absolute executable with `MacosBackendConfig`.
 
-The macOS host must provide Seatbelt and the native process-group and file
-descriptor operations used by the backend. Cross-target compilation checks the
+Place `cageforge-macos-helper` beside the integrating application's executable,
+or select its absolute path with `MacosBackendConfig::with_helper_executable`.
+The Cageforge CLI embeds that helper in its own executable. Each launch creates
+a temporary unprivileged user-domain launchd service; no `sudo`, persistent
+installation, or `setup install` command is required on macOS.
+
+The macOS host must provide Seatbelt, generation-bound process signalling
+(`proc_signal_with_audittoken`), and coalition accounting. These include native
+interfaces outside Apple's stable public API; a future OS update can require a
+backend update. Missing native support fails closed, without silently reverting
+to process-group-only cleanup. Backend construction checks that
+the versioned signalling API is available before any command is launched.
+Cross-target compilation checks the
 Rust API surface; native enforcement is exercised on a macOS runner. A
 missing executable or native operation is returned as a typed
 `MacosBackendError`; the backend does not silently fall back to an ordinary
@@ -196,8 +213,8 @@ unsupported combinations are rejected before launch.
 | Protection | When it is active | What it enforces |
 |---|---|---|
 | Seatbelt profile | Every sandboxed launch | Applies a closed-by-default macOS authorization profile to the complete descendant tree. |
-| Process-group boundary | Every launch | Keeps the command and descendants in one group so timeout, kill, and recovery target the complete tree. |
-| Parent-death watcher | Every launch | Terminates the process group if the owning parent disappears. |
+| Launchd coalition | Every launch | Retains descendants across fork, exec, and group/session changes; kernel accounting confirms complete termination. |
+| Parent-death helper | Every launch | Detects loss of the application's PID generation and terminates its owned descendants. |
 | Explicit filesystem scopes | Restricted filesystem | Allows only the effective read/write scopes, read-only carve-outs, and required fixed runtime paths. |
 | Protected paths and deny globs | Configured protected or denied paths | Rejects unsafe path lowering and blocks protected metadata and matching glob targets. |
 | Symlink and path-boundary checks | Filesystem lowering | Prevents a writable symbolic link or alternate path relationship from escaping the requested scope. |
@@ -206,7 +223,7 @@ unsupported combinations are rejected before launch.
 | Local IPC policy | Local IPC restrictions | Isolates local IPC and supports exact pathname Unix-socket rules; unsupported deny combinations fail typed and closed. |
 | Environment isolation | Every launch | Applies the selected inherited base, filters, and overrides only to the sandboxed command. |
 | Explicit standard streams | Every launch | Uses only the requested inherit, null, or pipe endpoints and closes unrelated descriptors before execution. |
-| Timeout | Backend-default or explicit limit | Terminates and confirms the complete process group within the prepared deadline. |
+| Timeout | Backend-default or explicit limit | Independently initiates termination of all owned tasks when the prepared deadline expires. |
 | Recovery owner | Failed termination or cleanup | Retains the boundary and enforcement resources, retries bounded termination and gateway cleanup, and releases them only after confirmation. |
 | Typed errors | Setup, prepare, spawn, wait, and cleanup | Identifies the failing native stage without requiring callers to parse display text. |
 
@@ -236,9 +253,16 @@ if shutdown had already been confirmed.
 
 `MacosChild` exposes the child identifier, configured standard-stream pipes,
 `try_wait`, `wait`, and `kill`. `kill` terminates and confirms the complete
-process group before successful cleanup. Normal completion, timeout, explicit
+coalition before successful cleanup. Normal completion, timeout, explicit
 termination, and parent loss all retain the boundary until its termination is
 confirmed.
+
+Normal completion removes the per-launch registration and its service files.
+If the application is killed without running destructors, the helper retains
+the ingress-port reservation until descendants are gone, then removes its
+registration and known files. Replaced entries or unexpected directory contents
+are preserved rather than recursively deleted. Persistent Windows-style
+accounts or system rules are not created by this backend.
 
 Use `MacosBackendError` and its nested typed error enums for construction,
 preflight, lowering, gateway, process, timeout, and cleanup failures. The

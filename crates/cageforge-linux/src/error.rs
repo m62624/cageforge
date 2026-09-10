@@ -331,6 +331,36 @@ pub enum NetworkGatewayTransportError {
 /// A host gateway setup failure.
 #[derive(Debug, Error)]
 pub enum NetworkGatewaySetupError {
+    /// Pinning the named socket inode before mounting failed.
+    #[error("cannot pin gateway socket {path:?}: {source}")]
+    SocketPin {
+        /// Socket path being pinned.
+        path: PathBuf,
+        /// Original operating-system failure.
+        source: io::Error,
+    },
+    /// A socket name no longer denotes the pinned inode.
+    #[error("gateway socket changed before detachment: {path:?}")]
+    SocketChanged {
+        /// Replaced entry left untouched.
+        path: PathBuf,
+    },
+    /// Removing the host name of a privately mounted socket failed.
+    #[error("cannot detach gateway socket name {path:?}: {source}")]
+    SocketDetach {
+        /// Named socket entry.
+        path: PathBuf,
+        /// Original operating-system failure.
+        source: io::Error,
+    },
+    /// Removing the empty host staging directory failed.
+    #[error("cannot detach gateway directory {path:?}: {source}")]
+    DirectoryDetach {
+        /// Directory left untouched when not empty.
+        path: PathBuf,
+        /// Original operating-system failure.
+        source: io::Error,
+    },
     /// Creating a private temporary directory failed.
     #[error("cannot create gateway temporary directory {parent:?}: {source}")]
     TemporaryDirectory {

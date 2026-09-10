@@ -48,7 +48,6 @@ not want to build or provide Bubblewrap separately. It includes Cageforge's
 verified, fixed Bubblewrap `v0.11.2` resource; the embedded version is not
 selected dynamically.
 
-The shared execution API in this checkout is intended for the next release.
 `native_sandbox()` chooses the backend for the current OS and enabled Cargo
 feature, returning `Box<dyn DynSandbox>`. The command-running part of an
 application uses the same API on all three operating systems:
@@ -67,7 +66,7 @@ builders or a resolved TOML profile. Use `native_sandbox_with(config)` for
 native configuration and `Arc<dyn DynSandbox>` to share one reusable backend
 between threads. Windows provisioning remains an explicit preceding step.
 The [facade README](crates/cageforge/README.md) includes examples and the
-concrete `prepare`/`spawn` API available in `0.1.0`.
+concrete `prepare`/`spawn` API.
 
 The execution flow is:
 
@@ -187,9 +186,11 @@ not install an uninstaller; remove the installed binary manually from
 `~/.cargo/bin/cageforge-cli` on Linux/macOS or
 `%USERPROFILE%\.cargo\bin\cageforge-cli.exe` on Windows.
 
-The Linux release binary is self-contained: its authenticated hardening-helper
-entry point is included in the same executable, so a separate helper binary is
-not installed.
+The Linux and macOS release binaries embed their native helper entry points, so
+a separate helper executable is not installed. macOS registers an unprivileged
+per-launch service and requires no administrative setup. Windows requires the
+explicit first-time `cageforge-cli setup install` step described in the
+[CLI README](crates/cageforge-cli/README.md#windows-first-time-setup).
 
 For the CLI command reference, see the [`cageforge-cli` README](crates/cageforge-cli/README.md).
 

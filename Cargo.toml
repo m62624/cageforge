@@ -76,6 +76,7 @@ cageforge-policy-compose = { path = "crates/cageforge-policy-compose", version =
 cageforge-path = { path = "crates/cageforge-path", version = "0.1.0" }
 cageforge-windows = { path = "crates/cageforge-windows", version = "0.1.0" }
 command-fds = "0.3.3"
+block2 = "0.6.2"
 clap = { version = "4.6.6", features = ["derive", "env"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"

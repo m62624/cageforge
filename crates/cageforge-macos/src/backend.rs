@@ -17,10 +17,7 @@ use crate::config::MacosBackendConfig;
 use crate::error::MacosBackendError;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::{GatewayRuntime, MacosNetworkPlan};
-use crate::process::{
-    MacosChild, ParentDeathChannel, command_deadline, configure_process_group, process_group_id,
-    stream,
-};
+use crate::process::{MacosChild, launchd};
 use crate::seatbelt::SeatbeltProfile;
 
 /// A macOS-native backend bound to one validated Seatbelt executable.
@@ -59,6 +56,7 @@ impl MacosBackend {
         if !metadata.is_file() {
             return Err(MacosBackendError::SeatbeltExecutableNotRegular { path });
         }
+        crate::process::identity::verify_available()?;
         Ok(Self {
             config,
             identity: BackendIdentity::new(),
@@ -123,41 +121,19 @@ impl MacosBackend {
             definition_argument.push(definition.value());
             command.arg(definition_argument);
         }
-        let parent_death = ParentDeathChannel::new()
-            .map_err(|source| MacosBackendError::ParentDeathChannel { source })?;
-        command.arg("--").arg("/bin/sh");
-        command.arg("-c").arg(crate::process::PARENT_DEATH_WRAPPER);
-        command.arg("cageforge-macos-boundary");
+        command.arg("--");
         command.arg(command_spec.program());
         command.args(command_spec.args());
         command.current_dir(prepared.working_directory(self)?);
         command.env_clear();
         command.envs(environment);
         let stdio = prepared.stdio(self)?;
-        command.stdin(stream(stdio.stdin()));
-        command.stdout(stream(stdio.stdout()));
-        command.stderr(stream(stdio.stderr()));
-        configure_process_group(&mut command, parent_death.read_fd());
-        let deadline = command_deadline(timeout)?;
-        let child = command
-            .spawn()
+        let helper = self
+            .config
+            .helper_executable()
             .map_err(|source| MacosBackendError::ProcessStart { source })?;
-        let process_group_id = match process_group_id(child.id()) {
-            Ok(process_group_id) => process_group_id,
-            Err(error) => {
-                let mut child = child;
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        };
-        Ok(MacosChild::new(
-            child,
-            process_group_id,
-            parent_death.into_writer(),
-            gateway.take(),
-            deadline,
-        ))
+        let session = launchd::Session::launch(&helper, &command, timeout, &stdio, gateway.take())?;
+        Ok(MacosChild::from_session(session))
     }
 
     fn environment_input(

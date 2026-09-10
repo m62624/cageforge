@@ -3,12 +3,12 @@
 //! Authenticated parent-runner session and complete process lifecycle.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 use std::os::windows::io::AsRawHandle;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::thread::JoinHandle;
+use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cageforge_command::StdioSpec;
@@ -28,6 +28,8 @@ use crate::runner::stdio::{ParentStdio, WindowsStandardStreamError};
 const SPAWN_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+const DISPATCHER_THREAD_NAME: &str = "cageforge-windows-lifecycle";
+const WATCHDOG_THREAD_NAME: &str = "cageforge-windows-timeout";
 
 pub(crate) struct RunnerSession {
     launch: RunnerLaunch,
@@ -116,6 +118,10 @@ pub(crate) enum RunnerSessionError {
     UnexpectedLifecycleMessage { actual: &'static str },
     #[error("authenticated runner lifecycle channel closed without a terminal result")]
     LifecycleClosed,
+    #[error("failed to create the runner lifecycle dispatcher: {source}")]
+    DispatcherStart { source: io::Error },
+    #[error("failed to create the command timeout watchdog: {source}")]
+    WatchdogStart { source: io::Error },
     #[error("authenticated runner lifecycle dispatcher panicked")]
     DispatcherPanic,
     #[error("timeout watchdog panicked")]
@@ -233,25 +239,30 @@ impl RunnerSession {
         }
         let (terminal_sender, terminal) = mpsc::channel();
         let timed_out = Arc::new(AtomicBool::new(false));
-        let watchdog = timeout.map(|duration| {
-            TimeoutWatchdog::start(
-                duration,
-                Arc::clone(&boundary),
-                Arc::clone(&timed_out),
-                terminal_sender.clone(),
-            )
-        });
+        let watchdog = timeout
+            .map(|duration| {
+                TimeoutWatchdog::start(
+                    duration,
+                    Arc::clone(&boundary),
+                    Arc::clone(&timed_out),
+                    terminal_sender.clone(),
+                )
+            })
+            .transpose()?;
         let watchdog_cancel = watchdog.as_ref().map(|watchdog| watchdog.cancel.clone());
         let dispatcher_timed_out = Arc::clone(&timed_out);
-        let dispatcher = std::thread::spawn(move || {
-            dispatch_responses(
-                response_pipe,
-                boundary,
-                dispatcher_timed_out,
-                watchdog_cancel,
-                terminal_sender,
-            );
-        });
+        let dispatcher = Builder::new()
+            .name(DISPATCHER_THREAD_NAME.to_owned())
+            .spawn(move || {
+                dispatch_responses(
+                    response_pipe,
+                    boundary,
+                    dispatcher_timed_out,
+                    watchdog_cancel,
+                    terminal_sender,
+                );
+            })
+            .map_err(|source| RunnerSessionError::DispatcherStart { source })?;
         Ok(Self {
             launch,
             process_id,
@@ -419,22 +430,25 @@ impl TimeoutWatchdog {
         boundary: Arc<BoundaryTerminator>,
         timed_out: Arc<AtomicBool>,
         terminal: mpsc::Sender<RunnerTerminal>,
-    ) -> Self {
+    ) -> Result<Self, RunnerSessionError> {
         let (cancel, receiver) = mpsc::sync_channel(1);
-        let join = std::thread::spawn(move || {
-            if matches!(
-                receiver.recv_timeout(timeout),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ) {
-                timed_out.store(true, Ordering::Release);
-                let result = boundary.terminate(124);
-                let _ = terminal.send(RunnerTerminal::TimedOut(result));
-            }
-        });
-        Self {
+        let join = Builder::new()
+            .name(WATCHDOG_THREAD_NAME.to_owned())
+            .spawn(move || {
+                if matches!(
+                    receiver.recv_timeout(timeout),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    timed_out.store(true, Ordering::Release);
+                    let result = boundary.terminate(124);
+                    let _ = terminal.send(RunnerTerminal::TimedOut(result));
+                }
+            })
+            .map_err(|source| RunnerSessionError::WatchdogStart { source })?;
+        Ok(Self {
             cancel,
             join: Some(join),
-        }
+        })
     }
 
     fn stop(&mut self) -> Result<(), RunnerSessionError> {
@@ -444,6 +458,12 @@ impl TimeoutWatchdog {
         } else {
             Ok(())
         }
+    }
+}
+
+impl Drop for TimeoutWatchdog {
+    fn drop(&mut self) {
+        let _ = self.stop();
     }
 }
 
@@ -603,4 +623,80 @@ fn exit_status(exit_code: u32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
 
     ExitStatus::from_raw(exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_a_watchdog_cancels_and_joins_with_another_sender_alive() {
+        let (cancel, receiver) = mpsc::sync_channel(1);
+        let retained_cancel = cancel.clone();
+        let (done, completion) = mpsc::channel();
+        let join = std::thread::spawn(move || {
+            let result = receiver.recv();
+            done.send(result).expect("record watchdog cancellation");
+        });
+        let watchdog = TimeoutWatchdog {
+            cancel,
+            join: Some(join),
+        };
+
+        drop(watchdog);
+        // Drop must have joined: this is a completed-state observation, not
+        // a scheduling deadline. Retain the dispatcher's sender so dropping
+        // the watchdog's sender alone cannot accidentally satisfy the test.
+        let observed = completion.try_recv();
+        if observed.is_err() {
+            // Also clean up the worker when running against the broken owner.
+            let _ = retained_cancel.try_send(());
+            completion
+                .recv_timeout(Duration::from_secs(5))
+                .expect("clean up detached regression worker")
+                .expect("cleanup cancellation");
+        }
+        assert!(
+            matches!(observed, Ok(Ok(()))),
+            "watchdog Drop must cancel and join its worker: {observed:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_watchdog_stop_is_idempotent_before_drop() {
+        let (cancel, receiver) = mpsc::sync_channel(1);
+        let join = std::thread::spawn(move || receiver.recv().expect("cancel watchdog"));
+        let mut watchdog = TimeoutWatchdog {
+            cancel,
+            join: Some(join),
+        };
+        watchdog.stop().expect("stop watchdog");
+        assert!(watchdog.join.is_none());
+        watchdog.stop().expect("repeated stop");
+        drop(watchdog);
+    }
+
+    #[test]
+    fn lifecycle_thread_start_errors_preserve_the_native_code_in_public_variants() {
+        use crate::WindowsBackendError;
+        use windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY;
+
+        let native_code = ERROR_NOT_ENOUGH_MEMORY as i32;
+        let dispatcher = WindowsBackendError::runner_session(RunnerSessionError::DispatcherStart {
+            source: io::Error::from_raw_os_error(native_code),
+        });
+        assert!(matches!(
+            dispatcher,
+            WindowsBackendError::RunnerDispatcherStart { source }
+                if source.raw_os_error() == Some(native_code)
+        ));
+        let watchdog = WindowsBackendError::runner_session(RunnerSessionError::WatchdogStart {
+            source: io::Error::from_raw_os_error(native_code),
+        });
+        assert!(matches!(
+            watchdog,
+            WindowsBackendError::TimeoutWatchdogStart { source }
+                if source.raw_os_error() == Some(native_code)
+        ));
+    }
 }

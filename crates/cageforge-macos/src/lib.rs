@@ -27,3 +27,12 @@ pub use backend::MacosBackend;
 pub use config::{MacosBackendConfig, MacosBackendConfigError};
 pub use error::{MacosBackendError, MacosFilesystemError, MacosNetworkError, SeatbeltProfileError};
 pub use process::MacosChild;
+pub use process::coalition::CoalitionError as MacosCoalitionError;
+pub use process::launchd::{
+    LaunchError as MacosHelperError, MACOS_HELPER_ARGUMENT, Operation as MacosHelperOperation,
+    StorageError as MacosHelperStorageError, helper_entry as run_macos_helper,
+};
+pub use process::protocol::{ProtocolError as MacosHelperProtocolError, Stage as MacosHelperStage};
+pub use process::transport::{
+    FieldError as MacosHelperFieldError, FieldKind as MacosHelperFieldKind,
+};

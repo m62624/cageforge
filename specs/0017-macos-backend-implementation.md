@@ -1,6 +1,6 @@
 # Specification 0017: macOS Backend Implementation
 
-Status: implemented; native verification complete for the reviewed revision
+Status: implementation contract
 
 ## 1. Purpose
 
@@ -56,7 +56,7 @@ The behavior review is against commit
 | `codex-rs/sandboxing/src/seatbelt_network_policy.sbpl` | Minimal network service allowances needed by macOS clients | Re-authored and composed only with the selected effective network mode |
 | `codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl` | Minimal system/framework visibility for restricted commands | Re-authored as Cageforge's fixed read-only runtime policy; it is never used to grant workspace access |
 | `codex-rs/sandboxing/src/manager.rs` and `src/spawn.rs` | Platform selection and process handoff | Replaced by `SandboxBackend`, backend-bound preparation, and `MacosChild`; PTY remains outside the portable API |
-| `codex-rs/utils/pty/src/process_group.rs` | macOS process-group member enumeration and per-member fallback after `EPERM` | Retained for Cageforge's `SIGKILL` cleanup; the fallback validates each member's current group before signalling it |
+| `codex-rs/utils/pty/src/process_group.rs` | macOS process-group member enumeration and per-member fallback after `EPERM` | Replaced for command ownership by an isolated launchd coalition and generation-bound member signalling; group membership alone cannot retain detached descendants |
 
 Every retained behavior must have an allowed and denied black-box test on a
 macOS runner. Any Seatbelt rule whose effect cannot be demonstrated on the
@@ -173,26 +173,169 @@ the gateway handle and retries; it never treats an unjoined runtime as clean.
 
 ## 5. Process and lifecycle contract
 
+Process-group membership is not an immutable descendant identity. A successful
+cleanup of the original group alone must not be treated as proof that all
+descendants exited: `setsid`, `setpgid`, and `posix_spawn` group attributes can
+move a descendant out of that group without removing its inherited Seatbelt
+policy. Lifecycle verification must exercise all three paths, independently
+of filesystem and network inheritance tests.
+
+Any replacement ownership mechanism must retain per-launch membership across
+fork, exec, reparenting, and group/session changes. Termination must not target
+an unrelated process after PID reuse or affect another sandbox instance.
+An enumeration that misses an in-flight fork is not proof of an empty boundary.
+
+For coalition ownership, only the executing helper may interpret a kernel
+active-task count of one as completed descendant cleanup: that one task is
+itself. External recovery must require zero tasks, including the helper.
+Looking up the helper's PID or generation externally is insufficient to
+subtract it from a count: process-record lifetime and live-task lifetime are
+not the same, and its exit can race the count query. Acquiring a coalition
+requires generation-checked helper and application identities and must reject
+the application's own shared coalition before signalling anything.
+
+Individual lifecycle signals must bind the PID to its kernel generation before
+inspecting membership and preserve that generation through signal delivery.
+A second numeric `kill(pid, signal)` after `getpgid` cannot enforce this: the
+checked process may exit and the PID may name another process before delivery.
+The native regression must reject a mismatched generation for a live, directly
+owned fixture PID and also prove successful delivery to its exact generation.
+This strengthens the numeric member-signalling fallback in upstream
+`utils/pty/src/process_group.rs`; it does not make process-group membership an
+immutable boundary or solve reuse of a previously reaped group identifier.
+Delivery uses `proc_signal_with_audittoken`, whose kernel implementation holds
+the target process reference while comparing its PID version and signalling
+it. Its libproc wrapper returns an errno value directly. The backend verifies
+the system symbol is available before launching any command; an unavailable
+API is a typed construction failure, never a fallback to numeric signalling.
+
+Filesystem or network unrestricted mode must not authorize delegating process
+creation to an unsandboxed host service. In particular, a sandboxed
+`launchctl submit` must not register a new launchd job, even when its executable
+and output paths are otherwise writable and executable. The closed-by-default
+process/service boundary follows upstream `seatbelt_base_policy.sbpl`; broad
+filesystem grants must not become a general `allow default` rule. Native
+verification must include an unsandboxed positive control with the same job
+arguments, so an unavailable launchd session cannot masquerade as enforcement.
+
+System provisioning is acceptable only if the native mechanism satisfies this
+ownership contract on an ordinary supported macOS installation. Installation
+must be an explicit API/CLI operation which performs its own authenticated
+administrative elevation, without manual service files, extra entitlements,
+or disabling host protections. Normal launches must not prompt for elevation
+or execute caller commands with administrative credentials. Status,
+verification, and explicit uninstallation must accompany installation;
+uninstallation must reject active boundaries and remove only owned resources.
+These are admission requirements for a provisioned architecture, not evidence
+that installing a privileged helper itself provides descendant containment.
+
+A launchd-owned helper channel must authenticate the originating process from
+kernel-supplied message identity, including the PID generation. A claimed PID,
+service label, or request field is not authentication. A named Mach service
+must belong to the exact registered job; another job must not be able to check
+in under that service name. Standard-stream and listener descriptors are
+transferred explicitly, not discovered through inherited descriptors or caller
+paths. The helper must reject an unrelated client without preventing the
+authorized client from using its own channel. Native transport admission
+checks precede integration with the launch lifecycle; a successful transport
+test alone is not evidence that descendants are contained.
+
+An outgoing XPC request must move into the exchange, with no remaining mutable
+dictionary access in its caller, even when the exchange times out while native
+delivery is pending. Received messages are a separate read-only type. Unsent
+request destruction releases its duplicated descriptors; received message
+ownership may retain an additional descriptor reference until that message is
+dropped. Channel disconnection and elapsed exchange deadlines remain distinct
+errors rather than being reported interchangeably as timeouts.
+
+The helper execution handoff is a typed state machine: identity exchange and
+coalition adoption precede launch approval; exactly one launch is accepted;
+running, terminating, and confirmed-exit states are distinct. Retrying a
+request must not create another command. The command payload preserves native
+argument, environment, and directory bytes without UTF-8 replacement. It
+contains the already-lowered executable and arguments, not a second policy
+interpreter or a shell command string. Standard streams and ingress listeners
+travel as explicitly named descriptors outside that byte payload.
+
+The transport envelope is limited to 8 MiB, matching the Windows runner's
+transport budget. This is an IPC allocation bound, not a limit on TOML input
+or policy size. Both the sender and receiver must reject larger frames before
+copying them into transport buffers. XPC integer/data fields must have their
+expected native types: the native integer getter's zero result for an absent
+or wrong-type field must never become a successful response. Unknown message
+tags, incompatible versions, truncated fields, trailing data, invalid native
+strings, and an impossible timeout must produce distinct typed failures.
+
+The helper must acquire a duplicate of each authorized ingress listener before
+allowing a command to start. Abrupt loss of the application process must not
+release that port while the command remains alive. Cleanup retains the
+reservation until termination is confirmed, then releases it. Native admission
+tests must kill an owning application without running its destructors, observe
+the helper's reservation during cleanup, and verify eventual port reuse after
+the owned process exits. This transport/resource-lifetime check complements,
+but does not replace, the detached-descendant ownership tests.
+
 The backend maps `StdioSpec` to explicit inherited, null, or piped standard
 streams. The child API owns all pipe endpoints and never uses stdout or stderr
 as a control protocol. Setup and launch failures are typed library errors.
+Successful lifecycle cleanup closes command-side writers but preserves the
+application's piped stdout/stderr readers, so buffered output can still be read
+after `wait` returns. Those read endpoints do not retain process or policy
+authority and must not postpone enforcement cleanup.
 
-The Seatbelt boundary is placed in its own process group. A timeout, explicit
-kill, parent drop, or launch failure terminates the complete process group and
-waits for confirmation before releasing gateway and child resources. If a
-bounded cleanup attempt cannot confirm termination, a detached recovery owner
-retains the child and all enforcement resources and retries termination; it
-does not release a live boundary's policy resources as if cleanup succeeded.
-When the group leader has already been reaped, cleanup enumerates the remaining
-members and re-checks each member's current process group before sending
-`SIGKILL`; it does not perform a destructive group-wide signal using a numeric
-PGID that could have been reused by an unrelated group. Every child termination
-path, including a retry after another boundary resource failed to clean up,
-preserves the reaped state and never calls `wait` again for that leader.
+The pre-exec descriptor sweep must reject failed or malformed native snapshots
+before launching the command. Apple's `proc_pidinfo` wrapper reports failure
+with zero while preserving `errno`; zero is not proof of an empty descriptor
+table. Snapshot lengths must contain whole `proc_fdinfo` records. When the
+stack snapshot fills, the sweep obtains the native descriptor-table extent
+using the null-buffer `PROC_PIDLISTFDS` query, as in upstream
+`codex-rs/utils/pty/src/pty.rs::close_inherited_fds_except`. Existing descriptors
+may lie above a subsequently lowered `RLIMIT_NOFILE` soft limit; that limit
+must not truncate the sweep. Unlike the upstream best-effort helper, Cageforge
+returns a startup error if either native query fails. All of this work remains
+allocation-free after fork, and the close-on-exec spawn-error pipe stays open
+until exec so the caller receives the failure.
+
+Each launch registers an unprivileged user-domain launchd helper, authenticates
+its XPC response, and adopts its separate coalition before sending the lowered
+Seatbelt command. The helper is a sibling executable selected by native
+configuration or an internal dispatch mode embedded in the CLI executable.
+This architecture requires neither a privileged installation nor recurring
+administrative elevation. Missing helper or native coalition support is a typed
+failure, not admission to the older group-only lifecycle.
+
+The helper owns direct-child reaping, an independent deadline, and the ingress
+reservation. Its parent-death check uses the application's kernel PID version,
+not numeric PID existence alone. The application owns a separate recovery
+handle for the same immutable coalition. Before accepting a zero-task count it
+must remove the launchd registration, so a remaining Mach service cannot
+reactivate a helper after that observation. Removal failure still requires a
+termination attempt and retains recovery ownership. Gateway shutdown follows
+confirmed coalition termination, never precedes it.
+
+A timeout, explicit kill, drop, launch failure, or application death must
+terminate all owned tasks, including descendants that change their group or
+session. Bounded cleanup failure transfers ownership to recovery; an
+unconfirmed boundary retains its enforcement resources. Successful direct-child
+reaping is cached and must not be repeated during cleanup retries. Per-launch
+service files must be cleaned after normal and abrupt application termination;
+uncertain or replaced filesystem objects must not be recursively removed as
+though they were proven owned files.
 
 The command timeout is per prepared command and is distinct from gateway
 handshake/relay limits. Backend construction and one command's timeout do not
 serialize unrelated instances.
+
+Timeout enforcement must run independently of the caller's `wait`, `try_wait`,
+and standard-stream reads. As in upstream `core/src/exec.rs::consume_output`,
+the deadline and output consumption are concurrent responsibilities. The
+library owns the timer instead of requiring a CLI or async runtime to poll it.
+The trusted helper advances that deadline independently of application polling
+or output consumption. All helper-side child collection and termination occur
+in one lifecycle loop. No delayed numeric process-group signal may target a
+reused group identity after the root process has been collected. A failed
+helper exchange after launch approval transfers the coalition and gateway to
+recovery rather than returning an unowned running command.
 
 ## 6. Capabilities
 
@@ -226,7 +369,7 @@ Native macOS black-box tests cover at least:
 - a gateway ingress port remains unavailable until confirmed runtime cleanup;
 - separate simultaneous instances retain separate policies and gateway keys;
 - unrelated inherited file descriptors do not cross the launch boundary;
-- timeout, explicit kill, drop, and parent death terminate the complete group;
+- timeout, explicit kill, drop, and parent death terminate the complete coalition;
 - a reaped group leader cannot leave a running descendant and cleanup does not
   target a reused numeric process-group ID;
 - recovery of a previously reaped leader never calls `waitpid` on that child

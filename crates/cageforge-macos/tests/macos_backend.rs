@@ -7,8 +7,9 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, mpsc};
@@ -30,6 +31,41 @@ use tempfile::TempDir;
 const PARENT_DEATH_ROOT: &str = "CAGEFORGE_MACOS_PARENT_DEATH_ROOT";
 const PARENT_DEATH_CHILD: &str = "CAGEFORGE_MACOS_PARENT_DEATH_CHILD";
 const UNIX_SOCKET_TEST_PATH: &str = "CAGEFORGE_MACOS_UNIX_SOCKET_TEST_PATH";
+const GROUP_CHANGE_MODE: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_MODE";
+const GROUP_CHANGE_ROOT: &str = "CAGEFORGE_MACOS_GROUP_CHANGE_ROOT";
+const MARKER_DELAY_SECONDS: u64 = 30;
+
+struct LaunchdTestJob {
+    label: String,
+}
+
+struct FixtureParent(std::process::Child);
+
+impl Drop for FixtureParent {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl LaunchdTestJob {
+    fn remove(&self) -> std::process::Output {
+        Command::new("/bin/launchctl")
+            .args(["remove", &self.label])
+            .output()
+            .expect("remove this test's launchd job")
+    }
+}
+
+impl Drop for LaunchdTestJob {
+    fn drop(&mut self) {
+        // The label belongs only to this fixture. Cleanup also runs when an
+        // assertion detects an unexpected successful sandboxed registration.
+        let _ = Command::new("/bin/launchctl")
+            .args(["remove", &self.label])
+            .output();
+    }
+}
 
 fn context(workspace: &Path) -> PathResolutionContext {
     PathResolutionContext::new()
@@ -344,7 +380,7 @@ fn delayed_marker_child(
         .with_arg("-c")
         .expect("shell option")
         .with_arg(
-            "(sleep 1; touch \"$1\") & descendant=$!; ".to_owned()
+            format!("(sleep {MARKER_DELAY_SECONDS}; touch \"$1\") & descendant=$!; ")
                 + "printf 'ready:%s\\n' \"$descendant\"; wait",
         )
         .expect("shell script")
@@ -390,7 +426,7 @@ fn exiting_marker_child(
         .with_arg("-c")
         .expect("shell option")
         .with_arg(
-            "(sleep 1; touch \"$1\") & descendant=$!; ".to_owned()
+            format!("(sleep {MARKER_DELAY_SECONDS}; touch \"$1\") & descendant=$!; ")
                 + "printf 'ready:%s\\n' \"$descendant\"; exit 0",
         )
         .expect("shell script")
@@ -408,6 +444,40 @@ fn exiting_marker_child(
 }
 
 #[test]
+fn completed_wait_preserves_both_piped_output_streams() {
+    let workspace = TempDir::new().expect("output fixture workspace");
+    let backend = backend();
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args(["-c", "printf stdout; printf stderr >&2"])
+        .expect("explicit arguments");
+    let (command, effective, context) = request_for(
+        workspace.path(),
+        &restricted_policy(workspace.path()),
+        command,
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    assert!(child.wait().expect("wait before reading output").success());
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout()
+        .expect("stdout retained after wait")
+        .read_to_string(&mut stdout)
+        .expect("stdout EOF");
+    child
+        .stderr()
+        .expect("stderr retained after wait")
+        .read_to_string(&mut stderr)
+        .expect("stderr EOF");
+    assert_eq!(stdout, "stdout");
+    assert_eq!(stderr, "stderr");
+}
+
+#[test]
 fn parent_death_child_harness() {
     let Some(root) = std::env::var_os(PARENT_DEATH_ROOT) else {
         return;
@@ -422,28 +492,62 @@ fn parent_death_child_harness() {
     )
     .expect("publish parent-death child PID");
     let _ = marker;
-    std::process::exit(0);
+    // The controller sends SIGKILL after observing the live registration.
+    // No application destructor is involved in the recovery being tested.
+    thread::sleep(Duration::from_secs(30));
+    panic!("parent-death controller did not terminate the fixture");
 }
 
 #[test]
-fn parent_process_death_terminates_the_complete_seatbelt_process_group() {
+fn parent_process_death_terminates_the_boundary_and_removes_owned_registration() {
     let temporary = TempDir::new().expect("parent-death temporary root");
     let workspace = temporary.path().join("workspace");
     let child_pid = temporary.path().join("child.pid");
     let marker = workspace.join("marker-after-boundary");
-    let parent = Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "parent_death_child_harness", "--nocapture"])
-        .env(PARENT_DEATH_ROOT, &workspace)
-        .env(PARENT_DEATH_CHILD, &child_pid)
-        .spawn()
-        .expect("spawn parent-death harness");
-    let status = parent
-        .wait_with_output()
-        .expect("wait parent-death harness");
-    assert!(
-        status.status.success(),
-        "parent-death harness failed: {status:?}"
+    let runtime = temporary.path().join("helper-runtime");
+    fs::create_dir(&runtime).expect("private runtime test scope");
+    let mut parent = FixtureParent(
+        Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "parent_death_child_harness", "--nocapture"])
+            .env(PARENT_DEATH_ROOT, &workspace)
+            .env(PARENT_DEATH_CHILD, &child_pid)
+            .env("TMPDIR", &runtime)
+            .spawn()
+            .expect("spawn parent-death harness"),
     );
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    while !child_pid.exists() {
+        assert!(
+            parent.0.try_wait().expect("fixture status").is_none(),
+            "fixture exited before publishing a child"
+        );
+        assert!(
+            Instant::now() < ready_deadline,
+            "fixture did not publish its child"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let entries = fs::read_dir(&runtime)
+        .expect("runtime entries")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("runtime directory listing");
+    assert_eq!(entries.len(), 1, "one runtime registration per launch");
+    let label = format!(
+        "dev.cageforge.{}",
+        entries[0].file_name().to_str().expect("registration name")
+    );
+    #[allow(unsafe_code)]
+    let target = format!("user/{}/{label}", unsafe { libc::geteuid() });
+    assert!(
+        Command::new("/bin/launchctl")
+            .args(["print", &target])
+            .output()
+            .expect("live registration")
+            .status
+            .success()
+    );
+    parent.0.kill().expect("abruptly terminate application");
+    parent.0.wait().expect("confirm application death");
     let pid = fs::read_to_string(&child_pid)
         .expect("read parent-death child PID")
         .trim()
@@ -464,6 +568,27 @@ fn parent_process_death_terminates_the_complete_seatbelt_process_group() {
     }
     thread::sleep(Duration::from_secs(2));
     assert!(!marker.exists(), "parent death left a descendant running");
+    let cleanup_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let files_gone = fs::read_dir(&runtime)
+            .expect("runtime cleanup listing")
+            .next()
+            .is_none();
+        let job_gone = !Command::new("/bin/launchctl")
+            .args(["print", &target])
+            .output()
+            .expect("registration cleanup status")
+            .status
+            .success();
+        if files_gone && job_gone {
+            break;
+        }
+        assert!(
+            Instant::now() < cleanup_deadline,
+            "emergency cleanup incomplete: files_gone={files_gone}, job_gone={job_gone}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]
@@ -482,6 +607,91 @@ fn host_accepts_the_backend_seatbelt_profile() {
         status.success(),
         "backend Seatbelt probe failed: {status:?}"
     );
+}
+
+#[test]
+fn sandboxed_commands_cannot_delegate_execution_to_launchd() {
+    let workspace = TempDir::new().expect("launchd fixture workspace");
+    let suffix = workspace.path().file_name().expect("unique fixture suffix");
+    let backend = backend();
+    for (mode, policy) in [
+        ("restricted", writable_policy(workspace.path())),
+        ("unrestricted", SandboxPolicy::full_access()),
+    ] {
+        let job = LaunchdTestJob {
+            label: format!(
+                "cageforge-test-delegation-{}-{}-{mode}",
+                std::process::id(),
+                suffix.to_string_lossy()
+            ),
+        };
+        let marker = workspace.path().join(format!("{mode}-delegated"));
+        let arguments: Vec<OsString> = ["submit", "-l", &job.label, "--", "/usr/bin/touch"]
+            .into_iter()
+            .map(OsString::from)
+            .chain([marker.clone().into_os_string()])
+            .collect();
+
+        // Prove that this user/session can register exactly this finite job.
+        // Otherwise a host configuration error could look like a sandbox deny.
+        let positive = Command::new("/bin/launchctl")
+            .args(&arguments)
+            .output()
+            .expect("submit unsandboxed positive control");
+        assert!(positive.status.success(), "positive control: {positive:?}");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "positive control did not execute"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let removed = job.remove();
+        assert!(
+            removed.status.success(),
+            "remove positive control: {removed:?}"
+        );
+        fs::remove_file(&marker).expect("remove positive-control marker");
+
+        let command = CommandSpec::new("/bin/launchctl")
+            .expect("launchctl executable")
+            .with_args(arguments)
+            .expect("launchctl arguments");
+        let (command, effective, context) = request_for(workspace.path(), &policy, command);
+        let command = command.with_timeout(Duration::from_secs(5));
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &context)
+            .expect("prepare launchd delegation probe");
+        let mut child = backend
+            .spawn(prepared)
+            .expect("spawn launchctl inside sandbox");
+        let mut stderr = File::from(
+            child
+                .stderr()
+                .expect("launchctl stderr")
+                .as_fd()
+                .try_clone_to_owned()
+                .expect("retain diagnostics across wait"),
+        );
+        let status = child.wait().expect("wait for launchctl delegation probe");
+        let mut diagnostic = Vec::new();
+        read_pipe_until_eof(&mut stderr, |bytes| {
+            diagnostic.extend_from_slice(bytes);
+            Ok(())
+        })
+        .expect("bounded diagnostic read");
+        let registered = Command::new("/bin/launchctl")
+            .args(["list", &job.label])
+            .output()
+            .expect("check exact fixture job registration");
+        assert!(
+            !status.success() && !registered.status.success() && !marker.exists(),
+            "{mode} command delegated execution outside Seatbelt: status={status:?}; \
+             registration={registered:?}; stderr={}",
+            String::from_utf8_lossy(&diagnostic)
+        );
+    }
 }
 
 #[test]
@@ -681,15 +891,27 @@ fn parent_watcher_does_not_retain_closed_stdout_or_stderr() {
     stderr_result.expect("parent watcher retained the closed stderr write end");
 }
 
-#[allow(unsafe_code)]
 fn wait_for_pipe_eof<T: Read + AsRawFd>(stream: &mut T) -> io::Result<()> {
+    read_pipe_until_eof(stream, |_| {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "closed standard-stream fixture produced output",
+        ))
+    })
+}
+
+#[allow(unsafe_code)]
+fn read_pipe_until_eof<T: Read + AsRawFd>(
+    stream: &mut T,
+    mut on_output: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<()> {
     let mut poll = libc::pollfd {
         fd: stream.as_raw_fd(),
         events: libc::POLLIN | libc::POLLHUP,
         revents: 0,
     };
     let deadline = Instant::now() + Duration::from_secs(3);
-    let mut byte = [0; 1];
+    let mut buffer = [0; 4096];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -713,14 +935,9 @@ fn wait_for_pipe_eof<T: Read + AsRawFd>(stream: &mut T) -> io::Result<()> {
                 "standard stream did not reach EOF",
             ));
         }
-        match stream.read(&mut byte) {
+        match stream.read(&mut buffer) {
             Ok(0) => return Ok(()),
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "closed standard-stream fixture produced output",
-                ));
-            }
+            Ok(read) => on_output(&buffer[..read])?,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
         }
@@ -1021,6 +1238,34 @@ fn workspace_glob_rejects_a_non_utf8_root_before_launch() {
 }
 
 #[test]
+fn command_timeout_closes_pipes_without_wait_or_polling() {
+    let workspace = TempDir::new().expect("workspace");
+    let policy = restricted_policy(workspace.path());
+    let (request, effective, context) =
+        request_for(workspace.path(), &policy, shell_command("sleep 30 & wait"));
+    let request = request.with_timeout(Duration::from_millis(200));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&request, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    // Observe only the pipe. Calling wait/try_wait here would hide a deadline
+    // that is enforced only when the embedding application polls the child.
+    // The observer itself is bounded so a broken watchdog cannot hang CI.
+    let stdout_eof = wait_for_pipe_eof(child.stdout().expect("stdout pipe"));
+    let stderr_eof = wait_for_pipe_eof(child.stderr().expect("stderr pipe"));
+    let result = child.wait();
+
+    stdout_eof.expect("command timeout must close stdout without lifecycle polling");
+    stderr_eof.expect("command timeout must close stderr without lifecycle polling");
+    assert!(
+        matches!(result, Err(MacosBackendError::ProcessTimedOut)),
+        "timeout must retain its typed result: {result:?}"
+    );
+}
+
+#[test]
 fn timeout_terminates_the_complete_seatbelt_process_group() {
     let workspace = TempDir::new().expect("workspace");
     let policy = restricted_policy(workspace.path());
@@ -1097,6 +1342,153 @@ fn reaped_leader_does_not_leave_a_running_descendant() {
     assert!(
         !marker.exists(),
         "descendant {descendant} survived leader exit"
+    );
+}
+
+#[test]
+fn process_group_change_fixture() {
+    let Ok(mode) = std::env::var(GROUP_CHANGE_MODE) else {
+        return;
+    };
+    let root = PathBuf::from(std::env::var_os(GROUP_CHANGE_ROOT).expect("fixture root"));
+    let ready = root.join("ready");
+    let release = root.join("release");
+    if let Some(operation) = mode.strip_prefix("root-") {
+        let mut command = Command::new(std::env::current_exe().expect("fixture executable"));
+        command
+            .args(["--exact", "process_group_change_fixture", "--nocapture"])
+            .env(GROUP_CHANGE_MODE, operation)
+            .stdin(std::process::Stdio::null());
+        if operation == "spawn-group" {
+            // Also exercise native spawn attributes: denying only the direct
+            // setpgid/setsid syscalls cannot establish immutable membership.
+            command.process_group(0);
+        }
+        let mut descendant = command.spawn().expect("spawn group-changing descendant");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(
+                descendant.try_wait().expect("poll descendant").is_none(),
+                "descendant exited before readiness"
+            );
+            assert!(Instant::now() < deadline, "descendant readiness timeout");
+            thread::sleep(Duration::from_millis(2));
+        }
+        // Deliberately finish the root while its descendant is alive. The
+        // backend must complete descendant cleanup before wait() succeeds.
+        drop(descendant);
+        return;
+    }
+
+    #[allow(unsafe_code)]
+    let (before, result, after) = unsafe {
+        let before = libc::getpgrp();
+        let result = match mode.as_str() {
+            "setsid" => libc::setsid(),
+            "setpgid" => libc::setpgid(0, 0),
+            "spawn-group" => 0,
+            other => panic!("unexpected group-change operation: {other}"),
+        };
+        (before, result, libc::getpgrp())
+    };
+    fs::write(
+        ready,
+        format!("{mode}: before={before}, result={result}, after={after}"),
+    )
+    .expect("record group-change result");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !release.exists() {
+        // Bound the fixture's own lifetime even on a broken cleanup path.
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    fs::write(
+        root.join("survived"),
+        b"executed after backend wait completed",
+    )
+    .expect("record surviving descendant");
+}
+
+#[test]
+fn successful_wait_terminates_descendants_that_change_group_or_session() {
+    let backend = backend();
+    let executable = std::env::current_exe().expect("fixture executable");
+    let mut survivors = Vec::new();
+    for operation in ["setsid", "setpgid", "spawn-group"] {
+        let workspace = TempDir::new().expect("workspace");
+        let root = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let environment = EnvironmentSpec::inherit_core()
+            .with_var(GROUP_CHANGE_MODE, format!("root-{operation}"))
+            .expect("fixture mode")
+            .with_var(GROUP_CHANGE_ROOT, root.as_os_str())
+            .expect("fixture root");
+        let policy = writable_policy(&root);
+        let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+        let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
+            .expect("compose policy");
+        let context = context(&root)
+            .with_minimal_path(executable.clone())
+            .expect("fixture runtime path");
+        let command = CommandRequest::new(
+            CommandSpec::new(&executable)
+                .expect("fixture program")
+                .with_args(["--exact", "process_group_change_fixture", "--nocapture"])
+                .expect("fixture arguments"),
+        )
+        .with_working_directory(root.clone())
+        .expect("working directory")
+        .with_environment(environment)
+        .with_timeout(Duration::from_secs(10))
+        .with_stdio(
+            StdioSpec::inherited()
+                .with_stdout(StdioMode::Pipe)
+                .with_stderr(StdioMode::Pipe),
+        );
+        let prepared = backend
+            .prepare(BackendRequest::new(&command, &effective), &context)
+            .expect("prepare group-change fixture");
+        let mut child = backend.spawn(prepared).expect("spawn group-change fixture");
+        // MacosChild closes its own stream handles at successful completion.
+        // Keep only reader duplicates to observe EOF after that cleanup.
+        let mut stdout = File::from(
+            child
+                .stdout()
+                .expect("stdout")
+                .as_fd()
+                .try_clone_to_owned()
+                .expect("stdout reader"),
+        );
+        let mut stderr = File::from(
+            child
+                .stderr()
+                .expect("stderr")
+                .as_fd()
+                .try_clone_to_owned()
+                .expect("stderr reader"),
+        );
+        let status = child.wait();
+        // Release the finite descendant only after the public boundary claims
+        // completion. On the broken implementation it records the violation
+        // and exits itself, leaving no unbounded orphan or host-side PID kill.
+        fs::write(root.join("release"), b"boundary wait returned").expect("release fixture");
+        read_pipe_until_eof(&mut stdout, |_| Ok(()))
+            .expect("descendant closes stdout after release");
+        let mut diagnostic = String::new();
+        read_pipe_until_eof(&mut stderr, |chunk| {
+            diagnostic.push_str(&String::from_utf8_lossy(chunk));
+            Ok(())
+        })
+        .expect("stderr diagnostic");
+        assert!(status.expect("wait for fixture").success(), "{diagnostic}");
+        if root.join("survived").exists() {
+            survivors.push(fs::read_to_string(root.join("ready")).expect("group-change record"));
+        }
+    }
+    assert!(
+        survivors.is_empty(),
+        "descendants survived successful boundary wait: {survivors:?}"
     );
 }
 

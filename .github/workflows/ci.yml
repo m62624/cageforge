@@ -620,6 +620,49 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Probe macOS lifecycle ownership prerequisites
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir=$(mktemp -d "${RUNNER_TEMP}/cageforge-coalition.XXXXXX")
+          probe_label="dev.cageforge.ci-coalition-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rustc --edition 2024 -D warnings ci/macos-lifecycle-probe.rs -o "$probe_dir/probe"
+          "$probe_dir/probe"
+          sudo "$probe_dir/probe"
+          # A root shell is not equivalent to a launchd-owned service. Measure
+          # both; this transient CI job is not a Cageforge setup installation.
+          trap 'sudo launchctl remove "$probe_label" || true' EXIT
+          sudo launchctl submit -l "$probe_label" -o "$probe_dir/service.out" -e "$probe_dir/service.err" -- "$probe_dir/probe"
+          for attempt in {1..100}; do
+            if sudo test -f "$probe_dir/service.out" && sudo grep -q '^probe complete$' "$probe_dir/service.out"; then
+              sudo cat "$probe_dir/service.out" "$probe_dir/service.err"
+              exit 0
+            fi
+            sleep 0.1
+          done
+          sudo cat "$probe_dir/service.out" "$probe_dir/service.err" || true
+          sudo launchctl list "$probe_label" || true
+          exit 1
+      - name: Probe independent macOS descendant cleanup
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir=$(mktemp -d "${RUNNER_TEMP}/cageforge-families.XXXXXX")
+          first_label="dev.cageforge.ci-family-first-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          second_label="dev.cageforge.ci-family-second-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rustc --edition 2024 -D warnings ci/macos-lifecycle-probe.rs -o "$probe_dir/probe"
+          mkdir "$probe_dir/first" "$probe_dir/second"
+          trap 'launchctl remove "$first_label" || true; launchctl remove "$second_label" || true' EXIT
+          launchctl submit -l "$first_label" -o "$probe_dir/first.out" -e "$probe_dir/first.err" -- "$probe_dir/probe" family "$probe_dir/first"
+          launchctl submit -l "$second_label" -o "$probe_dir/second.out" -e "$probe_dir/second.err" -- "$probe_dir/probe" family "$probe_dir/second"
+          if ! "$probe_dir/probe" families "$probe_dir/first" "$probe_dir/second"; then
+            cat "$probe_dir/first.out" "$probe_dir/first.err" "$probe_dir/second.out" "$probe_dir/second.err" || true
+            launchctl list "$first_label" || true
+            launchctl list "$second_label" || true
+            exit 1
+          fi
       - name: Check macOS backend formatting
         run: cargo fmt --package cageforge-macos --package cageforge -- --check
       - name: Lint macOS backend

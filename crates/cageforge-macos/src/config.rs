@@ -14,6 +14,12 @@ pub(crate) const DEFAULT_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 /// Invalid macOS backend construction settings.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MacosBackendConfigError {
+    /// The helper must be selected through an absolute path.
+    #[error("macOS helper path must be absolute: {path:?}")]
+    HelperNotAbsolute {
+        /// Rejected helper path.
+        path: PathBuf,
+    },
     /// A zero default timeout would make default-timed commands expire
     /// immediately.
     #[error("default command timeout must be greater than zero")]
@@ -29,6 +35,7 @@ pub enum MacosBackendConfigError {
 /// Configuration for one reusable macOS enforcement backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacosBackendConfig {
+    helper_executable: Option<PathBuf>,
     seatbelt_executable: PathBuf,
     default_timeout: Duration,
     network_gateway: GatewayConfig,
@@ -37,6 +44,7 @@ pub struct MacosBackendConfig {
 impl Default for MacosBackendConfig {
     fn default() -> Self {
         Self {
+            helper_executable: None,
             seatbelt_executable: PathBuf::from(DEFAULT_SEATBELT_EXECUTABLE),
             default_timeout: Duration::from_secs(300),
             network_gateway: GatewayConfig::new(),
@@ -45,6 +53,38 @@ impl Default for MacosBackendConfig {
 }
 
 impl MacosBackendConfig {
+    /// Selects a standalone helper or an application embedding the helper entry point.
+    pub fn with_helper_executable(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, MacosBackendConfigError> {
+        let path = path.into();
+        if !path.is_absolute() {
+            return Err(MacosBackendConfigError::HelperNotAbsolute { path });
+        }
+        self.helper_executable = Some(path);
+        Ok(self)
+    }
+
+    pub(crate) fn helper_executable(&self) -> std::io::Result<PathBuf> {
+        if let Some(path) = &self.helper_executable {
+            return Ok(path.clone());
+        }
+        let executable = std::env::current_exe()?;
+        let parent = executable.parent().ok_or(std::io::ErrorKind::NotFound)?;
+        let adjacent = parent.join(crate::process::launchd::HELPER_NAME);
+        if adjacent.is_file() {
+            return Ok(adjacent);
+        }
+        // Cargo integration-test executables reside in target/<profile>/deps;
+        // Cargo builds their companion binary in target/<profile>.
+        if parent.file_name().is_some_and(|name| name == "deps")
+            && let Some(profile) = parent.parent()
+        {
+            return Ok(profile.join(crate::process::launchd::HELPER_NAME));
+        }
+        Ok(adjacent)
+    }
     /// Creates the secure default configuration.
     pub fn new() -> Self {
         Self::default()

@@ -12,6 +12,9 @@ use thiserror::Error;
 /// Errors returned by the macOS backend.
 #[derive(Debug, Error)]
 pub enum MacosBackendError {
+    /// Authenticated helper launch or complete-coalition cleanup failed.
+    #[error(transparent)]
+    Helper(#[from] crate::process::launchd::LaunchError),
     /// Portable capability or prepared-handoff validation failed.
     #[error(transparent)]
     Contract(#[from] BackendContractError),
@@ -52,6 +55,19 @@ pub enum MacosBackendError {
     /// The command exceeded its prepared timeout.
     #[error("the macOS sandboxed command exceeded its prepared timeout")]
     ProcessTimedOut,
+    /// The independent command-timeout worker could not be created.
+    #[error("failed to start macOS command-timeout watchdog: {source}")]
+    TimeoutWatchdogSetup {
+        /// The operating-system thread creation failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The timeout worker failed while supervising its process group.
+    #[error("macOS command-timeout watchdog panicked")]
+    TimeoutWatchdogPanicked,
+    /// Watchdog signalling and child collection could not be synchronized.
+    #[error("macOS command-timeout watchdog synchronization is poisoned")]
+    TimeoutWatchdogLockPoisoned,
     /// The prepared timeout cannot be represented by the native monotonic
     /// deadline used by the child lifecycle.
     #[error("macOS sandbox timeout cannot be represented by a native deadline: {timeout_ms} ms")]
@@ -69,6 +85,12 @@ pub enum MacosBackendError {
         #[source]
         source: io::Error,
     },
+    /// The host lacks the native API needed to signal an exact process
+    /// generation without risking delivery to a reused PID.
+    #[error(
+        "macOS does not provide proc_signal_with_audittoken for generation-bound process cleanup"
+    )]
+    VersionedProcessSignallingUnavailable,
     /// The process identifier cannot be represented by the native `pid_t`.
     #[error("macOS sandbox process ID {pid} is outside the native pid_t range")]
     ProcessGroupPidOutOfRange {

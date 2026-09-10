@@ -664,6 +664,15 @@ owned when their cleanup returns an error; a detached recovery owner retries
 termination and cleanup. A failed cleanup must not clear a guard while the
 associated boundary or host-side protection may still exist.
 
+Abrupt application death bypasses these Rust destructors. The retained upstream
+`--die-with-parent` and PID-namespace boundary must still terminate its owned
+processes. Shared synthetic-target recovery must discard the dead process's
+generation-bound marker without removing a target held by another live
+instance; the last live owner's cleanup then removes the exact empty target.
+Native verification must kill one of two independent owning applications,
+observe the first boundary's exit through a pinned pidfd, and prove that the
+second instance remains protected and can complete its own cleanup.
+
 ### 7.5 Network lowering
 
 Network namespace isolation implements all-network-disabled behavior. Narrower
@@ -684,12 +693,25 @@ The gateway must implement ordinary HTTP proxying, HTTP `CONNECT`, and SOCKS5
 empty DNS result, private-address violation, target outside the captured
 resolution, bridge failure, or unsupported protocol fails closed.
 
+The gateway's socket inode is pinned and mounted as one read-only file in the
+private runtime tree, not as a host directory. After the authenticated setup
+handshake confirms the mount and before the command receives its release
+message, the parent removes the known host socket name and its empty directory.
+The listener and private bind mount retain the inode; new authenticated bridge
+connections still reach it. Application death then closes the listener and
+destroys the PID/mount boundary without needing a destructor to remove those
+host names. Unlink failure rejects launch rather than releasing the command.
+This differs intentionally from upstream `proxy_routing.rs` and
+`proxy_lifecycle.rs`, which keep named socket directories and spawn a separate
+cleanup worker. No process-wide sweep of similarly named directories is used.
+
 Gateway shutdown is bounded. If the runtime thread does not exit within the
-cleanup deadline, the launch transfers the thread and private socket directory
-to a recovery owner; that owner joins the thread later, and the socket
-directory is retained until the join completes. A caller must never delete the
-directory or release the gateway as though shutdown were confirmed while the
-thread may still accept authenticated traffic.
+cleanup deadline, the launch transfers the thread and any remaining private
+socket directory to a recovery owner; that owner joins the thread later, and
+retains that directory until the join completes. A caller must never release the
+gateway as though shutdown were confirmed while the thread may still accept
+authenticated traffic. Removing a published host name after the private socket
+mount is confirmed is not gateway shutdown: the mount and listener remain owned.
 
 Product
 features such as MITM, credential injection, audit upload, and remote policy
