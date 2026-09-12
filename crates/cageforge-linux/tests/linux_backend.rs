@@ -1016,6 +1016,116 @@ fn denied_existing_file_cannot_be_read() {
 }
 
 #[test]
+fn multiple_denied_files_use_independent_empty_masks() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let first = workspace.path().join("first-secret");
+    let second = workspace.path().join("second-secret");
+    std::fs::write(&first, "first").expect("first fixture");
+    std::fs::write(&second, "second").expect("second fixture");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(PathSelector::root(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+            FilesystemRule::new(
+                PathSelector::workspace("first-secret").expect("first selector"),
+                AccessMode::Deny,
+            ),
+            FilesystemRule::new(
+                PathSelector::workspace("second-secret").expect("second selector"),
+                AccessMode::Deny,
+            ),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args([
+            "-c",
+            "if cat first-secret >/dev/null 2>&1 || cat second-secret >/dev/null 2>&1; then exit 17; else exit 0; fi",
+        ])
+        .expect("arguments");
+    let (command, effective, runtime) = request(workspace.path(), policy, command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(first).expect("first host fixture"),
+        "first"
+    );
+    assert_eq!(
+        std::fs::read_to_string(second).expect("second host fixture"),
+        "second"
+    );
+}
+
+#[test]
+fn nested_missing_denied_leaf_preserves_writable_missing_parents() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let nested = workspace.path().join(".local/share/keyrings");
+    let filesystem = SandboxPolicy::workspace()
+        .filesystem()
+        .clone()
+        .dangerously_allow_git_write()
+        .with_additional_protected_relative_path(".local/share/keyrings")
+        .expect("keyrings protected path");
+    let policy = SandboxPolicy::new(filesystem, NetworkPolicy::disabled());
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args([
+            "-c",
+            "mkdir -p .local/share; printf allowed > .local/share/allowed; if mkdir .local/share/keyrings; then exit 17; else exit 0; fi",
+        ])
+        .expect("arguments");
+    let (command, effective, runtime) = request(workspace.path(), policy, command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+    assert!(workspace.path().join(".local/share").is_dir());
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join(".local/share/allowed"))
+            .expect("writable parent file"),
+        "allowed"
+    );
+    assert!(!nested.is_dir(), "denied leaf became a host directory");
+}
+
+#[test]
+fn restricted_root_rejects_unmounted_root_writes() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let command = CommandSpec::new("/bin/sh")
+        .expect("shell")
+        .with_args([
+            "-c",
+            "if printf escaped > /cageforge-unmounted-root-write; then exit 17; else exit 0; fi",
+        ])
+        .expect("arguments");
+    let (command, effective, runtime) = request(workspace.path(), policy, command);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    assert_eq!(child.wait().expect("wait").code(), Some(0));
+}
+
+#[test]
 fn writable_child_remains_available_below_a_read_only_parent() {
     let workspace = TempDir::new().expect("temporary workspace");
     let readonly = workspace.path().join("readonly");

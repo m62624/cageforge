@@ -201,7 +201,7 @@ pub(crate) fn lower<'a>(
 
     let mut args = vec!["--tmpfs".into(), "/".into()];
     let mut preserved_files = Vec::new();
-    let mut empty_mask_descriptor = None;
+    let mut virtual_mount_parent_dirs = BTreeSet::new();
     if let Some(mount) = mounts.get(Path::new("/")).copied() {
         match mount {
             Mount::Read | Mount::Write => add_bind(
@@ -243,7 +243,7 @@ pub(crate) fn lower<'a>(
                 &writable_roots,
                 &ordered_mounts,
                 &mut preserved_files,
-                &mut empty_mask_descriptor,
+                &mut virtual_mount_parent_dirs,
             )?;
         }
     }
@@ -545,7 +545,6 @@ fn materialize_missing_masks(
         }
     }
     for (path, mount) in missing_masks {
-        mounts.remove(&path);
         let Some(first_missing) = first_missing_component(&path)? else {
             continue;
         };
@@ -553,12 +552,16 @@ fn materialize_missing_masks(
             .iter()
             .any(|root| first_missing.starts_with(root))
         {
+            mounts.remove(&path);
             continue;
         }
         validate_mount_path(&first_missing)?;
-        let target = SyntheticMountTarget::create(&first_missing, &setup_lock)?;
-        insert_mount(mounts, target.path().to_path_buf(), mount);
-        synthetic_targets.push(target);
+        if first_missing == path {
+            mounts.remove(&path);
+            let target = SyntheticMountTarget::create(&first_missing, &setup_lock)?;
+            insert_mount(mounts, target.path().to_path_buf(), mount);
+            synthetic_targets.push(target);
+        }
     }
     prune_redundant_denied_descendants(mounts);
     Ok(())
@@ -823,7 +826,7 @@ fn add_mask(
     writable_roots: &[PathBuf],
     ordered_mounts: &[(PathBuf, Mount)],
     preserved_files: &mut Vec<File>,
-    empty_mask_descriptor: &mut Option<std::os::fd::RawFd>,
+    virtual_mount_parent_dirs: &mut BTreeSet<PathBuf>,
 ) -> Result<(), LinuxBackendError> {
     if path == Path::new("/") {
         return Err(LinuxBackendError::FilesystemLoweringFailed {
@@ -834,15 +837,40 @@ fn add_mask(
     if let Some(symlink) = first_writable_symlink(path, writable_roots) {
         return Err(writable_symlink_error(path, &symlink));
     }
-    let metadata = fs::symlink_metadata(path).map_err(|source| {
-        LinuxBackendError::FilesystemLoweringFailed {
-            path: path.to_path_buf(),
-            source: FilesystemLoweringError::Metadata {
-                operation: FilesystemMetadataOperation::Mask,
-                source,
-            },
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            let Some(first_missing) = first_missing_component(path)? else {
+                return Err(LinuxBackendError::FilesystemLoweringFailed {
+                    path: path.to_path_buf(),
+                    source: FilesystemLoweringError::Metadata {
+                        operation: FilesystemMetadataOperation::Mask,
+                        source,
+                    },
+                });
+            };
+            append_missing_mount_parent_dirs(args, path, &first_missing, virtual_mount_parent_dirs);
+            return add_empty_mask_file(
+                args,
+                path,
+                if mount == Mount::ReadOnly {
+                    "0500"
+                } else {
+                    "000"
+                },
+                preserved_files,
+            );
         }
-    })?;
+        Err(source) => {
+            return Err(LinuxBackendError::FilesystemLoweringFailed {
+                path: path.to_path_buf(),
+                source: FilesystemLoweringError::Metadata {
+                    operation: FilesystemMetadataOperation::Mask,
+                    source,
+                },
+            });
+        }
+    };
     if metadata.file_type().is_symlink() && mount == Mount::Deny {
         return Ok(());
     }
@@ -865,30 +893,63 @@ fn add_mask(
         }
         args.extend(["--remount-ro".into(), path.as_os_str().into()]);
     } else {
-        let descriptor = match *empty_mask_descriptor {
-            Some(descriptor) => descriptor,
-            None => {
-                let file = File::open("/dev/null").map_err(|source| {
-                    LinuxBackendError::FilesystemLoweringFailed {
-                        path: path.to_path_buf(),
-                        source: FilesystemLoweringError::EmptyMaskSource { source },
-                    }
-                })?;
-                let descriptor = file.as_raw_fd();
-                preserved_files.push(file);
-                *empty_mask_descriptor = Some(descriptor);
-                descriptor
-            }
-        };
-        args.extend([
-            "--perms".into(),
-            "000".into(),
-            "--ro-bind-data".into(),
-            descriptor.to_string().into(),
-            path.as_os_str().into(),
-        ]);
+        add_empty_mask_file(args, path, "000", preserved_files)?;
     }
     Ok(())
+}
+
+fn add_empty_mask_file(
+    args: &mut Vec<OsString>,
+    path: &Path,
+    permissions: &str,
+    preserved_files: &mut Vec<File>,
+) -> Result<(), LinuxBackendError> {
+    let file =
+        File::open("/dev/null").map_err(|source| LinuxBackendError::FilesystemLoweringFailed {
+            path: path.to_path_buf(),
+            source: FilesystemLoweringError::EmptyMaskSource { source },
+        })?;
+    let descriptor = file.as_raw_fd();
+    args.extend([
+        "--perms".into(),
+        permissions.into(),
+        "--ro-bind-data".into(),
+        descriptor.to_string().into(),
+        path.as_os_str().into(),
+    ]);
+    preserved_files.push(file);
+    Ok(())
+}
+
+fn append_missing_mount_parent_dirs(
+    args: &mut Vec<OsString>,
+    mount_target: &Path,
+    first_missing: &Path,
+    virtual_mount_parent_dirs: &mut BTreeSet<PathBuf>,
+) {
+    let Some(parent) = mount_target.parent() else {
+        return;
+    };
+    if !parent.starts_with(first_missing) {
+        return;
+    }
+
+    let Ok(relative_parent) = parent.strip_prefix(first_missing) else {
+        return;
+    };
+    let mut directory = first_missing.to_path_buf();
+    if virtual_mount_parent_dirs.insert(directory.clone()) {
+        args.extend(["--dir".into(), directory.clone().into_os_string()]);
+    }
+    for component in relative_parent.components() {
+        let std::path::Component::Normal(part) = component else {
+            continue;
+        };
+        directory.push(part);
+        if virtual_mount_parent_dirs.insert(directory.clone()) {
+            args.extend(["--dir".into(), directory.clone().into_os_string()]);
+        }
+    }
 }
 
 fn writable_symlink_error(path: &Path, symlink: &Path) -> LinuxBackendError {
