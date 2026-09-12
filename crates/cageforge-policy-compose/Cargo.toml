@@ -1,6 +1,6 @@
 [package]
 name = "cageforge-policy-compose"
-description = "Pure intersection of requested Cageforge sandbox policy and a portable ceiling"
+description = "Policy ceiling composition for Rust process sandboxes"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

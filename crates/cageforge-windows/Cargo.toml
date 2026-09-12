@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Windows native backend for Cageforge process sandboxing"
+description = "Windows-native sandbox backend for Rust applications"
 readme = "README.md"
 
 [package.metadata.dist]

@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Backend capability and preflight contracts for Cageforge execution"
+description = "Capability and execution contracts for Cageforge sandbox backends"
 readme = "README.md"
 
 [package.metadata.dist]

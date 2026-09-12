@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Strict TOML profile resolution for Cageforge policies and commands"
+description = "TOML configuration and profile resolution for Cageforge sandboxes"
 repository.workspace = true
 readme = "README.md"
 

@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Shared native path comparison and validation primitives"
+description = "Cross-platform native path validation for Rust sandbox policies"
 repository.workspace = true
 readme = "README.md"
 

@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Platform-independent filesystem and network sandbox policy types"
+description = "Filesystem and network policies for Rust process sandboxes"
 repository.workspace = true
 readme = "README.md"
 

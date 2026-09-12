@@ -4,6 +4,8 @@
 > crate provides independently authored native path semantics shared by
 > Cageforge libraries.
 
+This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
+
 # cageforge-path
 
 `cageforge-path` centralizes the small set of path comparisons that must agree
