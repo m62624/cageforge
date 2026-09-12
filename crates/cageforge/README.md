@@ -106,8 +106,9 @@ fn shared_backend() -> Result<Arc<dyn DynSandbox>, NativeSandboxError> {
 ```
 
 Each thread supplies its own command and effective policy to `launch`; each
-returned child owns an independent sandbox instance. Backend sharing does not
-serialize the commands for their whole lifetime.
+returned child owns an independent sandbox instance. Backend sharing lets
+those launches proceed concurrently; each child keeps its own process boundary
+and native state.
 
 Use `native_sandbox_with(NativeSandboxConfig::new()...)` for custom native
 settings. `NativeSandboxConfig` exposes the matching backend's existing
@@ -233,7 +234,7 @@ The public configuration types from
 are always re-exported; enable `network-runtime` to expose its standalone
 gateway and resolver runtime as well. Native backends use that runtime
 internally when their effective policy requires routed networking.
-The `config` feature additionally re-exports
+The `config` feature also re-exports
 [`cageforge-config`](https://docs.rs/cageforge-config/latest/cageforge_config/).
 The matching OS feature re-exports that backend's configuration, child, and
 typed error types.
@@ -244,9 +245,8 @@ waiting, and termination. Native child types and errors remain available when
 platform-specific behavior or diagnostics are needed.
 
 The public facade is synchronous. Internal network gateways may use helper
-threads or asynchronous tasks; an application using the facade does not need
-to select an async runtime. In an async application, run blocking process
-operations in its blocking-task facility.
+threads or asynchronous tasks. An async application only needs to run the
+blocking process operations in its blocking-task facility.
 
 For complete platform-specific behavior and native setup, see the
 documentation for [`cageforge-linux`](https://docs.rs/cageforge-linux/latest/cageforge_linux/),

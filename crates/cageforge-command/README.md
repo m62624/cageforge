@@ -15,8 +15,8 @@ ordinary process launch.
 ## When to use it
 
 Use this crate when one part of an application describes a process and another
-part launches it. It is also suitable for ordinary process execution: the
-request model does not require a sandbox backend or a particular harness.
+part launches it. Applications can also use it for ordinary process execution;
+the request model carries no backend or harness dependency.
 
 The usual handoff is:
 

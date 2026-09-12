@@ -126,8 +126,8 @@ Apache-2.0. A distribution that ships the embedded mode must preserve the
 Bubblewrap license notice and corresponding machine-readable source. The
 `cageforge-bwrap` crate contains both in its published package.
 
-The host kernel must permit the user, mount, PID, IPC, and—when requested—network
-namespaces used by Bubblewrap. It must also support anonymous executable files
+The host kernel must permit the user, mount, PID, IPC, and, when requested,
+network namespaces used by Bubblewrap. It must also support anonymous executable files
 and file sealing so Cageforge can capture Bubblewrap and the hardening helper
 after validation. A missing prerequisite is reported as a typed
 `LinuxBackendError`; restricted requests are never widened into an ordinary
@@ -359,9 +359,9 @@ or cause preparation to reject the requested weakening.
 
 ## Protection matrix
 
-The backend combines these protections according to the effective policy. A
-feature being available on Linux does not widen a request that did not ask for
-it, and an unsupported combination is rejected before launch.
+The backend enables these protections from the effective policy. Linux-only
+capabilities never widen a request, and an unsupported combination is rejected
+before launch.
 
 | Protection | When it is active | What it enforces |
 |---|---|---|
@@ -396,12 +396,11 @@ it, and an unsupported combination is rejected before launch.
 | Timeout and parent-death handling | Backend-default or limited timeout, plus every boundary | Uses PIDFD-based timeout termination, Bubblewrap parent binding, and cleanup to terminate the complete sandbox boundary when the command expires or its owner disappears |
 | Setup and readiness deadlines | Helper, bridge, and gateway startup | Bounds authentication, environment transfer, status exchange, bridge port publication, and gateway handshakes so startup cannot hang indefinitely |
 
-`External` filesystem or network ownership is not treated as local Linux
-enforcement. The backend returns a typed unsupported result unless a future
-trusted integration supplies the required enforcement boundary. Likewise,
-`Unrestricted` modes intentionally disable only the corresponding local
-restriction; they do not bypass the helper, lifecycle, descriptor, or setup
-integrity protections needed to start the process safely.
+`External` filesystem or network ownership requires a trusted integration that
+supplies the enforcement boundary. Without one, the backend returns a typed
+unsupported result. `Unrestricted` modes disable only the selected local
+restriction; helper, lifecycle, descriptor, and setup integrity protections
+remain active.
 
 ## Network behavior
 

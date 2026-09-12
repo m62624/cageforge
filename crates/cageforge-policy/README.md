@@ -33,9 +33,9 @@ The normal sequence is:
    `cageforge-policy-compose`.
 5. Give the resulting constraints to a native backend.
 
-The last step is essential. This crate performs portable lexical and policy
-decisions; it does not make `std::fs` operations safe, resolve DNS, or create
-an operating-system sandbox.
+A native backend must perform the final enforcement step. This crate makes
+portable lexical and policy decisions; filesystem I/O, DNS resolution, and
+operating-system sandbox setup belong to the backend.
 
 ## Workspace role
 
@@ -64,8 +64,8 @@ mutable collections or public fields that could bypass policy invariants. This
 keeps both direct library use and backend compilation on the same validated API.
 
 `PathSelector` is opaque. Create it with `absolute`, `workspace`,
-`workspace_root`, `root`, `minimal`, `tmpdir`, or `slash_tmp`; callers cannot construct
-an unchecked path selector by writing a public enum payload.
+`workspace_root`, `root`, `minimal`, `tmpdir`, or `slash_tmp`; callers cannot
+construct an unchecked selector by writing a public enum payload.
 
 ## Public API
 
@@ -214,10 +214,9 @@ external enforcement.
 
 `UnixSocketRule` equality and hashing use the same native path identity as
 Unix-socket matching and policy normalization. A rule matches one exact native
-socket path; it does not implicitly grant a directory or path prefix. On
-Windows this makes case variants one rule identity; on POSIX, case remains
-significant. The `path()` accessor still preserves the declared spelling for
-diagnostics.
+socket path. It grants no directory or path prefix. On Windows this makes case
+variants one rule identity; on POSIX, case remains significant. The `path()`
+accessor still preserves the declared spelling for diagnostics.
 
 Network policy is independent from filesystem policy. Disabled mode denies
 destinations, while external mode records that another trusted boundary owns
@@ -240,7 +239,7 @@ The policy crate performs no DNS or network I/O. It also cannot prove that a
 caller actually connected to the checked address; the native backend must use
 the target snapshot instead of resolving the hostname again.
 
-For network code, the safe handoff is deliberately explicit:
+The handoff to network code is explicit:
 
 ```text
 DNS results + exact SocketAddr

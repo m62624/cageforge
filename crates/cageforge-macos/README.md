@@ -89,10 +89,9 @@ The macOS host must provide Seatbelt, generation-bound process signalling
 (`proc_signal_with_audittoken`), and coalition accounting. These include native
 interfaces outside Apple's stable public API; a future OS update can require a
 backend update. Missing native support fails closed, without silently reverting
-to process-group-only cleanup. Backend construction checks that
-the versioned signalling API is available before any command is launched.
-Cross-target compilation checks the
-Rust API surface; native enforcement is exercised on a macOS runner. A
+to process-group-only cleanup. Backend construction checks that the versioned
+signalling API is available before any command is launched. Cross-target
+compilation checks the Rust API surface; native enforcement requires macOS. A
 missing executable or native operation is returned as a typed
 `MacosBackendError`; the backend does not silently fall back to an ordinary
 unsandboxed process.
@@ -260,15 +259,11 @@ confirmed.
 Normal completion removes the per-launch registration and its service files.
 If the application is killed without running destructors, the helper retains
 the ingress-port reservation until descendants are gone, then removes its
-registration and known files. Replaced entries or unexpected directory contents
-are preserved rather than recursively deleted. Persistent Windows-style
-accounts or system rules are not created by this backend.
+registration and known files. Replaced entries or unexpected directory
+contents are preserved rather than recursively deleted. macOS does not create
+persistent sandbox accounts or system firewall rules.
 
 Use `MacosBackendError` and its nested typed error enums for construction,
 preflight, lowering, gateway, process, timeout, and cleanup failures. The
 parent does not parse command output or diagnostics as a protocol. Display
 text is for humans; applications match error variants and their sources.
-
-The exact native enforcement correspondence and intentional differences from
-the upstream design are recorded in
-[`specs/0017-macos-backend-implementation.md`](../../specs/0017-macos-backend-implementation.md).

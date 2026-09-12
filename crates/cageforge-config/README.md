@@ -22,11 +22,11 @@ an execution layer, or narrowed first with `cageforge-policy-compose` and a
 ## When to use it
 
 Use this crate when users or operators need named TOML profiles, inheritance,
-editor schema, and structured configuration diagnostics. Do not use it when
-your application already has a typed configuration model; in that case build
-`cageforge-policy` and `cageforge-command` values directly.
+editor schema, and structured configuration diagnostics. If an application
+already has a typed configuration model, it can build `cageforge-policy` and
+`cageforge-command` values directly instead.
 
-The configuration flow is intentionally one-way:
+Configuration flows from source text to a resolved profile:
 
 ```text
 TOML text/file

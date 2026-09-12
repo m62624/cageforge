@@ -46,10 +46,9 @@ does not know how Linux, macOS, or Windows will enforce the result.
 | `cageforge` | Re-exports composition types for the application-facing sandbox flow. |
 | Backend integrations | Inspect effective constraints and lower them to native execution APIs. |
 
-The dependency direction is deliberate: composition does not depend on a
-configuration format or a backend. An application can use TOML, JSON, Rust
-builders, or its own configuration system and pass the same validated values
-here.
+The dependency direction keeps composition independent of configuration
+formats and backends. An application can use TOML, JSON, Rust builders, or its
+own configuration system and pass the same validated values here.
 
 ## Example
 
@@ -94,10 +93,9 @@ an unsupported capability, but it must not silently replace the effective
 constraints with a broader request.
 
 `External` is accepted only when both policy sides use the same opaque
-`ExternalOwner` proof. The proof is not evidence that an external sandbox
-exists, is trusted, or is enforcing anything; it is only a caller-supplied
-identity token that prevents two unrelated declarations from being treated as
-one boundary:
+`ExternalOwner` identity. This token comes from the caller; it does not prove
+that an external sandbox exists or enforces anything. It only prevents two
+unrelated declarations from being treated as one boundary:
 
 ```rust
 use cageforge_policy_compose::ExternalOwner;
@@ -107,10 +105,9 @@ assert_eq!(owner.clone(), owner);
 assert_ne!(ExternalOwner::new(), owner);
 ```
 
-Create owners explicitly with `ExternalOwner::new()`. The type deliberately
-does not implement `Default`: every newly created owner is a different identity,
-so a generic default value must not be mistaken for a shared enforcement
-boundary. Cloning an owner preserves its identity.
+Create owners explicitly with `ExternalOwner::new()`. The type has no
+`Default` implementation because every new owner represents a different
+identity. Cloning an owner preserves that identity.
 
 ## API guide
 

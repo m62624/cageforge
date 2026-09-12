@@ -4,14 +4,6 @@
 > crate adapts sandbox design ideas from open-source OpenAI Codex into an
 > independent library API and contains no copied Codex source.
 
-The Windows design was informed by OpenAI's [Building a safe, effective
-sandbox to enable Codex on
-Windows](https://openai.com/index/building-codex-windows-sandbox/) article,
-which describes the same native direction of dedicated process identities,
-restricted tokens, filesystem permissions, and firewall enforcement. This
-crate implements that behavior independently for Cageforge's reusable backend
-API.
-
 The sandbox isolates processes using the host operating system's native
 enforcement mechanisms. Its guarantees depend on a correct host OS, correct
 native enforcement, and a correct Cageforge implementation.
@@ -133,9 +125,9 @@ application/
 ```
 
 `WindowsSetupConfig` can instead select the sibling executables or explicit
-absolute paths. Resource selection is not a download: every helper and runner
-is opened through a pinned handle, checked for reparse and final-path changes,
-hashed, and retained through the operation that uses it. When the
+absolute paths. Resource selection uses pinned handles. Every helper and runner
+is checked for reparse and final-path changes, hashed, and retained through the
+operation that uses it. When the
 `bundled-helpers` feature is enabled, the default configuration selects the
 release resource layout shown above; without default features, it selects the
 sibling executable layout. The feature does not embed helper binaries or turn
@@ -152,7 +144,7 @@ targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 ```
 
 Native enforcement is performed by Windows APIs. Cross-compiling the library
-checks its target surface, but does not replace execution on Windows.
+checks its target surface; native enforcement requires Windows.
 
 ## Basic use
 
@@ -396,11 +388,10 @@ resources only after the process boundary and runner lifecycle have finished.
 an unconfirmed termination retains the resources for the per-instance recovery
 owner instead of releasing enforcement early.
 
-The parent does not parse runner `stdout` or `stderr` as a protocol. The
-authenticated runner reports `Ready`, `Spawned`, `Exited`, and typed `Failed`
-frames through the bounded transport. `stderr` is only a non-authoritative
-diagnostic for direct invocation or for the case where even the authenticated
-failure report cannot be established.
+The parent receives `Ready`, `Spawned`, `Exited`, and typed `Failed` frames from
+the authenticated runner through the bounded transport. `stderr` is a
+non-authoritative diagnostic for direct invocation or for a failure that occurs
+before the authenticated failure report can be established.
 
 `WindowsSetup::uninstall` is intentionally separate from child cleanup. Drop or
 wait for every `WindowsChild` and backend before uninstalling so that the
