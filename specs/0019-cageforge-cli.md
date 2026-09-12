@@ -158,16 +158,24 @@ stages. The WiX template uses Cageforge-owned stable product and PATH-component
 GUIDs; these identifiers must not be copied from another project or changed
 between compatible MSI releases.
 
-The first crates.io publication is a one-time bootstrap. Trusted Publishing
-cannot be registered until a crate has an initial release. For that bootstrap,
-the release publisher temporarily adds a GitHub Actions secret named
-`CARGO_REGISTRY_TOKEN`, containing a narrowly scoped crates.io API token. The
-workflow detects that secret without exposing it and uses it only for the
-bootstrap publication. After each crate has its Trusted Publisher configured
-for repository `m62624/cageforge` and workflow `release.yml`, the bootstrap
-secret is removed; subsequent runs then use
-`rust-lang/crates-io-auth-action` with GitHub OIDC. `HOMEBREW_TAP_TOKEN` is a
+Each publishable crate must have an initial crates.io release before its
+Trusted Publisher can be registered. If an initial release is needed, the
+release maintainer performs that one-time bootstrap with a narrowly scoped
+crates.io API token; the bootstrap token is not a normal release dependency
+and is not kept as a workflow fallback.
+
+Normal crate releases use crates.io Trusted Publishing. Each publishable crate
+is configured with the GitHub repository `m62624/cageforge` and workflow
+filename `release.yml`. The `publish-crates` job grants `id-token: write`,
+uses `rust-lang/crates-io-auth-action`, and passes its short-lived output as
+`CARGO_REGISTRY_TOKEN` only to `cargo publish --workspace --locked`. The job
+must not require a long-lived crates.io token. `HOMEBREW_TAP_TOKEN` is a
 separate secret used only to push the generated formula to the Cageforge tap.
+
+The release CI also runs `cargo publish --workspace --dry-run --locked` before
+the release workflow reaches the publication stage. This checks that every
+publishable workspace package can be packaged and verified from its registry
+form; it does not replace the OIDC exchange or a real publication.
 
 ## Testing requirements
 
