@@ -3,6 +3,8 @@
 > Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
 > crate is an independent command-line adapter over Cageforge's public API.
 
+This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
+
 # cageforge-cli
 
 `cageforge-cli` runs an explicitly selected program inside the native Cageforge

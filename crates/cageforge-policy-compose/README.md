@@ -4,6 +4,8 @@
 > crate adapts sandbox design ideas from open-source OpenAI Codex into an
 > independent library API and contains no copied Codex source.
 
+This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
+
 # cageforge-policy-compose
 
 `cageforge-policy-compose` narrows a requested Cageforge sandbox policy with a

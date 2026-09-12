@@ -4,6 +4,8 @@
 > crate adapts sandbox boundary ideas from open-source OpenAI Codex into an
 > independent library API and contains no copied Codex source.
 
+This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
+
 # cageforge-bwrap
 
 `cageforge-bwrap` builds the official upstream Bubblewrap executable used as

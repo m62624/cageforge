@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Policy-enforcing HTTP and SOCKS5 network gateway for Cageforge"
+description = "Policy-enforcing HTTP and SOCKS5 gateway for Rust sandboxes"
 readme = "README.md"
 
 [package.metadata.dist]
