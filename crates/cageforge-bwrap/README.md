@@ -1,4 +1,10 @@
-⚠️ **Independent project**
+> ⚠️ **Independent project**
+>
+> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
+> crate adapts sandbox boundary ideas from open-source OpenAI Codex into an
+> independent library API and contains no copied Codex source.
+
+# cageforge-bwrap
 
 `cageforge-bwrap` builds the official upstream Bubblewrap executable used as
 the bundled Linux resource for Cageforge and provides the reviewed

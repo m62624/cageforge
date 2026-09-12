@@ -1,15 +1,14 @@
 # `cageforge-config` examples
 
-These examples belong to one of the 13 Cargo packages in the Cageforge
-workspace. They document the configuration layer used by the portable crates
-and by the `cageforge` facade; native sandbox setup remains in the platform
+These examples document the configuration layer used by the portable crates
+and by the `cageforge` facade. Native sandbox setup remains in the platform
 backend guides.
 
 These TOML files are copyable documentation for the configuration boundary.
 Each one can be loaded with `Config::from_file` or embedded with
 `Config::from_toml`, then resolved through `resolve_default` or `resolve`.
-They are kept alongside the crate's integration coverage so the documented
-syntax remains a real configuration surface.
+They are kept alongside the crate so the documented syntax stays close to the
+configuration code.
 
 | File | Scenario | Main concepts |
 |---|---|---|
@@ -23,9 +22,8 @@ syntax remains a real configuration surface.
 | [`platform-targets-windows.toml`](platform-targets-windows.toml) | Windows-native equivalent | Drive-qualified paths and the same portable policy fields |
 
 The two `platform-targets-*` files contain the same logical scenario with
-native absolute paths. The test suite selects the matching file for the host;
-the other file remains available as a copyable reference for cross-platform
-configuration.
+native absolute paths. Select the file that matches the target platform; the
+other remains available as a copyable cross-platform reference.
 
 The environment order applies to a command environment, not to filesystem
 permissions or profile inheritance. `cageforge-config` parses and resolves the

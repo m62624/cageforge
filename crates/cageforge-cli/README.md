@@ -41,7 +41,7 @@ $ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/m62624/cageforge/rele
 ```
 
 ```powershell
-# Windows (PowerShell) — alternative to the .msi
+# Windows (PowerShell), alternative to the .msi
 > powershell -ExecutionPolicy Bypass -c "irm https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.ps1 | iex"
 ```
 
@@ -87,10 +87,6 @@ $ cargo install --path crates/cageforge-cli --locked --no-default-features --fea
 
 The native feature is explicit: `linux`, `linux-bundled-bubblewrap`, `windows`,
 or `macos`. There is no unsandboxed fallback when a matching feature is absent.
-
-The Linux CLI release is self-contained: the same executable contains the
-authenticated entry point used by the Linux backend as its private hardening
-helper. Users do not install or invoke a second helper executable.
 
 ### Uninstall
 
@@ -223,7 +219,7 @@ consume resources available to its allowed boundary until the timeout or native
 lifecycle policy terminates it. Stronger resource quotas require future native
 support on each OS.
 
-## Architecture and documentation
+## Execution flow and backend guides
 
 The execution sequence is `Config::from_file` → profile resolution → policy
 composition → `native_sandbox_with` → `DynSandbox::launch` → child lifecycle.

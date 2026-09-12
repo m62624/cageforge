@@ -14,7 +14,8 @@ system integration that will enforce and launch them.
 The crate turns a backend's declared enforcement capabilities into a common
 preflight contract. `BackendRequest::prepare_for` accepts a request built from
 `CommandRequest` and `EffectiveSandbox`, verifies every required capability,
-and returns a prepared request or an actionable typed error.
+and returns a prepared request or a typed error that identifies the failed
+requirement.
 
 ## The handoff model
 

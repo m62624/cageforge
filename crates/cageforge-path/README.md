@@ -22,10 +22,9 @@ agree with Cageforge's policy and configuration layers. It is especially
 useful for workspace-root maps, protected metadata paths, and component-aware
 containment checks.
 
-Do not use it as a filesystem sandbox by itself. It answers lexical questions
-such as “is this path below that path?”; it does not prove that a file can be
-opened safely. A native executor must add symlink, junction/reparse-point,
-mount, and TOCTOU-safe enforcement.
+Use a native executor for filesystem enforcement. This crate answers lexical
+questions such as "is this path below that path?"; the executor adds symlink,
+junction/reparse-point, mount, and TOCTOU-safe checks before opening a file.
 
 ## Workspace role
 
@@ -95,10 +94,9 @@ assert!(paths_equal(workspace, Path::new("/work/project")));
 let _map_key = NativePathKey::new(workspace);
 ```
 
-Most applications do not need a direct dependency on this crate: the policy,
-command, config, and composition crates already use it internally. Depend on
-it directly when an integration layer has to build its own native path maps or
-make a comparison before handing values to those crates.
+The policy, command, config, and composition crates already use this layer
+internally. Depend on it directly when an integration layer builds native path
+maps or compares paths before handing values to those crates.
 
 API reference: [`cageforge-path` on docs.rs](https://docs.rs/cageforge-path/latest/cageforge_path/).
 

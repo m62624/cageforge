@@ -43,10 +43,10 @@ cageforge = { version = "0.1.0", features = ["linux"] }
 
 Add `config` when profiles should come from TOML.
 
-On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
-not want to build or provide Bubblewrap separately. It includes Cageforge's
-verified, fixed Bubblewrap `v0.11.2` resource; the embedded version is not
-selected dynamically.
+On Linux, `linux-bundled-bubblewrap` is an optional alternative when the
+application should carry its Bubblewrap resource. It includes Cageforge's
+pinned Bubblewrap `v0.11.2` resource; the embedded version is fixed at build
+time.
 
 `native_sandbox()` chooses the backend for the current OS and enabled Cargo
 feature, returning `Box<dyn DynSandbox>`. The command-running part of an
@@ -127,7 +127,7 @@ $ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/m62624/cageforge/rele
 ```
 
 ```powershell
-# Windows (PowerShell) — alternative to the .msi
+# Windows (PowerShell), alternative to the .msi
 > powershell -ExecutionPolicy Bypass -c "irm https://github.com/m62624/cageforge/releases/latest/download/cageforge-cli-installer.ps1 | iex"
 ```
 
@@ -271,30 +271,19 @@ which validates the request and narrows it with the optional safety ceiling.
 `spawn` then asks the selected native backend to create the boundary around the
 root process and every descendant it creates.
 
-This is different from a virtual machine: Cageforge does not boot a guest
-kernel or provide a second operating system. It is also different from a
-Docker container: the library does not build an image or require a container
-daemon; it uses the host's native process, filesystem, and network controls.
-That makes startup and integration lightweight for an embedding application,
-while the protection necessarily depends on the host OS, its native security
-mechanisms, and a correct Cageforge implementation. A program must be started
-through Cageforge for the boundary to apply.
+Unlike a virtual machine, Cageforge uses the host kernel rather than booting a
+guest operating system. Unlike a Docker container, it starts no container
+daemon and builds no image. The library uses the host's process, filesystem,
+and network controls, so the host OS and its security configuration remain part
+of the trust boundary. A program must be started through Cageforge for the
+boundary to apply.
 
-The idea for Cageforge's common command-sandbox API grew from studying the
-security model and protection mechanisms used by the open-source
-[Codex](https://github.com/openai/codex) sandbox, including the process-boundary
-design described in OpenAI's [Building a safe, effective sandbox to enable
-Codex on Windows](https://openai.com/index/building-codex-windows-sandbox/)
-article. Cageforge takes those sandbox principles and the corresponding
-mechanism inventory as its behavioral foundation, then realizes each part with
-the native enforcement facilities of Linux, Windows, and macOS. The backends
-are separate implementations for their operating systems, not one Windows
-mechanism transplanted unchanged to the others.
-
-Cageforge remains an independent library with its own public API and adapts
-that shared security model for multiple independent sandbox instances; Codex
-product protocols, runtime integrations, and source files are not part of this
-API.
+Cageforge's sandbox model was reviewed against the open-source
+[Codex](https://github.com/openai/codex) sandbox and the native enforcement
+mechanisms described in OpenAI's [Windows sandbox article](https://openai.com/index/building-codex-windows-sandbox/).
+The Linux, macOS, and Windows backends implement the model independently for
+their respective operating systems. Cageforge has its own public API and does
+not expose Codex product protocols or runtime integrations.
 
 The protection is layered:
 

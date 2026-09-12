@@ -1,14 +1,16 @@
 > ⚠️ **Independent project**
 >
 > Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
+> This crate adapts sandbox boundary ideas from open-source OpenAI Codex into
+> an independent library API and contains no copied Codex source.
 
 # cageforge-network-proxy
 
 `cageforge-network-proxy` provides the shared outbound network gateway used by
 Cageforge native sandbox backends. It handles HTTP proxy requests, HTTP
 `CONNECT`, and SOCKS5 `CONNECT`, resolves each destination once, applies both
-layers of an `EffectiveNetworkPolicy`, and connects only to the consumed exact
-address authorization.
+layers of an `EffectiveNetworkPolicy`, and connects only to the exact
+`SocketAddr` returned by authorization.
 
 The gateway is transport-neutral on its ingress side. A native backend gives
 it an authenticated private stream and separately prevents the sandboxed
