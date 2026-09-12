@@ -341,6 +341,15 @@ jobs:
       - name: Check workspace publication metadata
         if: matrix.target == 'Linux'
         run: ci/check-workspace-metadata.sh
+      - name: Install Bubblewrap package verification dependencies
+        if: matrix.target == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential pkg-config libcap-dev
+      - name: Check workspace packages publish cleanly
+        if: matrix.target == 'Linux'
+        run: cargo publish --workspace --dry-run --locked
       - name: Check formatting
         if: matrix.target == 'Linux'
         run: >-
