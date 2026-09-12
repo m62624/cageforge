@@ -525,6 +525,20 @@ explicit child scope from turning a mutable workspace symlink into a bind of
 an unrelated host directory; the failure must be a typed lowering error, not a
 late Bubblewrap handshake failure.
 
+When a missing read-only or denied target is nested below a writable root, the
+backend must preserve the leaf target and create only its missing parent
+directories inside the Bubblewrap namespace. It must not materialize the first
+missing ancestor on the host merely to mask a deeper target. A target whose
+own component is the first missing component may use the existing synthetic
+mount-target coordination. Empty-file masks must use a distinct preserved
+descriptor for every `--ro-bind-data` operation because Bubblewrap may consume
+the descriptor while applying `--perms`.
+
+A restricted filesystem plan starts with a tmpfs root and must append a final
+`--remount-ro /` after all policy and Cageforge runtime mounts have been
+installed. Writable child mounts remain explicitly writable; the root remount
+must not be used as a substitute for those policy mounts.
+
 Protected paths must be mounted read-only or otherwise blocked before the
 command can create or replace them. The implementation must cover both
 existing protected paths and protected paths that do not yet exist.

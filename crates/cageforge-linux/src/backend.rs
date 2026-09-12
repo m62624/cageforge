@@ -248,6 +248,11 @@ impl LinuxBackend {
                 ]);
             }
         }
+        if sandbox.filesystem().requirements().mode()
+            == cageforge_policy::FilesystemMode::Restricted
+        {
+            args.extend(["--remount-ro".into(), "/".into()]);
+        }
         args.extend([
             "--chdir".into(),
             prepared.working_directory(self)?.as_os_str().into(),
