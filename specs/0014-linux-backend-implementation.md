@@ -324,13 +324,13 @@ restricted request to an unrestricted process.
 | read-only subpaths | Apply after writable binds and preserve narrower carve-outs |
 | missing-path behavior | Implement error/skip exactly; never reinterpret skip as write permission |
 | default/additional protected paths | Protect existing and not-yet-existing paths against modification, replacement, and creation |
-| disabled network | Isolate the network namespace, reject every pathname-capable AF_UNIX endpoint, and apply required process hardening while preserving process-local stream socketpair IPC |
+| disabled network | Isolate the network namespace, reject every pathname-capable AF_UNIX endpoint, and apply required process hardening while preserving process-local stream and sequenced-packet socketpair IPC |
 | unrestricted network | Preserve host network only when no narrower network restriction is requested |
 | external network enforcement | Reject by default without a trusted external integration |
 | domain rules | Enforce through an isolated namespace and backend-owned HTTP/SOCKS gateway that resolves once and applies both effective policy layers |
 | private/loopback/link-local restrictions | Enforce at the gateway using every resolved address before any exact connection attempt |
 | `ResolvedNetworkTarget` authorization | Require one captured target and immediate exact-address authorization; connect only with the consumed authorized address |
-| Unix socket rules | Proxy-routed mode denies pathname-capable AF_UNIX sockets while preserving AF_UNIX stream socketpair IPC; explicit allowlists remain typed unsupported on Linux |
+| Unix socket rules | Proxy-routed mode denies pathname-capable AF_UNIX sockets while preserving AF_UNIX stream and sequenced-packet socketpair IPC; explicit allowlists remain typed unsupported on Linux |
 | all/core/none environment bases | Apply the selected base; Linux `core` variables are selected by the backend |
 | environment filters | Apply include/exclude filters after selecting the base and preserve the portable ordering |
 | environment set/remove overrides | Apply after the selected base and filters according to `EnvironmentSpec` |
@@ -628,10 +628,13 @@ redirected with `connect` or `sendto`. The frozen proxy-routed policy likewise
 permits every AF_UNIX socketpair type on the assumption that those descriptors
 cannot reach a pathname socket. Cageforge therefore permits AF_UNIX
 `SOCK_STREAM` sockets and socketpairs, including normal `CLOEXEC` and
-`NONBLOCK` flags, but denies `SOCK_DGRAM` and `SOCK_SEQPACKET` endpoints whenever
+`NONBLOCK` flags, and permits process-local `SOCK_SEQPACKET` socketpairs. The
+latter is required by Rust's portable fork-and-exec implementation for its
+child-error channel and has no pathname endpoint to redirect. It continues to
+deny standalone `SOCK_SEQPACKET` sockets and `SOCK_DGRAM` endpoints whenever
 pathname Unix isolation is required. The base socket type is checked with the
 Linux UAPI type mask so creation flags cannot bypass or accidentally trigger
-the rule. This preserves process-local stream IPC without leaving a pathname
+the rule. This preserves process-local IPC without leaving a pathname
 Unix-socket route around disabled or proxy-routed networking.
 
 Before the command is released, the authenticated helper channel carries a
@@ -817,6 +820,8 @@ job is an enforcement gate.
 ### Process tests
 
 - command argv, stdio, environment, and verified cwd reach the child;
+- ordinary fork-and-exec descendants can create process-local sequenced-packet
+  socketpairs while retaining the same seccomp and native sandbox boundary;
 - relative cwd is resolved against the runtime current directory;
 - timeout and cancellation terminate the sandboxed process tree;
 - dropping a running `LinuxChild` terminates and reaps the Bubblewrap boundary;
@@ -841,7 +846,7 @@ job is an enforcement gate.
 
 - disabled networking rejects loopback and public destinations;
 - disabled networking rejects pathname Unix datagrams sent through `sendmsg`
-  while preserving process-local stream socketpair IPC;
+  while preserving process-local stream and sequenced-packet socketpair IPC;
 - unrestricted networking is not accidentally treated as disabled;
 - hostname-only decisions cannot authorize a connection;
 - an address outside the captured `ResolvedNetworkTarget` is rejected;

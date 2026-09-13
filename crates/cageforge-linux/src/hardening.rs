@@ -1014,8 +1014,9 @@ fn isolated_unix_socketpair_rules() -> Result<Vec<SeccompRule>, SeccompBuildErro
     ])
     .map_err(|source| SeccompBuildError::Rule { source })?;
     let unix_datagram = unix_socket_type_rule(libc::SOCK_DGRAM)?;
-    let unix_seqpacket = unix_socket_type_rule(libc::SOCK_SEQPACKET)?;
-    Ok(vec![non_unix, unix_datagram, unix_seqpacket])
+    // Socketpair endpoints are created already connected and have no pathname
+    // address; SOCK_SEQPACKET is also used by Rust's fork-and-exec error pipe.
+    Ok(vec![non_unix, unix_datagram])
 }
 
 fn unix_socket_type_rule(socket_type: libc::c_int) -> Result<SeccompRule, SeccompBuildError> {
