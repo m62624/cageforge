@@ -69,7 +69,7 @@
 
         <Package Id='*'
             Keywords='Installer'
-            Description='Command-line adapter for running programs through Cageforge sandboxes'
+            Description='Command-line tool for running untrusted programs in Cageforge sandboxes'
             Manufacturer='Mansur Azatbek'
             InstallerVersion='450'
             Languages='1033'
