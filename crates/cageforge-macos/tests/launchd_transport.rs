@@ -164,6 +164,12 @@ fn launchd_mach_service_checks_sender_identity_and_transfers_only_explicit_fds()
         fs::read(&output_path).expect("helper FD output"),
         b"fd-proof"
     );
+    // A send barrier drains the helper's outbound queue; it does not make the
+    // remote reply callback synchronous. Keep the peer alive until this client
+    // has observed the dictionary, otherwise helper teardown can race reply
+    // delivery and turn a valid response into XPC_ERROR_CONNECTION_INVALID.
+    fs::write(temporary.path().join("reply-received"), b"ack")
+        .expect("acknowledge received response");
 }
 
 #[test]
@@ -501,6 +507,7 @@ fn launchd_transport_helper() {
                     .reply_data(&(if authorized { ACCEPTED } else { REJECTED }).to_le_bytes())
                     .expect("flush typed response");
                 if authorized {
+                    wait_for_marker(&root, "reply-received");
                     return;
                 }
             }
