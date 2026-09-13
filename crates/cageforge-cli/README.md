@@ -204,23 +204,6 @@ after `--`; a profile without either is rejected.
 
 `cageforge-cli schema` prints the configuration schema for editor tooling.
 
-## What programs can run
-
-Most ordinary user-space programs can run when their explicitly declared file,
-environment, and network requirements fit the profile: command-line tools,
-Cargo builds, scripts, plugins, mod loaders, and GUI applications where the OS
-desktop permits them. Programs that require kernel drivers, raw devices,
-mount or namespace administration, host IPC, unrestricted files, or an
-undeclared network destination are expected to fail at the relevant OS
-boundary.
-
-The CLI enforces the command timeout and existing gateway limits. The current
-portable API is not a complete CPU, RAM, process-count, thread-count,
-write-byte, disk-space, or direct-bandwidth quota manager. A workload can
-consume resources available to its allowed boundary until the timeout or native
-lifecycle policy terminates it. Stronger resource quotas require future native
-support on each OS.
-
 ## Execution flow and backend guides
 
 The execution sequence is `Config::from_file` → profile resolution → policy

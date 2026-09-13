@@ -38,7 +38,7 @@ Choose the feature that matches the target operating system:
 
 ```toml
 [dependencies]
-cageforge = { version = "0.1.0", features = ["linux"] }
+cageforge = { version = "x.y.z", features = ["linux"] }
 ```
 
 Add `config` when profiles should come from TOML.

@@ -10,7 +10,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram, UnixStream};
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, mpsc};
@@ -42,6 +42,7 @@ const SYNTHETIC_FIXTURE_READY: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_READY";
 const SYNTHETIC_FIXTURE_RELEASE: &str = "CAGEFORGE_SYNTHETIC_FIXTURE_RELEASE";
 const COMMON_SECCOMP_FIXTURE: &str = "CAGEFORGE_COMMON_SECCOMP_FIXTURE";
 const CORE_LIMIT_FIXTURE: &str = "CAGEFORGE_CORE_LIMIT_FIXTURE";
+const FORK_EXEC_FIXTURE: &str = "CAGEFORGE_FORK_EXEC_FIXTURE";
 const TRACER_GUARD_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_FIXTURE";
 const TRACER_GUARD_DESCENDANT_FIXTURE: &str = "CAGEFORGE_TRACER_GUARD_DESCENDANT_FIXTURE";
 const EXPECTED_TRACER_PID: &str = "CAGEFORGE_EXPECTED_TRACER_PID";
@@ -593,6 +594,41 @@ fn common_seccomp_fixture() {
         libc::close(socket_pair[1]);
     }
 
+    let mut seqpacket_pair = [-1; 2];
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        libc::socketpair(
+            libc::AF_UNIX,
+            libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+            0,
+            seqpacket_pair.as_mut_ptr(),
+        )
+    };
+    assert_eq!(
+        result, 0,
+        "local seqpacket socketpair IPC must remain available"
+    );
+    let message = b"local-seqpacket";
+    #[allow(unsafe_code)]
+    let written = unsafe { libc::write(seqpacket_pair[0], message.as_ptr().cast(), message.len()) };
+    assert_eq!(written, message.len() as isize);
+    let mut received = [0; 32];
+    #[allow(unsafe_code)]
+    let read = unsafe {
+        libc::read(
+            seqpacket_pair[1],
+            received.as_mut_ptr().cast(),
+            received.len(),
+        )
+    };
+    assert_eq!(read, message.len() as isize);
+    assert_eq!(&received[..message.len()], message);
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::close(seqpacket_pair[0]);
+        libc::close(seqpacket_pair[1]);
+    }
+
     if let Some(target) = std::env::var_os(UNIX_SOCKET_BYPASS_TARGET) {
         let mut datagram_pair = [-1; 2];
         #[allow(unsafe_code)]
@@ -627,22 +663,32 @@ fn common_seccomp_fixture() {
             }
         }
 
-        let mut seqpacket_pair = [-1; 2];
         #[allow(unsafe_code)]
-        let result = unsafe {
-            libc::socketpair(
-                libc::AF_UNIX,
-                libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
-                0,
-                seqpacket_pair.as_mut_ptr(),
-            )
-        };
-        assert_eq!(result, -1, "seqpacket socketpair must be denied");
+        let seqpacket_socket =
+            unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0) };
+        assert_eq!(
+            seqpacket_socket, -1,
+            "pathname-capable seqpacket sockets must be denied"
+        );
         assert_eq!(
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::EPERM)
         );
     }
+}
+
+#[test]
+fn fork_exec_fixture() {
+    if std::env::var_os(FORK_EXEC_FIXTURE).is_none() {
+        return;
+    }
+    let mut command = Command::new("/bin/true");
+    #[allow(unsafe_code)]
+    unsafe {
+        command.pre_exec(|| Ok(()));
+    }
+    let status = command.status().expect("fork+exec child");
+    assert!(status.success(), "fork+exec child failed with {status}");
 }
 
 #[test]
@@ -2973,6 +3019,48 @@ fn restricted_child_has_trusted_ptrace_guard_after_exec() {
     let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
         .expect("fixture command")
         .with_args(["--exact", "tracer_guard_fixture", "--nocapture"])
+        .expect("fixture arguments");
+    let (command, effective, runtime) =
+        request_with_environment(workspace.path(), policy, command, environment);
+    let command = command.with_stdio(StdioSpec::captured());
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("preflight");
+    let mut child = backend.spawn(prepared).expect("spawn");
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout()
+        .expect("captured stdout")
+        .read_to_string(&mut stdout)
+        .expect("read stdout");
+    child
+        .stderr()
+        .expect("captured stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0), "stdout={stdout}\nstderr={stderr}");
+}
+
+#[test]
+fn restricted_child_allows_generic_fork_exec_descendant() {
+    let workspace = TempDir::new().expect("temporary workspace");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(PathSelector::root(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let environment = EnvironmentSpec::inherit_all()
+        .with_var(FORK_EXEC_FIXTURE, "1")
+        .expect("fixture environment");
+    let command = CommandSpec::new(std::env::current_exe().expect("test executable"))
+        .expect("fixture command")
+        .with_args(["--exact", "fork_exec_fixture", "--nocapture"])
         .expect("fixture arguments");
     let (command, effective, runtime) =
         request_with_environment(workspace.path(), policy, command, environment);
