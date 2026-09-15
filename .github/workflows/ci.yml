@@ -479,7 +479,7 @@ jobs:
     # selected Rust component or native backend is still being validated.
     # Skipped native lanes are valid for a narrow PR; failures and cancellations
     # are rejected by the condition below.
-    needs: [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, cli-build]
+    needs: [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows]
     if: ${{ always() && needs.changes.outputs.java_binding == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     strategy:
       fail-fast: false
