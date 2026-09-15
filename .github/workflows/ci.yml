@@ -72,6 +72,8 @@ concurrency:
 # 5. Sandbox crates never enter the common-component jobs. The Windows sandbox
 #    lane runs every cageforge-windows feature combination and its native tests;
 #    macOS still reports its missing native backend in its own sandbox job.
+# 6. The JVM binding is scheduled only for binding/facade/backend dependency
+#    changes (or full/main validation), and runs after all selected Rust jobs.
 #
 jobs:
   changes:
@@ -82,6 +84,7 @@ jobs:
       linux_sandbox: ${{ steps.classify.outputs.linux_sandbox }}
       macos_sandbox: ${{ steps.classify.outputs.macos_sandbox }}
       windows_sandbox: ${{ steps.classify.outputs.windows_sandbox }}
+      java_binding: ${{ steps.classify.outputs.java_binding }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -104,6 +107,7 @@ jobs:
           linux_sandbox=false
           macos_sandbox=false
           windows_sandbox=false
+          java_binding=false
           shared_change=false
           changed_paths=()
           manual_linux=false
@@ -159,6 +163,22 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
+          # Packages consumed by the JVM binding through the public facade.
+          # Unrelated crate-only PRs can therefore skip the final JVM stage.
+          java_binding_packages=(
+            cageforge
+            cageforge-bwrap
+            cageforge-linux
+            cageforge-macos
+            cageforge-windows
+            cageforge-config
+            cageforge-backend-api
+            cageforge-command
+            cageforge-network-proxy
+            cageforge-path
+            cageforge-policy
+            cageforge-policy-compose
+          )
 
           for label in ${PR_LABELS:-}; do
             case "$label" in
@@ -185,16 +205,19 @@ jobs:
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
+            java_binding=true
             mode=release
           elif [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
+            java_binding=true
             mode=main
           elif [[ "$EVENT_NAME" == "workflow_call" ]]; then
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
+            java_binding=true
             mode=called
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
@@ -202,6 +225,7 @@ jobs:
                 linux_sandbox=true
                 macos_sandbox=true
                 windows_sandbox=true
+                java_binding=true
                 mode=manual-full
                 ;;
               default|auto) ;;
@@ -228,6 +252,7 @@ jobs:
           for path in "${changed_paths[@]}"; do
             case "$path" in
               .github/workflows/*)
+                java_binding=true
                 mapfile -t workflow_jobs < <(
                   git diff --unified=0 "${BASE_SHA}...${HEAD_SHA}" -- "$path" \
                     | sed -n 's/^+  \([[:alnum:]_-][[:alnum:]_-]*\):$/\1/p'
@@ -258,15 +283,24 @@ jobs:
                 ;;
               Cargo.toml)
                 root_manifest_change=true
+                java_binding=true
                 ;;
               Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|ci/*)
                 shared_change=true
+                java_binding=true
                 ;;
               *) ;;
             esac
 
             package=""
             case "$path" in
+              crates/bindings/cageforge-java/*)
+                package=cageforge-java
+                # The JVM adapter exercises every native backend. Select all
+                # Rust native lanes before the final Java consumer stage.
+                shared_change=true
+                java_binding=true
+                ;;
               crates/*/*)
                 package=${path#crates/}
                 package=${package%%/*}
@@ -280,6 +314,7 @@ jobs:
               package_in_list "$package" "${linux_sandbox_packages[@]}" && linux_sandbox=true
               package_in_list "$package" "${windows_sandbox_packages[@]}" && windows_sandbox=true
               package_in_list "$package" "${macos_sandbox_packages[@]}" && macos_sandbox=true
+              package_in_list "$package" "${java_binding_packages[@]}" && java_binding=true
             fi
           done
 
@@ -311,6 +346,7 @@ jobs:
             echo "linux_sandbox=${linux_sandbox}"
             echo "macos_sandbox=${macos_sandbox}"
             echo "windows_sandbox=${windows_sandbox}"
+            echo "java_binding=${java_binding}"
           } >> "$GITHUB_OUTPUT"
 
   common-components:
@@ -436,6 +472,178 @@ jobs:
           -p cageforge-upstream-review
           -p cageforge-cli
           --no-deps
+
+  java-binding:
+    name: "Cageforge JVM binding (${{ matrix.target }})"
+    # The JVM adapter is a final consumer check. It must not start while any
+    # selected Rust component or native backend is still being validated.
+    # Skipped native lanes are valid for a narrow PR; failures and cancellations
+    # are rejected by the condition below.
+    needs: [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, cli-build]
+    if: ${{ always() && needs.changes.outputs.java_binding == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Linux
+            runner: ubuntu-24.04
+            feature: linux-bundled-bubblewrap
+            helper_package: cageforge-linux
+            helper_arguments: "--bin cageforge-linux-helper"
+          - target: macOS
+            runner: macos-15
+            feature: macos
+            helper_package: cageforge-macos
+            helper_arguments: "--bin cageforge-macos-helper"
+          - target: Windows
+            runner: windows-2025
+            feature: windows
+            helper_package: cageforge-windows
+            helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux Bubblewrap verification dependencies
+        if: matrix.target == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential pkg-config libcap-dev binutils
+      - name: Build the pinned Linux Bubblewrap resource
+        if: matrix.target == 'Linux'
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64) resource_arch=x86_64 ;;
+            aarch64) resource_arch=aarch64 ;;
+            *) echo "unsupported Linux architecture: $arch" >&2; exit 1 ;;
+          esac
+          output_dir="crates/cageforge-bwrap/assets/linux-$resource_arch"
+          mkdir -p "$output_dir"
+          cargo run --locked --release -p cageforge-bwrap -- \
+            --output "$output_dir/bwrap"
+      - name: Check Rust JNI binding formatting
+        run: cargo fmt --package cageforge-java -- --check
+      - name: Lint Rust JNI binding
+        run: cargo clippy --locked -p cageforge-java --no-default-features --features "${{ matrix.feature }}" --all-targets -- -D warnings
+      - name: Build Rust JNI binding and native helper
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p cageforge-java --no-default-features --features "${{ matrix.feature }}"
+          cargo build --locked --release -p "${{ matrix.helper_package }}" ${{ matrix.helper_arguments }}
+          version="$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "cageforge-java") | .version')"
+          test -n "$version" && test "$version" != null
+          echo "CAGEFORGE_JVM_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Run Java and Kotlin tests and linters
+        working-directory: crates/bindings/cageforge-java/jvm
+        run: gradle --no-daemon check ktlintCheck
+      - name: Stage the locally built native resources
+        working-directory: crates/bindings/cageforge-java/jvm
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux)
+              native_os=linux
+              library=libcageforge_java.so
+              ;;
+            macOS)
+              native_os=macos
+              library=libcageforge_java.dylib
+              ;;
+            Windows)
+              native_os=windows
+              library=cageforge_java.dll
+              ;;
+            *)
+              echo "unsupported runner OS: $RUNNER_OS" >&2
+              exit 1
+              ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64) native_arch=x86_64 ;;
+            aarch64|arm64) native_arch=aarch64 ;;
+            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          target_id="$native_os-$native_arch"
+          resource_dir="$PWD/build/native/META-INF/native/$target_id"
+          repo_root="$(git rev-parse --show-toplevel)"
+          mkdir -p "$resource_dir"
+          cp "$repo_root/target/release/$library" "$resource_dir/"
+          case "$RUNNER_OS" in
+            Linux)
+              cp "$repo_root/target/release/cageforge-linux-helper" "$resource_dir/"
+              cp "$repo_root/crates/cageforge-bwrap/assets/linux-$native_arch/bwrap" "$resource_dir/"
+              cp "$repo_root/crates/cageforge-bwrap/assets/linux-$native_arch/bwrap.sha256" "$resource_dir/"
+              ;;
+            macOS) cp "$repo_root/target/release/cageforge-macos-helper" "$resource_dir/" ;;
+            Windows)
+              cp "$repo_root/target/release/cageforge-windows-setup.exe" "$resource_dir/"
+              cp "$repo_root/target/release/cageforge-windows-command-runner.exe" "$resource_dir/"
+              ;;
+          esac
+          echo "CAGEFORGE_JVM_EXPECTED_TARGET=$target_id" >> "$GITHUB_ENV"
+      - name: Assemble the local JVM artifact
+        working-directory: crates/bindings/cageforge-java/jvm
+        run: gradle --no-daemon jar -PnativeResourcesDir=build/native -PreleaseVersion="$CAGEFORGE_JVM_VERSION"
+      - name: Verify the local JAR contains this runner's native resources
+        working-directory: crates/bindings/cageforge-java/jvm
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) native_os=linux; library=libcageforge_java.so; helper=cageforge-linux-helper ;;
+            macOS) native_os=macos; library=libcageforge_java.dylib; helper=cageforge-macos-helper ;;
+            Windows) native_os=windows; library=cageforge_java.dll; helper= ;;
+            *) echo "unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64) native_arch=x86_64 ;;
+            aarch64|arm64) native_arch=aarch64 ;;
+            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          jar_file="build/libs/cageforge-java-$CAGEFORGE_JVM_VERSION.jar"
+          jar tf "$jar_file" | grep -F "META-INF/native/$native_os-$native_arch/$library"
+          if [[ -n "$helper" ]]; then
+            jar tf "$jar_file" | grep -F "META-INF/native/$native_os-$native_arch/$helper"
+            if [[ "$native_os" == linux ]]; then
+              jar tf "$jar_file" | grep -F "META-INF/native/$native_os-$native_arch/bwrap"
+              jar tf "$jar_file" | grep -F "META-INF/native/$native_os-$native_arch/bwrap.sha256"
+            fi
+          else
+            jar tf "$jar_file" | grep -F "META-INF/native/$native_os-$native_arch/cageforge-windows-setup.exe"
+            jar tf "$jar_file" | grep -F "META-INF/native/$native_os-$native_arch/cageforge-windows-command-runner.exe"
+          fi
+      - name: Run a Java consumer against the local JVM artifact
+        working-directory: crates/bindings/cageforge-java/jvm/smoke
+        env:
+          NATIVE_CACHE: ${{ runner.temp }}/cageforge-java-native-cache
+        run: |
+          set -euo pipefail
+          output="$(gradle --no-daemon run \
+            -PbindingVersion="$CAGEFORGE_JVM_VERSION" \
+            -PnativeCache="$NATIVE_CACHE")"
+          printf '%s\n' "$output"
+          grep -F "native-target=$CAGEFORGE_JVM_EXPECTED_TARGET" <<<"$output"
+          grep -F 'concurrent-instances=ok' <<<"$output"
+          grep -F 'consumer-smoke=ok' <<<"$output"
+          grep -F 'stdio-routing=ok' <<<"$output"
 
   cli-build:
     name: "Cageforge CLI cross-build (${{ matrix.target }})"
@@ -880,7 +1088,7 @@ jobs:
     name: CI passed
     if: ${{ always() }}
     needs:
-      [changes, common-components, cli-build, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
+      [changes, common-components, java-binding, cli-build, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

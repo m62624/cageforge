@@ -257,6 +257,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cageforge-java"
+version = "0.2.0"
+dependencies = [
+ "cageforge",
+ "jni",
+]
+
+[[package]]
 name = "cageforge-linux"
 version = "0.2.0"
 dependencies = [

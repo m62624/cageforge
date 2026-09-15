@@ -1,0 +1,33 @@
+[package]
+name = "cageforge-java"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Internal JNI implementation for the Cageforge JVM binding"
+readme = "README.md"
+publish = false
+
+[features]
+default = ["config"]
+config = ["cageforge/config"]
+linux = ["config", "cageforge/linux"]
+linux-bundled-bubblewrap = ["linux", "cageforge/linux-bundled-bubblewrap"]
+macos = ["config", "cageforge/macos"]
+windows = ["config", "cageforge/windows"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cageforge.workspace = true
+jni.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "deny"
+
+[lints.clippy]
+all = "warn"

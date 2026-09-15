@@ -109,9 +109,16 @@ jobs:
       tag: ${{ needs.prepare.outputs.tag }}
     secrets: inherit
 
+  jvm:
+    name: Build JVM artifact
+    needs: [prepare, tests, tag]
+    uses: ./.github/workflows/jvm-release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+
   release-notes:
     name: Create draft GitHub release
-    needs: [prepare, dist, publish-crates]
+    needs: [prepare, dist, jvm, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,7 +160,7 @@ jobs:
 
   publish-release:
     name: Publish completed GitHub release
-    needs: [prepare, dist, release-notes, publish-crates]
+    needs: [prepare, dist, jvm, release-notes, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -166,7 +173,7 @@ jobs:
 
   publish-crates:
     name: Publish workspace crates
-    needs: [prepare, dist]
+    needs: [prepare, dist, jvm]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -191,7 +198,7 @@ jobs:
 
   sync:
     name: Open version-sync PR
-    needs: [prepare, dist, publish-crates]
+    needs: [prepare, dist, jvm, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
