@@ -8,9 +8,10 @@ import java.util.Locale
 object WindowsSetup {
     /** Returns whether the current JVM belongs to the Windows OS family. */
     @JvmStatic
-    fun isSupported(): Boolean = System.getProperty("os.name")
-        .lowercase(Locale.ROOT)
-        .contains("windows")
+    fun isSupported(): Boolean =
+        System.getProperty("os.name")
+            .lowercase(Locale.ROOT)
+            .contains("windows")
 
     /** Installs or reconciles the owner-scoped Windows Cageforge boundary. */
     @JvmStatic

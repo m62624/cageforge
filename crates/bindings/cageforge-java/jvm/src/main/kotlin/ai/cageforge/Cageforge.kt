@@ -15,21 +15,23 @@ class Cageforge private constructor(
 
     /** Launches the profile command, or an explicit argv when supplied. */
     @JvmOverloads
-    fun launch(argv: List<String> = emptyList()): SandboxProcess = synchronized(lifecycleLock) {
-        checkOpen()
-        val process = NativeBridge.nativeLaunch(handle, argv.toTypedArray())
-        if (process == 0L) throw CageforgeException("Cageforge returned an invalid process handle")
-        SandboxProcess.fromHandle(process)
-    }
+    fun launch(argv: List<String> = emptyList()): SandboxProcess =
+        synchronized(lifecycleLock) {
+            checkOpen()
+            val process = NativeBridge.nativeLaunch(handle, argv.toTypedArray())
+            if (process == 0L) throw CageforgeException("Cageforge returned an invalid process handle")
+            SandboxProcess.fromHandle(process)
+        }
 
     /** Releases the native backend. Active processes must be closed first. */
-    override fun close() = synchronized(lifecycleLock) {
-        if (handle != 0L) {
-            val value = handle
-            handle = 0L
-            NativeBridge.nativeCloseRuntime(value)
+    override fun close() =
+        synchronized(lifecycleLock) {
+            if (handle != 0L) {
+                val value = handle
+                handle = 0L
+                NativeBridge.nativeCloseRuntime(value)
+            }
         }
-    }
 
     private fun checkOpen() {
         if (handle == 0L) throw CageforgeException("Cageforge runtime is closed")
@@ -51,12 +53,13 @@ class Cageforge private constructor(
         ): Cageforge {
             require(toml.isNotEmpty()) { "TOML must not be empty" }
             val directory = NativeLoader.load()
-            val handle = NativeBridge.nativeCreate(
-                toml,
-                profileName,
-                context.currentDirectory.toString(),
-                directory.toString(),
-            )
+            val handle =
+                NativeBridge.nativeCreate(
+                    toml,
+                    profileName,
+                    context.currentDirectory.toString(),
+                    directory.toString(),
+                )
             if (handle == 0L) throw CageforgeException("Cageforge runtime creation failed")
             return Cageforge(handle, directory)
         }

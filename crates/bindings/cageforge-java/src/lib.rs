@@ -742,7 +742,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsStatus<'calle
                 cageforge::WindowsSetupStatus::Missing { .. } => 0,
                 cageforge::WindowsSetupStatus::Stale { .. } => 1,
                 cageforge::WindowsSetupStatus::Ready(_) => 2,
-            });
+            })
         }
         #[cfg(not(target_os = "windows"))]
         {

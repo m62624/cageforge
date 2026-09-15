@@ -33,8 +33,9 @@ checkstyle {
     configFile = layout.projectDirectory.file("config/checkstyle/checkstyle.xml").asFile
 }
 
-val nativeResources = providers.gradleProperty("nativeResourcesDir")
-    .map { layout.projectDirectory.dir(it) }
+val nativeResources =
+    providers.gradleProperty("nativeResourcesDir")
+        .map { layout.projectDirectory.dir(it) }
 
 tasks.jar {
     duplicatesStrategy = DuplicatesStrategy.FAIL
@@ -51,37 +52,41 @@ tasks.jar {
 }
 
 val mavenRepositoryUrl = providers.gradleProperty("mavenRepositoryUrl")
-val mavenSigningKey = providers.gradleProperty("signingKey")
-    .orElse(providers.environmentVariable("MAVEN_GPG_PRIVATE_KEY"))
-val mavenSigningPassword = providers.gradleProperty("signingPassword")
-    .orElse(providers.environmentVariable("MAVEN_GPG_PASSPHRASE"))
+val mavenSigningKey =
+    providers.gradleProperty("signingKey")
+        .orElse(providers.environmentVariable("MAVEN_GPG_PRIVATE_KEY"))
+val mavenSigningPassword =
+    providers.gradleProperty("signingPassword")
+        .orElse(providers.environmentVariable("MAVEN_GPG_PASSPHRASE"))
 
 tasks.register("verifyNativeBundle") {
     group = "verification"
     description = "Checks that all six JVM native target layouts and helpers are present."
     doLast {
-        val directory = nativeResources.orNull
-            ?: error("Pass -PnativeResourcesDir=<directory> to verify the release bundle")
-        val required = listOf(
-            "META-INF/native/linux-x86_64/cageforge-linux-helper",
-            "META-INF/native/linux-aarch64/cageforge-linux-helper",
-            "META-INF/native/linux-x86_64/bwrap",
-            "META-INF/native/linux-x86_64/bwrap.sha256",
-            "META-INF/native/linux-aarch64/bwrap",
-            "META-INF/native/linux-aarch64/bwrap.sha256",
-            "META-INF/native/macos-x86_64/cageforge-macos-helper",
-            "META-INF/native/macos-aarch64/cageforge-macos-helper",
-            "META-INF/native/windows-x86_64/cageforge-windows-setup.exe",
-            "META-INF/native/windows-aarch64/cageforge-windows-setup.exe",
-            "META-INF/native/windows-x86_64/cageforge-windows-command-runner.exe",
-            "META-INF/native/windows-aarch64/cageforge-windows-command-runner.exe",
-            "META-INF/native/linux-x86_64/libcageforge_java.so",
-            "META-INF/native/linux-aarch64/libcageforge_java.so",
-            "META-INF/native/macos-x86_64/libcageforge_java.dylib",
-            "META-INF/native/macos-aarch64/libcageforge_java.dylib",
-            "META-INF/native/windows-x86_64/cageforge_java.dll",
-            "META-INF/native/windows-aarch64/cageforge_java.dll",
-        )
+        val directory =
+            nativeResources.orNull
+                ?: error("Pass -PnativeResourcesDir=<directory> to verify the release bundle")
+        val required =
+            listOf(
+                "META-INF/native/linux-x86_64/cageforge-linux-helper",
+                "META-INF/native/linux-aarch64/cageforge-linux-helper",
+                "META-INF/native/linux-x86_64/bwrap",
+                "META-INF/native/linux-x86_64/bwrap.sha256",
+                "META-INF/native/linux-aarch64/bwrap",
+                "META-INF/native/linux-aarch64/bwrap.sha256",
+                "META-INF/native/macos-x86_64/cageforge-macos-helper",
+                "META-INF/native/macos-aarch64/cageforge-macos-helper",
+                "META-INF/native/windows-x86_64/cageforge-windows-setup.exe",
+                "META-INF/native/windows-aarch64/cageforge-windows-setup.exe",
+                "META-INF/native/windows-x86_64/cageforge-windows-command-runner.exe",
+                "META-INF/native/windows-aarch64/cageforge-windows-command-runner.exe",
+                "META-INF/native/linux-x86_64/libcageforge_java.so",
+                "META-INF/native/linux-aarch64/libcageforge_java.so",
+                "META-INF/native/macos-x86_64/libcageforge_java.dylib",
+                "META-INF/native/macos-aarch64/libcageforge_java.dylib",
+                "META-INF/native/windows-x86_64/cageforge_java.dll",
+                "META-INF/native/windows-aarch64/cageforge_java.dll",
+            )
         required.forEach { relative ->
             if (!directory.file(relative).asFile.isFile) error("Missing native bundle entry: $relative")
         }
