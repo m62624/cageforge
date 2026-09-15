@@ -161,7 +161,7 @@ jobs:
           test -n "$MAVEN_CENTRAL_NAMESPACE" || { echo "MAVEN_CENTRAL_NAMESPACE repository variable is not configured" >&2; exit 64; }
           gradle --no-daemon publishMavenJavaPublicationToCentralPortalRepository \
             -PnativeResourcesDir=build/native \
-            -PmavenGroup="io.github.m62624" \
+            -PmavenGroup="$MAVEN_CENTRAL_NAMESPACE" \
             -PreleaseVersion="${{ needs.prepare.outputs.version }}" \
             -PmavenRepositoryUrl="https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/" \
             -PallowMavenPublish=true

@@ -183,6 +183,13 @@ exercises the explicit setup/UAC lifecycle. This checks resource selection,
 extraction, JNI loading, TOML runtime creation, and native process execution
 together rather than testing only compiled classes.
 
+The Linux VM launcher is suite-oriented rather than binding-oriented. A suite
+under `ci/vm-suites/<name>/` declares its guest packages and the
+`bootstrap.sh`, `prepare.sh`, and `run.sh` phases. External build outputs are
+passed as named read-only payload archives. Adding another FFI consumer check
+therefore adds a suite and a payload declaration without adding language-
+specific branches to the QEMU lifecycle or Bubblewrap setup.
+
 The release workflow keeps Cargo trusted publishing unchanged: `publish =
 false` causes the internal binding package to be skipped by `cargo publish
 --workspace`. A separate JVM artifact assembly step follows the same tested

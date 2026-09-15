@@ -709,7 +709,8 @@ jobs:
           echo "CAGEFORGE_VM_IMAGE=$image" >> "$GITHUB_ENV"
 
       - name: Archive the checked-out source
-        run: git archive --format=tar.gz --output="$RUNNER_TEMP/cageforge-source.tar.gz" HEAD
+        run: git archive --format=tar.gz --prefix=cageforge-source/ \
+          --output="$RUNNER_TEMP/cageforge-source.tar.gz" HEAD
 
       - name: Run the Java consumer in the Cageforge QEMU guest
         env:
@@ -721,8 +722,8 @@ jobs:
           ./ci/run-native-linux-vm.sh \
             --image "$CAGEFORGE_VM_IMAGE" \
             --source-archive "$RUNNER_TEMP/cageforge-source.tar.gz" \
-            --java-smoke-archive "$java_archive" \
-            --java-only
+            --suite java \
+            --payload "java-smoke=$java_archive"
 
   cli-build:
     name: "Cageforge CLI cross-build (${{ matrix.target }})"
