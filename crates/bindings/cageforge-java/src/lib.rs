@@ -707,7 +707,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsInstall<'call
             windows_setup(&directory)
                 .install()
                 .map_err(|error| error.to_string())?;
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -738,7 +738,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsStatus<'calle
             let status = windows_setup(&directory)
                 .status()
                 .map_err(|error| error.to_string())?;
-            return Ok(match status {
+            Ok(match status {
                 cageforge::WindowsSetupStatus::Missing { .. } => 0,
                 cageforge::WindowsSetupStatus::Stale { .. } => 1,
                 cageforge::WindowsSetupStatus::Ready(_) => 2,
@@ -773,7 +773,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsVerify<'calle
             windows_setup(&directory)
                 .verify()
                 .map_err(|error| error.to_string())?;
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -804,7 +804,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsUninstall<'ca
             windows_setup(&directory)
                 .uninstall()
                 .map_err(|error| error.to_string())?;
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(target_os = "windows"))]
         {

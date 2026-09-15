@@ -56,9 +56,11 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
     /** Waits until the process exits or Cageforge's configured timeout fires. */
     fun waitFor(): ProcessResult = synchronized(lifecycleLock) {
         checkOpen()
-        decode(NativeBridge.nativeWait(handle)
-            .takeUnless { it == -1 }
-            ?: throw CageforgeException("Cageforge returned a running status from wait"))
+        val status = NativeBridge.nativeWait(handle)
+        if (status == -1) {
+            throw CageforgeException("Cageforge returned a running status from wait")
+        }
+        decode(status) ?: throw CageforgeException("Cageforge returned no process result from wait")
     }
 
     /**

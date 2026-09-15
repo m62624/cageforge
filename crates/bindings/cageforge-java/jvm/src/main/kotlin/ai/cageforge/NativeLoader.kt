@@ -64,7 +64,7 @@ internal object NativeLoader {
     }
 
     private fun cacheDirectory(target: Target): Path {
-        val version = NativeLoader::class.java.package?.implementationVersion ?: "development"
+        val version = NativeLoader::class.java.getPackage()?.implementationVersion ?: "development"
         val base = System.getProperty("cageforge.native.cache")?.let { Path.of(it) }
             ?: Path.of(System.getProperty("user.home"), ".cache", "cageforge-java")
         return base.resolve(version).resolve("${target.os}-${target.arch}").toAbsolutePath().normalize()
