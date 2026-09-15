@@ -168,8 +168,10 @@ Kotlin. CI runs the JVM checks on Linux, macOS, and Windows, and compiles the
 matching Rust JNI feature on each runner. The existing native backend jobs
 remain authoritative for Linux, macOS, and Windows enforcement behavior. The
 JVM matrix is a final consumer stage and starts only after all selected Rust
-component, native-backend, and Rust CLI cross-build jobs have completed
-successfully; skipped lanes for an unrelated narrow PR do not block it.
+component and native-backend jobs have completed successfully; it does not
+wait for the independent Rust CLI cross-build matrix. The final `ci-pass`
+gate still requires the CLI matrix, and skipped lanes for an unrelated narrow
+PR do not block the JVM stage.
 The change classifier schedules this final stage for the binding, its Rust
 facade/backend dependencies, workspace/toolchain/CI changes, main pushes, and
 full release validation; unrelated crate-only or documentation-only PRs can
