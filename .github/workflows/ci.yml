@@ -501,6 +501,7 @@ jobs:
             helper_package: cageforge-windows
             helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
