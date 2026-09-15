@@ -1,0 +1,4 @@
+build-essential
+git
+libcap-dev
+pkg-config

@@ -302,6 +302,18 @@ impl RunnerSession {
         self.stderr.as_mut()
     }
 
+    pub(crate) fn take_stdin(&mut self) -> Option<File> {
+        self.stdin.take()
+    }
+
+    pub(crate) fn take_stdout(&mut self) -> Option<File> {
+        self.stdout.take()
+    }
+
+    pub(crate) fn take_stderr(&mut self) -> Option<File> {
+        self.stderr.take()
+    }
+
     pub(crate) fn close_stdin(&mut self) {
         self.stdin = None;
     }

@@ -252,6 +252,18 @@ impl Session {
         self.streams.stderr.as_mut()
     }
 
+    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.streams.stdin.take()
+    }
+
+    pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.streams.stdout.take()
+    }
+
+    pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.streams.stderr.take()
+    }
+
     pub(crate) fn try_wait(&mut self) -> Result<Option<(ExitStatus, bool)>, LaunchError> {
         if let Some(completed) = self.completed {
             return Ok(Some(completed));
