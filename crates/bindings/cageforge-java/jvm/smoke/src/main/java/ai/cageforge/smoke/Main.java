@@ -11,6 +11,7 @@ import ai.cageforge.WindowsSetupState;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /** Minimal Java consumer used by CI to exercise the locally assembled JAR. */
 public final class Main {
@@ -98,6 +99,59 @@ public final class Main {
                     throw new CageforgeException("sandbox command did not exit successfully");
                 }
                 System.out.println("consumer-smoke=ok");
+            }
+            Cageforge closedRuntime = Cageforge.fromToml(
+                    toml, null, new RuntimeContext(currentDirectory));
+            closedRuntime.close();
+            closedRuntime.close();
+            boolean runtimeRejected = false;
+            try {
+                closedRuntime.launch(argv);
+            } catch (CageforgeException expected) {
+                // A closed runtime must reject new native operations.
+                runtimeRejected = true;
+            }
+            if (!runtimeRejected) {
+                throw new CageforgeException("closed runtime accepted a launch");
+            }
+            Cageforge processOwner = Cageforge.fromToml(
+                    toml, null, new RuntimeContext(currentDirectory));
+            SandboxProcess closedProcess = processOwner.launch(argv);
+            closedProcess.close();
+            closedProcess.close();
+            processOwner.close();
+            boolean processRejected = false;
+            try {
+                closedProcess.tryWait();
+            } catch (CageforgeException expected) {
+                // A closed process must reject new native operations.
+                processRejected = true;
+            }
+            if (!processRejected) {
+                throw new CageforgeException("closed process accepted a status query");
+            }
+            System.out.println("closed-handles=ok");
+            List<String> longRunningArgv = windows
+                    ? List.of(command.toString(), "/d", "/c", "timeout", "/t", "30", "/nobreak")
+                    : List.of(Path.of("/bin/sh").toString(), "-c", "sleep 30");
+            try (Cageforge runtime = Cageforge.fromToml(
+                    toml, null, new RuntimeContext(currentDirectory));
+                 SandboxProcess process = runtime.launch(longRunningArgv)) {
+                var wait = process.waitForAsync();
+                boolean running = false;
+                for (int attempt = 0; attempt < 40; attempt++) {
+                    if (process.tryWait() == null) {
+                        running = true;
+                        break;
+                    }
+                    Thread.sleep(50);
+                }
+                if (!running) {
+                    throw new CageforgeException("long-running sandbox command exited too early");
+                }
+                process.kill();
+                wait.get(15, TimeUnit.SECONDS);
+                System.out.println("wait-kill=ok");
             }
             String nonPipedToml = toml + """
 

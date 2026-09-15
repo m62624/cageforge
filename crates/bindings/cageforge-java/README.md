@@ -70,12 +70,13 @@ surrounds launch, wait, stream, or kill operations. Synchronization after
 loading is scoped to the individual native handle, so one runtime does not
 serialize unrelated runtimes.
 
-The JVM facade also serializes lifecycle access for one object while an
-operation is in progress. This prevents `close` from reclaiming a raw JNI
-handle during a native call; it does not serialize independent runtimes or
-processes. Consequently, `kill` on the same process may wait for an already
-running blocking operation to return, while `waitForAsync` keeps the caller's
-thread responsive.
+The JVM facade retains an operation reference for one object while a native
+call is in progress. This prevents `close` from reclaiming a raw JNI handle
+during that call without holding the JVM lock across the operation. The native
+wait releases its short child lock between polls, so `kill` can terminate the
+same process while `waitForAsync` is in flight. That wait may then complete
+with a `ProcessResult` whose `exitCode` is `null` because the process was
+terminated rather than normally reaped.
 
 `waitFor`, and reads from `stdout` or `stderr`, are blocking operations. Do not
 call them on a Swing or JavaFX event-dispatch thread. Use `waitForAsync` with

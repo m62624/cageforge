@@ -8,17 +8,20 @@ import java.io.OutputStream
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.locks.Condition
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /** Process and complete descendant-boundary lifecycle for one sandbox launch. */
 class SandboxProcess internal constructor(private var handle: Long) : Closeable {
-    private val lifecycleLock = Any()
+    private val lifecycleLock = ReentrantLock()
+    private val noActiveOperations: Condition = lifecycleLock.newCondition()
+    private val waitLock = Any()
+    private var activeOperations = 0
+    private var closing = false
 
     val id: Int
-        get() =
-            synchronized(lifecycleLock) {
-                checkOpen()
-                NativeBridge.nativeId(handle)
-            }
+        get() = withHandle { NativeBridge.nativeId(it) }
 
     /** A readable pipe when TOML configured stdout as `pipe`, otherwise null. */
     val stdout: InputStream? =
@@ -48,12 +51,11 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
                     len: Int,
                 ) {
                     require(off >= 0 && len >= 0 && off <= b.size - len) { "invalid byte range" }
-                    synchronized(lifecycleLock) {
-                        checkOpen()
+                    withHandle {
                         if (len == 0) return
                         val written =
                             NativeBridge.nativeWriteStdin(
-                                handle,
+                                it,
                                 b.copyOfRange(off, off + len),
                             )
                         if (written != len) {
@@ -67,21 +69,18 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
         }
 
     /** Returns null while running, otherwise the completed process result. */
-    fun tryWait(): ProcessResult? =
-        synchronized(lifecycleLock) {
-            checkOpen()
-            decode(NativeBridge.nativeTryWait(handle))
-        }
+    fun tryWait(): ProcessResult? = withHandle { decode(NativeBridge.nativeTryWait(it)) }
 
     /** Waits until the process exits or Cageforge's configured timeout fires. */
     fun waitFor(): ProcessResult =
-        synchronized(lifecycleLock) {
-            checkOpen()
-            val status = NativeBridge.nativeWait(handle)
-            if (status == -1) {
-                throw CageforgeException("Cageforge returned a running status from wait")
+        synchronized(waitLock) {
+            withHandle {
+                val status = NativeBridge.nativeWait(it)
+                if (status == -1) {
+                    throw CageforgeException("Cageforge returned a running status from wait")
+                }
+                decode(status) ?: throw CageforgeException("Cageforge returned no process result from wait")
             }
-            decode(status) ?: throw CageforgeException("Cageforge returned no process result from wait")
         }
 
     /**
@@ -97,19 +96,20 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
         CompletableFuture.supplyAsync({ waitFor() }, executor)
 
     /** Terminates and confirms the complete sandbox boundary. */
-    fun kill() =
-        synchronized(lifecycleLock) {
-            checkOpen()
-            NativeBridge.nativeKill(handle)
-        }
+    fun kill() = withHandle { NativeBridge.nativeKill(it) }
 
     override fun close() =
-        synchronized(lifecycleLock) {
-            if (handle != 0L) {
-                val value = handle
-                handle = 0L
-                NativeBridge.nativeCloseProcess(value)
-            }
+        run {
+            val value =
+                lifecycleLock.withLock {
+                    if (handle == 0L) return@withLock 0L
+                    closing = true
+                    while (activeOperations != 0) {
+                        noActiveOperations.awaitUninterruptibly()
+                    }
+                    handle.also { handle = 0L }
+                }
+            if (value != 0L) NativeBridge.nativeCloseProcess(value)
         }
 
     private fun stream(stdout: Boolean): InputStream =
@@ -132,33 +132,37 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
             }
 
             private fun readBytes(size: Int): ByteArray =
-                synchronized(lifecycleLock) {
-                    checkOpen()
+                withHandle {
                     if (stdout) {
-                        NativeBridge.nativeReadStdout(handle, size)
+                        NativeBridge.nativeReadStdout(it, size)
                     } else {
-                        NativeBridge.nativeReadStderr(handle, size)
+                        NativeBridge.nativeReadStderr(it, size)
                     }
                 }
         }
 
-    private fun hasStdin(): Boolean =
-        synchronized(lifecycleLock) {
-            checkOpen()
-            NativeBridge.nativeHasStdin(handle)
-        }
+    private fun hasStdin(): Boolean = withHandle { NativeBridge.nativeHasStdin(it) }
 
-    private fun hasStdout(): Boolean =
-        synchronized(lifecycleLock) {
-            checkOpen()
-            NativeBridge.nativeHasStdout(handle)
-        }
+    private fun hasStdout(): Boolean = withHandle { NativeBridge.nativeHasStdout(it) }
 
-    private fun hasStderr(): Boolean =
-        synchronized(lifecycleLock) {
-            checkOpen()
-            NativeBridge.nativeHasStderr(handle)
+    private fun hasStderr(): Boolean = withHandle { NativeBridge.nativeHasStderr(it) }
+
+    private inline fun <T> withHandle(block: (Long) -> T): T {
+        val value =
+            lifecycleLock.withLock {
+                checkOpen()
+                activeOperations += 1
+                handle
+            }
+        return try {
+            block(value)
+        } finally {
+            lifecycleLock.withLock {
+                activeOperations -= 1
+                if (activeOperations == 0) noActiveOperations.signalAll()
+            }
         }
+    }
 
     private fun decode(status: Int): ProcessResult? =
         when {
@@ -169,7 +173,7 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
         }
 
     private fun checkOpen() {
-        if (handle == 0L) throw CageforgeException("sandbox process is closed")
+        if (handle == 0L || closing) throw CageforgeException("sandbox process is closed")
     }
 
     internal companion object {

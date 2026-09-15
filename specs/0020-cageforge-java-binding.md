@@ -137,11 +137,14 @@ backend mutexes, semaphores, timeout state, network registries, and helper
 threads remain scoped to backend behavior and must not be exposed as a Java
 global execution lock.
 
-The JVM facade holds the corresponding per-object lifecycle lock across a
-native operation so `close` cannot reclaim a raw JNI handle concurrently. This
-does not serialize independent handles. Same-child `kill` can therefore wait
-for an already-running blocking `waitFor` or stream read; the asynchronous wait
-API is the way to keep the caller thread responsive.
+The JVM facade retains an operation reference for each native call so `close`
+cannot reclaim a raw JNI handle while that call is in flight. This does not
+serialize independent handles or hold the JVM lock during a blocking operation.
+The native wait polls between short child-lock sections, allowing a concurrent
+same-child `kill` to acquire the handle and terminate the complete boundary.
+After a successful kill, an already-running wait may complete with a
+`ProcessResult` whose `exitCode` is `null`, because the boundary was terminated
+by the caller rather than reaped as a normal exit.
 
 The synchronous `waitFor` and stream reads are explicitly blocking. They must
 not be called on Swing/JavaFX event-dispatch threads when UI responsiveness is
@@ -153,10 +156,9 @@ coroutine dispatcher because an `InputStream.read` can wait for child output.
 The binding must test concurrent independent launches, no cross-runtime lock
 contention, closed-handle rejection, repeated close, and the documented
 wait/kill lifecycle. A blocking operation on one child must not acquire a
-global lock or prevent unrelated child handles from progressing. If the
-underlying native child API serializes operations on one child, that fact must
-remain explicit in the Java lifecycle documentation and tests must ensure the
-application can still use `waitForAsync` without blocking its caller thread.
+global lock or prevent unrelated child handles from progressing. Tests must
+also ensure the application can use `waitForAsync` without blocking its caller
+thread and can terminate a child while that wait is in flight.
 
 ## Validation and CI
 
@@ -182,8 +184,9 @@ used by `ci/run-native-linux-vm.sh`. This keeps Bubblewrap user-namespace
 behavior out of the GitHub host runner, whose AppArmor policy is not the
 supported Cageforge execution environment. The consumer must print the
 selected target, successful TOML validation, and a successful action marker.
-The Windows consumer also exercises the explicit setup/UAC lifecycle. This
-checks resource selection,
+It must also prove that an in-flight asynchronous wait can be interrupted by
+`kill`. The Windows consumer also exercises the explicit setup/UAC lifecycle.
+This checks resource selection,
 extraction, JNI loading, TOML runtime creation, and native process execution
 together rather than testing only compiled classes.
 

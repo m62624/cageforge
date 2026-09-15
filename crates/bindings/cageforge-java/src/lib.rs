@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(all(feature = "linux", target_os = "linux"))]
+use std::thread;
 use std::time::Duration;
 
 use jni::errors::ErrorPolicy;
@@ -27,6 +27,7 @@ struct RuntimeState {
 
 struct ChildState {
     child: Box<dyn cageforge::SandboxChild<Error = cageforge::SandboxExecutionError> + Send>,
+    killed: bool,
 }
 
 #[derive(Debug)]
@@ -488,7 +489,10 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
             .backend
             .launch(backend_request, &state.context)
             .map_err(|error| error.to_string())?;
-        Ok(Box::into_raw(Box::new(Mutex::new(ChildState { child }))) as jlong)
+        Ok(Box::into_raw(Box::new(Mutex::new(ChildState {
+            child,
+            killed: false,
+        }))) as jlong)
     })
 }
 
@@ -599,14 +603,28 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWait<'caller>(
 ) -> jint {
     ffi_call(&mut unowned_env, |_env| {
         let child = child_ref(process)?;
-        let mut child = child
-            .lock()
-            .map_err(|_| "process handle is poisoned".to_string())?;
-        Ok(child
-            .child
-            .wait()
-            .map(|status| status_code(Some(status)))
-            .map_err(|error| error.to_string())?)
+        loop {
+            let status = {
+                let mut child = child
+                    .lock()
+                    .map_err(|_| "process handle is poisoned".to_string())?;
+                if child.killed {
+                    return Ok(-2);
+                }
+                child
+                    .child
+                    .try_wait()
+                    .map(status_code)
+                    .map_err(|error| error.to_string())?
+            };
+            if status != -1 {
+                return Ok(status);
+            }
+            // Do not hold the child mutex while waiting. This lets a
+            // concurrent nativeKill acquire the same per-process handle and
+            // terminate the complete boundary.
+            thread::sleep(Duration::from_millis(5));
+        }
     })
 }
 
@@ -622,7 +640,9 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeKill<'caller>(
         let mut child = child
             .lock()
             .map_err(|_| "process handle is poisoned".to_string())?;
-        Ok(child.child.kill().map_err(|error| error.to_string())?)
+        child.child.kill().map_err(|error| error.to_string())?;
+        child.killed = true;
+        Ok(())
     });
 }
 
