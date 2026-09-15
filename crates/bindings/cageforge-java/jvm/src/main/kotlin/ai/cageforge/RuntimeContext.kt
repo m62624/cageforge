@@ -11,7 +11,8 @@ data class RuntimeContext
     constructor(
         val currentDirectory: Path = Paths.get("").toAbsolutePath().normalize(),
     ) {
-    init {
-        require(currentDirectory.isAbsolute) { "currentDirectory must be absolute" }
+        init {
+            require(currentDirectory.isAbsolute) { "currentDirectory must be absolute" }
+        }
     }
 }

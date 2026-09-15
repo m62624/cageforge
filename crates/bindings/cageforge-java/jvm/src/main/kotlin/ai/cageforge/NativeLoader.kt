@@ -78,7 +78,10 @@ internal object NativeLoader {
         return base.resolve(version).resolve("${target.os}-${target.arch}").toAbsolutePath().normalize()
     }
 
-    private fun extract(directory: Path, resource: String): Path {
+    private fun extract(
+        directory: Path,
+        resource: String,
+    ): Path {
         val name = resource.substringAfterLast('/')
         val destination = directory.resolve(name)
         val stream =
@@ -106,10 +109,7 @@ internal object NativeLoader {
         return destination
     }
 
-    private fun sameDigest(
-        path: Path,
-        expected: ByteArray,
-    ): Boolean =
+    private fun sameDigest(path: Path, expected: ByteArray): Boolean =
         digest(Files.newInputStream(path)) == digest(expected.inputStream())
 
     private fun digest(input: InputStream): String =

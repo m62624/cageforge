@@ -42,15 +42,20 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
             object : OutputStream() {
                 override fun write(b: Int) = write(byteArrayOf(b.toByte()))
 
-                override fun write(b: ByteArray, off: Int, len: Int) {
+                override fun write(
+                    b: ByteArray,
+                    off: Int,
+                    len: Int,
+                ) {
                     require(off >= 0 && len >= 0 && off <= b.size - len) { "invalid byte range" }
                     synchronized(lifecycleLock) {
                         checkOpen()
                         if (len == 0) return
-                        val written = NativeBridge.nativeWriteStdin(
-                            handle,
-                            b.copyOfRange(off, off + len),
-                        )
+                        val written =
+                            NativeBridge.nativeWriteStdin(
+                                handle,
+                                b.copyOfRange(off, off + len),
+                            )
                         if (written != len) {
                             throw CageforgeException("Cageforge wrote only $written stdin bytes")
                         }
@@ -114,7 +119,11 @@ class SandboxProcess internal constructor(private var handle: Long) : Closeable 
                 return if (bytes.isEmpty()) -1 else bytes[0].toInt() and 0xff
             }
 
-            override fun read(b: ByteArray, off: Int, len: Int): Int {
+            override fun read(
+                b: ByteArray,
+                off: Int,
+                len: Int,
+            ): Int {
                 require(off >= 0 && len >= 0 && off <= b.size - len) { "invalid byte range" }
                 if (len == 0) return 0
                 val bytes = readBytes(len)
