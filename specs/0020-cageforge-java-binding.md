@@ -49,13 +49,16 @@ selected JNI library. The loader passes the resulting absolute resource
 directory to Rust. `current_exe()` must never be used as a helper path from the
 JVM binding because it identifies `java`/`javaw`, not a Cageforge helper.
 
-The artifact is published as a normal Maven library with sources, Javadoc,
+The artifact is published as the Maven coordinate
+`io.github.m62624:cageforge-java:<version>` with sources, Javadoc,
 POM, module metadata, and Apache-2.0/LGPL-2.0-or-later license metadata.
 Native variants are implementation resources of one versioned artifact rather
 than separate consumer dependencies. Release CI builds every target, assembles
 the single artifact, and verifies that all required resources are present.
-Maven publication remains an explicit release operation until its trusted
-credentials and repository ownership are enabled.
+Maven publication is an explicit release operation. The current release path
+uses Central Portal token credentials and PGP signing; a later trusted/OIDC
+publishing path may replace the token authentication without changing the
+artifact coordinates or native bundle contract.
 
 ## Configuration and public surface
 
@@ -179,8 +182,8 @@ The release workflow keeps Cargo trusted publishing unchanged: `publish =
 false` causes the internal binding package to be skipped by `cargo publish
 --workspace`. A separate JVM artifact assembly step follows the same tested
 release tag and version but does not publish to Maven until explicit release
-credentials are configured. Manual publication must run the full Gradle
-verification and inspect the generated POM, sources, Javadoc, license, and
+credentials are configured. Publication must run the full Gradle verification
+and inspect the generated POM, sources, Javadoc, license, PGP signatures, and
 all native resources.
 
 ## Relationship to existing specifications

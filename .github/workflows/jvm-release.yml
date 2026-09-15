@@ -182,3 +182,15 @@ jobs:
             crates/bindings/cageforge-java/jvm/build/libs/cageforge-java-*.jar
             crates/bindings/cageforge-java/jvm/build/publications/mavenJava
           if-no-files-found: error
+      - name: Stage the Maven publication build
+        working-directory: crates/bindings/cageforge-java/jvm
+        run: |
+          set -euo pipefail
+          mkdir -p build/maven-publish
+          cp -a build/libs build/publications build/native build/maven-publish/
+      - name: Upload the Maven publication build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-java-maven-build-${{ steps.version.outputs.version }}
+          path: crates/bindings/cageforge-java/jvm/build/maven-publish
+          if-no-files-found: error

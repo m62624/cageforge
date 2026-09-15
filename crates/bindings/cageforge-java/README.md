@@ -16,6 +16,10 @@ publication. The Rust package in this directory is an internal `publish =
 false` JNI implementation; applications depend on the JVM artifact rather
 than on this Cargo package.
 
+The Maven coordinates are `io.github.m62624:cageforge-java:<version>`. The
+Java package names remain `ai.cageforge`; the Maven group and Java package
+namespace are independent concepts.
+
 ## Basic usage
 
 ```kotlin
@@ -106,9 +110,27 @@ implementation.
 
 Build the native resources for the six target combinations, place them under
 the `META-INF/native/<os>-<arch>/` layout, and run the Gradle
-`verifyNativeBundle` task before publishing. The initial Maven publication is
-manual. Supply `mavenRepositoryUrl`, credentials (or `MAVEN_USERNAME` and
-`MAVEN_PASSWORD`), and `allowMavenPublish` to the Gradle `publish` task when
-you are ready to publish. The release workflow uploads the complete
-publication directory, including the POM and Gradle module metadata, but does
-not publish to Maven automatically.
+`verifyNativeBundle` task before publishing. The release workflow publishes
+the signed publication to the Central Portal OSSRH Staging API after the
+native bundle has passed CI. The repository namespace is configured as the
+`MAVEN_CENTRAL_NAMESPACE` GitHub Actions variable; credentials and the PGP
+signing key are GitHub Actions secrets.
+
+For the repository's release configuration, add the following under GitHub
+Settings > Secrets and variables > Actions:
+
+- repository variable `MAVEN_CENTRAL_NAMESPACE` with value `io.github.m62624`;
+- repository secret `MAVEN_CENTRAL_USERNAME` with the value from the token
+  `<username>` element;
+- repository secret `MAVEN_CENTRAL_PASSWORD` with the value from the token
+  `<password>` element;
+- repository secret `MAVEN_GPG_PRIVATE_KEY` containing the complete ASCII-armored
+  private signing key; and
+- repository secret `MAVEN_GPG_PASSPHRASE` containing that key's passphrase.
+
+The `<id>${server}</id>` line from a Maven `settings.xml` example is only a
+local server alias and is not stored in GitHub. The public part of the signing
+key must also be published to a supported OpenPGP keyserver so Central can
+verify the detached signatures. The release job uses the token credentials
+for the Central Portal staging API and the PGP credentials for Maven Central's
+artifact-signature requirement.

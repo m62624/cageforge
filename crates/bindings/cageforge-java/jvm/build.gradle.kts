@@ -1,12 +1,13 @@
 plugins {
     `java-library`
     `maven-publish`
+    signing
     checkstyle
     kotlin("jvm") version "2.1.20"
     id("org.jlleitschuh.gradle.ktlint") version "12.1.2"
 }
 
-group = providers.gradleProperty("mavenGroup").orElse("ai.cageforge").get()
+group = providers.gradleProperty("mavenGroup").orElse("io.github.m62624").get()
 version = providers.gradleProperty("releaseVersion").orElse("0.2.0").get()
 
 java {
@@ -50,6 +51,10 @@ tasks.jar {
 }
 
 val mavenRepositoryUrl = providers.gradleProperty("mavenRepositoryUrl")
+val mavenSigningKey = providers.gradleProperty("signingKey")
+    .orElse(providers.environmentVariable("MAVEN_GPG_PRIVATE_KEY"))
+val mavenSigningPassword = providers.gradleProperty("signingPassword")
+    .orElse(providers.environmentVariable("MAVEN_GPG_PASSPHRASE"))
 
 tasks.register("verifyNativeBundle") {
     group = "verification"
@@ -87,7 +92,7 @@ publishing {
     repositories {
         if (mavenRepositoryUrl.isPresent) {
             maven {
-                name = "manual"
+                name = "centralPortal"
                 url = uri(mavenRepositoryUrl.get())
                 credentials {
                     username = providers.gradleProperty("mavenUsername").orNull
@@ -128,7 +133,28 @@ publishing {
     }
 }
 
+signing {
+    if (mavenSigningKey.isPresent) {
+        useInMemoryPgpKeys(mavenSigningKey.get(), mavenSigningPassword.orNull)
+        sign(publishing.publications["mavenJava"])
+    }
+}
+
+tasks.register("verifyMavenSigning") {
+    group = "verification"
+    description = "Checks that the Maven publication has the required PGP signing credentials."
+    doLast {
+        check(mavenSigningKey.isPresent) {
+            "MAVEN_GPG_PRIVATE_KEY (or -PsigningKey) is required for Maven Central publication"
+        }
+        check(mavenSigningPassword.isPresent) {
+            "MAVEN_GPG_PASSPHRASE (or -PsigningPassword) is required for Maven Central publication"
+        }
+    }
+}
+
 tasks.withType<PublishToMavenRepository>().configureEach {
     dependsOn("verifyNativeBundle")
+    dependsOn("verifyMavenSigning")
     onlyIf { providers.gradleProperty("allowMavenPublish").isPresent }
 }
