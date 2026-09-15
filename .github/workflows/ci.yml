@@ -642,6 +642,7 @@ jobs:
             -PnativeCache="$NATIVE_CACHE")"
           printf '%s\n' "$output"
           grep -F "native-target=$CAGEFORGE_JVM_EXPECTED_TARGET" <<<"$output"
+          grep -F 'toml-validation=ok' <<<"$output"
           grep -F 'concurrent-instances=ok' <<<"$output"
           grep -F 'consumer-smoke=ok' <<<"$output"
           grep -F 'stdio-routing=ok' <<<"$output"

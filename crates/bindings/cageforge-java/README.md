@@ -20,6 +20,11 @@ The Maven coordinates are `io.github.m62624:cageforge-java:<version>`. The
 Java package names remain `ai.cageforge`; the Maven group and Java package
 namespace are independent concepts.
 
+`Cageforge.profileNames(toml)` exposes the resolver's deterministic profile
+list, and `Cageforge.checkToml(toml, profileName, context)` validates parsing,
+inheritance resolution, path context, and policy composition without launching
+a command. Both operations use the Rust Cageforge TOML implementation.
+
 ## Basic usage
 
 ```kotlin

@@ -71,6 +71,9 @@ timeouts.
 The thin public surface covers every launch and security operation needed by a
 host:
 
+- `Cageforge.profileNames` and `Cageforge.checkToml` expose configuration
+  inspection and validation through the Rust TOML resolver without launching
+  a command;
 - `Cageforge.fromToml` and `Cageforge.fromTomlFile` select a profile and
   create one reusable native runtime;
 - `RuntimeContext` supplies the absolute current directory used to resolve
@@ -178,8 +181,9 @@ job runs that exact distribution inside the same disposable Ubuntu guest model
 used by `ci/run-native-linux-vm.sh`. This keeps Bubblewrap user-namespace
 behavior out of the GitHub host runner, whose AppArmor policy is not the
 supported Cageforge execution environment. The consumer must print the
-selected target and a successful action marker. The Windows consumer also
-exercises the explicit setup/UAC lifecycle. This checks resource selection,
+selected target, successful TOML validation, and a successful action marker.
+The Windows consumer also exercises the explicit setup/UAC lifecycle. This
+checks resource selection,
 extraction, JNI loading, TOML runtime creation, and native process execution
 together rather than testing only compiled classes.
 

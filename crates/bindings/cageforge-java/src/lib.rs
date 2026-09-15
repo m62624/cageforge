@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use jni::errors::ErrorPolicy;
 use jni::objects::{JByteArray, JClass, JObjectArray, JString};
-use jni::sys::{jbyteArray, jint, jlong};
+use jni::sys::{jbyteArray, jint, jlong, jobjectArray};
 use jni::{Env, EnvUnowned};
 
 struct RuntimeState {
@@ -273,18 +273,50 @@ fn runtime_from_toml(
 ) -> Result<jlong, String> {
     let current_directory = path(current_directory, "current directory")?;
     let native_directory = path(native_directory, "native resource directory")?;
-    let config = cageforge::Config::from_toml(&toml).map_err(|error| error.to_string())?;
-    let profile = match profile_name.as_deref() {
+    let config = config_from_toml(&toml)?;
+    let profile = resolve_profile(&config, profile_name.as_deref())?;
+    let (context, effective) = runtime_inputs(&profile, &current_directory)?;
+    let backend = native_backend(&native_directory, profile.network_gateway().clone())?;
+    let state = RuntimeState {
+        backend,
+        context,
+        effective,
+        profile_command: profile.command().cloned(),
+    };
+    Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong)
+}
+
+fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
+    cageforge::Config::from_toml(toml).map_err(|error| error.to_string())
+}
+
+fn resolve_profile(
+    config: &cageforge::Config,
+    profile_name: Option<&str>,
+) -> Result<cageforge::ResolvedProfile, String> {
+    match profile_name {
         Some(name) if !name.is_empty() => config.resolve(name),
         _ => config.resolve_default(),
     }
-    .map_err(|error| error.to_string())?;
-    let workspace_roots = resolve_workspace_roots(&current_directory, profile.workspace_roots())?;
-    let context = runtime_context(&current_directory, &workspace_roots)?;
+    .map_err(|error| error.to_string())
+}
+
+fn runtime_inputs(
+    profile: &cageforge::ResolvedProfile,
+    current_directory: &Path,
+) -> Result<
+    (
+        cageforge::PathResolutionContext,
+        cageforge::EffectiveSandbox,
+    ),
+    String,
+> {
+    let workspace_roots = resolve_workspace_roots(current_directory, profile.workspace_roots())?;
+    let context = runtime_context(current_directory, &workspace_roots)?;
     let environment = profile
         .command()
         .map(|command| command.environment().clone())
-        .unwrap_or_else(cageforge::EnvironmentSpec::default);
+        .unwrap_or_default();
     let mut ceiling = cageforge::PolicyCeiling::new(profile.policy().clone(), environment.clone());
     if !workspace_roots.is_empty() {
         ceiling = ceiling
@@ -299,14 +331,55 @@ fn runtime_from_toml(
             .map_err(|error| error.to_string())?;
     }
     let effective = cageforge::compose(composition).map_err(|error| error.to_string())?;
-    let backend = native_backend(&native_directory, profile.network_gateway().clone())?;
-    let state = RuntimeState {
-        backend,
-        context,
-        effective,
-        profile_command: profile.command().cloned(),
-    };
-    Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong)
+    Ok((context, effective))
+}
+
+fn java_string_array<'local>(
+    env: &mut Env<'local>,
+    values: impl IntoIterator<Item = String>,
+) -> Result<jobjectArray, BindingError> {
+    let values: Vec<String> = values.into_iter().collect();
+    let empty = env.new_string("")?;
+    let array = JObjectArray::<JString>::new(env, values.len(), &empty)?;
+    for (index, value) in values.into_iter().enumerate() {
+        let value = env.new_string(value)?;
+        array.set_element(env, index, &value)?;
+    }
+    Ok(array.into_raw())
+}
+
+/// Returns validated profile names from an in-memory TOML document.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeProfileNames<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    toml: JString<'caller>,
+) -> jobjectArray {
+    ffi_call(&mut unowned_env, |env| {
+        let config = config_from_toml(&java_string(env, toml, "TOML")?)?;
+        java_string_array(env, config.profile_names().map(str::to_owned))
+    })
+}
+
+/// Validates TOML parsing, profile resolution, and policy composition.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCheckToml<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    toml: JString<'caller>,
+    profile: JString<'caller>,
+    current_directory: JString<'caller>,
+) {
+    ffi_call(&mut unowned_env, |env| {
+        let config = config_from_toml(&java_string(env, toml, "TOML")?)?;
+        let profile = resolve_profile(&config, optional_profile(env, profile)?.as_deref())?;
+        let current_directory = path(
+            java_string(env, current_directory, "current directory")?,
+            "current directory",
+        )?;
+        let _ = runtime_inputs(&profile, &current_directory)?;
+        Ok(())
+    });
 }
 
 fn command_from_array<'local>(

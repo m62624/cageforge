@@ -38,9 +38,29 @@ class Cageforge private constructor(
     }
 
     companion object {
-        init {
-            // Loading happens lazily in factory methods so applications that
-            // only inspect configuration do not load an OS-specific library.
+        /** Returns validated profile names in deterministic lexical order. */
+        @JvmStatic
+        fun profileNames(toml: String): List<String> {
+            require(toml.isNotEmpty()) { "TOML must not be empty" }
+            NativeLoader.load()
+            return NativeBridge.nativeProfileNames(toml).toList()
+        }
+
+        /** Checks TOML parsing, profile resolution, and policy composition. */
+        @JvmStatic
+        @JvmOverloads
+        fun checkToml(
+            toml: String,
+            profileName: String? = null,
+            context: RuntimeContext = RuntimeContext(),
+        ) {
+            require(toml.isNotEmpty()) { "TOML must not be empty" }
+            NativeLoader.load()
+            NativeBridge.nativeCheckToml(
+                toml,
+                profileName,
+                context.currentDirectory.toString(),
+            )
         }
 
         /** Creates a runtime from TOML and the selected profile. */

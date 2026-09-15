@@ -11,6 +11,13 @@ final class NativeBridge {
             String currentDirectory,
             String nativeDirectory);
 
+    static native String[] nativeProfileNames(String toml);
+
+    static native void nativeCheckToml(
+            String toml,
+            String profile,
+            String currentDirectory);
+
     static native long nativeLaunch(long runtime, String[] argv);
 
     static native int nativeId(long process);

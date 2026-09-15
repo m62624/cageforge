@@ -53,6 +53,12 @@ public final class Main {
                 mode = "disabled"
                 """.formatted(tomlString(currentDirectory), filesystemRule);
 
+        List<String> profileNames = Cageforge.profileNames(toml);
+        if (!List.of("base", "smoke").equals(profileNames)) {
+            throw new CageforgeException("unexpected profile names: " + profileNames);
+        }
+        Cageforge.checkToml(toml, "smoke", new RuntimeContext(currentDirectory));
+        System.out.println("toml-validation=ok");
         System.out.println("native-target=" + Cageforge.nativeTarget());
         if (windows) {
             WindowsSetup.install();
