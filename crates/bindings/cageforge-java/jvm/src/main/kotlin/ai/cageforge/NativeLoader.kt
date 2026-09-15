@@ -109,8 +109,12 @@ internal object NativeLoader {
         return destination
     }
 
-    private fun sameDigest(path: Path, expected: ByteArray): Boolean =
-        digest(Files.newInputStream(path)) == digest(expected.inputStream())
+    private fun sameDigest(
+        path: Path,
+        expected: ByteArray,
+    ): Boolean {
+        return digest(Files.newInputStream(path)) == digest(expected.inputStream())
+    }
 
     private fun digest(input: InputStream): String =
         input.use {
