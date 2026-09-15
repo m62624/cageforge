@@ -186,6 +186,32 @@ credentials are configured. Publication must run the full Gradle verification
 and inspect the generated POM, sources, Javadoc, license, PGP signatures, and
 all native resources.
 
+### Maven Central release credential contract
+
+The public artifact uses the coordinate
+`io.github.m62624:cageforge-java:<version>`. The release workflow reads the
+following repository configuration from GitHub Actions:
+
+- repository variable `MAVEN_CENTRAL_NAMESPACE` set to `io.github.m62624`;
+- repository secret `MAVEN_CENTRAL_USERNAME` containing the `<username>` value
+  from a Central Portal user token;
+- repository secret `MAVEN_CENTRAL_PASSWORD` containing the `<password>` value
+  from that token;
+- repository secret `MAVEN_GPG_PRIVATE_KEY` containing the complete
+  ASCII-armored private OpenPGP signing key; and
+- repository secret `MAVEN_GPG_PASSPHRASE` containing the passphrase for that
+  private key.
+
+The Maven `settings.xml` example's `<id>${server}</id>` is only a local
+repository alias and is not a GitHub secret. The public key corresponding to
+`MAVEN_GPG_PRIVATE_KEY` must be published to a Central-supported OpenPGP
+keyserver. The Gradle release job loads the private key in memory, creates the
+detached publication signatures, uploads through the Central Portal OSSRH
+Staging API using the token credentials, and promotes the completed deployment
+with the namespace endpoint. The internal Cargo binding remains
+`publish = false`; Cargo trusted publishing is independent of this JVM
+publication path.
+
 ## Relationship to existing specifications
 
 The binding consumes the facade, command, configuration, policy-composition,

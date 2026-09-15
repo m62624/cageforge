@@ -15,4 +15,3 @@ data class RuntimeContext
             require(currentDirectory.isAbsolute) { "currentDirectory must be absolute" }
         }
     }
-}
