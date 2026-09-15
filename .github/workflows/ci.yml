@@ -631,6 +631,7 @@ jobs:
             jar tf "$jar_file" | grep -F "META-INF/native/$native_os-$native_arch/cageforge-windows-command-runner.exe"
           fi
       - name: Run a Java consumer against the local JVM artifact
+        if: matrix.target != 'Linux'
         working-directory: crates/bindings/cageforge-java/jvm/smoke
         env:
           NATIVE_CACHE: ${{ runner.temp }}/cageforge-java-native-cache
@@ -644,6 +645,84 @@ jobs:
           grep -F 'concurrent-instances=ok' <<<"$output"
           grep -F 'consumer-smoke=ok' <<<"$output"
           grep -F 'stdio-routing=ok' <<<"$output"
+
+      - name: Package the Linux Java consumer for the QEMU smoke
+        if: matrix.target == 'Linux'
+        working-directory: crates/bindings/cageforge-java/jvm/smoke
+        run: |
+          set -euo pipefail
+          gradle --no-daemon installDist -PbindingVersion="$CAGEFORGE_JVM_VERSION"
+          tar --create --gzip --file="$RUNNER_TEMP/cageforge-java-consumer-smoke.tar.gz" \
+            --directory=build/install cageforge-java-consumer-smoke
+
+      - name: Upload the Linux Java consumer for the QEMU smoke
+        if: matrix.target == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-java-linux-consumer-smoke
+          path: ${{ runner.temp }}/cageforge-java-consumer-smoke.tar.gz
+          if-no-files-found: error
+
+  java-linux-qemu:
+    name: "Cageforge JVM Linux consumer in QEMU"
+    needs: [changes, java-binding]
+    if: ${{ always() && needs.changes.outputs.java_binding == 'true' && needs.java-binding.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Install QEMU tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes genisoimage qemu-system-x86 qemu-utils
+
+      - name: Verify KVM access
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm || {
+            echo "::error title=CAGEFORGE_KVM_UNAVAILABLE::GitHub runner did not expose /dev/kvm"
+            exit 86
+          }
+          sudo chmod 0666 /dev/kvm
+
+      - name: Download the Linux Java consumer
+        uses: actions/download-artifact@v4
+        with:
+          name: cageforge-java-linux-consumer-smoke
+          path: ${{ runner.temp }}/cageforge-java-consumer
+
+      - name: Download and verify the pinned Ubuntu guest image
+        env:
+          CAGEFORGE_VM_IMAGE_URL: https://cloud-images.ubuntu.com/noble/20260814/noble-server-cloudimg-amd64.img
+          CAGEFORGE_VM_IMAGE_SHA256: 6e40c07ae715f744f84af0bec76415cc1987dd115b4b8de437818561f01a3733
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
+          curl --fail --silent --show-error --location --retry 3 \
+            --max-filesize 1073741824 --max-time 900 \
+            "$CAGEFORGE_VM_IMAGE_URL" --output "$image"
+          printf '%s  %s\n' "$CAGEFORGE_VM_IMAGE_SHA256" "$image" | sha256sum --check --status
+          echo "CAGEFORGE_VM_IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Archive the checked-out source
+        run: git archive --format=tar.gz --output="$RUNNER_TEMP/cageforge-source.tar.gz" HEAD
+
+      - name: Run the Java consumer in the Cageforge QEMU guest
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          java_archive=$(find "$RUNNER_TEMP/cageforge-java-consumer" -name 'cageforge-java-consumer-smoke.tar.gz' -type f -print -quit)
+          test -n "$java_archive"
+          ./ci/run-native-linux-vm.sh \
+            --image "$CAGEFORGE_VM_IMAGE" \
+            --source-archive "$RUNNER_TEMP/cageforge-source.tar.gz" \
+            --java-smoke-archive "$java_archive" \
+            --java-only
 
   cli-build:
     name: "Cageforge CLI cross-build (${{ matrix.target }})"
@@ -1088,7 +1167,7 @@ jobs:
     name: CI passed
     if: ${{ always() }}
     needs:
-      [changes, common-components, java-binding, cli-build, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
+      [changes, common-components, java-binding, java-linux-qemu, cli-build, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled

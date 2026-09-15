@@ -172,11 +172,16 @@ skip the JVM stage.
 
 Each JVM matrix job additionally assembles a local JAR from the just-built JNI
 library and platform helper assets, connects that JAR to a separate minimal
-Java consumer project, and runs a real restricted command on its OS. The
-consumer must print the selected target and a successful action marker. The
-Windows consumer also exercises the explicit setup/UAC lifecycle. This checks
-resource selection, extraction, JNI loading, TOML runtime creation, and native
-process execution together rather than testing only compiled classes.
+Java consumer project, and runs a real restricted command on its OS. The Linux
+matrix job packages its consumer distribution, and a separate Java-only QEMU
+job runs that exact distribution inside the same disposable Ubuntu guest model
+used by `ci/run-native-linux-vm.sh`. This keeps Bubblewrap user-namespace
+behavior out of the GitHub host runner, whose AppArmor policy is not the
+supported Cageforge execution environment. The consumer must print the
+selected target and a successful action marker. The Windows consumer also
+exercises the explicit setup/UAC lifecycle. This checks resource selection,
+extraction, JNI loading, TOML runtime creation, and native process execution
+together rather than testing only compiled classes.
 
 The release workflow keeps Cargo trusted publishing unchanged: `publish =
 false` causes the internal binding package to be skipped by `cargo publish

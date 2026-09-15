@@ -4,22 +4,36 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: run-native-linux-vm.sh --image IMAGE --source-archive ARCHIVE" >&2
+    echo "Usage: run-native-linux-vm.sh --image IMAGE --source-archive ARCHIVE [--java-smoke-archive ARCHIVE] [--java-only]" >&2
     exit 64
 }
 
 image=
 source_archive=
+java_smoke_archive=
+java_only=false
 while (($# > 0)); do
     case "$1" in
         --image) (($# >= 2)) || usage; image=$2; shift 2 ;;
         --source-archive) (($# >= 2)) || usage; source_archive=$2; shift 2 ;;
+        --java-smoke-archive) (($# >= 2)) || usage; java_smoke_archive=$2; shift 2 ;;
+        --java-only) java_only=true; shift ;;
         *) usage ;;
     esac
 done
 
 [[ -f "$image" ]] || { echo "image is missing: $image" >&2; exit 66; }
 [[ -f "$source_archive" ]] || { echo "source archive is missing: $source_archive" >&2; exit 66; }
+if [[ -n "$java_smoke_archive" ]]; then
+    [[ -f "$java_smoke_archive" ]] || {
+        echo "Java smoke archive is missing: $java_smoke_archive" >&2
+        exit 66
+    }
+fi
+if [[ "$java_only" == true && -z "$java_smoke_archive" ]]; then
+    echo "--java-only requires --java-smoke-archive" >&2
+    exit 64
+fi
 
 for command in genisoimage qemu-img qemu-system-x86_64 ssh ssh-keygen; do
     command -v "$command" >/dev/null || { echo "required command is missing: $command" >&2; exit 69; }
@@ -34,6 +48,7 @@ ssh_key="$work_dir/guest_ed25519"
 overlay="$work_dir/guest-overlay.qcow2"
 seed_iso="$work_dir/seed.iso"
 source_iso="$work_dir/source.iso"
+java_smoke_iso="$work_dir/java-smoke.iso"
 bootstrap_log="$work_dir/bootstrap-qemu.log"
 test_log="$work_dir/test-qemu.log"
 
@@ -48,6 +63,10 @@ trap cleanup EXIT
 
 ssh-keygen -q -t ed25519 -N '' -f "$ssh_key"
 ssh_public_key_value=$(<"$ssh_key.pub")
+java_package=
+if [[ -n "$java_smoke_archive" ]]; then
+    java_package='  - openjdk-17-jre-headless'
+fi
 
 cat >"$work_dir/meta-data" <<EOF
 instance-id: cageforge-native-vm-${GITHUB_RUN_ID:-local}
@@ -64,6 +83,7 @@ packages:
   - curl
   - git
   - bubblewrap
+${java_package}
   - libcap-dev
   - openssh-server
   - pkg-config
@@ -171,6 +191,10 @@ EOF
 qemu-img create -q -f qcow2 -F qcow2 -o size=16G -b "$image" "$overlay"
 genisoimage -quiet -output "$seed_iso" -volid CIDATA -joliet -rock "$work_dir/user-data" "$work_dir/meta-data"
 genisoimage -quiet -output "$source_iso" -volid CAGEFORGE_SOURCE -joliet -rock -graft-points "source_archive=$source_archive"
+if [[ -n "$java_smoke_archive" ]]; then
+    genisoimage -quiet -output "$java_smoke_iso" -volid CAGEFORGE_JAVA_SMOKE -joliet -rock \
+        -graft-points "smoke_archive=$java_smoke_archive"
+fi
 
 ssh_guest() {
     ssh -q -i "$ssh_key" -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "$@"
@@ -180,6 +204,7 @@ start_guest() {
     local network_mode=$1
     local log_file=$2
     local attach_source=$3
+    local attach_java_smoke=${4:-false}
     local stderr_log="${log_file}.stderr"
     local network_spec="user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22"
     local source_args=()
@@ -190,6 +215,13 @@ start_guest() {
     fi
     if [[ "$attach_source" == true ]]; then
         source_args=("-drive" "if=ide,media=cdrom,readonly=on,format=raw,file=${source_iso}")
+    fi
+    if [[ "$attach_java_smoke" == true ]]; then
+        [[ -f "$java_smoke_iso" ]] || {
+            echo "Java smoke ISO was not created" >&2
+            exit 66
+        }
+        source_args+=("-drive" "if=ide,media=cdrom,readonly=on,format=raw,file=${java_smoke_iso}")
     fi
     local qemu_args=(
         -machine q35,accel=kvm
@@ -328,10 +360,13 @@ EOF
 stop_guest
 
 echo 'Running native tests inside the isolated guest.'
-start_guest restricted "$test_log" true
+start_guest restricted "$test_log" true "$([[ -n "$java_smoke_archive" ]] && echo true || echo false)"
 wait_for_ssh "$test_log"
 set +e
-ssh_guest 'bash -s' <<'EOF'
+ssh_guest env \
+    "CAGEFORGE_JAVA_ONLY=$java_only" \
+    "CAGEFORGE_JAVA_SMOKE=$([[ -n "$java_smoke_archive" ]] && echo true || echo false)" \
+    'bash -s' <<'EOF'
 set -euo pipefail
 export PATH=/home/ubuntu/.cargo/bin:$PATH
 export RUST_BACKTRACE=1
@@ -340,6 +375,7 @@ sudo mkdir -p "$source_mount"
 sudo mount -L CAGEFORGE_SOURCE -o ro "$source_mount"
 root_dir=$(sudo cat /var/lib/cageforge-source-root)
 cd "$root_dir"
+if [[ "${CAGEFORGE_JAVA_ONLY:-false}" != true ]]; then
 cargo fmt --all -- --check
 cargo clippy -p cageforge-bwrap --all-targets --locked -- -D warnings
 
@@ -373,6 +409,26 @@ echo 'Running the CLI checks with the bundled Bubblewrap feature.'
 cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets --locked -- -D warnings
 cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --locked
 cargo doc -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --no-deps --locked
+fi
+
+if [[ "${CAGEFORGE_JAVA_SMOKE:-false}" == true ]]; then
+    java_mount=/mnt/cageforge-java-smoke
+    java_dir=/home/ubuntu/cageforge-java-smoke
+    sudo mkdir -p "$java_mount"
+    sudo mount -L CAGEFORGE_JAVA_SMOKE -o ro "$java_mount"
+    rm -rf "$java_dir"
+    mkdir -p "$java_dir"
+    tar --extract --file="$java_mount/smoke_archive" --directory="$java_dir" --no-same-owner
+    java_cache=$(mktemp -d /tmp/cageforge-java-native-cache.XXXXXX)
+    java_output=$(JAVA_OPTS="-Dcageforge.native.cache=$java_cache" \
+        "$java_dir/cageforge-java-consumer-smoke/bin/cageforge-java-consumer-smoke")
+    printf '%s\n' "$java_output"
+    grep -F 'native-target=linux-x86_64' <<<"$java_output"
+    grep -F 'concurrent-instances=ok' <<<"$java_output"
+    grep -F 'consumer-smoke=ok' <<<"$java_output"
+    grep -F 'stdio-routing=ok' <<<"$java_output"
+    sudo umount "$java_mount"
+fi
 EOF
 result=$?
 set -e
