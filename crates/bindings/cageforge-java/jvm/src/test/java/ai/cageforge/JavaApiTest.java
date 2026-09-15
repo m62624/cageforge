@@ -10,7 +10,8 @@ import org.junit.jupiter.api.Test;
 class JavaApiTest {
     @Test
     void javaCanConstructTheKotlinRuntimeContext() {
-        RuntimeContext context = new RuntimeContext(Path.of("/tmp/cageforge-java"));
-        assertEquals(Path.of("/tmp/cageforge-java"), context.getCurrentDirectory());
+        Path runtimeDirectory = Path.of(System.getProperty("java.io.tmpdir"), "cageforge-java");
+        RuntimeContext context = new RuntimeContext(runtimeDirectory);
+        assertEquals(runtimeDirectory, context.getCurrentDirectory());
     }
 }

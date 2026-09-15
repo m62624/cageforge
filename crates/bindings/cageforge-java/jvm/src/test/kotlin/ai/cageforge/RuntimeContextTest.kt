@@ -10,8 +10,9 @@ import kotlin.test.assertFailsWith
 class RuntimeContextTest {
     @Test
     fun keepsAbsoluteRuntimeDirectory() {
-        val context = RuntimeContext(Path.of("/tmp/workspace"))
-        assertEquals(Path.of("/tmp/workspace"), context.currentDirectory)
+        val runtimeDirectory = Path.of(System.getProperty("java.io.tmpdir"), "workspace")
+        val context = RuntimeContext(runtimeDirectory)
+        assertEquals(runtimeDirectory, context.currentDirectory)
     }
 
     @Test
