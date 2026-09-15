@@ -169,9 +169,7 @@ jobs:
       - name: Verify and assemble the single JVM artifact
         working-directory: crates/bindings/cageforge-java/jvm
         run: |
-          gradle --no-daemon verifyNativeBundle jar sourcesJar javadocJar \
-            generatePomFileForMavenJavaPublication \
-            generateMetadataFileForMavenJavaPublication \
+          gradle --no-daemon verifyMavenPublication \
             -PnativeResourcesDir=build/native \
             -PreleaseVersion="${{ steps.version.outputs.version }}"
       - name: Upload the manually publishable JVM package

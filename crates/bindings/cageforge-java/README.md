@@ -3,10 +3,10 @@
 > Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
 > binding is an independent JVM adapter over Cageforge's public sandbox API.
 
-This directory contains the internal JNI binding for the
-[`cageforge`](https://crates.io/crates/cageforge) Rust crate. The Rust package
-is not published. Applications use the JVM artifact built by the `jvm`
-project.
+`cageforge-java` is the JVM binding for the
+[`cageforge`](https://crates.io/crates/cageforge) Rust crate. Its native JNI
+layer is implemented in an internal Rust crate with `publish = false`. The
+published Maven artifact is built by the [`jvm/`](jvm/) project.
 
 # Cageforge Java binding
 

@@ -3,6 +3,7 @@
 package ai.cageforge.smoke;
 
 import ai.cageforge.Cageforge;
+import ai.cageforge.CageforgeConfigurationException;
 import ai.cageforge.CageforgeException;
 import ai.cageforge.RuntimeContext;
 import ai.cageforge.SandboxProcess;
@@ -23,11 +24,7 @@ public final class Main {
         Path command = windows
                 ? Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe")
                 : Path.of("/bin/echo");
-        Path readableDirectory = windows ? command.getParent() : Path.of("/bin");
-        String filesystemRule = windows
-                ? "{ target = \"absolute\", path = \"%s\", access = \"read\" }"
-                        .formatted(tomlString(readableDirectory))
-                : "{ target = \"minimal\", access = \"read\" }";
+        String filesystemRule = "{ target = \"minimal\", access = \"read\" }";
         String toml = """
                 default_profile = "smoke"
 
@@ -57,6 +54,12 @@ public final class Main {
         List<String> profileNames = Cageforge.profileNames(toml);
         if (!List.of("base", "smoke").equals(profileNames)) {
             throw new CageforgeException("unexpected profile names: " + profileNames);
+        }
+        try {
+            Cageforge.profileNames("default_profile = [");
+            throw new CageforgeException("invalid TOML was accepted");
+        } catch (CageforgeConfigurationException expected) {
+            System.out.println("typed-errors=ok");
         }
         Cageforge.checkToml(toml, "smoke", new RuntimeContext(currentDirectory));
         System.out.println("toml-validation=ok");

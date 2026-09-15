@@ -159,6 +159,10 @@ jobs:
           test -n "$MAVEN_GPG_PRIVATE_KEY" || { echo "MAVEN_GPG_PRIVATE_KEY is not configured" >&2; exit 64; }
           test -n "$MAVEN_GPG_PASSPHRASE" || { echo "MAVEN_GPG_PASSPHRASE is not configured" >&2; exit 64; }
           test -n "$MAVEN_CENTRAL_NAMESPACE" || { echo "MAVEN_CENTRAL_NAMESPACE repository variable is not configured" >&2; exit 64; }
+          gradle --no-daemon verifyMavenPublication verifyMavenSigning \
+            -PnativeResourcesDir=build/native \
+            -PmavenGroup="$MAVEN_CENTRAL_NAMESPACE" \
+            -PreleaseVersion="${{ needs.prepare.outputs.version }}"
           gradle --no-daemon publishMavenJavaPublicationToCentralPortalRepository \
             -PnativeResourcesDir=build/native \
             -PmavenGroup="$MAVEN_CENTRAL_NAMESPACE" \

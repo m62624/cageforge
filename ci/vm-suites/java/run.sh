@@ -17,6 +17,7 @@ printf '%s\n' "$java_output"
 
 grep -F 'native-target=linux-x86_64' <<<"$java_output"
 grep -F 'toml-validation=ok' <<<"$java_output"
+grep -F 'typed-errors=ok' <<<"$java_output"
 grep -F 'concurrent-instances=ok' <<<"$java_output"
 grep -F 'consumer-smoke=ok' <<<"$java_output"
 grep -F 'closed-handles=ok' <<<"$java_output"

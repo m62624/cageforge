@@ -1,9 +1,13 @@
+import org.gradle.api.tasks.bundling.Jar
+import org.gradle.api.tasks.javadoc.Javadoc
+
 plugins {
     `java-library`
     `maven-publish`
     signing
     checkstyle
     kotlin("jvm") version "2.1.20"
+    id("org.jetbrains.dokka-javadoc") version "2.2.0"
     id("org.jlleitschuh.gradle.ktlint") version "12.1.2"
 }
 
@@ -26,6 +30,17 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.withType<Javadoc>().configureEach {
+    // The public facade is implemented in Kotlin. Dokka supplies the
+    // Java-facing documentation instead of the empty javac output.
+    enabled = false
+}
+
+tasks.named<Jar>("javadocJar") {
+    dependsOn("dokkaGeneratePublicationJavadoc")
+    from(layout.buildDirectory.dir("dokka/javadoc"))
 }
 
 checkstyle {
@@ -93,6 +108,44 @@ tasks.register("verifyNativeBundle") {
     }
 }
 
+tasks.register("verifyMavenPublication") {
+    group = "verification"
+    description = "Checks the complete Maven publication and its native bundle."
+    dependsOn(
+        "verifyNativeBundle",
+        "jar",
+        "sourcesJar",
+        "javadocJar",
+        "generatePomFileForMavenJavaPublication",
+        "generateMetadataFileForMavenJavaPublication",
+    )
+    doLast {
+        val version = project.version.toString()
+        val publicationDirectory = layout.buildDirectory.dir("publications/mavenJava").get().asFile
+        val requiredFiles =
+            listOf(
+                layout.buildDirectory.file("libs/${project.name}-$version.jar").get().asFile,
+                layout.buildDirectory.file("libs/${project.name}-$version-sources.jar").get().asFile,
+                layout.buildDirectory.file("libs/${project.name}-$version-javadoc.jar").get().asFile,
+                publicationDirectory.resolve("pom-default.xml"),
+                publicationDirectory.resolve("module.json"),
+            )
+        requiredFiles.forEach { file ->
+            check(file.isFile) { "Missing Maven publication file: ${file.path}" }
+        }
+        val pom = publicationDirectory.resolve("pom-default.xml").readText()
+        check("<groupId>${project.group}</groupId>" in pom) {
+            "Maven POM groupId does not match ${project.group}"
+        }
+        check("<artifactId>${project.name}</artifactId>" in pom) {
+            "Maven POM artifactId does not match ${project.name}"
+        }
+        check("<version>$version</version>" in pom) {
+            "Maven POM version does not match $version"
+        }
+    }
+}
+
 publishing {
     repositories {
         if (mavenRepositoryUrl.isPresent) {
@@ -131,7 +184,11 @@ publishing {
                     url.set("https://github.com/m62624/cageforge")
                 }
                 developers {
-                    developer { name.set("Cageforge maintainers") }
+                    developer {
+                        id.set("m62624")
+                        name.set("Mansur Azatbek")
+                        email.set("mansur62624@gmail.com")
+                    }
                 }
             }
         }
@@ -159,7 +216,7 @@ tasks.register("verifyMavenSigning") {
 }
 
 tasks.withType<PublishToMavenRepository>().configureEach {
-    dependsOn("verifyNativeBundle")
+    dependsOn("verifyMavenPublication")
     dependsOn("verifyMavenSigning")
     onlyIf { providers.gradleProperty("allowMavenPublish").isPresent }
 }

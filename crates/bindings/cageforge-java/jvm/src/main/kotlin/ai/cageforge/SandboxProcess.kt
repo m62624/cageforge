@@ -13,7 +13,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /** Process and complete descendant-boundary lifecycle for one sandbox launch. */
-class SandboxProcess internal constructor(private var handle: Long) : Closeable {
+class SandboxProcess private constructor(private var handle: Long) : Closeable {
     private val lifecycleLock = ReentrantLock()
     private val noActiveOperations: Condition = lifecycleLock.newCondition()
     private val waitLock = Any()

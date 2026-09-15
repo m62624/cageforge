@@ -8,16 +8,19 @@
 
 #![deny(missing_docs)]
 
+mod error;
+
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use jni::errors::ErrorPolicy;
 use jni::objects::{JByteArray, JClass, JObjectArray, JString};
 use jni::sys::{jbyteArray, jint, jlong, jobjectArray};
 use jni::{Env, EnvUnowned};
+
+use crate::error::{BindingError, BindingErrorKind, ffi_call_kind};
 
 struct RuntimeState {
     backend: Box<dyn cageforge::DynSandbox>,
@@ -34,78 +37,10 @@ struct ChildState {
     completed_status: Mutex<Option<jint>>,
 }
 
-#[derive(Debug)]
-struct BindingError(String);
-
-impl std::fmt::Display for BindingError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for BindingError {}
-
-impl From<String> for BindingError {
-    fn from(message: String) -> Self {
-        Self(message)
-    }
-}
-
-impl From<BindingError> for String {
-    fn from(error: BindingError) -> Self {
-        error.0
-    }
-}
-
-impl From<jni::errors::Error> for BindingError {
-    fn from(error: jni::errors::Error) -> Self {
-        Self(error.to_string())
-    }
-}
-
-struct ThrowCageforgeException;
-
-impl<T: Default> ErrorPolicy<T, BindingError> for ThrowCageforgeException {
-    type Captures<'unowned_env_local: 'native_method, 'native_method> = ();
-
-    fn on_error<'unowned_env_local: 'native_method, 'native_method>(
-        env: &mut Env<'unowned_env_local>,
-        _captures: &mut Self::Captures<'unowned_env_local, 'native_method>,
-        error: BindingError,
-    ) -> jni::errors::Result<T> {
-        if !env.exception_check() {
-            let class = env.find_class(jni::jni_str!("ai/cageforge/CageforgeException"))?;
-            let message = jni::strings::JNIString::new(error.to_string());
-            let _ = env.throw_new(class, message);
-        }
-        Ok(T::default())
-    }
-
-    fn on_panic<'unowned_env_local: 'native_method, 'native_method>(
-        env: &mut Env<'unowned_env_local>,
-        _captures: &mut Self::Captures<'unowned_env_local, 'native_method>,
-        _payload: Box<dyn std::any::Any + Send + 'static>,
-    ) -> jni::errors::Result<T> {
-        if !env.exception_check() {
-            let class = env.find_class(jni::jni_str!("ai/cageforge/CageforgeException"))?;
-            let message = jni::strings::JNIString::new("Cageforge native binding panicked");
-            let _ = env.throw_new(class, message);
-        }
-        Ok(T::default())
-    }
-}
-
-fn ffi_call<'local, T: Default>(
-    env: &mut EnvUnowned<'local>,
-    operation: impl FnOnce(&mut Env<'local>) -> Result<T, BindingError>,
-) -> T {
-    env.with_env(operation).resolve::<ThrowCageforgeException>()
-}
-
 fn java_string(env: &mut Env<'_>, value: JString<'_>, name: &str) -> Result<String, BindingError> {
     value
         .try_to_string(env)
-        .map_err(|error| BindingError(format!("invalid {name}: {error}")))
+        .map_err(|error| format!("invalid {name}: {error}").into())
 }
 
 fn optional_profile(env: &mut Env<'_>, value: JString<'_>) -> Result<Option<String>, BindingError> {
@@ -118,7 +53,7 @@ fn optional_profile(env: &mut Env<'_>, value: JString<'_>) -> Result<Option<Stri
 fn path(value: String, name: &str) -> Result<PathBuf, BindingError> {
     let path = PathBuf::from(value);
     if !path.is_absolute() {
-        return Err(BindingError(format!("{name} must be absolute: {path:?}")));
+        return Err(format!("{name} must be absolute: {path:?}").into());
     }
     Ok(path)
 }
@@ -131,9 +66,9 @@ fn resolve_workspace_roots(
         .iter()
         .map(|declaration| {
             if cageforge::contains_parent_traversal(declaration) {
-                return Err(BindingError(format!(
-                    "workspace root contains parent traversal: {declaration:?}"
-                )));
+                return Err(
+                    format!("workspace root contains parent traversal: {declaration:?}").into(),
+                );
             }
             let path = if declaration.is_absolute() {
                 declaration.clone()
@@ -360,7 +295,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeProfileNames<'caller
     _class: JClass<'caller>,
     toml: JString<'caller>,
 ) -> jobjectArray {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Configuration, |env| {
         let config = config_from_toml(&java_string(env, toml, "TOML")?)?;
         java_string_array(env, config.profile_names().map(str::to_owned))
     })
@@ -375,7 +310,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCheckToml<'caller>(
     profile: JString<'caller>,
     current_directory: JString<'caller>,
 ) {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Configuration, |env| {
         let config = config_from_toml(&java_string(env, toml, "TOML")?)?;
         let profile = resolve_profile(&config, optional_profile(env, profile)?.as_deref())?;
         let current_directory = path(
@@ -415,7 +350,9 @@ fn command_request(
             .ok_or_else(|| "profile has no command; pass a non-empty argv".to_string());
     }
     let mut parts = argv.into_iter();
-    let program = parts.next().expect("argv checked as non-empty");
+    let Some(program) = parts.next() else {
+        return Err("command argv must not be empty".to_string());
+    };
     let spec = cageforge::CommandSpec::new(program)
         .and_then(|spec| spec.with_args(parts))
         .map_err(|error| error.to_string())?;
@@ -463,7 +400,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
     current_directory: JString<'caller>,
     native_directory: JString<'caller>,
 ) -> jlong {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Initialization, |env| {
         runtime_from_toml(
             java_string(env, toml, "TOML")?,
             optional_profile(env, profile)?,
@@ -482,7 +419,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
     runtime: jlong,
     argv: JObjectArray<'caller, JString<'caller>>,
 ) -> jlong {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Launch, |env| {
         let runtime = runtime_ref(runtime)?;
         let state = runtime
             .lock()
@@ -513,7 +450,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeId<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) -> jint {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Process, |_env| {
         let child = child_ref(process)?;
         let child = child
             .child
@@ -558,7 +495,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeHasStdin<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) -> jni::sys::jboolean {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Stream, |_env| {
         Ok(stream_is_piped(process, StreamKind::Stdin)?)
     })
 }
@@ -570,7 +507,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeHasStdout<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) -> jni::sys::jboolean {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Stream, |_env| {
         Ok(stream_is_piped(process, StreamKind::Stdout)?)
     })
 }
@@ -582,7 +519,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeHasStderr<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) -> jni::sys::jboolean {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Stream, |_env| {
         Ok(stream_is_piped(process, StreamKind::Stderr)?)
     })
 }
@@ -601,7 +538,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeTryWait<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) -> jint {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Process, |_env| {
         let child = child_ref(process)?;
         let mut child_guard = child
             .child
@@ -635,7 +572,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWait<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) -> jint {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Process, |_env| {
         let child = child_ref(process)?;
         loop {
             let status = {
@@ -679,7 +616,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeKill<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Process, |_env| {
         let child = child_ref(process)?;
         let mut child_guard = child
             .child
@@ -757,7 +694,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeReadStdout<'caller>(
     process: jlong,
     size: jint,
 ) -> jbyteArray {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Stream, |env| {
         let child = child_ref(process)?;
         read_stream(child, true, size)
             .map_err(BindingError::from)
@@ -777,7 +714,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeReadStderr<'caller>(
     process: jlong,
     size: jint,
 ) -> jbyteArray {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Stream, |env| {
         let child = child_ref(process)?;
         read_stream(child, false, size)
             .map_err(BindingError::from)
@@ -797,7 +734,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWriteStdin<'caller>(
     process: jlong,
     data: JByteArray<'caller>,
 ) -> jint {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Stream, |env| {
         let bytes = env.convert_byte_array(data)?;
         let child = child_ref(process)?;
         write_stdin(child, &bytes).map_err(BindingError::from)
@@ -811,7 +748,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCloseStdin<'caller>(
     _class: JClass<'caller>,
     process: jlong,
 ) {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Stream, |_env| {
         close_stdin(child_ref(process)?).map_err(BindingError::from)
     });
 }
@@ -823,7 +760,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCloseRuntime<'caller
     _class: JClass<'caller>,
     runtime: jlong,
 ) {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Internal, |_env| {
         if runtime == 0 {
             return Ok(());
         }
@@ -841,7 +778,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCloseProcess<'caller
     _class: JClass<'caller>,
     process: jlong,
 ) {
-    ffi_call(&mut unowned_env, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Process, |_env| {
         if process == 0 {
             return Ok(());
         }
@@ -853,13 +790,13 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCloseProcess<'caller
 }
 
 #[cfg(target_os = "windows")]
-fn windows_setup(native_directory: &Path) -> cageforge::WindowsSetup {
+fn windows_setup(native_directory: &Path) -> Result<cageforge::WindowsSetup, BindingError> {
     let setup = cageforge::WindowsSetupConfig::new()
         .with_setup_helper_path(native_directory.join("cageforge-windows-setup.exe"))
-        .expect("native resource directory is absolute")
+        .map_err(|error| BindingError::from(error.to_string()))?
         .with_command_runner_path(native_directory.join("cageforge-windows-command-runner.exe"))
-        .expect("native resource directory is absolute");
-    cageforge::WindowsSetup::new(setup)
+        .map_err(|error| BindingError::from(error.to_string()))?;
+    Ok(cageforge::WindowsSetup::new(setup))
 }
 
 /// Installs the Windows elevated boundary, invoking UAC when required.
@@ -869,7 +806,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsInstall<'call
     _class: JClass<'caller>,
     native_directory: JString<'caller>,
 ) {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::WindowsSetup, |env| {
         #[cfg(not(target_os = "windows"))]
         let _ = env;
         #[cfg(target_os = "windows")]
@@ -878,7 +815,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsInstall<'call
                 java_string(env, native_directory, "native resource directory")?,
                 "native resource directory",
             )?;
-            windows_setup(&directory)
+            windows_setup(&directory)?
                 .install()
                 .map_err(|error| error.to_string())?;
             Ok(())
@@ -886,7 +823,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsInstall<'call
         #[cfg(not(target_os = "windows"))]
         {
             let _ = native_directory;
-            Err::<(), _>(BindingError(
+            Err::<(), _>(BindingError::from(
                 "Windows setup is available only on Windows".to_string(),
             ))
         }
@@ -900,7 +837,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsStatus<'calle
     _class: JClass<'caller>,
     native_directory: JString<'caller>,
 ) -> jint {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::WindowsSetup, |env| {
         #[cfg(not(target_os = "windows"))]
         let _ = env;
         #[cfg(target_os = "windows")]
@@ -909,7 +846,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsStatus<'calle
                 java_string(env, native_directory, "native resource directory")?,
                 "native resource directory",
             )?;
-            let status = windows_setup(&directory)
+            let status = windows_setup(&directory)?
                 .status()
                 .map_err(|error| error.to_string())?;
             Ok(match status {
@@ -921,7 +858,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsStatus<'calle
         #[cfg(not(target_os = "windows"))]
         {
             let _ = native_directory;
-            Err::<jint, _>(BindingError(
+            Err::<jint, _>(BindingError::from(
                 "Windows setup is available only on Windows".to_string(),
             ))
         }
@@ -935,7 +872,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsVerify<'calle
     _class: JClass<'caller>,
     native_directory: JString<'caller>,
 ) {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::WindowsSetup, |env| {
         #[cfg(not(target_os = "windows"))]
         let _ = env;
         #[cfg(target_os = "windows")]
@@ -944,7 +881,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsVerify<'calle
                 java_string(env, native_directory, "native resource directory")?,
                 "native resource directory",
             )?;
-            windows_setup(&directory)
+            windows_setup(&directory)?
                 .verify()
                 .map_err(|error| error.to_string())?;
             Ok(())
@@ -952,7 +889,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsVerify<'calle
         #[cfg(not(target_os = "windows"))]
         {
             let _ = native_directory;
-            Err::<(), _>(BindingError(
+            Err::<(), _>(BindingError::from(
                 "Windows setup is available only on Windows".to_string(),
             ))
         }
@@ -966,7 +903,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsUninstall<'ca
     _class: JClass<'caller>,
     native_directory: JString<'caller>,
 ) {
-    ffi_call(&mut unowned_env, |env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::WindowsSetup, |env| {
         #[cfg(not(target_os = "windows"))]
         let _ = env;
         #[cfg(target_os = "windows")]
@@ -975,7 +912,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsUninstall<'ca
                 java_string(env, native_directory, "native resource directory")?,
                 "native resource directory",
             )?;
-            windows_setup(&directory)
+            windows_setup(&directory)?
                 .uninstall()
                 .map_err(|error| error.to_string())?;
             Ok(())
@@ -983,7 +920,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWindowsUninstall<'ca
         #[cfg(not(target_os = "windows"))]
         {
             let _ = native_directory;
-            Err::<(), _>(BindingError(
+            Err::<(), _>(BindingError::from(
                 "Windows setup is available only on Windows".to_string(),
             ))
         }

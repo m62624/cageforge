@@ -644,6 +644,7 @@ jobs:
           printf '%s\n' "$output"
           grep -F "native-target=$CAGEFORGE_JVM_EXPECTED_TARGET" <<<"$output"
           grep -F 'toml-validation=ok' <<<"$output"
+          grep -F 'typed-errors=ok' <<<"$output"
           grep -F 'concurrent-instances=ok' <<<"$output"
           grep -F 'consumer-smoke=ok' <<<"$output"
           grep -F 'closed-handles=ok' <<<"$output"
