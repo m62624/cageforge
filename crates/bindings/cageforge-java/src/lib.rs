@@ -27,7 +27,7 @@ struct RuntimeState {
 
 struct ChildState {
     child: Box<dyn cageforge::SandboxChild<Error = cageforge::SandboxExecutionError> + Send>,
-    killed: bool,
+    completed_status: Option<jint>,
 }
 
 #[derive(Debug)]
@@ -491,7 +491,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
             .map_err(|error| error.to_string())?;
         Ok(Box::into_raw(Box::new(Mutex::new(ChildState {
             child,
-            killed: false,
+            completed_status: None,
         }))) as jlong)
     })
 }
@@ -586,11 +586,18 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeTryWait<'caller>(
         let mut child = child
             .lock()
             .map_err(|_| "process handle is poisoned".to_string())?;
-        Ok(child
+        if let Some(status) = child.completed_status {
+            return Ok(status);
+        }
+        let status = child
             .child
             .try_wait()
             .map(status_code)
-            .map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        if status != -1 {
+            child.completed_status = Some(status);
+        }
+        Ok(status)
     })
 }
 
@@ -608,14 +615,18 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWait<'caller>(
                 let mut child = child
                     .lock()
                     .map_err(|_| "process handle is poisoned".to_string())?;
-                if child.killed {
-                    return Ok(-2);
+                if let Some(status) = child.completed_status {
+                    return Ok(status);
                 }
-                child
+                let status = child
                     .child
                     .try_wait()
                     .map(status_code)
-                    .map_err(|error| error.to_string())?
+                    .map_err(|error| error.to_string())?;
+                if status != -1 {
+                    child.completed_status = Some(status);
+                }
+                status
             };
             if status != -1 {
                 return Ok(status);
@@ -640,8 +651,11 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeKill<'caller>(
         let mut child = child
             .lock()
             .map_err(|_| "process handle is poisoned".to_string())?;
+        if child.completed_status.is_some() {
+            return Ok(());
+        }
         child.child.kill().map_err(|error| error.to_string())?;
-        child.killed = true;
+        child.completed_status = Some(-2);
         Ok(())
     });
 }
