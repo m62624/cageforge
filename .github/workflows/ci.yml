@@ -648,6 +648,11 @@ jobs:
           grep -F 'consumer-smoke=ok' <<<"$output"
           grep -F 'closed-handles=ok' <<<"$output"
           grep -F 'wait-kill=ok' <<<"$output"
+          grep -F 'stream-kill=ok' <<<"$output"
+          grep -F 'write-kill=ok' <<<"$output"
+          grep -F 'close-kill=ok' <<<"$output"
+          grep -F 'async-cancel=ok' <<<"$output"
+          grep -F 'stdin-eof=ok' <<<"$output"
           grep -F 'stdio-routing=ok' <<<"$output"
 
       - name: Package the Linux Java consumer for the QEMU smoke

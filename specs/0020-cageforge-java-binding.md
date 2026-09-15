@@ -140,6 +140,10 @@ global execution lock.
 The JVM facade retains an operation reference for each native call so `close`
 cannot reclaim a raw JNI handle while that call is in flight. This does not
 serialize independent handles or hold the JVM lock during a blocking operation.
+The native adapter detaches the three existing platform pipe handles from the
+child lifecycle object and protects each stream with its own per-process lock;
+it does not create a second pipe implementation. Therefore a blocking stream
+read or write cannot hold the lifecycle lock needed by `kill` or `close`.
 The native wait polls between short child-lock sections, allowing a concurrent
 same-child `kill` to acquire the handle and terminate the complete boundary.
 After a successful kill, an already-running wait may complete with a
@@ -152,6 +156,10 @@ required. The JVM facade provides `waitForAsync(Executor)` so the blocking
 native wait runs on an application-selected worker. `tryWait` remains the
 non-blocking status query. Stream consumers should use worker threads or a
 coroutine dispatcher because an `InputStream.read` can wait for child output.
+Cancelling the future returned by `waitForAsync` terminates its associated
+boundary. Closing the exposed stdin stream closes only that pipe and delivers
+EOF to the child. Closing `SandboxProcess` terminates the boundary before it
+waits for active JNI calls to finish.
 
 The binding must test concurrent independent launches, no cross-runtime lock
 contention, closed-handle rejection, repeated close, and the documented

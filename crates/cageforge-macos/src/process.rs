@@ -90,6 +90,21 @@ impl cageforge_backend_api::SandboxChild for MacosChild {
         MacosChild::stderr(self).map(|stream| stream as &mut dyn std::io::Read)
     }
 
+    fn take_stdin(&mut self) -> Option<Box<dyn std::io::Write + Send>> {
+        MacosChild::take_stdin(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Write + Send>)
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        MacosChild::take_stdout(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Read + Send>)
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        MacosChild::take_stderr(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Read + Send>)
+    }
+
     fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {
         MacosChild::try_wait(self)
     }
@@ -148,6 +163,30 @@ impl MacosChild {
             return session.stderr();
         }
         self.child.as_mut().and_then(|child| child.stderr.as_mut())
+    }
+
+    /// Takes the child's standard-input pipe, if one was requested.
+    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+        if let Some(session) = self.session.as_mut() {
+            return session.take_stdin();
+        }
+        self.child.as_mut().and_then(|child| child.stdin.take())
+    }
+
+    /// Takes the child's standard-output pipe, if one was requested.
+    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+        if let Some(session) = self.session.as_mut() {
+            return session.take_stdout();
+        }
+        self.child.as_mut().and_then(|child| child.stdout.take())
+    }
+
+    /// Takes the child's standard-error pipe, if one was requested.
+    pub fn take_stderr(&mut self) -> Option<ChildStderr> {
+        if let Some(session) = self.session.as_mut() {
+            return session.take_stderr();
+        }
+        self.child.as_mut().and_then(|child| child.stderr.take())
     }
 
     /// Checks whether the boundary has exited, enforcing its timeout.

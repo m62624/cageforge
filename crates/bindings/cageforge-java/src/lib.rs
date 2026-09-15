@@ -8,6 +8,7 @@
 
 #![deny(missing_docs)]
 
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
@@ -26,8 +27,11 @@ struct RuntimeState {
 }
 
 struct ChildState {
-    child: Box<dyn cageforge::SandboxChild<Error = cageforge::SandboxExecutionError> + Send>,
-    completed_status: Option<jint>,
+    child: Mutex<Box<dyn cageforge::SandboxChild<Error = cageforge::SandboxExecutionError> + Send>>,
+    stdin: Mutex<Option<Box<dyn Write + Send>>>,
+    stdout: Mutex<Option<Box<dyn Read + Send>>>,
+    stderr: Mutex<Option<Box<dyn Read + Send>>>,
+    completed_status: Mutex<Option<jint>>,
 }
 
 #[derive(Debug)]
@@ -221,7 +225,7 @@ fn runtime_context(
 
 fn native_backend(
     native_directory: &Path,
-    network_gateway: cageforge::GatewayConfig,
+    _network_gateway: cageforge::GatewayConfig,
 ) -> Result<Box<dyn cageforge::DynSandbox>, String> {
     #[cfg(all(feature = "linux", target_os = "linux"))]
     {
@@ -229,7 +233,7 @@ fn native_backend(
             .with_system_then_bundled_bubblewrap()
             .with_resource_directory(native_directory.to_path_buf())
             .with_hardening_helper_path(native_directory.join("cageforge-linux-helper"))
-            .with_network_gateway(network_gateway)
+            .with_network_gateway(_network_gateway)
             .with_default_timeout(Duration::from_secs(300))
             .map_err(|error| error.to_string())?;
         return cageforge::native_sandbox_with(config).map_err(|error| error.to_string());
@@ -239,7 +243,7 @@ fn native_backend(
         let config = cageforge::NativeSandboxConfig::new()
             .with_helper_executable(native_directory.join("cageforge-macos-helper"))
             .map_err(|error| error.to_string())?
-            .with_network_gateway(network_gateway);
+            .with_network_gateway(_network_gateway);
         return cageforge::native_sandbox_with(config).map_err(|error| error.to_string());
     }
     #[cfg(all(feature = "windows", target_os = "windows"))]
@@ -252,7 +256,7 @@ fn native_backend(
         return cageforge::native_sandbox_with(
             cageforge::NativeSandboxConfig::new()
                 .with_setup(setup)
-                .with_network_gateway(network_gateway),
+                .with_network_gateway(_network_gateway),
         )
         .map_err(|error| error.to_string());
     }
@@ -440,13 +444,13 @@ fn runtime_ref(handle: jlong) -> Result<&'static Mutex<RuntimeState>, String> {
     Ok(unsafe { &*(handle as *const Mutex<RuntimeState>) })
 }
 
-fn child_ref(handle: jlong) -> Result<&'static Mutex<ChildState>, String> {
+fn child_ref(handle: jlong) -> Result<&'static ChildState, String> {
     if handle == 0 {
         return Err("process handle is closed".to_string());
     }
     // SAFETY: handles are created from Box::into_raw and reclaimed exactly
     // once by `native_close_process`; Java treats the value as opaque.
-    Ok(unsafe { &*(handle as *const Mutex<ChildState>) })
+    Ok(unsafe { &*(handle as *const ChildState) })
 }
 
 /// Creates a native runtime from an in-memory TOML document.
@@ -485,14 +489,20 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
             .map_err(|_| "runtime handle is poisoned".to_string())?;
         let request = command_request(&state, command_from_array(env, argv)?)?;
         let backend_request = cageforge::BackendRequest::new(&request, &state.effective);
-        let child = state
+        let mut child = state
             .backend
             .launch(backend_request, &state.context)
             .map_err(|error| error.to_string())?;
-        Ok(Box::into_raw(Box::new(Mutex::new(ChildState {
-            child,
-            completed_status: None,
-        }))) as jlong)
+        let stdin = child.take_stdin();
+        let stdout = child.take_stdout();
+        let stderr = child.take_stderr();
+        Ok(Box::into_raw(Box::new(ChildState {
+            child: Mutex::new(child),
+            stdin: Mutex::new(stdin),
+            stdout: Mutex::new(stdout),
+            stderr: Mutex::new(stderr),
+            completed_status: Mutex::new(None),
+        })) as jlong)
     })
 }
 
@@ -506,22 +516,32 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeId<'caller>(
     ffi_call(&mut unowned_env, |_env| {
         let child = child_ref(process)?;
         let child = child
+            .child
             .lock()
             .map_err(|_| "process handle is poisoned".to_string())?;
-        Ok(child.child.id() as jint)
+        Ok(child.id() as jint)
     })
 }
 
 fn stream_is_piped(process: jlong, stream: StreamKind) -> Result<bool, String> {
     let child = child_ref(process)?;
-    let mut child = child
-        .lock()
-        .map_err(|_| "process handle is poisoned".to_string())?;
-    Ok(match stream {
-        StreamKind::Stdin => child.child.stdin().is_some(),
-        StreamKind::Stdout => child.child.stdout().is_some(),
-        StreamKind::Stderr => child.child.stderr().is_some(),
-    })
+    match stream {
+        StreamKind::Stdin => Ok(child
+            .stdin
+            .lock()
+            .map_err(|_| "process stream handle is poisoned".to_string())?
+            .is_some()),
+        StreamKind::Stdout => Ok(child
+            .stdout
+            .lock()
+            .map_err(|_| "process stream handle is poisoned".to_string())?
+            .is_some()),
+        StreamKind::Stderr => Ok(child
+            .stderr
+            .lock()
+            .map_err(|_| "process stream handle is poisoned".to_string())?
+            .is_some()),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -583,19 +603,26 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeTryWait<'caller>(
 ) -> jint {
     ffi_call(&mut unowned_env, |_env| {
         let child = child_ref(process)?;
-        let mut child = child
+        let mut child_guard = child
+            .child
             .lock()
             .map_err(|_| "process handle is poisoned".to_string())?;
-        if let Some(status) = child.completed_status {
+        if let Some(status) = *child
+            .completed_status
+            .lock()
+            .map_err(|_| "process status is poisoned".to_string())?
+        {
             return Ok(status);
         }
-        let status = child
-            .child
+        let status = child_guard
             .try_wait()
             .map(status_code)
             .map_err(|error| error.to_string())?;
         if status != -1 {
-            child.completed_status = Some(status);
+            *child
+                .completed_status
+                .lock()
+                .map_err(|_| "process status is poisoned".to_string())? = Some(status);
         }
         Ok(status)
     })
@@ -612,28 +639,34 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWait<'caller>(
         let child = child_ref(process)?;
         loop {
             let status = {
-                let mut child = child
+                let mut child_guard = child
+                    .child
                     .lock()
                     .map_err(|_| "process handle is poisoned".to_string())?;
-                if let Some(status) = child.completed_status {
+                if let Some(status) = *child
+                    .completed_status
+                    .lock()
+                    .map_err(|_| "process status is poisoned".to_string())?
+                {
                     return Ok(status);
                 }
-                let status = child
-                    .child
+                let status = child_guard
                     .try_wait()
                     .map(status_code)
                     .map_err(|error| error.to_string())?;
                 if status != -1 {
-                    child.completed_status = Some(status);
+                    *child
+                        .completed_status
+                        .lock()
+                        .map_err(|_| "process status is poisoned".to_string())? = Some(status);
                 }
                 status
             };
             if status != -1 {
                 return Ok(status);
             }
-            // Do not hold the child mutex while waiting. This lets a
-            // concurrent nativeKill acquire the same per-process handle and
-            // terminate the complete boundary.
+            // Do not hold the child lifecycle mutex while waiting. This lets
+            // a concurrent nativeKill acquire the same per-process handle.
             thread::sleep(Duration::from_millis(5));
         }
     })
@@ -648,42 +681,72 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeKill<'caller>(
 ) {
     ffi_call(&mut unowned_env, |_env| {
         let child = child_ref(process)?;
-        let mut child = child
+        let mut child_guard = child
+            .child
             .lock()
             .map_err(|_| "process handle is poisoned".to_string())?;
-        if child.completed_status.is_some() {
+        if child
+            .completed_status
+            .lock()
+            .map_err(|_| "process status is poisoned".to_string())?
+            .is_some()
+        {
             return Ok(());
         }
-        child.child.kill().map_err(|error| error.to_string())?;
-        child.completed_status = Some(-2);
+        child_guard.kill().map_err(|error| error.to_string())?;
+        *child
+            .completed_status
+            .lock()
+            .map_err(|_| "process status is poisoned".to_string())? = Some(-2);
         Ok(())
     });
 }
 
-fn read_stream(child: &Mutex<ChildState>, stdout: bool, size: jint) -> Result<Vec<u8>, String> {
+/*
+ * The child lifecycle and each detached standard stream have independent
+ * locks. A blocking read or write must not prevent nativeKill from acquiring
+ * the lifecycle lock; terminating the boundary closes the peer pipe and
+ * releases the blocked I/O operation.
+ */
+fn read_stream(child: &ChildState, stdout: bool, size: jint) -> Result<Vec<u8>, String> {
     if size <= 0 || size > 16 * 1024 * 1024 {
         return Err("read size must be between 1 and 16777216 bytes".to_string());
     }
-    let mut child = child
+    let stream = if stdout { &child.stdout } else { &child.stderr };
+    let mut stream = stream
         .lock()
-        .map_err(|_| "process handle is poisoned".to_string())?;
+        .map_err(|_| "process stream handle is poisoned".to_string())?;
+    let stream = stream
+        .as_mut()
+        .ok_or_else(|| "requested stream is not piped".to_string())?;
     let mut bytes = vec![0; size as usize];
-    let read = if stdout {
-        child
-            .child
-            .stdout()
-            .ok_or_else(|| "stdout is not piped".to_string())?
-            .read(&mut bytes)
-    } else {
-        child
-            .child
-            .stderr()
-            .ok_or_else(|| "stderr is not piped".to_string())?
-            .read(&mut bytes)
-    }
-    .map_err(|error| error.to_string())?;
+    let read = stream.read(&mut bytes).map_err(|error| error.to_string())?;
     bytes.truncate(read);
     Ok(bytes)
+}
+
+/*
+ * Writes use the independently owned stdin pipe for the same reason as
+ * reads: a full pipe may block, but it must not block lifecycle control.
+ */
+fn write_stdin(child: &ChildState, bytes: &[u8]) -> Result<jint, String> {
+    let mut stdin = child
+        .stdin
+        .lock()
+        .map_err(|_| "process stream handle is poisoned".to_string())?;
+    let stdin = stdin
+        .as_mut()
+        .ok_or_else(|| "stdin is not piped".to_string())?;
+    stdin.write_all(bytes).map_err(|error| error.to_string())?;
+    Ok(bytes.len() as jint)
+}
+
+fn close_stdin(child: &ChildState) -> Result<(), String> {
+    *child
+        .stdin
+        .lock()
+        .map_err(|_| "process stream handle is poisoned".to_string())? = None;
+    Ok(())
 }
 
 /// Reads up to `size` bytes from stdout.
@@ -737,16 +800,20 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeWriteStdin<'caller>(
     ffi_call(&mut unowned_env, |env| {
         let bytes = env.convert_byte_array(data)?;
         let child = child_ref(process)?;
-        let mut child = child
-            .lock()
-            .map_err(|_| "process handle is poisoned".to_string())?;
-        let stdin = child
-            .child
-            .stdin()
-            .ok_or_else(|| "stdin is not piped".to_string())?;
-        stdin.write_all(&bytes).map_err(|error| error.to_string())?;
-        Ok(bytes.len() as jint)
+        write_stdin(child, &bytes).map_err(BindingError::from)
     })
+}
+
+/// Closes the JVM-owned stdin pipe so the child observes EOF.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCloseStdin<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    process: jlong,
+) {
+    ffi_call(&mut unowned_env, |_env| {
+        close_stdin(child_ref(process)?).map_err(BindingError::from)
+    });
 }
 
 /// Closes a runtime handle and drops its backend.
@@ -780,7 +847,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCloseProcess<'caller
         }
         // SAFETY: Java owns each handle exactly once; close is idempotent at
         // the facade, which zeroes its field before calling this function.
-        unsafe { drop(Box::from_raw(process as *mut Mutex<ChildState>)) };
+        unsafe { drop(Box::from_raw(process as *mut ChildState)) };
         Ok(())
     });
 }

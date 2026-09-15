@@ -74,9 +74,17 @@ The JVM facade retains an operation reference for one object while a native
 call is in progress. This prevents `close` from reclaiming a raw JNI handle
 during that call without holding the JVM lock across the operation. The native
 wait releases its short child lock between polls, so `kill` can terminate the
-same process while `waitForAsync` is in flight. That wait may then complete
-with a `ProcessResult` whose `exitCode` is `null` because the process was
-terminated rather than normally reaped.
+same process while `waitForAsync` is in flight. Standard streams are detached
+from the native lifecycle handle and have their own per-stream locks, so a
+blocking pipe read or write does not prevent `kill()` or `close()` from
+terminating the boundary. Such an operation may finish with EOF or a native
+I/O error after termination. A wait may complete with a `ProcessResult` whose
+`exitCode` is `null` because the process was terminated rather than normally
+reaped.
+
+Cancelling the `CompletableFuture` returned by `waitForAsync` also terminates
+the associated sandbox process. Closing the JVM `stdin` stream releases the
+pipe and sends EOF to the child; it does not close the whole sandbox.
 
 `waitFor`, and reads from `stdout` or `stderr`, are blocking operations. Do not
 call them on a Swing or JavaFX event-dispatch thread. Use `waitForAsync` with

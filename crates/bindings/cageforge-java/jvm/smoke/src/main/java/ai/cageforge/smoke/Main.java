@@ -153,6 +153,84 @@ public final class Main {
                 wait.get(15, TimeUnit.SECONDS);
                 System.out.println("wait-kill=ok");
             }
+            try (Cageforge runtime = Cageforge.fromToml(
+                    toml, null, new RuntimeContext(currentDirectory));
+                 SandboxProcess process = runtime.launch(longRunningArgv)) {
+                var blockedRead = java.util.concurrent.CompletableFuture.supplyAsync(
+                        () -> {
+                            try {
+                                return process.getStdout().read();
+                            } catch (java.io.IOException error) {
+                                throw new java.util.concurrent.CompletionException(error);
+                            }
+                        });
+                Thread.sleep(100);
+                process.kill();
+                blockedRead.get(15, TimeUnit.SECONDS);
+                System.out.println("stream-kill=ok");
+            }
+            try (Cageforge runtime = Cageforge.fromToml(
+                    toml, null, new RuntimeContext(currentDirectory));
+                 SandboxProcess process = runtime.launch(longRunningArgv)) {
+                var blockedWrite = java.util.concurrent.CompletableFuture.runAsync(
+                        () -> {
+                            try {
+                                process.getStdin().write(new byte[16 * 1024 * 1024]);
+                            } catch (java.io.IOException | CageforgeException expected) {
+                                // Killing the boundary closes the pipe peer.
+                            }
+                        });
+                Thread.sleep(100);
+                if (blockedWrite.isDone()) {
+                    throw new CageforgeException("stdin write did not block as expected");
+                }
+                process.kill();
+                blockedWrite.get(15, TimeUnit.SECONDS);
+                System.out.println("write-kill=ok");
+            }
+            try (Cageforge runtime = Cageforge.fromToml(
+                    toml, null, new RuntimeContext(currentDirectory));
+                 SandboxProcess process = runtime.launch(longRunningArgv)) {
+                var wait = process.waitForAsync();
+                Thread.sleep(100);
+                process.close();
+                wait.get(15, TimeUnit.SECONDS);
+                System.out.println("close-kill=ok");
+            }
+            try (Cageforge runtime = Cageforge.fromToml(
+                    toml, null, new RuntimeContext(currentDirectory));
+                 SandboxProcess process = runtime.launch(longRunningArgv)) {
+                var wait = process.waitForAsync();
+                Thread.sleep(100);
+                if (!wait.cancel(true)) {
+                    throw new CageforgeException("wait future could not be cancelled");
+                }
+                if (process.tryWait() == null) {
+                    throw new CageforgeException("future cancellation did not terminate process");
+                }
+                System.out.println("async-cancel=ok");
+            }
+            String eofToml = toml + """
+
+                    [profiles.smoke.command.stdio]
+                    stdin = "pipe"
+                    stdout = "null"
+                    stderr = "null"
+                    """;
+            List<String> eofArgv = windows
+                    ? List.of(command.toString(), "/d", "/c", "more > nul")
+                    : List.of(Path.of("/bin/sh").toString(), "-c", "cat >/dev/null");
+            try (Cageforge runtime = Cageforge.fromToml(
+                    eofToml, null, new RuntimeContext(currentDirectory));
+                 SandboxProcess process = runtime.launch(eofArgv)) {
+                process.getStdin().write("eof".getBytes(StandardCharsets.UTF_8));
+                process.getStdin().close();
+                if (!Integer.valueOf(0).equals(process.waitForAsync().get(15, TimeUnit.SECONDS)
+                        .getExitCode())) {
+                    throw new CageforgeException("stdin EOF command failed");
+                }
+                System.out.println("stdin-eof=ok");
+            }
             String nonPipedToml = toml + """
 
                     [profiles.smoke.command.stdio]

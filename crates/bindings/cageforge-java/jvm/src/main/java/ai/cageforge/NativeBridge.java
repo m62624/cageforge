@@ -40,6 +40,8 @@ final class NativeBridge {
 
     static native int nativeWriteStdin(long process, byte[] data);
 
+    static native void nativeCloseStdin(long process);
+
     static native void nativeCloseRuntime(long runtime);
 
     static native void nativeCloseProcess(long process);
