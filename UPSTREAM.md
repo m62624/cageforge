@@ -69,11 +69,12 @@ repository. The external checkout is updated manually before review.
 ## Bundled third-party source
 
 The bundled Bubblewrap source is taken directly from the upstream project, not
-from the Codex repository:
+from the Codex repository. The v0.12.0 update includes the upstream safe path
+resolution implementation and is retained byte-for-byte in the vendor area.
 
 | Component | Repository | Tag | Commit | License |
 | --- | --- | --- | --- | --- |
-| Bubblewrap | <https://github.com/containers/bubblewrap> | `v0.11.2` | `1b80120ef26a28e065e67f89bfef873f13bdd317` | LGPL-2.0-or-later |
+| Bubblewrap | <https://github.com/containers/bubblewrap> | `v0.12.0` | `014a04330642e5c870418beb621532cb896e0002` | LGPL-2.1-or-later |
 
 The current Cageforge crates are candidates for future upstream review, not
 source imports. Their APIs and implementations were written independently in

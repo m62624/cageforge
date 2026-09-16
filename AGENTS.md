@@ -25,7 +25,7 @@ These rules are mandatory:
    Cageforge-authored Rust files use the SPDX-only header defined in that
    specification; do not add a personal or collective copyright line to them.
 4. Cageforge-authored code is Apache-2.0. Third-party code keeps its own
-   license: bundled bubblewrap is LGPL-2.0-or-later; do not relabel it as
+   license: bundled bubblewrap is LGPL-2.1-or-later; do not relabel it as
    Apache-2.0.
    `cageforge-bwrap` is the only crate that builds the bundled Bubblewrap
    source. `cageforge-linux` consumes a staged resource and must not compile

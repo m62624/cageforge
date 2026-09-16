@@ -13,9 +13,9 @@ includes copied or substantially adapted Codex files, the applicable
 copyright, license, and file-level provenance notices will be added for those
 exact files.
 
-The Linux distribution includes the original Bubblewrap `v0.11.2` source and
+The Linux distribution includes the original Bubblewrap `v0.12.0` source and
 may produce a bundled `bwrap` executable from it. Bubblewrap is licensed under
-the LGPL-2.0-or-later; its original source, copyright headers, `COPYING`, and
+the LGPL-2.1-or-later; its original source, copyright headers, `COPYING`, and
 provenance record are retained under
 `crates/cageforge-bwrap/vendor/bubblewrap/`. The full license text is also
 available at `licenses/bubblewrap-COPYING`.

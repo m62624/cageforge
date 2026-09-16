@@ -13,14 +13,19 @@ resource but does not compile third-party C source itself.
 
 The source is taken directly from the official Bubblewrap project at:
 
-- tag: `v0.11.2`;
-- commit: `1b80120ef26a28e065e67f89bfef873f13bdd317`;
-- license: LGPL-2.0-or-later.
+- tag: `v0.12.0`;
+- commit: `014a04330642e5c870418beb621532cb896e0002`;
+- license: LGPL-2.1-or-later.
 
-The source files, copyright headers, `COPYING`, `LICENSE`, README, and
+The source files, copyright headers, `COPYING`, `LICENSE`, `COPYING.LIB`, README, and
 provenance record remain together under
 `crates/cageforge-bwrap/vendor/bubblewrap/`. The Cageforge build wrapper is
 Apache-2.0, while the bundled Bubblewrap component keeps its own license.
+
+The source snapshot includes Bubblewrap's `safe_openat.c` and
+`chroot_realpath.c` helpers. The build must compile these files together with
+the existing Bubblewrap sources; omitting either helper is an incomplete and
+unsafe update.
 
 ## Build contract
 
@@ -78,6 +83,12 @@ explicit executable paths.
   resource path.
 - A system executable is never accepted merely because it exists; its help
   flags and namespace behavior are probed.
+- Bubblewrap setup resolves source and destination paths inside the selected
+  root using `openat2(RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS)` when available,
+  with the upstream fallback for older kernels. Mount destinations are opened
+  with no-follow semantics and mount setup rejects symlink targets.
+- Cageforge never passes Bubblewrap's `--not-a-security-boundary` option; all
+  setup failures remain fatal because the sandbox is an enforcement boundary.
 - The resource fallback cannot widen a policy: it only supplies the native
   process boundary used by the already-composed Cageforge request.
 - The binary is a release resource next to the application, not a file hidden

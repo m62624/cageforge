@@ -117,6 +117,27 @@ impl Mount {
             Self::Write => AccessMode::Write,
         }
     }
+
+    fn effective_bind_access(self) -> Option<AccessMode> {
+        match self {
+            Self::Read | Self::ReadOnly => Some(AccessMode::Read),
+            Self::Write => Some(AccessMode::Write),
+            Self::Deny => None,
+        }
+    }
+}
+
+fn is_redundant_bind(path: &Path, mount: Mount, mounts: &BTreeMap<PathBuf, Mount>) -> bool {
+    let Some(access) = mount.effective_bind_access() else {
+        return false;
+    };
+
+    mounts
+        .iter()
+        .filter(|(ancestor, _)| ancestor != &path && path.starts_with(ancestor))
+        .max_by_key(|(ancestor, _)| ancestor.components().count())
+        .and_then(|(_, ancestor_mount)| ancestor_mount.effective_bind_access())
+        == Some(access)
 }
 
 pub(crate) fn lower<'a>(
@@ -233,6 +254,14 @@ pub(crate) fn lower<'a>(
             .then_with(|| left.cmp(right))
     });
     for (path, mount) in &ordered_mounts {
+        // Bubblewrap 0.12 rejects mount destinations that are symlinks.  A
+        // parent bind with the same effective access already carries nested
+        // paths, including merged-/usr aliases such as `/bin -> /usr/bin`.
+        // Avoid issuing a redundant child mount so the alias remains visible
+        // without mounting over its symlink destination.
+        if is_redundant_bind(path, *mount, &mounts) {
+            continue;
+        }
         if mount.is_bind() {
             add_bind(&mut args, path, mount.access(), &mut preserved_files)?;
         } else {
@@ -724,11 +753,10 @@ fn add_bind(
     if canonical == path {
         add_bind_fd(args, path, path, access, preserved_files)
     } else {
-        // Bubblewrap must resolve a symlink destination such as `/bin` while
-        // constructing the namespace; its `--*-bind-fd` race check compares
-        // the source inode with the destination and therefore rejects that
-        // legitimate layout.  Keep the canonical source explicit here, as
-        // Codex does for the same runtime roots.
+        // The caller has already rejected writable symlink paths.  For a
+        // read-only alias that is not covered by an ancestor bind, use the
+        // canonical source explicitly; Bubblewrap validates the destination
+        // and will fail closed if the layout cannot be constructed safely.
         args.extend([
             match access {
                 AccessMode::Read => "--ro-bind".into(),
@@ -1018,4 +1046,52 @@ fn first_writable_symlink(path: &Path, writable_roots: &[PathBuf]) -> Option<Pat
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_nested_mount_with_same_read_access() {
+        let mounts = BTreeMap::from([
+            (PathBuf::from("/"), Mount::Read),
+            (PathBuf::from("/bin"), Mount::Read),
+        ]);
+
+        assert!(is_redundant_bind(Path::new("/bin"), Mount::Read, &mounts));
+    }
+
+    #[test]
+    fn keeps_nested_mount_when_access_is_narrowed_or_widened() {
+        let read_parent = BTreeMap::from([
+            (PathBuf::from("/"), Mount::Read),
+            (PathBuf::from("/workspace"), Mount::Write),
+        ]);
+        let write_parent = BTreeMap::from([
+            (PathBuf::from("/"), Mount::Write),
+            (PathBuf::from("/etc"), Mount::Read),
+        ]);
+
+        assert!(!is_redundant_bind(
+            Path::new("/workspace"),
+            Mount::Write,
+            &read_parent
+        ));
+        assert!(!is_redundant_bind(
+            Path::new("/etc"),
+            Mount::Read,
+            &write_parent
+        ));
+    }
+
+    #[test]
+    fn does_not_skip_denied_descendants() {
+        let mounts = BTreeMap::from([
+            (PathBuf::from("/"), Mount::Read),
+            (PathBuf::from("/etc"), Mount::Deny),
+        ]);
+
+        assert!(!is_redundant_bind(Path::new("/etc"), Mount::Deny, &mounts));
+    }
 }

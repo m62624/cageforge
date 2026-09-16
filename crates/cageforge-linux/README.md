@@ -123,7 +123,7 @@ compile Bubblewrap implicitly. An explicit resource directory remains
 authoritative in both modes.
 
 The embedded executable remains the unchanged upstream Bubblewrap component
-under LGPL-2.0-or-later; enabling this feature does not relicense it as
+under LGPL-2.1-or-later; enabling this feature does not relicense it as
 Apache-2.0. A distribution that ships the embedded mode must preserve the
 Bubblewrap license notice and corresponding machine-readable source. The
 `cageforge-bwrap` crate contains both in its published package.
