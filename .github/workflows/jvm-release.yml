@@ -1,0 +1,194 @@
+name: JVM release artifact
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Tested release tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: "JVM native resource (${{ matrix.resource }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - resource: linux-x86_64
+            arch: x86_64
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            feature: linux-bundled-bubblewrap
+            helper_package: cageforge-linux
+            helper_args: "--bin cageforge-linux-helper"
+            library: libcageforge_java.so
+            helper: cageforge-linux-helper
+          - resource: linux-aarch64
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            feature: linux-bundled-bubblewrap
+            helper_package: cageforge-linux
+            helper_args: "--bin cageforge-linux-helper"
+            library: libcageforge_java.so
+            helper: cageforge-linux-helper
+          - resource: macos-x86_64
+            arch: x86_64
+            runner: macos-26-intel
+            rust_target: x86_64-apple-darwin
+            feature: macos
+            helper_package: cageforge-macos
+            helper_args: "--bin cageforge-macos-helper"
+            library: libcageforge_java.dylib
+            helper: cageforge-macos-helper
+          - resource: macos-aarch64
+            arch: aarch64
+            runner: macos-26
+            rust_target: aarch64-apple-darwin
+            feature: macos
+            helper_package: cageforge-macos
+            helper_args: "--bin cageforge-macos-helper"
+            library: libcageforge_java.dylib
+            helper: cageforge-macos-helper
+          - resource: windows-x86_64
+            arch: x86_64
+            runner: windows-2025
+            rust_target: x86_64-pc-windows-msvc
+            feature: windows
+            helper_package: cageforge-windows
+            helper_args: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
+            library: cageforge_java.dll
+            helper: cageforge-windows-setup.exe
+          - resource: windows-aarch64
+            arch: aarch64
+            runner: windows-2025
+            rust_target: aarch64-pc-windows-msvc
+            feature: windows
+            helper_package: cageforge-windows
+            helper_args: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
+            library: cageforge_java.dll
+            helper: cageforge-windows-setup.exe
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux Bubblewrap build dependencies
+        if: startsWith(matrix.resource, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential pkg-config libcap-dev binutils
+      - name: Build the pinned Linux Bubblewrap resource
+        if: startsWith(matrix.resource, 'linux-')
+        run: |
+          set -euo pipefail
+          output_dir="crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}"
+          mkdir -p "$output_dir"
+          cargo run --locked --release -p cageforge-bwrap -- \
+            --output "$output_dir/bwrap"
+      - name: Build the JNI library and platform helpers
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p cageforge-java \
+            --target "${{ matrix.rust_target }}" \
+            --no-default-features --features "${{ matrix.feature }}"
+          cargo build --locked --release -p "${{ matrix.helper_package }}" \
+            --target "${{ matrix.rust_target }}" ${{ matrix.helper_args }}
+      - name: Stage the target resource directory
+        run: |
+          set -euo pipefail
+          source_dir="target/${{ matrix.rust_target }}/release"
+          output_dir="bundle/META-INF/native/${{ matrix.resource }}"
+          mkdir -p "$output_dir"
+          cp "$source_dir/${{ matrix.library }}" "$output_dir/"
+          case "${{ matrix.resource }}" in
+            linux-*|macos-*)
+              cp "$source_dir/${{ matrix.helper }}" "$output_dir/"
+              ;;
+            windows-*)
+              cp "$source_dir/cageforge-windows-setup.exe" "$output_dir/"
+              cp "$source_dir/cageforge-windows-command-runner.exe" "$output_dir/"
+              ;;
+          esac
+          if [[ "${{ matrix.resource }}" == linux-* ]]; then
+            cp "crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap" "$output_dir/"
+            cp "crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap.sha256" "$output_dir/"
+          fi
+      - name: Upload target resources
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-java-native-${{ matrix.resource }}
+          path: bundle
+          if-no-files-found: error
+
+  assemble:
+    name: Assemble JVM artifact
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Download all native target resources
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cageforge-java-native-*
+          path: crates/bindings/cageforge-java/jvm/build/native
+          merge-multiple: true
+      - name: Read the release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "cageforge-java") | .version')"
+          test -n "$version" && test "$version" != null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Verify and assemble the single JVM artifact
+        working-directory: crates/bindings/cageforge-java/jvm
+        run: |
+          gradle --no-daemon verifyMavenPublication \
+            -PnativeResourcesDir=build/native \
+            -PreleaseVersion="${{ steps.version.outputs.version }}"
+      - name: Upload the manually publishable JVM package
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-java-${{ steps.version.outputs.version }}
+          path: |
+            crates/bindings/cageforge-java/jvm/build/libs/cageforge-java-*.jar
+            crates/bindings/cageforge-java/jvm/build/publications/mavenJava
+          if-no-files-found: error
+      - name: Stage the Maven publication build
+        working-directory: crates/bindings/cageforge-java/jvm
+        run: |
+          set -euo pipefail
+          mkdir -p build/maven-publish
+          cp -a build/libs build/publications build/native build/maven-publish/
+      - name: Upload the Maven publication build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-java-maven-build-${{ steps.version.outputs.version }}
+          path: crates/bindings/cageforge-java/jvm/build/maven-publish
+          if-no-files-found: error

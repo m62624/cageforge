@@ -13,7 +13,7 @@ jq --exit-status '
       and .rust_version == $reference.rust_version
       and .readme != null)
   and ([.packages[] | select(.publish == []) | .name]
-       == ["cageforge-upstream-review"])
+       == ["cageforge-java", "cageforge-upstream-review"])
   and all(.packages[];
       all(.dependencies[];
           if (.source == null and (.name | startswith("cageforge-")))

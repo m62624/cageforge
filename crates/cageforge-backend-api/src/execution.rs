@@ -119,6 +119,26 @@ pub trait SandboxChild {
     /// Returns the piped standard error stream, if requested.
     fn stderr(&mut self) -> Option<&mut dyn Read>;
 
+    /// Takes ownership of the piped standard input stream, when supported.
+    ///
+    /// This is used by adapters that must perform blocking stream I/O without
+    /// holding the child lifecycle lock. The default keeps existing custom
+    /// backends source-compatible; such adapters expose no detachable stream
+    /// through that integration path.
+    fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
+        None
+    }
+
+    /// Takes ownership of the piped standard output stream, when supported.
+    fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>> {
+        None
+    }
+
+    /// Takes ownership of the piped standard error stream, when supported.
+    fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>> {
+        None
+    }
+
     /// The native lifecycle error type.
     type Error: std::error::Error + 'static;
 
@@ -179,6 +199,18 @@ where
 
     fn stderr(&mut self) -> Option<&mut dyn Read> {
         self.child.stderr()
+    }
+
+    fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
+        self.child.take_stdin()
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.child.take_stdout()
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.child.take_stderr()
     }
 
     fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {

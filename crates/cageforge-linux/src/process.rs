@@ -53,6 +53,21 @@ impl cageforge_backend_api::SandboxChild for LinuxChild {
         LinuxChild::stderr(self).map(|stream| stream as &mut dyn std::io::Read)
     }
 
+    fn take_stdin(&mut self) -> Option<Box<dyn std::io::Write + Send>> {
+        LinuxChild::take_stdin(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Write + Send>)
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        LinuxChild::take_stdout(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Read + Send>)
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        LinuxChild::take_stderr(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Read + Send>)
+    }
+
     fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {
         LinuxChild::try_wait(self)
     }
@@ -105,6 +120,21 @@ impl LinuxChild {
     /// Returns the child's standard error pipe, if one was requested.
     pub fn stderr(&mut self) -> Option<&mut ChildStderr> {
         self.child.as_mut().and_then(|child| child.stderr.as_mut())
+    }
+
+    /// Takes the child's standard-input pipe, if one was requested.
+    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.child.as_mut().and_then(|child| child.stdin.take())
+    }
+
+    /// Takes the child's standard-output pipe, if one was requested.
+    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.as_mut().and_then(|child| child.stdout.take())
+    }
+
+    /// Takes the child's standard-error pipe, if one was requested.
+    pub fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.child.as_mut().and_then(|child| child.stderr.take())
     }
 
     /// Checks whether the child has exited.

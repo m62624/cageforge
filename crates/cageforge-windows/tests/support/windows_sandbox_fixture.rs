@@ -775,7 +775,7 @@ fn direct_powershell_denied() -> Result<(), String> {
     let host = target.ip();
     let port = target.port();
     let script = format!(
-        "$result = Test-NetConnection -ComputerName '{host}' -Port {port} -InformationLevel Quiet -WarningAction SilentlyContinue; if ($result -eq $true) {{ exit 42 }} else {{ exit 0 }}"
+        "$client = New-Object System.Net.Sockets.TcpClient; $exitCode = 0; try {{ $async = $client.BeginConnect('{host}', {port}, $null, $null); if ($async.AsyncWaitHandle.WaitOne(1000)) {{ try {{ $client.EndConnect($async); $exitCode = 42 }} catch {{ }} }} }} catch {{ }} finally {{ $client.Close() }}; exit $exitCode"
     );
     let status = std::process::Command::new("powershell.exe")
         .args([

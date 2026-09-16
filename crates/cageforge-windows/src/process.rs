@@ -54,6 +54,21 @@ impl cageforge_backend_api::SandboxChild for WindowsChild {
         WindowsChild::stderr(self)
     }
 
+    fn take_stdin(&mut self) -> Option<Box<dyn std::io::Write + Send>> {
+        WindowsChild::take_stdin(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Write + Send>)
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        WindowsChild::take_stdout(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Read + Send>)
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        WindowsChild::take_stderr(self)
+            .map(|stream| Box::new(stream) as Box<dyn std::io::Read + Send>)
+    }
+
     fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {
         WindowsChild::try_wait(self)
     }
@@ -112,6 +127,21 @@ impl WindowsChild {
             .as_mut()
             .and_then(RunnerSession::stderr)
             .map(|output| output as &mut dyn Read)
+    }
+
+    /// Takes the command's standard-input transport when pipe mode was requested.
+    pub fn take_stdin(&mut self) -> Option<std::fs::File> {
+        self.session.as_mut().and_then(RunnerSession::take_stdin)
+    }
+
+    /// Takes the command's standard-output transport when pipe mode was requested.
+    pub fn take_stdout(&mut self) -> Option<std::fs::File> {
+        self.session.as_mut().and_then(RunnerSession::take_stdout)
+    }
+
+    /// Takes the command's standard-error transport when pipe mode was requested.
+    pub fn take_stderr(&mut self) -> Option<std::fs::File> {
+        self.session.as_mut().and_then(RunnerSession::take_stderr)
     }
 
     /// Closes piped standard input so the child observes end-of-file.

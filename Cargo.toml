@@ -14,6 +14,7 @@ members = [
     "crates/cageforge-policy-compose",
     "crates/cageforge",
     "crates/cageforge-cli",
+    "crates/bindings/cageforge-java",
     "tools/cageforge-upstream-review",
 ]
 
@@ -104,3 +105,4 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 zeroize = "1.8.2"
 pkg-config = "0.3.34"
+jni = "0.22.4"

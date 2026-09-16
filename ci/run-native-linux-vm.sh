@@ -4,28 +4,100 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: run-native-linux-vm.sh --image IMAGE --source-archive ARCHIVE" >&2
+    echo "Usage: run-native-linux-vm.sh --image IMAGE --source-archive ARCHIVE [--suite NAME] [--payload NAME=ARCHIVE]..." >&2
     exit 64
 }
 
 image=
 source_archive=
+suite=native
+payload_specs=()
+
 while (($# > 0)); do
     case "$1" in
         --image) (($# >= 2)) || usage; image=$2; shift 2 ;;
         --source-archive) (($# >= 2)) || usage; source_archive=$2; shift 2 ;;
+        --suite) (($# >= 2)) || usage; suite=$2; shift 2 ;;
+        --payload) (($# >= 2)) || usage; payload_specs+=("$2"); shift 2 ;;
         *) usage ;;
     esac
 done
 
 [[ -f "$image" ]] || { echo "image is missing: $image" >&2; exit 66; }
 [[ -f "$source_archive" ]] || { echo "source archive is missing: $source_archive" >&2; exit 66; }
+[[ "$suite" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || {
+    echo "invalid suite name: $suite" >&2
+    exit 64
+}
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+suite_dir="$script_dir/vm-suites/$suite"
+[[ -d "$suite_dir" ]] || { echo "unknown VM suite: $suite" >&2; exit 64; }
+for required_file in packages bootstrap.sh prepare.sh run.sh; do
+    [[ -f "$suite_dir/$required_file" ]] || {
+        echo "VM suite is missing $required_file: $suite" >&2
+        exit 64
+    }
+done
+
+payload_names=()
+payload_archives=()
+payload_present() {
+    local candidate=$1
+    local name
+    for name in "${payload_names[@]}"; do
+        [[ "$name" == "$candidate" ]] && return 0
+    done
+    return 1
+}
+
+for spec in "${payload_specs[@]}"; do
+    [[ "$spec" == *=* ]] || {
+        echo "payload must have NAME=ARCHIVE form: $spec" >&2
+        exit 64
+    }
+    payload_name=${spec%%=*}
+    payload_archive=${spec#*=}
+    [[ "$payload_name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || {
+        echo "invalid payload name: $payload_name" >&2
+        exit 64
+    }
+    payload_present "$payload_name" && {
+        echo "duplicate payload name: $payload_name" >&2
+        exit 64
+    }
+    [[ -f "$payload_archive" ]] || {
+        echo "payload archive is missing: $payload_archive" >&2
+        exit 66
+    }
+    payload_names+=("$payload_name")
+    payload_archives+=("$payload_archive")
+done
+
+if [[ -f "$suite_dir/required-payloads" ]]; then
+    while IFS= read -r required_payload || [[ -n "$required_payload" ]]; do
+        [[ -z "$required_payload" || "$required_payload" == \#* ]] && continue
+        payload_present "$required_payload" || {
+            echo "suite $suite requires payload: $required_payload" >&2
+            exit 64
+        }
+    done < "$suite_dir/required-payloads"
+fi
 
 for command in genisoimage qemu-img qemu-system-x86_64 ssh ssh-keygen; do
     command -v "$command" >/dev/null || { echo "required command is missing: $command" >&2; exit 69; }
 done
-
 [[ -c /dev/kvm ]] || { echo "CAGEFORGE_KVM_UNAVAILABLE: /dev/kvm is not available" >&2; exit 86; }
+
+suite_packages_yaml=
+while IFS= read -r package || [[ -n "$package" ]]; do
+    [[ -z "$package" || "$package" == \#* ]] && continue
+    [[ "$package" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || {
+        echo "invalid package in suite $suite: $package" >&2
+        exit 64
+    }
+    suite_packages_yaml+="  - $package"$'\n'
+done < "$suite_dir/packages"
 
 work_dir=$(mktemp -d "${RUNNER_TEMP:-/tmp}/cageforge-native-vm.XXXXXX")
 qemu_pid=
@@ -34,8 +106,11 @@ ssh_key="$work_dir/guest_ed25519"
 overlay="$work_dir/guest-overlay.qcow2"
 seed_iso="$work_dir/seed.iso"
 source_iso="$work_dir/source.iso"
+suite_iso="$work_dir/suite.iso"
 bootstrap_log="$work_dir/bootstrap-qemu.log"
 test_log="$work_dir/test-qemu.log"
+payload_iso_paths=()
+payload_env_file="$work_dir/payloads.env"
 
 cleanup() {
     if [[ -n "${qemu_pid:-}" ]] && kill -0 "$qemu_pid" 2>/dev/null; then
@@ -48,6 +123,15 @@ trap cleanup EXIT
 
 ssh-keygen -q -t ed25519 -N '' -f "$ssh_key"
 ssh_public_key_value=$(<"$ssh_key.pub")
+{
+    printf "export CAGEFORGE_PAYLOAD_NAMES='%s'\n" "${payload_names[*]}"
+    for payload_name in "${payload_names[@]}"; do
+        payload_key=${payload_name//-/_}
+        payload_key=${payload_key^^}
+        printf "export CAGEFORGE_PAYLOAD_%s_MOUNT='/mnt/cageforge-payload-%s'\n" \
+            "$payload_key" "$payload_name"
+    done
+} > "$payload_env_file"
 
 cat >"$work_dir/meta-data" <<EOF
 instance-id: cageforge-native-vm-${GITHUB_RUN_ID:-local}
@@ -59,15 +143,11 @@ cat >"$work_dir/user-data" <<EOF
 package_update: true
 package_upgrade: false
 packages:
-  - build-essential
   - ca-certificates
   - curl
-  - git
   - bubblewrap
-  - libcap-dev
   - openssh-server
-  - pkg-config
-ssh_pwauth: false
+${suite_packages_yaml}ssh_pwauth: false
 disable_root: true
 ssh_authorized_keys:
   - ${ssh_public_key_value}
@@ -112,11 +192,7 @@ write_files:
         shift 3
         echo "[cageforge] bootstrap: probing \$namespace namespace (\$flag)"
         if ! timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
-          --die-with-parent \
-          --unshare-user \
-          "\$@" \
-          --ro-bind / / \
-          /bin/true; then
+          --die-with-parent --unshare-user "\$@" --ro-bind / / /bin/true; then
           echo "[cageforge] bootstrap: \$namespace namespace probe failed (\$flag): \$guidance" >&2
           return 1
         fi
@@ -124,44 +200,34 @@ write_files:
       probe_bubblewrap_namespace user --unshare-user \
         'enable unprivileged user namespaces and permit them in the guest security policy'
       probe_bubblewrap_namespace PID --unshare-pid \
-        'the guest kernel must permit CLONE_NEWPID' \
-        --unshare-pid --as-pid-1
+        'the guest kernel must permit CLONE_NEWPID' --unshare-pid --as-pid-1
       probe_bubblewrap_namespace IPC --unshare-ipc \
-        'the guest kernel must permit CLONE_NEWIPC' \
-        --unshare-ipc
+        'the guest kernel must permit CLONE_NEWIPC' --unshare-ipc
       probe_bubblewrap_namespace network --unshare-net \
-        'the guest kernel must permit CLONE_NEWNET' \
-        --unshare-net
+        'the guest kernel must permit CLONE_NEWNET' --unshare-net
       echo '[cageforge] bootstrap: all Bubblewrap namespace probes passed'
       echo '[cageforge] bootstrap: probing nested user namespace isolation (--disable-userns)'
       if ! timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
-        --die-with-parent \
-        --unshare-user \
-        --disable-userns \
-        --ro-bind / / \
-        /bin/true; then
+        --die-with-parent --unshare-user --disable-userns --ro-bind / / /bin/true; then
         echo '[cageforge] bootstrap: nested user namespace isolation failed (--disable-userns): the guest must permit namespaced user.max_user_namespaces lockdown' >&2
         exit 1
       fi
       echo '[cageforge] bootstrap: nested user namespace isolation passed'
       echo '[cageforge] bootstrap: probing root capability removal (--cap-drop ALL)'
       if ! timeout --kill-after=5s 15s bwrap \
-        --die-with-parent \
-        --unshare-user \
-        --unshare-pid \
-        --as-pid-1 \
-        --cap-drop ALL \
-        --ro-bind / / \
-        --proc /proc \
-        /bin/sh -c \
+        --die-with-parent --unshare-user --unshare-pid --as-pid-1 --cap-drop ALL \
+        --ro-bind / / --proc /proc /bin/sh -c \
         'awk '\''/^Cap(Inh|Prm|Eff|Bnd|Amb):/ { found++; if (\$2 != "0000000000000000") bad=1 } END { exit (found == 5 && bad == 0 ? 0 : 1) }'\'' /proc/self/status'; then
         echo '[cageforge] bootstrap: root capability removal failed (--cap-drop ALL): the guest must permit capability reduction inside user namespaces' >&2
         exit 1
       fi
       echo '[cageforge] bootstrap: root capability removal passed'
-      echo '[cageforge] bootstrap: installing Rust toolchain'
-      runuser -u ubuntu -- env HOME=/home/ubuntu bash -c "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
-      runuser -u ubuntu -- env HOME=/home/ubuntu PATH=/home/ubuntu/.cargo/bin:\$PATH rustup component add clippy rustfmt
+      suite_mount=/mnt/cageforge-vm-suite
+      mkdir -p "\$suite_mount"
+      mount -L CAGEFORGE_VM_SUITE -o ro "\$suite_mount"
+      source "\$suite_mount/payloads.env"
+      bash "\$suite_mount/suite/bootstrap.sh"
+      umount "\$suite_mount"
       echo '[cageforge] bootstrap: completed'
       touch /var/lib/cageforge-bootstrap-complete
 runcmd:
@@ -170,10 +236,25 @@ EOF
 
 qemu-img create -q -f qcow2 -F qcow2 -o size=16G -b "$image" "$overlay"
 genisoimage -quiet -output "$seed_iso" -volid CIDATA -joliet -rock "$work_dir/user-data" "$work_dir/meta-data"
-genisoimage -quiet -output "$source_iso" -volid CAGEFORGE_SOURCE -joliet -rock -graft-points "source_archive=$source_archive"
+genisoimage -quiet -output "$source_iso" -volid CAGEFORGE_SOURCE -joliet -rock \
+    -graft-points "source_archive=$source_archive"
+genisoimage -quiet -output "$suite_iso" -volid CAGEFORGE_VM_SUITE -joliet -rock \
+    -graft-points "suite=$suite_dir" "payloads.env=$payload_env_file"
+for index in "${!payload_names[@]}"; do
+    payload_name=${payload_names[$index]}
+    payload_key=${payload_name//-/_}
+    payload_key=${payload_key^^}
+    payload_iso="$work_dir/payload-${payload_name}.iso"
+    genisoimage -quiet -output "$payload_iso" \
+        -volid "CAGEFORGE_PAYLOAD_${payload_key}" -joliet -rock \
+        -graft-points "payload=${payload_archives[$index]}"
+    payload_iso_paths+=("$payload_iso")
+done
 
 ssh_guest() {
-    ssh -q -i "$ssh_key" -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "$@"
+    ssh -q -i "$ssh_key" -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=2 \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        ubuntu@127.0.0.1 "$@"
 }
 
 start_guest() {
@@ -182,28 +263,25 @@ start_guest() {
     local attach_source=$3
     local stderr_log="${log_file}.stderr"
     local network_spec="user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22"
-    local source_args=()
+    local drive_args=("-drive" "if=ide,media=cdrom,readonly=on,format=raw,file=${suite_iso}")
     : >"$log_file"
     : >"$stderr_log"
     if [[ "$network_mode" == restricted ]]; then
         network_spec="user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:${ssh_port}-:22"
     fi
     if [[ "$attach_source" == true ]]; then
-        source_args=("-drive" "if=ide,media=cdrom,readonly=on,format=raw,file=${source_iso}")
+        drive_args+=("-drive" "if=ide,media=cdrom,readonly=on,format=raw,file=${source_iso}")
     fi
+    for payload_iso in "${payload_iso_paths[@]}"; do
+        drive_args+=("-drive" "if=ide,media=cdrom,readonly=on,format=raw,file=${payload_iso}")
+    done
     local qemu_args=(
-        -machine q35,accel=kvm
-        -cpu host
-        -no-reboot
-        -smp 2
-        -m 4096
+        -machine q35,accel=kvm -cpu host -no-reboot -smp 2 -m 4096
         -drive "if=virtio,format=qcow2,file=${overlay}"
         -drive "if=ide,media=cdrom,readonly=on,format=raw,file=${seed_iso}"
-        "${source_args[@]}"
-        -netdev "$network_spec"
-        -device virtio-net-pci,netdev=net0
-        -display none
-        -serial "file:${log_file}"
+        "${drive_args[@]}"
+        -netdev "$network_spec" -device virtio-net-pci,netdev=net0
+        -display none -serial "file:${log_file}"
     )
     qemu-system-x86_64 "${qemu_args[@]}" >/dev/null 2>"$stderr_log" &
     qemu_pid=$!
@@ -233,9 +311,9 @@ print_guest_logs() {
 }
 
 print_guest_bootstrap_diagnostics() {
-    echo "--- guest bootstrap log ---" >&2
+    echo '--- guest bootstrap log ---' >&2
     ssh_guest 'sudo tail -n 120 /var/log/cageforge-bootstrap.log || true' >&2 || true
-    echo "--- guest cloud-init status ---" >&2
+    echo '--- guest cloud-init status ---' >&2
     ssh_guest 'sudo cloud-init status --long || true
 sudo systemctl show cloud-final.service --property=ActiveState,SubState,ExecMainStatus --no-pager || true
 sudo journalctl -u cloud-final.service -n 80 --no-pager || true
@@ -246,32 +324,28 @@ sudo dpkg --audit || true' >&2 || true
 wait_for_ssh() {
     local log_file=$1
     for _ in {1..120}; do
-        if ssh_guest true >/dev/null 2>&1; then
-            return
-        fi
+        if ssh_guest true >/dev/null 2>&1; then return; fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             print_guest_logs "$log_file"
-            echo "guest stopped before SSH became available" >&2
+            echo 'guest stopped before SSH became available' >&2
             exit 70
         fi
         sleep 2
     done
     print_guest_logs "$log_file"
-    echo "guest SSH readiness timed out" >&2
+    echo 'guest SSH readiness timed out' >&2
     exit 70
 }
 
 wait_for_bootstrap() {
     local log_file=$1
-    echo "guest bootstrap log:" >&2
+    echo 'guest bootstrap log:' >&2
     ssh_guest 'sudo test -f /var/log/cageforge-bootstrap.log && sudo tail -n 40 /var/log/cageforge-bootstrap.log' >&2 || true
     for attempt in {1..180}; do
-        if ssh_guest 'sudo test -f /var/lib/cageforge-bootstrap-complete' >/dev/null 2>&1; then
-            return
-        fi
+        if ssh_guest 'sudo test -f /var/lib/cageforge-bootstrap-complete' >/dev/null 2>&1; then return; fi
         if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
             print_guest_bootstrap_diagnostics
-            echo "guest bootstrap failed" >&2
+            echo 'guest bootstrap failed' >&2
             exit 70
         fi
         if (( attempt % 5 == 0 )); then
@@ -281,28 +355,34 @@ wait_for_bootstrap() {
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             print_guest_logs "$log_file"
-            echo "guest stopped during trusted bootstrap" >&2
+            echo 'guest stopped during trusted bootstrap' >&2
             exit 70
         fi
         sleep 2
     done
     print_guest_bootstrap_diagnostics
-    echo "guest bootstrap timed out" >&2
+    echo 'guest bootstrap timed out' >&2
     exit 70
 }
 
-echo 'Starting trusted guest bootstrap without PR source attached.'
+echo "Starting guest bootstrap for suite '$suite'."
 start_guest unrestricted "$bootstrap_log" false
 wait_for_ssh "$bootstrap_log"
 wait_for_bootstrap "$bootstrap_log"
 stop_guest
 
-echo 'Fetching dependencies inside the guest before network isolation.'
+echo "Preparing dependencies for suite '$suite' before network isolation."
 start_guest unrestricted "$bootstrap_log" true
 wait_for_ssh "$bootstrap_log"
-ssh_guest 'bash -s' <<'EOF'
+ssh_guest env \
+    CAGEFORGE_VM_SUITE=/mnt/cageforge-vm-suite/suite \
+    CAGEFORGE_PAYLOAD_ENV=/mnt/cageforge-vm-suite/payloads.env \
+    'bash -s' <<'EOF'
 set -euo pipefail
-export PATH=/home/ubuntu/.cargo/bin:$PATH
+suite_mount=/mnt/cageforge-vm-suite
+sudo mkdir -p "$suite_mount"
+sudo mount -L CAGEFORGE_VM_SUITE -o ro "$suite_mount"
+source "$CAGEFORGE_PAYLOAD_ENV"
 source_mount=/mnt/cageforge-source
 source_dir=/home/ubuntu/cageforge-source
 sudo mkdir -p "$source_mount"
@@ -311,68 +391,57 @@ rm -rf "$source_dir"
 mkdir -p "$source_dir"
 tar --extract --file="$source_mount/source_archive" --directory="$source_dir" --no-same-owner
 root_dir=$(find "$source_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)
+if [[ -z "$root_dir" && -f "$source_dir/Cargo.toml" ]]; then
+    root_dir="$source_dir"
+fi
 [[ -n "$root_dir" ]]
-# Cargo discovers `.cargo/config.toml` from its invocation directory, not from
-# `--manifest-path`. Fetch from a trusted empty directory so pull-request
-# configuration cannot install a compiler wrapper or credential process during
-# the only phase in which the guest has unrestricted outbound networking.
-fetch_dir=$(mktemp -d /tmp/cageforge-cargo-fetch.XXXXXX)
-trap 'rm -rf "$fetch_dir"' EXIT
-cd "$fetch_dir"
-unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
-unset CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER
-cargo fetch --locked --manifest-path "$root_dir/Cargo.toml"
+export CAGEFORGE_SOURCE_ROOT="$root_dir"
+bash "$CAGEFORGE_VM_SUITE/prepare.sh"
 printf '%s\n' "$root_dir" | sudo tee /var/lib/cageforge-source-root >/dev/null
 sudo umount "$source_mount"
+sudo umount "$suite_mount"
 EOF
 stop_guest
 
-echo 'Running native tests inside the isolated guest.'
+echo "Running suite '$suite' inside the isolated guest."
 start_guest restricted "$test_log" true
 wait_for_ssh "$test_log"
 set +e
-ssh_guest 'bash -s' <<'EOF'
+ssh_guest env \
+    CAGEFORGE_VM_SUITE=/mnt/cageforge-vm-suite/suite \
+    CAGEFORGE_PAYLOAD_ENV=/mnt/cageforge-vm-suite/payloads.env \
+    'bash -s' <<'EOF'
 set -euo pipefail
-export PATH=/home/ubuntu/.cargo/bin:$PATH
-export RUST_BACKTRACE=1
+suite_mount=/mnt/cageforge-vm-suite
+sudo mkdir -p "$suite_mount"
+sudo mount -L CAGEFORGE_VM_SUITE -o ro "$suite_mount"
+source "$CAGEFORGE_PAYLOAD_ENV"
 source_mount=/mnt/cageforge-source
 sudo mkdir -p "$source_mount"
 sudo mount -L CAGEFORGE_SOURCE -o ro "$source_mount"
 root_dir=$(sudo cat /var/lib/cageforge-source-root)
-cd "$root_dir"
-cargo fmt --all -- --check
-cargo clippy -p cageforge-bwrap --all-targets --locked -- -D warnings
+export CAGEFORGE_SOURCE_ROOT="$root_dir"
 
-echo 'Running the unified facade Clippy with the Linux feature.'
-cargo clippy -p cageforge --no-default-features --features linux --all-targets --locked -- -D warnings
+payload_mounts=()
+for payload_name in $CAGEFORGE_PAYLOAD_NAMES; do
+    payload_key=${payload_name//-/_}
+    payload_key=${payload_key^^}
+    payload_mount="/mnt/cageforge-payload-$payload_name"
+    sudo mkdir -p "$payload_mount"
+    sudo mount -L "CAGEFORGE_PAYLOAD_${payload_key}" -o ro "$payload_mount"
+    payload_mounts+=("$payload_mount")
+done
 
-echo 'Running cageforge-linux Clippy without optional features.'
-cargo clippy -p cageforge-linux --no-default-features --all-targets --locked -- -D warnings
-echo 'Running cageforge-linux tests without optional features.'
-cargo test -p cageforge-linux --no-default-features --locked
+cleanup_mounts() {
+    for payload_mount in "${payload_mounts[@]}"; do
+        sudo umount "$payload_mount" 2>/dev/null || true
+    done
+    sudo umount "$source_mount" 2>/dev/null || true
+    sudo umount "$suite_mount" 2>/dev/null || true
+}
+trap cleanup_mounts EXIT
 
-echo 'Running cageforge-linux Clippy with bundled-bubblewrap.'
-cargo clippy -p cageforge-linux --features bundled-bubblewrap --all-targets --locked -- -D warnings
-echo 'Running cageforge-linux tests with bundled-bubblewrap.'
-cargo test -p cageforge-linux --features bundled-bubblewrap --locked
-
-echo 'Running cageforge-linux Clippy with all features.'
-cargo clippy -p cageforge-linux --all-features --all-targets --locked -- -D warnings
-echo 'Running cageforge-linux tests with all features.'
-cargo test -p cageforge-linux --all-features --locked
-
-echo 'Running the unified facade tests with the Linux feature.'
-cargo test -p cageforge --no-default-features --features linux --locked
-
-echo 'Running the CLI checks with the Linux feature.'
-cargo clippy -p cageforge-cli --no-default-features --features linux --all-targets --locked -- -D warnings
-cargo test -p cageforge-cli --no-default-features --features linux --locked
-cargo doc -p cageforge-cli --no-default-features --features linux --no-deps --locked
-
-echo 'Running the CLI checks with the bundled Bubblewrap feature.'
-cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets --locked -- -D warnings
-cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --locked
-cargo doc -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --no-deps --locked
+bash "$CAGEFORGE_VM_SUITE/run.sh"
 EOF
 result=$?
 set -e
