@@ -5,6 +5,8 @@
 
 # Cageforge Java binding
 
+JVM binding for the [`cageforge`](https://crates.io/crates/cageforge) Rust crate.
+
 The binding provides the Cageforge API to Java and Kotlin/JVM desktop
 applications on Linux, macOS, and Windows. Detailed sandbox policy remains in
 Cageforge TOML configuration; the JVM layer provides the API for loading a
