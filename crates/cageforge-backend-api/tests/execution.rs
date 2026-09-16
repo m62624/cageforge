@@ -31,7 +31,7 @@ struct Backend {
 struct Child {
     state: Arc<State>,
     id: u32,
-    input: Vec<u8>,
+    input: Cursor<Vec<u8>>,
     output: Cursor<Vec<u8>>,
     error: Cursor<Vec<u8>>,
     finished: bool,
@@ -89,7 +89,7 @@ impl Sandbox for Backend {
         Ok(Child {
             state: Arc::clone(&self.state),
             id,
-            input: Vec::new(),
+            input: Cursor::new(Vec::new()),
             output: Cursor::new(command.program().to_string_lossy().as_bytes().to_vec()),
             error: Cursor::new(b"fixture stderr".to_vec()),
             finished: false,
@@ -114,6 +114,27 @@ impl SandboxChild for Child {
 
     fn stderr(&mut self) -> Option<&mut dyn Read> {
         Some(&mut self.error)
+    }
+
+    fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
+        Some(Box::new(std::mem::replace(
+            &mut self.input,
+            Cursor::new(Vec::new()),
+        )))
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>> {
+        Some(Box::new(std::mem::replace(
+            &mut self.output,
+            Cursor::new(Vec::new()),
+        )))
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>> {
+        Some(Box::new(std::mem::replace(
+            &mut self.error,
+            Cursor::new(Vec::new()),
+        )))
     }
 
     fn try_wait(&mut self) -> Result<Option<ExitStatus>, Self::Error> {
@@ -211,7 +232,7 @@ fn dynamic_spawn_preserves_native_error_type() {
 }
 
 #[test]
-fn dynamic_child_preserves_streams_status_and_native_drop() {
+fn dynamic_child_preserves_detachable_streams_status_and_native_drop() {
     let (command, effective, context) = inputs("selected-program");
     let request = BackendRequest::new(&command, &effective);
     let backend = backend(request);
@@ -222,21 +243,21 @@ fn dynamic_child_preserves_streams_status_and_native_drop() {
     assert_eq!(child.id(), 1);
     assert_eq!(child.try_wait().expect("poll"), None);
     child
-        .stdin()
-        .expect("stdin")
+        .take_stdin()
+        .expect("detachable stdin")
         .write_all(b"input")
         .expect("write");
     let mut output = String::new();
     child
-        .stdout()
-        .expect("stdout")
+        .take_stdout()
+        .expect("detachable stdout")
         .read_to_string(&mut output)
         .expect("read");
     assert_eq!(output, "selected-program");
     output.clear();
     child
-        .stderr()
-        .expect("stderr")
+        .take_stderr()
+        .expect("detachable stderr")
         .read_to_string(&mut output)
         .expect("read");
     assert_eq!(output, "fixture stderr");
