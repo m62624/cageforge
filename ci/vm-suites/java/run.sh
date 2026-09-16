@@ -15,16 +15,21 @@ java_output=$(JAVA_OPTS="-Dcageforge.native.cache=$java_cache" \
     "$java_dir/cageforge-java-consumer-smoke/bin/cageforge-java-consumer-smoke")
 printf '%s\n' "$java_output"
 
-grep -F 'native-target=linux-x86_64' <<<"$java_output"
-grep -F 'toml-validation=ok' <<<"$java_output"
-grep -F 'typed-errors=ok' <<<"$java_output"
-grep -F 'concurrent-instances=ok' <<<"$java_output"
-grep -F 'consumer-smoke=ok' <<<"$java_output"
-grep -F 'closed-handles=ok' <<<"$java_output"
-grep -F 'wait-kill=ok' <<<"$java_output"
-grep -F 'stream-kill=ok' <<<"$java_output"
-grep -F 'write-kill=ok' <<<"$java_output"
-grep -F 'close-kill=ok' <<<"$java_output"
-grep -F 'async-cancel=ok' <<<"$java_output"
-grep -F 'stdin-eof=ok' <<<"$java_output"
-grep -F 'stdio-routing=ok' <<<"$java_output"
+expected_markers=(
+    'native-target=linux-x86_64'
+    'toml-validation=ok'
+    'typed-errors=ok'
+    'concurrent-instances=ok'
+    'consumer-smoke=ok'
+    'closed-handles=ok'
+    'wait-kill=ok'
+    'stream-kill=ok'
+    'write-kill=ok'
+    'close-kill=ok'
+    'async-cancel=ok'
+    'stdin-eof=ok'
+    'stdio-routing=ok'
+)
+for marker in "${expected_markers[@]}"; do
+    grep -F "$marker" <<<"$java_output"
+done
