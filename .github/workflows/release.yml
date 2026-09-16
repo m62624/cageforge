@@ -172,7 +172,7 @@ jobs:
           auth="$(printf '%s:%s' "$MAVEN_USERNAME" "$MAVEN_PASSWORD" | base64 -w0)"
           curl --fail-with-body --silent --show-error --request POST \
             --header "Authorization: Bearer $auth" \
-            "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/$MAVEN_CENTRAL_NAMESPACE"
+            "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/$MAVEN_CENTRAL_NAMESPACE?publishing_type=automatic"
 
   release-notes:
     name: Create draft GitHub release
