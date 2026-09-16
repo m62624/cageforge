@@ -50,6 +50,17 @@ fn optional_profile(env: &mut Env<'_>, value: JString<'_>) -> Result<Option<Stri
     java_string(env, value, "profile name").map(Some)
 }
 
+fn optional_path(
+    env: &mut Env<'_>,
+    value: JString<'_>,
+    name: &str,
+) -> Result<Option<PathBuf>, BindingError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    path(java_string(env, value, name)?, name).map(Some)
+}
+
 fn path(value: String, name: &str) -> Result<PathBuf, BindingError> {
     let path = PathBuf::from(value);
     if !path.is_absolute() {
@@ -120,11 +131,16 @@ fn platform_minimal_root(current_directory: &Path) -> PathBuf {
 fn runtime_context(
     current_directory: &Path,
     workspace_roots: &[PathBuf],
+    minimal_path: Option<&Path>,
 ) -> Result<cageforge::PathResolutionContext, String> {
     let mut context = cageforge::PathResolutionContext::new()
         .with_root(platform_root(current_directory))
         .map_err(|error| error.to_string())?
-        .with_minimal_path(platform_minimal_root(current_directory))
+        .with_minimal_path(
+            minimal_path
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| platform_minimal_root(current_directory)),
+        )
         .map_err(|error| error.to_string())?
         .with_current_directory(current_directory.to_path_buf())
         .map_err(|error| error.to_string())?;
@@ -211,13 +227,22 @@ fn runtime_from_toml(
     profile_name: Option<String>,
     current_directory: String,
     native_directory: String,
-) -> Result<jlong, String> {
+    minimal_directory: Option<String>,
+) -> Result<jlong, BindingError> {
     let current_directory = path(current_directory, "current directory")?;
     let native_directory = path(native_directory, "native resource directory")?;
-    let config = config_from_toml(&toml)?;
-    let profile = resolve_profile(&config, profile_name.as_deref())?;
-    let (context, effective) = runtime_inputs(&profile, &current_directory)?;
-    let backend = native_backend(&native_directory, profile.network_gateway().clone())?;
+    let minimal_directory = minimal_directory
+        .map(|value| path(value, "minimal directory"))
+        .transpose()?;
+    let config = config_from_toml(&toml)
+        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let profile = resolve_profile(&config, profile_name.as_deref())
+        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let (context, effective) =
+        runtime_inputs(&profile, &current_directory, minimal_directory.as_deref())
+            .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let backend = native_backend(&native_directory, profile.network_gateway().clone())
+        .map_err(|error| BindingError::new(BindingErrorKind::Initialization, error))?;
     let state = RuntimeState {
         backend,
         context,
@@ -245,6 +270,7 @@ fn resolve_profile(
 fn runtime_inputs(
     profile: &cageforge::ResolvedProfile,
     current_directory: &Path,
+    minimal_path: Option<&Path>,
 ) -> Result<
     (
         cageforge::PathResolutionContext,
@@ -253,7 +279,7 @@ fn runtime_inputs(
     String,
 > {
     let workspace_roots = resolve_workspace_roots(current_directory, profile.workspace_roots())?;
-    let context = runtime_context(current_directory, &workspace_roots)?;
+    let context = runtime_context(current_directory, &workspace_roots, minimal_path)?;
     let environment = profile
         .command()
         .map(|command| command.environment().clone())
@@ -310,6 +336,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCheckToml<'caller>(
     toml: JString<'caller>,
     profile: JString<'caller>,
     current_directory: JString<'caller>,
+    minimal_directory: JString<'caller>,
 ) {
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Configuration, |env| {
         let config = config_from_toml(&java_string(env, toml, "TOML")?)?;
@@ -318,7 +345,8 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCheckToml<'caller>(
             java_string(env, current_directory, "current directory")?,
             "current directory",
         )?;
-        let _ = runtime_inputs(&profile, &current_directory)?;
+        let minimal_directory = optional_path(env, minimal_directory, "minimal directory")?;
+        let _ = runtime_inputs(&profile, &current_directory, minimal_directory.as_deref())?;
         Ok(())
     });
 }
@@ -400,6 +428,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
     profile: JString<'caller>,
     current_directory: JString<'caller>,
     native_directory: JString<'caller>,
+    minimal_directory: JString<'caller>,
 ) -> jlong {
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Initialization, |env| {
         runtime_from_toml(
@@ -407,8 +436,12 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
             optional_profile(env, profile)?,
             java_string(env, current_directory, "current directory")?,
             java_string(env, native_directory, "native resource directory")?,
+            if minimal_directory.is_null() {
+                None
+            } else {
+                Some(java_string(env, minimal_directory, "minimal directory")?)
+            },
         )
-        .map_err(BindingError::from)
     })
 }
 

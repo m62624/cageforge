@@ -45,6 +45,13 @@ pub(crate) struct BindingError {
 }
 
 impl BindingError {
+    pub(crate) fn new(kind: BindingErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn with_default_kind(mut self, kind: BindingErrorKind) -> Self {
         if matches!(self.kind, BindingErrorKind::Internal) {
             self.kind = kind;

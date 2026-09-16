@@ -9,14 +9,16 @@ final class NativeBridge {
             String toml,
             String profile,
             String currentDirectory,
-            String nativeDirectory);
+            String nativeDirectory,
+            String minimalDirectory);
 
     static native String[] nativeProfileNames(String toml);
 
     static native void nativeCheckToml(
             String toml,
             String profile,
-            String currentDirectory);
+            String currentDirectory,
+            String minimalDirectory);
 
     static native long nativeLaunch(long runtime, String[] argv);
 

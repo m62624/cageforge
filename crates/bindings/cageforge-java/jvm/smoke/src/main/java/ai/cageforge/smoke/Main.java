@@ -10,6 +10,7 @@ import ai.cageforge.SandboxProcess;
 import ai.cageforge.WindowsSetup;
 import ai.cageforge.WindowsSetupState;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +20,10 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) throws Exception {
-        Path currentDirectory = Path.of(System.getProperty("user.dir"));
+        Path currentDirectory = Files.createTempDirectory("cageforge-java-smoke-")
+                .toAbsolutePath().normalize();
+        Path minimalPath = Files.createDirectory(currentDirectory.resolve(".cageforge-test-runtime"));
+        RuntimeContext context = new RuntimeContext(currentDirectory, minimalPath);
         boolean windows = WindowsSetup.isSupported();
         Path command = windows
                 ? Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe")
@@ -61,24 +65,25 @@ public final class Main {
         } catch (CageforgeConfigurationException expected) {
             System.out.println("typed-errors=ok");
         }
-        Cageforge.checkToml(toml, "smoke", new RuntimeContext(currentDirectory));
+        Cageforge.checkToml(toml, "smoke", context);
         System.out.println("toml-validation=ok");
         System.out.println("native-target=" + Cageforge.nativeTarget());
-        if (windows) {
-            WindowsSetup.install();
-            if (WindowsSetup.status() != WindowsSetupState.READY) {
-                throw new CageforgeException("Windows setup did not become ready");
-            }
-            WindowsSetup.verify();
-        }
+        boolean cleanupWindowsSetup = false;
         try {
+            if (windows) {
+                cleanupWindowsSetup = WindowsSetup.status() != WindowsSetupState.READY;
+                WindowsSetup.install();
+                if (WindowsSetup.status() != WindowsSetupState.READY) {
+                    throw new CageforgeException("Windows setup did not become ready");
+                }
+                WindowsSetup.verify();
+            }
+            System.out.println("stage=concurrent-instances");
             List<String> argv = windows
                     ? List.of(command.toString(), "/d", "/c", "echo", "cageforge-java-local-consumer")
                     : List.of(command.toString(), "cageforge-java-local-consumer");
-            try (Cageforge firstRuntime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
-                 Cageforge secondRuntime = Cageforge.fromToml(
-                         toml, null, new RuntimeContext(currentDirectory))) {
+            try (Cageforge firstRuntime = openRuntime(toml, context);
+                 Cageforge secondRuntime = openRuntime(toml, context)) {
                 var first = java.util.concurrent.CompletableFuture.runAsync(
                         () -> runCommand(firstRuntime, argv));
                 var second = java.util.concurrent.CompletableFuture.runAsync(
@@ -90,8 +95,7 @@ public final class Main {
                 secondRuntime.close();
                 System.out.println("concurrent-instances=ok");
             }
-            try (Cageforge runtime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            try (Cageforge runtime = openRuntime(toml, context);
                  SandboxProcess process = runtime.launch(argv)) {
                 String stdout = new String(
                         process.getStdout().readAllBytes(), StandardCharsets.UTF_8);
@@ -103,8 +107,8 @@ public final class Main {
                 }
                 System.out.println("consumer-smoke=ok");
             }
-            Cageforge closedRuntime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            System.out.println("stage=closed-handles");
+            Cageforge closedRuntime = openRuntime(toml, context);
             closedRuntime.close();
             closedRuntime.close();
             boolean runtimeRejected = false;
@@ -117,8 +121,7 @@ public final class Main {
             if (!runtimeRejected) {
                 throw new CageforgeException("closed runtime accepted a launch");
             }
-            Cageforge processOwner = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            Cageforge processOwner = openRuntime(toml, context);
             SandboxProcess closedProcess = processOwner.launch(argv);
             closedProcess.close();
             closedProcess.close();
@@ -137,8 +140,8 @@ public final class Main {
             List<String> longRunningArgv = windows
                     ? List.of(command.toString(), "/d", "/c", "timeout", "/t", "30", "/nobreak")
                     : List.of(Path.of("/bin/sh").toString(), "-c", "sleep 30");
-            try (Cageforge runtime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            System.out.println("stage=wait-kill");
+            try (Cageforge runtime = openRuntime(toml, context);
                  SandboxProcess process = runtime.launch(longRunningArgv)) {
                 var wait = process.waitForAsync();
                 boolean running = false;
@@ -156,8 +159,8 @@ public final class Main {
                 wait.get(15, TimeUnit.SECONDS);
                 System.out.println("wait-kill=ok");
             }
-            try (Cageforge runtime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            System.out.println("stage=stream-kill");
+            try (Cageforge runtime = openRuntime(toml, context);
                  SandboxProcess process = runtime.launch(longRunningArgv)) {
                 var blockedRead = java.util.concurrent.CompletableFuture.supplyAsync(
                         () -> {
@@ -172,8 +175,8 @@ public final class Main {
                 blockedRead.get(15, TimeUnit.SECONDS);
                 System.out.println("stream-kill=ok");
             }
-            try (Cageforge runtime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            System.out.println("stage=write-kill");
+            try (Cageforge runtime = openRuntime(toml, context);
                  SandboxProcess process = runtime.launch(longRunningArgv)) {
                 var blockedWrite = java.util.concurrent.CompletableFuture.runAsync(
                         () -> {
@@ -191,8 +194,8 @@ public final class Main {
                 blockedWrite.get(15, TimeUnit.SECONDS);
                 System.out.println("write-kill=ok");
             }
-            try (Cageforge runtime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            System.out.println("stage=close-kill");
+            try (Cageforge runtime = openRuntime(toml, context);
                  SandboxProcess process = runtime.launch(longRunningArgv)) {
                 var wait = process.waitForAsync();
                 Thread.sleep(100);
@@ -200,8 +203,8 @@ public final class Main {
                 wait.get(15, TimeUnit.SECONDS);
                 System.out.println("close-kill=ok");
             }
-            try (Cageforge runtime = Cageforge.fromToml(
-                    toml, null, new RuntimeContext(currentDirectory));
+            System.out.println("stage=async-cancel");
+            try (Cageforge runtime = openRuntime(toml, context);
                  SandboxProcess process = runtime.launch(longRunningArgv)) {
                 var wait = process.waitForAsync();
                 Thread.sleep(100);
@@ -213,6 +216,7 @@ public final class Main {
                 }
                 System.out.println("async-cancel=ok");
             }
+            System.out.println("stage=stdin-eof");
             String eofToml = toml + """
 
                     [profiles.smoke.command.stdio]
@@ -223,8 +227,7 @@ public final class Main {
             List<String> eofArgv = windows
                     ? List.of(command.toString(), "/d", "/c", "more > nul")
                     : List.of(Path.of("/bin/sh").toString(), "-c", "cat >/dev/null");
-            try (Cageforge runtime = Cageforge.fromToml(
-                    eofToml, null, new RuntimeContext(currentDirectory));
+            try (Cageforge runtime = openRuntime(eofToml, context);
                  SandboxProcess process = runtime.launch(eofArgv)) {
                 process.getStdin().write("eof".getBytes(StandardCharsets.UTF_8));
                 process.getStdin().close();
@@ -234,6 +237,7 @@ public final class Main {
                 }
                 System.out.println("stdin-eof=ok");
             }
+            System.out.println("stage=stdio-routing");
             String nonPipedToml = toml + """
 
                     [profiles.smoke.command.stdio]
@@ -241,8 +245,7 @@ public final class Main {
                     stdout = "null"
                     stderr = "null"
                     """;
-            try (Cageforge runtime = Cageforge.fromToml(
-                    nonPipedToml, null, new RuntimeContext(currentDirectory));
+            try (Cageforge runtime = openRuntime(nonPipedToml, context);
                  SandboxProcess process = runtime.launch(argv)) {
                 if (process.getStdin() != null || process.getStdout() != null
                         || process.getStderr() != null) {
@@ -254,13 +257,17 @@ public final class Main {
                 System.out.println("stdio-routing=ok");
             }
         } finally {
-            if (windows) {
+            if (windows && cleanupWindowsSetup) {
                 WindowsSetup.uninstall();
                 if (WindowsSetup.status() != WindowsSetupState.MISSING) {
                     throw new CageforgeException("Windows setup was not removed");
                 }
             }
         }
+    }
+
+    private static Cageforge openRuntime(String toml, RuntimeContext context) {
+        return Cageforge.fromToml(toml, null, context);
     }
 
     private static void runCommand(Cageforge runtime, List<String> argv) {

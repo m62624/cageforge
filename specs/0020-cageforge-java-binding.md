@@ -77,7 +77,12 @@ host:
 - `Cageforge.fromToml` and `Cageforge.fromTomlFile` select a profile and
   create one reusable native runtime;
 - `RuntimeContext` supplies the absolute current directory used to resolve
-  relative workspace declarations and platform runtime paths;
+  relative workspace declarations and an optional absolute `minimalPath` used
+  to resolve the TOML `minimal` filesystem selector. When omitted, the
+  binding uses the platform default (`/usr` on Unix and the host Windows
+  `System32` directory). This escape hatch is important for applications that
+  provide a small self-contained runtime directory and for deterministic
+  native tests; it is a path-resolution input, not a second policy language;
 - `Cageforge.launch(argv)` passes an explicit, NUL-validated argv vector or
   launches the command declared by the profile;
 - `SandboxProcess` exposes the process identifier, TOML-selected standard
@@ -96,8 +101,9 @@ The binding must keep these invariants from the Rust facade:
 1. TOML is parsed and resolved by `cageforge-config`; Java strings are not a
    second policy language.
 2. Relative workspace declarations are resolved against the supplied absolute
-   current directory with lexical parent traversal rejected. The runtime
-   context is explicit and never inferred from filesystem discovery.
+   current directory with lexical parent traversal rejected. The optional
+   minimal path must also be absolute. The runtime context is explicit and
+   never inferred from filesystem discovery.
 3. Profile policy and environment are composed through `PolicyCeiling` and
    `compose` before the backend receives a request; the resolved profile
    gateway limits are passed unchanged into the selected native backend.

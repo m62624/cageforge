@@ -60,6 +60,7 @@ class Cageforge private constructor(
                 toml,
                 profileName,
                 context.currentDirectory.toString(),
+                context.minimalPath?.toString(),
             )
         }
 
@@ -79,6 +80,7 @@ class Cageforge private constructor(
                     profileName,
                     context.currentDirectory.toString(),
                     directory.toString(),
+                    context.minimalPath?.toString(),
                 )
             if (handle == 0L) throw CageforgeException("Cageforge runtime creation failed")
             return Cageforge(handle, directory)

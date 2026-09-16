@@ -3,6 +3,8 @@
 package ai.cageforge
 
 import java.io.InputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -15,8 +17,14 @@ internal object NativeLoader {
 
     fun load(): Path =
         synchronized(lock) {
-            loadedDirectory?.let { return it }
             val target = target()
+            loadedDirectory?.let { directory ->
+                // Helpers are executed by later runtime launches, so verify
+                // the cached bytes on every access, not only on first load.
+                extract(directory, target.library)
+                target.resources.forEach { extract(directory, it) }
+                return directory
+            }
             val directory = cacheDirectory(target)
             Files.createDirectories(directory)
             val library = extract(directory, target.library)
@@ -90,14 +98,12 @@ internal object NativeLoader {
         stream.use { input ->
             val bytes = input.readBytes()
             if (Files.exists(destination)) {
-                if (!sameDigest(destination, bytes)) {
-                    throw CageforgeException("Cageforge native resource cache mismatch: $destination")
-                }
+                verifyCached(destination, bytes)
             } else {
                 val temporary = Files.createTempFile(directory, ".cageforge-", ".tmp")
                 try {
                     Files.write(temporary, bytes)
-                    Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE)
+                    installCached(destination, temporary, bytes)
                 } finally {
                     Files.deleteIfExists(temporary)
                 }
@@ -107,6 +113,33 @@ internal object NativeLoader {
             destination.toFile().setExecutable(true, true)
         }
         return destination
+    }
+
+    private fun installCached(
+        destination: Path,
+        temporary: Path,
+        expected: ByteArray,
+    ) {
+        try {
+            Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: FileAlreadyExistsException) {
+            verifyCached(destination, expected)
+        } catch (_: AtomicMoveNotSupportedException) {
+            try {
+                Files.move(temporary, destination)
+            } catch (_: FileAlreadyExistsException) {
+                verifyCached(destination, expected)
+            }
+        }
+    }
+
+    private fun verifyCached(
+        destination: Path,
+        expected: ByteArray,
+    ) {
+        if (!sameDigest(destination, expected)) {
+            throw CageforgeException("Cageforge native resource cache mismatch: $destination")
+        }
     }
 
     private fun sameDigest(

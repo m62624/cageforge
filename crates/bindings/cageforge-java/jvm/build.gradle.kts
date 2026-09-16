@@ -1,5 +1,6 @@
 import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.javadoc.Javadoc
+import java.util.zip.ZipFile
 
 plugins {
     `java-library`
@@ -52,6 +53,28 @@ val nativeResources =
     providers.gradleProperty("nativeResourcesDir")
         .map { layout.projectDirectory.dir(it) }
 
+val requiredNativeEntries =
+    listOf(
+        "META-INF/native/linux-x86_64/cageforge-linux-helper",
+        "META-INF/native/linux-aarch64/cageforge-linux-helper",
+        "META-INF/native/linux-x86_64/bwrap",
+        "META-INF/native/linux-x86_64/bwrap.sha256",
+        "META-INF/native/linux-aarch64/bwrap",
+        "META-INF/native/linux-aarch64/bwrap.sha256",
+        "META-INF/native/macos-x86_64/cageforge-macos-helper",
+        "META-INF/native/macos-aarch64/cageforge-macos-helper",
+        "META-INF/native/windows-x86_64/cageforge-windows-setup.exe",
+        "META-INF/native/windows-aarch64/cageforge-windows-setup.exe",
+        "META-INF/native/windows-x86_64/cageforge-windows-command-runner.exe",
+        "META-INF/native/windows-aarch64/cageforge-windows-command-runner.exe",
+        "META-INF/native/linux-x86_64/libcageforge_java.so",
+        "META-INF/native/linux-aarch64/libcageforge_java.so",
+        "META-INF/native/macos-x86_64/libcageforge_java.dylib",
+        "META-INF/native/macos-aarch64/libcageforge_java.dylib",
+        "META-INF/native/windows-x86_64/cageforge_java.dll",
+        "META-INF/native/windows-aarch64/cageforge_java.dll",
+    )
+
 tasks.jar {
     duplicatesStrategy = DuplicatesStrategy.FAIL
     manifest {
@@ -81,28 +104,7 @@ tasks.register("verifyNativeBundle") {
         val directory =
             nativeResources.orNull
                 ?: error("Pass -PnativeResourcesDir=<directory> to verify the release bundle")
-        val required =
-            listOf(
-                "META-INF/native/linux-x86_64/cageforge-linux-helper",
-                "META-INF/native/linux-aarch64/cageforge-linux-helper",
-                "META-INF/native/linux-x86_64/bwrap",
-                "META-INF/native/linux-x86_64/bwrap.sha256",
-                "META-INF/native/linux-aarch64/bwrap",
-                "META-INF/native/linux-aarch64/bwrap.sha256",
-                "META-INF/native/macos-x86_64/cageforge-macos-helper",
-                "META-INF/native/macos-aarch64/cageforge-macos-helper",
-                "META-INF/native/windows-x86_64/cageforge-windows-setup.exe",
-                "META-INF/native/windows-aarch64/cageforge-windows-setup.exe",
-                "META-INF/native/windows-x86_64/cageforge-windows-command-runner.exe",
-                "META-INF/native/windows-aarch64/cageforge-windows-command-runner.exe",
-                "META-INF/native/linux-x86_64/libcageforge_java.so",
-                "META-INF/native/linux-aarch64/libcageforge_java.so",
-                "META-INF/native/macos-x86_64/libcageforge_java.dylib",
-                "META-INF/native/macos-aarch64/libcageforge_java.dylib",
-                "META-INF/native/windows-x86_64/cageforge_java.dll",
-                "META-INF/native/windows-aarch64/cageforge_java.dll",
-            )
-        required.forEach { relative ->
+        requiredNativeEntries.forEach { relative ->
             if (!directory.file(relative).asFile.isFile) error("Missing native bundle entry: $relative")
         }
     }
@@ -132,6 +134,24 @@ tasks.register("verifyMavenPublication") {
             )
         requiredFiles.forEach { file ->
             check(file.isFile) { "Missing Maven publication file: ${file.path}" }
+        }
+        val jar = requiredFiles.first()
+        ZipFile(jar).use { archive ->
+            requiredNativeEntries.forEach { entry ->
+                check(archive.getEntry(entry) != null) {
+                    "Maven JAR is missing native entry: $entry"
+                }
+            }
+            listOf(
+                "META-INF/LICENSE",
+                "META-INF/NOTICE",
+                "META-INF/THIRD_PARTY_NOTICES.md",
+                "META-INF/licenses/bubblewrap-COPYING",
+            ).forEach { entry ->
+                check(archive.getEntry(entry) != null) {
+                    "Maven JAR is missing license entry: $entry"
+                }
+            }
         }
         val pom = publicationDirectory.resolve("pom-default.xml").readText()
         check("<groupId>${project.group}</groupId>" in pom) {

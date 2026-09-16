@@ -11,8 +11,10 @@ class RuntimeContextTest {
     @Test
     fun keepsAbsoluteRuntimeDirectory() {
         val runtimeDirectory = Path.of(System.getProperty("java.io.tmpdir"), "workspace")
-        val context = RuntimeContext(runtimeDirectory)
+        val minimalDirectory = runtimeDirectory.resolve("minimal")
+        val context = RuntimeContext(runtimeDirectory, minimalDirectory)
         assertEquals(runtimeDirectory, context.currentDirectory)
+        assertEquals(minimalDirectory, context.minimalPath)
     }
 
     @Test

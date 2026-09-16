@@ -638,10 +638,11 @@ jobs:
           NATIVE_CACHE: ${{ runner.temp }}/cageforge-java-native-cache
         run: |
           set -euo pipefail
-          output="$(gradle --no-daemon run \
+          smoke_log="$RUNNER_TEMP/cageforge-java-smoke.log"
+          gradle --no-daemon run \
             -PbindingVersion="$CAGEFORGE_JVM_VERSION" \
-            -PnativeCache="$NATIVE_CACHE")"
-          printf '%s\n' "$output"
+            -PnativeCache="$NATIVE_CACHE" 2>&1 | tee "$smoke_log"
+          output="$(<"$smoke_log")"
           grep -F "native-target=$CAGEFORGE_JVM_EXPECTED_TARGET" <<<"$output"
           grep -F 'toml-validation=ok' <<<"$output"
           grep -F 'typed-errors=ok' <<<"$output"

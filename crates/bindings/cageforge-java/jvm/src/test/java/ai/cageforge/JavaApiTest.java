@@ -11,7 +11,9 @@ class JavaApiTest {
     @Test
     void javaCanConstructTheKotlinRuntimeContext() {
         Path runtimeDirectory = Path.of(System.getProperty("java.io.tmpdir"), "cageforge-java");
-        RuntimeContext context = new RuntimeContext(runtimeDirectory);
+        Path minimalDirectory = runtimeDirectory.resolve("minimal");
+        RuntimeContext context = new RuntimeContext(runtimeDirectory, minimalDirectory);
         assertEquals(runtimeDirectory, context.getCurrentDirectory());
+        assertEquals(minimalDirectory, context.getMinimalPath());
     }
 }
