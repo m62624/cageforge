@@ -642,7 +642,8 @@ jobs:
           gradle --no-daemon run \
             -PbindingVersion="$CAGEFORGE_JVM_VERSION" \
             -PnativeCache="$NATIVE_CACHE" 2>&1 | tee "$smoke_log"
-          "$GITHUB_WORKSPACE/ci/vm-suites/java/verify-output.sh" "$smoke_log"
+          repo_root="$(git rev-parse --show-toplevel)"
+          "$repo_root/ci/vm-suites/java/verify-output.sh" "$smoke_log"
 
       - name: Package the Linux Java consumer for the QEMU smoke
         if: matrix.target == 'Linux'
