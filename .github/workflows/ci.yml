@@ -908,14 +908,14 @@ jobs:
               'crates/cageforge-bwrap/src/**',
               'crates/cageforge-bwrap/vendor/bubblewrap/**'
             ) }}
-      - name: Export ARM64 resource for the upstream update
-        if: matrix.arch == 'aarch64' && steps.bwrap-cache.outputs.cache-hit != 'true'
+      - name: Upload verified Bubblewrap resource
+        if: always() && steps.bwrap-cache.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: cageforge-bwrap-linux-aarch64-for-update
+          name: cageforge-bwrap-linux-${{ matrix.arch }}
           path: |
-            crates/cageforge-bwrap/assets/linux-aarch64/bwrap
-            crates/cageforge-bwrap/assets/linux-aarch64/bwrap.sha256
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap
+            crates/cageforge-bwrap/assets/linux-${{ matrix.arch }}/bwrap.sha256
           if-no-files-found: error
   native-macos:
     name: macOS sandbox
