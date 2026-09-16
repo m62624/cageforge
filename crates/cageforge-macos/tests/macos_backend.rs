@@ -1401,7 +1401,13 @@ fn symlinked_writable_root_is_rejected_before_launch() {
 
     match error {
         MacosBackendError::Filesystem(MacosFilesystemError::Symlink { path }) => {
-            assert_eq!(path, workspace)
+            let expected = workspace
+                .parent()
+                .expect("workspace parent")
+                .canonicalize()
+                .expect("canonical workspace parent")
+                .join("workspace");
+            assert_eq!(path, expected)
         }
         other => panic!("unexpected symlinked-root error: {other:?}"),
     }
