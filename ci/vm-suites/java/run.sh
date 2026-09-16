@@ -15,21 +15,4 @@ java_output=$(JAVA_OPTS="-Dcageforge.native.cache=$java_cache" \
     "$java_dir/cageforge-java-consumer-smoke/bin/cageforge-java-consumer-smoke")
 printf '%s\n' "$java_output"
 
-expected_markers=(
-    'native-target=linux-x86_64'
-    'toml-validation=ok'
-    'typed-errors=ok'
-    'concurrent-instances=ok'
-    'consumer-smoke=ok'
-    'closed-handles=ok'
-    'wait-kill=ok'
-    'stream-kill=ok'
-    'write-kill=ok'
-    'close-kill=ok'
-    'async-cancel=ok'
-    'stdin-eof=ok'
-    'stdio-routing=ok'
-)
-for marker in "${expected_markers[@]}"; do
-    grep -F "$marker" <<<"$java_output"
-done
+"$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/verify-output.sh" <<<"$java_output"

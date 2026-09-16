@@ -642,20 +642,7 @@ jobs:
           gradle --no-daemon run \
             -PbindingVersion="$CAGEFORGE_JVM_VERSION" \
             -PnativeCache="$NATIVE_CACHE" 2>&1 | tee "$smoke_log"
-          output="$(<"$smoke_log")"
-          grep -F "native-target=$CAGEFORGE_JVM_EXPECTED_TARGET" <<<"$output"
-          grep -F 'toml-validation=ok' <<<"$output"
-          grep -F 'typed-errors=ok' <<<"$output"
-          grep -F 'concurrent-instances=ok' <<<"$output"
-          grep -F 'consumer-smoke=ok' <<<"$output"
-          grep -F 'closed-handles=ok' <<<"$output"
-          grep -F 'wait-kill=ok' <<<"$output"
-          grep -F 'stream-kill=ok' <<<"$output"
-          grep -F 'write-kill=ok' <<<"$output"
-          grep -F 'close-kill=ok' <<<"$output"
-          grep -F 'async-cancel=ok' <<<"$output"
-          grep -F 'stdin-eof=ok' <<<"$output"
-          grep -F 'stdio-routing=ok' <<<"$output"
+          "$GITHUB_WORKSPACE/ci/vm-suites/java/verify-output.sh" "$smoke_log"
 
       - name: Package the Linux Java consumer for the QEMU smoke
         if: matrix.target == 'Linux'

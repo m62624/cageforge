@@ -20,6 +20,12 @@ public final class Main {
     private static final String SMOKE_OUTPUT = "cageforge-java-local-consumer";
     private static final String MINIMAL_DIRECTORY = ".cageforge-test-runtime";
     private static final String WORKSPACE_ROOT = "workspace-root";
+    private static final String WINDOWS_SYSTEM_ROOT = "SystemRoot";
+    private static final String WINDOWS_SYSTEM32 = "System32";
+    private static final String WINDOWS_CMD = "cmd.exe";
+    private static final String WINDOWS_POWERSHELL = "WindowsPowerShell";
+    private static final String WINDOWS_POWERSHELL_VERSION = "v1.0";
+    private static final String POWERSHELL = "powershell.exe";
     private static final int WAIT_TIMEOUT_SECONDS = 15;
 
     private Main() {}
@@ -31,7 +37,7 @@ public final class Main {
         RuntimeContext context = new RuntimeContext(currentDirectory, minimalPath);
         boolean windows = WindowsSetup.isSupported();
         Path command = windows
-                ? Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe")
+                ? windowsSystemPath(WINDOWS_CMD)
                 : Path.of("/bin/echo");
         String filesystemRule = "{ target = \"minimal\", access = \"read\" }";
         String toml = """
@@ -147,8 +153,8 @@ public final class Main {
             System.out.println("closed-handles=ok");
             List<String> longRunningArgv = windows
                     ? List.of(
-                            Path.of(System.getenv("SystemRoot"), "System32",
-                                    "WindowsPowerShell", "v1.0", "powershell.exe").toString(),
+                            windowsSystemPath(WINDOWS_POWERSHELL,
+                                    WINDOWS_POWERSHELL_VERSION, POWERSHELL).toString(),
                             "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
                             "Start-Sleep -Seconds 30")
                     : List.of(Path.of("/bin/sh").toString(), "-c", "sleep 30");
@@ -292,5 +298,13 @@ public final class Main {
 
     private static String tomlString(Path path) {
         return path.toString().replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static Path windowsSystemPath(String... components) {
+        String[] path = new String[components.length + 2];
+        path[0] = System.getenv(WINDOWS_SYSTEM_ROOT);
+        path[1] = WINDOWS_SYSTEM32;
+        System.arraycopy(components, 0, path, 2, components.length);
+        return Path.of(path);
     }
 }
