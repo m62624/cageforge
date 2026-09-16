@@ -708,8 +708,13 @@ jobs:
           echo "CAGEFORGE_VM_IMAGE=$image" >> "$GITHUB_ENV"
 
       - name: Archive the checked-out source
-        run: git archive --format=tar.gz --prefix=cageforge-source/ \
-          --output="$RUNNER_TEMP/cageforge-source.tar.gz" HEAD
+        run: |
+          set -euo pipefail
+          git archive \
+            --format=tar.gz \
+            --prefix=cageforge-source/ \
+            --output="$RUNNER_TEMP/cageforge-source.tar.gz" \
+            HEAD
 
       - name: Run the Java consumer in the Cageforge QEMU guest
         env:
