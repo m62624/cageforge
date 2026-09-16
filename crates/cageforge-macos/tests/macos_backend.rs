@@ -1399,10 +1399,12 @@ fn symlinked_writable_root_is_rejected_before_launch() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect_err("symlinked writable root must fail closed");
 
-    assert!(matches!(
-        error,
-        MacosBackendError::Filesystem(MacosFilesystemError::Symlink { path }) if path == workspace
-    ));
+    match error {
+        MacosBackendError::Filesystem(MacosFilesystemError::Symlink { path }) => {
+            assert_eq!(path, workspace)
+        }
+        other => panic!("unexpected symlinked-root error: {other:?}"),
+    }
 }
 
 #[test]
