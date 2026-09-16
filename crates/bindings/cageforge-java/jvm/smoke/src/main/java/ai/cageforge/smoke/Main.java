@@ -146,7 +146,11 @@ public final class Main {
             }
             System.out.println("closed-handles=ok");
             List<String> longRunningArgv = windows
-                    ? List.of(command.toString(), "/d", "/c", "timeout", "/t", "30", "/nobreak")
+                    ? List.of(
+                            Path.of(System.getenv("SystemRoot"), "System32",
+                                    "WindowsPowerShell", "v1.0", "powershell.exe").toString(),
+                            "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                            "Start-Sleep -Seconds 30")
                     : List.of(Path.of("/bin/sh").toString(), "-c", "sleep 30");
             System.out.println("stage=wait-kill");
             try (Cageforge runtime = openRuntime(toml, context);
