@@ -383,7 +383,29 @@ The common-component jobs must not replace this native test. The dedicated
 on `main`, when the macOS crate or its transitive dependencies change in a PR,
 or when the maintainer adds `sandbox-macos`.
 
-## 8. Release boundary
+## 8. Current upstream parity audit
+
+On 2026-09-16, the macOS boundary was compared with the externally maintained
+Codex checkout at commit
+`50d77959bf927293c4b5ddcca81d05331ae582ea`. The frozen baseline in
+`UPSTREAM.md` remains unchanged; this comparison is an audit of newer
+security behavior, not an automatic baseline advance.
+
+The audit retained and adapted three relevant Seatbelt invariants:
+
+- user-preference IPC is available only to an unrestricted filesystem policy,
+  because it can expose data outside the declared filesystem roots;
+- a writable directory root cannot itself be renamed or replaced; and
+- directories containing protected, read-only, or deny-glob descendants cannot
+  be renamed out of the path where their restrictions apply.
+
+The matching black-box macOS tests exercise these cases through the Cageforge
+`MacosBackend` API. Existing Cageforge differences remain deliberate: the
+portable glob grammar treats backslashes as ordinary path characters, and
+Linux WSLg masking and Codex-managed proxy features are outside this backend's
+public contract.
+
+## 9. Release boundary
 
 The crate is Apache-2.0 Cageforge-authored code with no bundled third-party
 source. Its public README describes the reusable library API and one-spawn/

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::MacosNetworkPlan;
 
-use crate::seatbelt::{SeatbeltProfile, glob_to_seatbelt_regex};
+use crate::seatbelt::{SeatbeltProfile, glob_to_seatbelt_regex, glob_to_seatbelt_regex_exact};
 
 fn filesystem_plan(denied_path: &str) -> MacosFilesystemPlan {
     MacosFilesystemPlan {
@@ -125,6 +125,72 @@ fn base_profile_does_not_widen_restricted_filesystem_scopes() {
     assert!(policy.contains("(subpath \"/usr/lib\")"));
     assert!(policy.contains("(subpath \"/System/Library/Frameworks\")"));
     assert!(policy.contains("(subpath (param \"READ_ROOT_0\"))"));
+    assert!(!policy.contains("user-preference-read"));
+}
+
+#[test]
+fn unrestricted_profile_is_the_only_profile_that_reads_user_preferences() {
+    let restricted = SeatbeltProfile::build(
+        &filesystem_plan("/workspace/private"),
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("restricted profile");
+    assert!(!restricted.policy().contains("user-preference-read"));
+
+    let unrestricted = SeatbeltProfile::build(
+        &MacosFilesystemPlan {
+            unrestricted: true,
+            ..MacosFilesystemPlan::default()
+        },
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("unrestricted profile");
+    assert!(unrestricted.policy().contains("user-preference-read"));
+}
+
+#[test]
+fn writable_roots_and_protected_ancestors_cannot_be_renamed() {
+    let profile = SeatbeltProfile::build(
+        &MacosFilesystemPlan {
+            write_roots: vec![PathBuf::from("/workspace")],
+            write_denied_paths: vec![PathBuf::from("/workspace/.github/workflows")],
+            ..MacosFilesystemPlan::default()
+        },
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+    let policy = profile.policy();
+
+    assert!(policy.contains(
+        "(deny file-write-unlink (require-all (literal (param \"WRITE_ROOT_0\")) (vnode-type DIRECTORY)))"
+    ));
+    assert!(policy.contains("PROTECTED_ANCESTOR_"));
+    assert!(policy.contains("(vnode-type DIRECTORY) (literal (param \"PROTECTED_ANCESTOR_"));
+}
+
+#[test]
+fn file_roots_use_literal_rules() {
+    let temporary = tempfile::NamedTempFile::new().expect("file root");
+    let profile = SeatbeltProfile::build(
+        &MacosFilesystemPlan {
+            read_roots: vec![temporary.path().to_path_buf()],
+            ..MacosFilesystemPlan::default()
+        },
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+    let policy = profile.policy();
+
+    assert!(policy.contains("(literal (param \"READ_ROOT_0\"))"));
+    assert!(!policy.contains("(subpath (param \"READ_ROOT_0\"))"));
 }
 
 #[test]
@@ -213,6 +279,10 @@ fn glob_translation_is_anchored_and_keeps_path_components_bounded() {
     assert_eq!(
         glob_to_seatbelt_regex("/workspace/{one,}/file"),
         r"^/workspace/one/file$"
+    );
+    assert_eq!(
+        glob_to_seatbelt_regex_exact("/workspace/private"),
+        r"^/workspace/private$"
     );
 }
 

@@ -2,6 +2,8 @@
 
 //! Re-authored Seatbelt profile construction.
 
+use std::collections::BTreeSet;
+use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -170,7 +172,6 @@ const SEATBELT_BASE_POLICY: &str = r#"
     (mac-policy-name "Sandbox")
     (mac-syscall-number 67)))
 (allow system-fsctl (fsctl-command FSIOC_CAS_BSDFLAGS))
-(allow user-preference-read)
 (allow ipc-posix-sem)
 (allow ipc-posix-shm-read-data
   ipc-posix-shm-write-create
@@ -182,10 +183,7 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (global-name "com.apple.system.opendirectoryd.membership")
   (global-name "com.apple.bsd.dirhelper")
   (global-name "com.apple.SecurityServer")
-  (global-name "com.apple.cfprefsd.daemon")
-  (global-name "com.apple.cfprefsd.agent")
-  (global-name "com.apple.PowerManagement.control")
-  (local-name "com.apple.cfprefsd.agent"))
+  (global-name "com.apple.PowerManagement.control"))
 
 ; System aliases, firmlinks, and special files needed during process startup.
 (allow file-read* file-test-existence
@@ -254,6 +252,17 @@ const SEATBELT_NETWORK_SERVICE_POLICY: &str = r#"
 (allow sysctl-read (sysctl-name-regex #"^net.routetable"))
 "#;
 
+const SEATBELT_PREFERENCES_POLICY: &str = r#"
+; Preferences IPC can expose data outside the filesystem read roots.
+; Include this policy only when filesystem reads are unrestricted.
+(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
+(allow mach-lookup
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.cfprefsd.agent")
+  (local-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read)
+"#;
+
 /// Complete policy text and safe path definitions for one launch.
 #[derive(Debug)]
 pub(crate) struct SeatbeltProfile {
@@ -277,6 +286,9 @@ impl SeatbeltProfile {
         let mut builder = ProfileBuilder::new();
         builder.push_raw(SEATBELT_BASE_POLICY);
         builder.add_filesystem(filesystem)?;
+        if filesystem.unrestricted() {
+            builder.push_raw(SEATBELT_PREFERENCES_POLICY);
+        }
         builder.add_network(network)?;
         Ok(builder.finish())
     }
@@ -303,6 +315,12 @@ impl SeatbeltDefinition {
 struct ProfileBuilder {
     policy: String,
     definitions: Vec<SeatbeltDefinition>,
+}
+
+#[derive(Clone, Copy)]
+enum SeatbeltPathMatch {
+    Literal,
+    Subpath,
 }
 
 impl ProfileBuilder {
@@ -351,6 +369,8 @@ impl ProfileBuilder {
             )?;
         }
         self.add_denied_glob_rules(plan.denied_globs())?;
+        self.add_writable_root_anchor_denies(plan.write_roots());
+        self.add_protected_ancestor_denies(plan)?;
         for (index, _path) in plan.denied_paths().iter().enumerate() {
             let name = format!("DENIED_PATH_{index}");
             self.policy
@@ -390,6 +410,54 @@ impl ProfileBuilder {
                 .push_str(&format!("(deny file-write-create (regex #\"{regex}\"))\n"));
             self.policy
                 .push_str(&format!("(deny file-write-unlink (regex #\"{regex}\"))\n"));
+            for ancestor in Path::new(pattern).ancestors().skip(1) {
+                let regex = escape_regex_literal(&glob_to_seatbelt_regex_exact(
+                    ancestor.to_string_lossy().as_ref(),
+                ));
+                self.policy.push_str(&format!(
+                    "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #\"{regex}\")))\n"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn add_writable_root_anchor_denies(&mut self, roots: &[PathBuf]) {
+        for (index, _) in roots.iter().enumerate() {
+            let name = format!("WRITE_ROOT_{index}");
+            self.policy.push_str(&format!(
+                "(deny file-write-unlink (require-all (literal (param \"{name}\")) (vnode-type DIRECTORY)))\n"
+            ));
+        }
+    }
+
+    fn add_protected_ancestor_denies(
+        &mut self,
+        plan: &MacosFilesystemPlan,
+    ) -> Result<(), SeatbeltProfileError> {
+        let mut ancestors = BTreeSet::new();
+        let protected_paths = plan.denied_paths().iter().chain(plan.write_denied_paths());
+        for protected in protected_paths {
+            let Some(parent) = protected.parent() else {
+                continue;
+            };
+            for ancestor in parent.ancestors() {
+                if plan
+                    .write_roots()
+                    .iter()
+                    .any(|root| is_within(ancestor, root))
+                {
+                    ancestors.insert(ancestor.to_path_buf());
+                }
+            }
+        }
+
+        for (index, ancestor) in ancestors.into_iter().enumerate() {
+            let name = format!("PROTECTED_ANCESTOR_{index}");
+            self.add_definition(name.clone(), ancestor)?;
+            self.policy.push_str(&format!(
+                "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{name}\"))))\n"
+            ));
         }
         Ok(())
     }
@@ -410,7 +478,11 @@ impl ProfileBuilder {
         for (index, path) in roots.iter().enumerate() {
             let name = format!("{prefix}_{index}");
             self.add_definition(name.clone(), path.clone())?;
-            let mut requirements = vec![format!("(subpath (param \"{name}\"))")];
+            let root_filter = match path_match_for_root(path)? {
+                SeatbeltPathMatch::Literal => format!("(literal (param \"{name}\"))"),
+                SeatbeltPathMatch::Subpath => format!("(subpath (param \"{name}\"))"),
+            };
+            let mut requirements = vec![root_filter];
             for (excluded_index, excluded) in denied_paths.iter().enumerate() {
                 if is_within(excluded, path) {
                     self.push_path_exclusion(&mut requirements, "DENIED_PATH", excluded_index);
@@ -545,12 +617,39 @@ impl ProfileBuilder {
     }
 }
 
+fn path_match_for_root(path: &Path) -> Result<SeatbeltPathMatch, SeatbeltProfileError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(SeatbeltProfileError::SymlinkedRoot {
+                path: path.to_path_buf(),
+            })
+        }
+        Ok(metadata) if metadata.is_dir() => Ok(SeatbeltPathMatch::Subpath),
+        Ok(_) => Ok(SeatbeltPathMatch::Literal),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(SeatbeltPathMatch::Subpath)
+        }
+        Err(source) => Err(SeatbeltProfileError::PathMetadata {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 pub(crate) fn glob_to_seatbelt_regex(pattern: &str) -> String {
+    glob_to_seatbelt_regex_with_descendants(pattern, true)
+}
+
+pub(crate) fn glob_to_seatbelt_regex_exact(pattern: &str) -> String {
+    glob_to_seatbelt_regex_with_descendants(pattern, false)
+}
+
+fn glob_to_seatbelt_regex_with_descendants(pattern: &str, descendants: bool) -> String {
     let mut regex = String::from("^");
     let characters: Vec<char> = pattern.chars().collect();
     let mut index = 0;
     translate_glob_sequence(&characters, &mut index, None, &mut regex);
-    if !pattern_has_glob_meta(pattern) {
+    if descendants && !pattern_has_glob_meta(pattern) {
         regex.push_str("(/.*)?");
     }
     regex.push('$');
