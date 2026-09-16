@@ -14,4 +14,7 @@ trap 'rm -rf "$fetch_dir"' EXIT
 cd "$fetch_dir"
 unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
 unset CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER
+# rustup installs Cargo for the guest user, but the SSH command does not inherit
+# the bootstrap shell's PATH.
+export PATH=/home/ubuntu/.cargo/bin:$PATH
 cargo fetch --locked --manifest-path "$root_dir/Cargo.toml"
