@@ -1018,6 +1018,60 @@ fn restricted_filesystem_does_not_grant_unlisted_conventional_tmp() {
 }
 
 #[test]
+fn restricted_command_cannot_read_user_preferences() {
+    let workspace = TempDir::new().expect("workspace");
+    let domain = format!("ai.cageforge.cageforge-test-{}", std::process::id());
+    let key = "cageforgeSecret";
+    let marker = "cageforge-preference-marker";
+    let write = Command::new("/usr/bin/defaults")
+        .args(["write", &domain, key, marker])
+        .status()
+        .expect("write preference fixture");
+    assert!(write.success(), "preference fixture could not be written");
+
+    let command = CommandSpec::new("/usr/bin/defaults")
+        .expect("defaults")
+        .with_args(["read", domain.as_str(), key])
+        .expect("defaults arguments");
+    let (command, effective, context) = request_for(
+        workspace.path(),
+        &restricted_policy(workspace.path()),
+        command,
+    );
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .expect("stdout pipe")
+        .read_to_string(&mut stdout)
+        .expect("read stdout");
+    let mut stderr = String::new();
+    child
+        .stderr()
+        .expect("stderr pipe")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    let delete = Command::new("/usr/bin/defaults")
+        .args(["delete", &domain])
+        .status()
+        .expect("delete preference fixture");
+    assert!(delete.success(), "preference fixture could not be removed");
+    assert!(
+        !status.success(),
+        "restricted command read user preferences: stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        !stdout.contains(marker),
+        "preference marker escaped Seatbelt"
+    );
+}
+
+#[test]
 fn writable_workspace_preserves_read_only_and_protected_descendants() {
     let workspace = TempDir::new().expect("workspace");
     let readonly = workspace.path().join("readonly");
@@ -1063,6 +1117,132 @@ fn writable_workspace_preserves_read_only_and_protected_descendants() {
         fs::read_to_string(&protected_file).expect("protected result"),
         "protected"
     );
+}
+
+#[test]
+fn writable_root_cannot_be_renamed_by_the_sandboxed_command() {
+    let workspace = TempDir::new().expect("workspace");
+    let moved = workspace.path().with_extension("moved");
+    let script = format!("mv '{}' '{}'", workspace.path().display(), moved.display());
+    let (command, effective, context) = request_for(
+        workspace.path(),
+        &writable_policy(workspace.path()),
+        shell_command(&script),
+    );
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    let workspace_exists = workspace.path().is_dir();
+    let moved_exists = moved.exists();
+    if moved_exists {
+        fs::rename(&moved, workspace.path()).expect("restore unexpectedly moved root");
+    }
+    assert!(
+        !status.success(),
+        "sandboxed command replaced its writable root"
+    );
+    assert!(workspace_exists, "writable root was renamed");
+    assert!(!moved_exists, "writable root replacement was created");
+}
+
+#[test]
+fn protected_descendant_cannot_be_moved_out_of_its_read_only_scope() {
+    let workspace = TempDir::new().expect("workspace");
+    let protected_parent = workspace.path().join(".github");
+    let protected = protected_parent.join("workflows");
+    fs::create_dir_all(&protected).expect("protected directory");
+    let file = protected.join("release.yml");
+    fs::write(&file, "release").expect("protected file");
+    let writable = FilesystemRule::new(
+        PathSelector::absolute(workspace.path().to_path_buf()).expect("workspace selector"),
+        AccessMode::Write,
+    )
+    .with_read_only_subpath(PathSelector::absolute(protected.clone()).expect("protected selector"))
+    .expect("read-only carve-out");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            writable,
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let moved = workspace.path().join("moved");
+    let script = format!(
+        "mv '{}' '{}' && cat '{}/release.yml'",
+        protected_parent.display(),
+        moved.display(),
+        moved.display()
+    );
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command(&script));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    let protected_parent_exists = protected_parent.is_dir();
+    let moved_exists = moved.exists();
+    if moved_exists {
+        fs::rename(&moved, &protected_parent).expect("restore unexpectedly moved ancestor");
+    }
+    assert!(
+        !status.success(),
+        "protected descendant escaped after its ancestor was renamed"
+    );
+    assert!(protected_parent_exists, "protected ancestor was renamed");
+    assert!(!moved_exists, "protected ancestor replacement was created");
+}
+
+#[test]
+fn deny_glob_descendant_cannot_be_moved_out_of_its_matching_scope() {
+    let workspace = TempDir::new().expect("workspace");
+    let secret_parent = workspace.path().join("secrets");
+    let secret_directory = secret_parent.join("nested");
+    fs::create_dir_all(&secret_directory).expect("secret directory");
+    let secret = secret_directory.join("value.env");
+    fs::write(&secret, "secret").expect("secret file");
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(
+                PathSelector::absolute(workspace.path().to_path_buf()).expect("workspace selector"),
+                AccessMode::Write,
+            ),
+            FilesystemRule::workspace_glob("secrets/**/*.env", AccessMode::Deny)
+                .expect("secret glob"),
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let moved = workspace.path().join("moved");
+    let script = format!(
+        "mv '{}' '{}' && cat '{}/nested/value.env'",
+        secret_parent.display(),
+        moved.display(),
+        moved.display()
+    );
+    let (command, effective, context) =
+        request_for(workspace.path(), &policy, shell_command(&script));
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare");
+    let mut child = backend.spawn(prepared).expect("spawn");
+    let status = child.wait().expect("wait");
+    let secret_parent_exists = secret_parent.is_dir();
+    let moved_exists = moved.exists();
+    if moved_exists {
+        fs::rename(&moved, &secret_parent).expect("restore unexpectedly moved glob ancestor");
+    }
+    assert!(
+        !status.success(),
+        "deny-glob descendant escaped after its ancestor was renamed"
+    );
+    assert!(secret_parent_exists, "deny-glob ancestor was renamed");
+    assert!(!moved_exists, "deny-glob ancestor replacement was created");
 }
 
 #[test]
@@ -1202,6 +1382,35 @@ fn writable_workspace_cannot_escape_through_a_symlink() {
         .expect("prepare");
     let mut child = backend.spawn(prepared).expect("spawn");
     assert!(!child.wait().expect("wait").success());
+}
+
+#[test]
+fn symlinked_writable_root_is_rejected_before_launch() {
+    use std::os::unix::fs::symlink;
+
+    let parent = TempDir::new().expect("workspace parent");
+    let target = parent.path().join("target");
+    let workspace = parent.path().join("workspace");
+    fs::create_dir(&target).expect("target directory");
+    symlink(&target, &workspace).expect("workspace symlink");
+    let policy = writable_policy(&workspace);
+    let (command, effective, context) = request_for(&workspace, &policy, shell_command(":"));
+    let error = backend()
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect_err("symlinked writable root must fail closed");
+
+    match error {
+        MacosBackendError::Filesystem(MacosFilesystemError::Symlink { path }) => {
+            let expected = workspace
+                .parent()
+                .expect("workspace parent")
+                .canonicalize()
+                .expect("canonical workspace parent")
+                .join("workspace");
+            assert_eq!(path, expected)
+        }
+        other => panic!("unexpected symlinked-root error: {other:?}"),
+    }
 }
 
 #[test]

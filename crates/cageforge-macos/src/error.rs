@@ -291,6 +291,21 @@ pub enum MacosNetworkError {
 /// Failures while rendering a Seatbelt profile.
 #[derive(Debug, Error)]
 pub enum SeatbeltProfileError {
+    /// A filesystem root could not be inspected before policy construction.
+    #[error("failed to inspect Seatbelt filesystem root {path:?}: {source}")]
+    PathMetadata {
+        /// Root that could not be inspected.
+        path: PathBuf,
+        /// The operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// A filesystem root became a symbolic link before policy construction.
+    #[error("Seatbelt filesystem root must not be a symbolic link: {path:?}")]
+    SymlinkedRoot {
+        /// Rejected root path.
+        path: PathBuf,
+    },
     /// A path could not be represented as a valid Seatbelt definition.
     #[error("path contains an unsupported NUL character: {path:?}")]
     PathContainsNul {
