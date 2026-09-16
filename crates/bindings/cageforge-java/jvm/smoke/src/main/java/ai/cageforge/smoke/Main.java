@@ -301,10 +301,10 @@ public final class Main {
     }
 
     private static Path windowsSystemPath(String... components) {
-        String[] path = new String[components.length + 2];
-        path[0] = System.getenv(WINDOWS_SYSTEM_ROOT);
-        path[1] = WINDOWS_SYSTEM32;
-        System.arraycopy(components, 0, path, 2, components.length);
-        return Path.of(path);
+        Path path = Path.of(System.getenv(WINDOWS_SYSTEM_ROOT), WINDOWS_SYSTEM32);
+        for (String component : components) {
+            path = path.resolve(component);
+        }
+        return path;
     }
 }
