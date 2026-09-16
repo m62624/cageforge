@@ -88,10 +88,11 @@ fn platform_root(current_directory: &Path) -> PathBuf {
     }
     #[cfg(target_os = "windows")]
     {
-        current_directory
-            .ancestors()
-            .last()
-            .map(Path::to_path_buf)
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .and_then(|system_root| system_root.parent().map(Path::to_path_buf))
+            .filter(|root| root.is_absolute())
+            .or_else(|| current_directory.ancestors().last().map(Path::to_path_buf))
             .unwrap_or_else(|| PathBuf::from(r"C:\"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
