@@ -396,6 +396,7 @@ if [[ -z "$root_dir" && -f "$source_dir/Cargo.toml" ]]; then
 fi
 [[ -n "$root_dir" ]]
 export CAGEFORGE_SOURCE_ROOT="$root_dir"
+export PATH=/home/ubuntu/.cargo/bin:$PATH
 bash "$CAGEFORGE_VM_SUITE/prepare.sh"
 printf '%s\n' "$root_dir" | sudo tee /var/lib/cageforge-source-root >/dev/null
 sudo umount "$source_mount"
