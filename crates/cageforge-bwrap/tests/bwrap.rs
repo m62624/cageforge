@@ -32,7 +32,7 @@ fn builder_stages_original_bwrap_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
-        "bubblewrap 0.11.2"
+        "bubblewrap 0.12.0"
     );
     assert!(
         fs::metadata(binary)

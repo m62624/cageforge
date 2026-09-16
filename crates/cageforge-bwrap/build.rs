@@ -6,13 +6,20 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "build-from-source")]
-const SOURCES: &[&str] = &["bubblewrap.c", "bind-mount.c", "network.c", "utils.c"];
+const SOURCES: &[&str] = &[
+    "bubblewrap.c",
+    "bind-mount.c",
+    "network.c",
+    "utils.c",
+    "chroot_realpath.c",
+    "safe_openat.c",
+];
 #[cfg(feature = "build-from-source")]
 const HEADERS: &[&str] = &["bind-mount.h", "network.h", "utils.h"];
 #[cfg(feature = "build-from-source")]
-const UPSTREAM_VERSION: &str = "0.11.2";
+const UPSTREAM_VERSION: &str = "0.12.0";
 #[cfg(feature = "build-from-source")]
-const UPSTREAM_COMMIT: &str = "1b80120ef26a28e065e67f89bfef873f13bdd317";
+const UPSTREAM_COMMIT: &str = "014a04330642e5c870418beb621532cb896e0002";
 
 fn main() {
     #[cfg(feature = "build-from-source")]
@@ -85,7 +92,7 @@ fn build_bwrap(source_dir: &Path) -> Result<(), String> {
     let config_h = out_dir.join("config.h");
     std::fs::write(
         &config_h,
-        "#pragma once\n#define PACKAGE_STRING \"bubblewrap 0.11.2\"\n",
+        "#pragma once\n#define PACKAGE_STRING \"bubblewrap 0.12.0\"\n",
     )
     .map_err(|error| format!("failed to write {}: {error}", config_h.display()))?;
 

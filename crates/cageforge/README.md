@@ -41,7 +41,7 @@ available through the optional `network-runtime` feature.
 
 On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
 not want to build or provide Bubblewrap separately. It includes Cageforge's
-verified, fixed Bubblewrap `v0.11.2` resource; the embedded version is not
+verified, fixed Bubblewrap `v0.12.0` resource; the embedded version is not
 selected dynamically.
 
 The feature surface is explicit:

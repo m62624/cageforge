@@ -140,6 +140,20 @@ fn namespace_plan_always_disables_nested_user_namespaces() {
 }
 
 #[test]
+fn namespace_plan_never_relaxes_the_bubblewrap_security_boundary() {
+    for proc_mount in [ProcMountPolicy::Required, ProcMountPolicy::Disabled] {
+        for network_isolated in [false, true] {
+            let args = namespace_args(proc_mount, network_isolated);
+            assert!(
+                !args
+                    .iter()
+                    .any(|argument| argument == "--not-a-security-boundary")
+            );
+        }
+    }
+}
+
+#[test]
 fn namespace_probe_failures_identify_each_required_flag() {
     for (namespace, flag, guidance) in [
         (

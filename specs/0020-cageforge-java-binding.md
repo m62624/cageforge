@@ -51,7 +51,7 @@ JVM binding because it identifies `java`/`javaw`, not a Cageforge helper.
 
 The artifact is published as the Maven coordinate
 `io.github.m62624:cageforge-java:<version>` with sources, Javadoc,
-POM, module metadata, and Apache-2.0/LGPL-2.0-or-later license metadata.
+POM, module metadata, and Apache-2.0/LGPL-2.1-or-later license metadata.
 Native variants are implementation resources of one versioned artifact rather
 than separate consumer dependencies. Release CI builds every target, assembles
 the single artifact, and verifies that all required resources are present.

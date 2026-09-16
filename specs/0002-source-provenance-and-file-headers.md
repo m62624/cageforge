@@ -58,7 +58,7 @@ branding and must not imply affiliation, sponsorship, or endorsement.
 ## Header for other third-party code
 
 Third-party code keeps its own license and copyright. For bundled bubblewrap,
-retain the applicable LGPL-2.0-or-later notices and use a matching SPDX
+retain the applicable LGPL-2.1-or-later notices and use a matching SPDX
 identifier; never label that source as wholly Apache-2.0. The same rule applies
 to any future MIT, BSD, or other third-party component.
 

@@ -45,7 +45,7 @@ Add `config` when profiles should come from TOML.
 
 On Linux, `linux-bundled-bubblewrap` is an optional alternative when the
 application should carry its Bubblewrap resource. It includes Cageforge's
-pinned Bubblewrap `v0.11.2` resource; the embedded version is fixed at build
+pinned Bubblewrap `v0.12.0` resource; the embedded version is fixed at build
 time.
 
 `native_sandbox()` chooses the backend for the current OS and enabled Cargo
@@ -314,6 +314,6 @@ The legal and provenance records are maintained in
 ## License
 
 Cageforge's Rust code is Apache-2.0. The separately maintained Bubblewrap
-component retains its LGPL-2.0-or-later license; see the
+component retains its LGPL-2.1-or-later license; see the
 [`cageforge-bwrap` README](crates/cageforge-bwrap/README.md) and
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

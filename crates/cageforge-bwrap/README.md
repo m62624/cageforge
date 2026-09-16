@@ -13,10 +13,15 @@ the bundled Linux resource for Cageforge and provides the reviewed
 architecture-specific bytes to `cageforge-linux`. It keeps the Bubblewrap
 implementation separate from Cageforge's Apache-2.0 Rust crates.
 
-The source snapshot is Bubblewrap `0.11.2` at commit
-`1b80120ef26a28e065e67f89bfef873f13bdd317`. Its original LGPL-2.0-or-later
+The source snapshot is Bubblewrap `0.12.0` at commit
+`014a04330642e5c870418beb621532cb896e0002`. Its original LGPL-2.1-or-later
 notices are retained under `vendor/bubblewrap/`. The standalone license text
 is also available at `licenses/bubblewrap-COPYING` in this crate.
+
+The upstream release includes `--not-a-security-boundary` for callers that
+only need filesystem layout changes. Cageforge does not pass that option:
+Bubblewrap setup failures remain fatal because Cageforge uses it as a security
+boundary.
 
 The `build-from-source` feature is the release-builder mode. On Linux it
 requires a C compiler, `pkg-config`, and the development files for `libcap`.
