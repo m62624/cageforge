@@ -525,6 +525,14 @@ explicit child scope from turning a mutable workspace symlink into a bind of
 an unrelated host directory; the failure must be a typed lowering error, not a
 late Bubblewrap handshake failure.
 
+The default restricted Linux policy must work on both traditional layouts and
+merged-/usr layouts where paths such as `/bin`, `/lib`, or `/lib64` are symlink
+aliases. When a parent bind already provides the same effective access, the
+backend must not emit a redundant child bind over that alias. This preserves
+the alias inside the namespace and satisfies Bubblewrap's rule that mount
+destinations must not be symlinks. The backend must not use
+`--not-a-security-boundary` to bypass this requirement.
+
 When a missing read-only or denied target is nested below a writable root, the
 backend must preserve the leaf target and create only its missing parent
 directories inside the Bubblewrap namespace. It must not materialize the first
