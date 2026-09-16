@@ -17,12 +17,17 @@ import java.util.concurrent.TimeUnit;
 
 /** Minimal Java consumer used by CI to exercise the locally assembled JAR. */
 public final class Main {
+    private static final String SMOKE_OUTPUT = "cageforge-java-local-consumer";
+    private static final String MINIMAL_DIRECTORY = ".cageforge-test-runtime";
+    private static final String WORKSPACE_ROOT = "workspace-root";
+    private static final int WAIT_TIMEOUT_SECONDS = 15;
+
     private Main() {}
 
     public static void main(String[] args) throws Exception {
         Path currentDirectory = Files.createTempDirectory("cageforge-java-smoke-")
                 .toAbsolutePath().normalize();
-        Path minimalPath = Files.createDirectory(currentDirectory.resolve(".cageforge-test-runtime"));
+        Path minimalPath = Files.createDirectory(currentDirectory.resolve(MINIMAL_DIRECTORY));
         RuntimeContext context = new RuntimeContext(currentDirectory, minimalPath);
         boolean windows = WindowsSetup.isSupported();
         Path command = windows
@@ -48,12 +53,12 @@ public final class Main {
                 mode = "restricted"
                 rules = [
                 %s,
-                  { target = "workspace-root", access = "write" },
+                  { target = "%s", access = "write" },
                 ]
 
                 [profiles.smoke.network]
                 mode = "disabled"
-                """.formatted(tomlString(currentDirectory), filesystemRule);
+                """.formatted(tomlString(currentDirectory), filesystemRule, WORKSPACE_ROOT);
 
         List<String> profileNames = Cageforge.profileNames(toml);
         if (!List.of("base", "smoke").equals(profileNames)) {
@@ -80,8 +85,11 @@ public final class Main {
             }
             System.out.println("stage=concurrent-instances");
             List<String> argv = windows
-                    ? List.of(command.toString(), "/d", "/c", "echo", "cageforge-java-local-consumer")
-                    : List.of(command.toString(), "cageforge-java-local-consumer");
+                    ? List.of(command.toString(), "/d", "/c", "echo", SMOKE_OUTPUT)
+                    : List.of(command.toString(), SMOKE_OUTPUT);
+            try (Cageforge warmupRuntime = openRuntime(toml, context)) {
+                runCommand(warmupRuntime, argv);
+            }
             try (Cageforge firstRuntime = openRuntime(toml, context);
                  Cageforge secondRuntime = openRuntime(toml, context)) {
                 var first = java.util.concurrent.CompletableFuture.runAsync(
@@ -99,7 +107,7 @@ public final class Main {
                  SandboxProcess process = runtime.launch(argv)) {
                 String stdout = new String(
                         process.getStdout().readAllBytes(), StandardCharsets.UTF_8);
-                if (!stdout.contains("cageforge-java-local-consumer")) {
+                if (!stdout.contains(SMOKE_OUTPUT)) {
                     throw new CageforgeException("unexpected sandbox stdout: " + stdout);
                 }
                 if (!Integer.valueOf(0).equals(process.waitForAsync().join().getExitCode())) {
@@ -156,7 +164,7 @@ public final class Main {
                     throw new CageforgeException("long-running sandbox command exited too early");
                 }
                 process.kill();
-                wait.get(15, TimeUnit.SECONDS);
+                wait.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 System.out.println("wait-kill=ok");
             }
             System.out.println("stage=stream-kill");
@@ -172,7 +180,7 @@ public final class Main {
                         });
                 Thread.sleep(100);
                 process.kill();
-                blockedRead.get(15, TimeUnit.SECONDS);
+                blockedRead.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 System.out.println("stream-kill=ok");
             }
             System.out.println("stage=write-kill");
@@ -191,7 +199,7 @@ public final class Main {
                     throw new CageforgeException("stdin write did not block as expected");
                 }
                 process.kill();
-                blockedWrite.get(15, TimeUnit.SECONDS);
+                blockedWrite.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 System.out.println("write-kill=ok");
             }
             System.out.println("stage=close-kill");
@@ -200,7 +208,7 @@ public final class Main {
                 var wait = process.waitForAsync();
                 Thread.sleep(100);
                 process.close();
-                wait.get(15, TimeUnit.SECONDS);
+                wait.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 System.out.println("close-kill=ok");
             }
             System.out.println("stage=async-cancel");
@@ -231,7 +239,7 @@ public final class Main {
                  SandboxProcess process = runtime.launch(eofArgv)) {
                 process.getStdin().write("eof".getBytes(StandardCharsets.UTF_8));
                 process.getStdin().close();
-                if (!Integer.valueOf(0).equals(process.waitForAsync().get(15, TimeUnit.SECONDS)
+                if (!Integer.valueOf(0).equals(process.waitForAsync().get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                         .getExitCode())) {
                     throw new CageforgeException("stdin EOF command failed");
                 }
