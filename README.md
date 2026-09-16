@@ -5,7 +5,7 @@
 
 **[What Cageforge is](#what-cageforge-is) · [Use it as a library](#start-with-the-facade) ·
 [Install the CLI](#install-the-command-line-adapter) · [Workspace packages](#workspace-packages) ·
-[Portable layers](#portable-layers) · [Isolation model](#isolation-model-and-references) ·
+[Isolation model](#isolation-model-and-references) ·
 [License](#license)**
 
 ## What Cageforge is
@@ -196,13 +196,14 @@ For the CLI command reference, see the [`cageforge-cli` README](crates/cageforge
 
 ## Workspace packages
 
-The workspace currently contains 14 Cargo packages: 13 reusable library,
-resource, or CLI packages and one internal upstream-review tool.
+The workspace currently contains 15 Cargo packages: 14 reusable library,
+resource, binding, or CLI packages and one internal upstream-review tool.
 
 | Package | Role | Native target or feature |
 | --- | --- | --- |
 | [`cageforge`](crates/cageforge/README.md) | Unified application-facing facade | `linux`, `windows`, or `macos` |
 | [`cageforge-cli`](crates/cageforge-cli/README.md) | Explicit command-line adapter over the facade | Matching OS feature |
+| [`cageforge-java`](crates/bindings/cageforge-java/README.md) | Internal JNI implementation for the JVM binding | Linux, macOS, or Windows |
 | [`cageforge-backend-api`](crates/cageforge-backend-api/README.md) | Capability preflight and backend-bound handoff | Portable |
 | [`cageforge-command`](crates/cageforge-command/README.md) | Validated command, environment, stdio, and timeout values | Portable |
 | [`cageforge-config`](crates/cageforge-config/README.md) | TOML profiles and inheritance resolution | Portable, optional facade feature `config` |
@@ -216,31 +217,10 @@ resource, or CLI packages and one internal upstream-review tool.
 | [`cageforge-bwrap`](crates/cageforge-bwrap/README.md) | Builds and stages the pinned Bubblewrap resource | Linux build/release support |
 | `cageforge-upstream-review` | Read-only internal upstream comparison tool | `publish = false` |
 
-The three native backend README files are the platform-specific guides. The
-other package README files describe the portable layers and their handoff
-relationships. The `cageforge-bwrap` README covers the separately licensed
-Bubblewrap build component.
-
-## Portable layers
-
-Applications can use the smaller packages independently:
-
-1. `cageforge-path` provides shared lexical path equality, containment, native
-   case handling, and parent-traversal decisions.
-2. `cageforge-command` validates executable, arguments, working directory,
-   environment, standard streams, and timeout intent.
-3. `cageforge-policy` validates filesystem and network rules and evaluates
-   portable decisions.
-4. `cageforge-config` can resolve those values from named TOML profiles.
-5. `cageforge-policy-compose` can narrow requested values with an outer
-   `PolicyCeiling`.
-6. `cageforge-backend-api` performs common capability preflight and creates a
-   backend-bound prepared handoff.
-7. A native backend lowers that complete handoff to the OS enforcement API.
-
-The portable packages do not launch processes or silently select an OS
-sandbox. They provide validated values for an application or the `cageforge`
-facade to pass to a selected native backend.
+The native backend README files are the platform-specific guides. The
+`cageforge-java` README covers the JVM binding and its Maven artifact. The
+`cageforge-bwrap` README covers the separately licensed Bubblewrap build
+component.
 
 ## Policy and command boundaries
 

@@ -194,8 +194,8 @@ publishing {
                         url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
                     }
                     license {
-                        name.set("GNU Lesser General Public License, Version 2.0 or later")
-                        url.set("https://www.gnu.org/licenses/old-licenses/lgpl-2.0.html")
+                        name.set("GNU Lesser General Public License, Version 2.1 or later")
+                        url.set("https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html")
                     }
                 }
                 scm {
