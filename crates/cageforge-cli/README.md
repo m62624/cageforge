@@ -76,7 +76,7 @@ automatically for the target operating system:
 $ cargo install --locked cageforge-cli
 
 # Linux, with the verified embedded Bubblewrap resource
-$ cargo install --locked cageforge-cli --no-default-features --features linux-bundled-bubblewrap
+$ cargo install --locked cageforge-cli --features linux-bundled-bubblewrap
 
 # Windows and macOS use the same command on their respective runners.
 ```
@@ -145,12 +145,12 @@ persistent sandbox accounts to uninstall on macOS.
 
 ## Build from source
 
-The backend is selected from the target OS. A library depending on the CLI
-needs only the configuration feature:
+The backend is selected from the target OS. The CLI enables its configuration
+layer by default:
 
 ```toml
 [dependencies]
-cageforge-cli = { version = "0.3.0", features = ["config"] }
+cageforge-cli = "x.y.z"
 ```
 
 The only optional native packaging feature is

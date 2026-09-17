@@ -1,6 +1,8 @@
 # One portable profile with platform-specific path additions.
 # The profile policy and approval settings are shared; only native paths are
 # selected by the resolver for the current PlatformId.
+# The host selects the persistent permissions.json path separately with
+# --permission-store; it is deliberately not part of the policy TOML.
 default_profile = "tool"
 
 [profiles.tool]

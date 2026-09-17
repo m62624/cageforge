@@ -32,8 +32,7 @@ Linux also needs a compatible Bubblewrap and unprivileged namespaces. The
 bundled feature supplies the pinned Bubblewrap resource:
 
 ```console
-cargo run --locked -p cageforge-cli --no-default-features \
-  --features linux-bundled-bubblewrap -- run \
+cargo run --locked -p cageforge-cli --features linux-bundled-bubblewrap -- run \
   --config crates/cageforge-config/examples/runnable/linux/smoke.toml
 ```
 
@@ -41,7 +40,7 @@ macOS needs Seatbelt and the native Cageforge helper; the CLI packages the
 helper and needs no install command:
 
 ```console
-cargo run --locked -p cageforge-cli --no-default-features --features config -- \
+cargo run --locked -p cageforge-cli -- \
   run --config crates/cageforge-config/examples/runnable/macos/smoke.toml
 ```
 
@@ -50,7 +49,7 @@ executables, and an administrator-approved UAC operation. Build the CLI and
 helpers beside one another, then run the release CLI:
 
 ```powershell
-cargo build --locked --release -p cageforge-cli --no-default-features --features config
+cargo build --locked --release -p cageforge-cli
 cargo build --locked --release -p cageforge-windows --bins --features bundled-helpers
 & target/release/cageforge-cli.exe setup install
 & target/release/cageforge-cli.exe run `

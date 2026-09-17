@@ -1,5 +1,5 @@
 # Runnable macOS smoke profile. Run from the repository root with:
-# cargo run --locked -p cageforge-cli --no-default-features --features config -- \
+# cargo run --locked -p cageforge-cli -- \
 #   run --config crates/cageforge-config/examples/runnable/macos/smoke.toml
 default_profile = "smoke"
 
