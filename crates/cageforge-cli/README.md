@@ -150,12 +150,41 @@ needs only the configuration feature:
 
 ```toml
 [dependencies]
-cageforge-cli = { version = "0.1.0", features = ["config"] }
+cageforge-cli = { version = "0.3.0", features = ["config"] }
 ```
 
 The only optional native packaging feature is
-`linux-bundled-bubblewrap`; the crate has no default configuration feature and
-never falls back to an unsandboxed process on an unsupported target.
+`linux-bundled-bubblewrap`; the CLI enables its `config` feature by default
+for normal installs. It never falls back to an unsandboxed process on an
+unsupported target.
+
+## Preflight approval and persistent grants
+
+Approval is disabled by default. To make the CLI ask the trusted host before
+launch, enable preflight in the selected profile:
+
+```toml
+[profiles.tool.approval]
+mode = "preflight"
+timeout_ms = 10000
+on_timeout = "deny"
+persistence = "persistent"
+```
+
+Run it interactively, or use `--approve` only when the caller is itself the
+trusted approval host:
+
+```console
+$ cageforge-cli run --config permission-preflight.toml --approve \
+    --permission-store /var/lib/my-tool/permissions.json -- tool
+```
+
+`--permission-store PATH` selects the host-owned persistent grant store. If
+omitted, the CLI uses `permissions.json` beside the selected TOML file. The
+file is created only after a persistent approval, is protected by the host OS,
+and can be deleted by its owner to revoke saved approvals. A sandboxed command
+does not receive new permissions while it is running; a missing approval in a
+non-interactive invocation is denied rather than retried or auto-approved.
 
 ## Run one program
 

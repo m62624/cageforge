@@ -84,6 +84,11 @@ one path across projects or choose separate stores. Rust callers pass an
 absolute path to `PermissionStore::open`, and the Python and Java bindings
 expose the same explicit store-path operation.
 
+Persistence is revocable host state, not an undeletable system database. The
+owner may remove the file to revoke all saved approvals, and the next launch
+will require approval again. A host should keep the store outside any
+workspace or directory that it grants to the sandbox with write access.
+
 ## Persistent grant store
 
 `PermissionStore` stores grants in one versioned `permissions.json` document.

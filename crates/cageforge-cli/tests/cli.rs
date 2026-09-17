@@ -49,13 +49,40 @@ fn requires_a_config_path_for_run() {
 
 #[test]
 fn help_and_version_succeed() {
-    for flag in ["--help", "--version"] {
-        let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
-            .arg(flag)
-            .output()
-            .expect("run cageforge-cli");
-        assert!(output.status.success(), "{flag} should exit successfully");
+    let help = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .arg("--help")
+        .output()
+        .expect("run cageforge-cli --help");
+    assert!(help.status.success(), "--help should exit successfully");
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    for expected in ["approval.mode = \"preflight\"", "persistent approval"] {
+        assert!(help_text.contains(expected), "help is missing {expected:?}");
     }
+
+    let run_help = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .args(["run", "--help"])
+        .output()
+        .expect("run cageforge-cli run --help");
+    assert!(
+        run_help.status.success(),
+        "run --help should exit successfully"
+    );
+    let run_help_text = String::from_utf8_lossy(&run_help.stdout);
+    for expected in ["--approve", "--permission-store <PATH>"] {
+        assert!(
+            run_help_text.contains(expected),
+            "run help is missing {expected:?}"
+        );
+    }
+
+    let version = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .arg("--version")
+        .output()
+        .expect("run cageforge-cli --version");
+    assert!(
+        version.status.success(),
+        "--version should exit successfully"
+    );
 }
 
 #[test]

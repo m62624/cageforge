@@ -228,7 +228,9 @@ A trusted host may deliberately share one path across projects or choose
 separate stores. The Python and Java bindings expose `PermissionStore` with
 the same `open/get/put` sequence. A store is used only for explicitly
 persistent grants and is protected by the native filesystem security rules of
-the host OS.
+the host OS. It is revocable host state: the owner may delete it to clear all
+saved approvals. Hosts should keep it outside any workspace that the sandbox
+can write.
 
 ## How a sandbox instance works
 
