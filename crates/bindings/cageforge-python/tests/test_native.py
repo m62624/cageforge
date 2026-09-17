@@ -74,7 +74,7 @@ def runtime_context(tmp_path: Path) -> RuntimeContext:
 def smoke_argv() -> list[str]:
     if sys.platform == "win32":
         return [
-            r"C:\Windows\System32\cmd.exe",
+            "C:/Windows/System32/cmd.exe",
             "/d",
             "/c",
             "echo",
@@ -91,7 +91,7 @@ def smoke_grant(toml: str, context: RuntimeContext) -> PermissionGrant:
 def long_running_argv() -> list[str]:
     if sys.platform == "win32":
         return [
-            r"C:\Windows\System32\cmd.exe",
+            "C:/Windows/System32/cmd.exe",
             "/d",
             "/c",
             "ping",
@@ -146,7 +146,7 @@ def test_wait_releases_the_gil(tmp_path: Path) -> None:
     context = runtime_context(tmp_path)
     argv = (
         [
-            r"C:\Windows\System32\cmd.exe",
+            "C:/Windows/System32/cmd.exe",
             "/d",
             "/c",
             "ping",
