@@ -189,7 +189,7 @@ class SandboxProcess:
         """
     def wait_for(self) -> ProcessResult:
         r"""
-        Waits for process completion using the Java binding's snake-case name.
+        Compatibility alias for `wait()`.
         """
     def __enter__(self) -> SandboxProcess: ...
     def __exit__(self, _ty: typing.Optional[typing.Any], _value: typing.Optional[typing.Any], _traceback: typing.Optional[typing.Any]) -> builtins.bool: ...

@@ -858,7 +858,7 @@ impl SandboxProcess {
         })
     }
 
-    /// Waits for process completion using the Java binding's snake-case name.
+    /// Compatibility alias for `wait()`.
     fn wait_for(&self, py: Python<'_>) -> PyResult<ProcessResult> {
         self.wait(py)
     }
