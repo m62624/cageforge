@@ -134,6 +134,29 @@ working directory is the workspace.
   authorization; and
 - `inherits` composes named profiles, with semantic child overrides.
 
+### Preflight approval and the permission request
+
+The TOML controls the policy and approval behavior; it does not contain a
+grant. When a resolved profile uses `approval.mode = "preflight"`, the Rust
+facade, CLI, Python binding, or Java binding builds a `PermissionRequest` from
+the resolved policy and runtime identity. That request includes the selected
+`PlatformId`, architecture, executable/tool identity, config and manifest
+digests, resolved native paths, network capabilities, and child-process
+capabilities. A trusted host then returns an opaque `PermissionGrant` before
+the native backend is launched.
+
+Use [`permission-preflight.toml`](permission-preflight.toml) for one profile
+that applies the same policy to all three operating systems while adding a
+different native config path for each platform. The platform overlay is chosen
+by the typed `PlatformId`; Linux paths are never compared with Windows paths.
+
+Approval is disabled when the `[profiles.<name>.approval]` section is omitted.
+`mode = "preflight"` is fail-closed: an absent or late approval denies the
+launch. `persistence = "session"` keeps the grant in memory, while
+`persistence = "persistent"` allows the trusted host to write it to its
+host-owned `permissions.json` store after approval. The store is not policy
+input and must not be edited as TOML.
+
 An omitted filesystem section resolves to an empty restricted policy. An
 omitted network section denies networking. A profile without `command` is
 valid for a harness that supplies its own typed command or for the CLI when

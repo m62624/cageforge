@@ -68,13 +68,16 @@ on_timeout = "deny"
 persistence = "session"
 
 [profiles.tool.platforms.linux]
-read = ["/etc/tool/config"]
+[profiles.tool.platforms.linux.filesystem]
+rules = [{ target = "absolute", path = "/etc/tool/config", access = "read" }]
 
 [profiles.tool.platforms.macos]
-read = ["/Library/Application Support/tool/config"]
+[profiles.tool.platforms.macos.filesystem]
+rules = [{ target = "absolute", path = "/Library/Application Support/tool/config", access = "read" }]
 
 [profiles.tool.platforms.windows]
-read = ["C:/ProgramData/tool/config"]
+[profiles.tool.platforms.windows.filesystem]
+rules = [{ target = "absolute", path = "C:/ProgramData/tool/config", access = "read" }]
 ```
 
 The platform overlay can also override `filesystem`, `network`, `command`,

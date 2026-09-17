@@ -652,10 +652,18 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeApprovePermissionReq
     mut unowned_env: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     request: jlong,
+    scope: JString<'caller>,
+    expires_at: jlong,
 ) -> jlong {
-    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |_env| {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
         let request = request_ref(request)?.clone();
-        let grant = cageforge::GrantAuthority::new().approve(&request);
+        let scope_value = java_string(env, scope, "permission scope")?;
+        let scope = cageforge::PermissionScope::parse(&scope_value)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        let expires_at = (expires_at >= 0).then_some(expires_at as u64);
+        let grant = cageforge::GrantAuthority::new()
+            .approve_with(&request, request.capabilities().clone(), scope, expires_at)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
         Ok(Box::into_raw(Box::new(grant)) as jlong)
     })
 }
@@ -714,6 +722,74 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeClosePermissionGrant
         // SAFETY: the handle is owned by the JVM PermissionGrant object and is
         // closed at most once by that object.
         unsafe { drop(Box::from_raw(grant as *mut cageforge::PermissionGrant)) };
+    }
+}
+
+/// Opens a host-owned permission store at an absolute path.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeOpenPermissionStore<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    path_value: JString<'caller>,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        let value = java_string(env, path_value, "permission store path")?;
+        let path = path(value, "permission store path")?;
+        let store = cageforge::PermissionStore::open(path)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        Ok(Box::into_raw(Box::new(store)) as jlong)
+    })
+}
+
+/// Looks up a persisted grant for an exact request; zero means no match.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionStoreGet<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    store: jlong,
+    request: jlong,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |_env| {
+        let store = store_ref(store)?;
+        let request = request_ref(request)?;
+        let Some(grant) = store
+            .get(request)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?
+        else {
+            return Ok(0);
+        };
+        Ok(Box::into_raw(Box::new(grant)) as jlong)
+    })
+}
+
+/// Persists a grant after validating it against the exact request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionStorePut<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    store: jlong,
+    grant: jlong,
+    request: jlong,
+) {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |_env| {
+        store_ref(store)?
+            .put(grant_ref(grant)?, request_ref(request)?)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        Ok(())
+    });
+}
+
+/// Releases an opaque JVM permission store handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeClosePermissionStore(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    store: jlong,
+) {
+    if store != 0 {
+        // SAFETY: the handle is created by nativeOpenPermissionStore and is
+        // closed at most once by PermissionStore.close().
+        unsafe { drop(Box::from_raw(store as *mut cageforge::PermissionStore)) };
     }
 }
 
@@ -795,6 +871,18 @@ fn grant_ref(handle: jlong) -> Result<&'static cageforge::PermissionGrant, Bindi
     // SAFETY: the handle is created by nativeApprovePermissionRequest and is
     // reclaimed exactly once by nativeClosePermissionGrant.
     Ok(unsafe { &*(handle as *const cageforge::PermissionGrant) })
+}
+
+fn store_ref(handle: jlong) -> Result<&'static cageforge::PermissionStore, BindingError> {
+    if handle == 0 {
+        return Err(BindingError::new(
+            BindingErrorKind::Permission,
+            "permission store handle is closed",
+        ));
+    }
+    // SAFETY: the handle is created by nativeOpenPermissionStore and
+    // reclaimed exactly once by nativeClosePermissionStore.
+    Ok(unsafe { &*(handle as *const cageforge::PermissionStore) })
 }
 
 /// Creates a native runtime from an in-memory TOML document.

@@ -57,6 +57,12 @@ grant by deserializing or reconstructing its representation. A grant is bound
 to the complete request identity and can be narrowed to a subset of the
 requested capabilities before launch.
 
+`PermissionRequest` is intentionally different from a launch request. A
+`CommandRequest` describes the executable and its argv, while a backend
+request carries the composed policy into one OS implementation. This crate's
+request is the host-facing capability declaration that connects those two
+steps before native launch.
+
 The host performs this sequence before starting a process:
 
 1. construct the request from the exact launch inputs;
@@ -68,14 +74,67 @@ The host performs this sequence before starting a process:
 There is no permission escalation inside a running process. A request that
 cannot be approved before launch is rejected with a typed error.
 
+`PermissionScope::Launch` and `PermissionScope::Session` remain in memory.
+`PermissionScope::Persistent` may be written to the store only after the
+trusted host approves it. The store path is always selected by the host: the
+CLI accepts `--permission-store PATH` and otherwise uses `permissions.json`
+next to the selected TOML file. That default is a per-project convenience,
+not a mandatory system-wide location. A trusted host may deliberately share
+one path across projects or choose separate stores. Rust callers pass an
+absolute path to `PermissionStore::open`, and the Python and Java bindings
+expose the same explicit store-path operation.
+
 ## Persistent grant store
 
 `PermissionStore` stores grants in one versioned `permissions.json` document.
-It loads and indexes the document once per operation, validates the stored
-audit metadata against the request, and writes updates through a temporary
-file, sync, and atomic rename. Unix stores are restricted to the owner; the
-Windows implementation applies and verifies an owner-only ACL. A persistent
-OS advisory lock serializes concurrent writers without a fixed retry budget.
+It loads and indexes the document once when the store is opened, validates the
+stored audit metadata against each request, and writes updates through a
+temporary file, sync, and atomic rename. A writer refreshes the latest
+document while holding the OS lock before replacing it. Unix stores are
+restricted to the owner; the Windows implementation applies and verifies an
+owner-only ACL. A persistent OS advisory lock serializes concurrent writers
+without a fixed retry budget.
+
+The document contains host audit state, not executable policy:
+
+```json
+{
+  "schema_version": 2,
+  "grants": {
+    "<request-digest>": {
+      "request_digest": "<request-digest>",
+      "tool_id": "example-tool",
+      "tool_version": "1.2.3",
+      "manifest_digest": "<sha256>",
+      "config_digest": "<sha256>",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "approved": {
+        "filesystem": [],
+        "network": [],
+        "child_processes": []
+      },
+      "scope": "persistent",
+      "expires_at": null,
+      "issued_at": 1780000000
+    }
+  }
+}
+```
+
+The digest key and the repeated identity fields bind the persisted approval to
+the exact tool, executable/manifest identity, configuration, platform,
+architecture, and requested capabilities. Editing a record does not grant new
+authority: the next lookup revalidates its digest, subset, expiry, schema, and
+owner-only file protection. A changed TOML profile or executable therefore
+requires a new approval.
+
+Normal `get` calls do not reread the file or take the OS lock. `put` takes the
+kernel lock and performs one durable atomic replacement; there is no userspace
+polling delay or fixed retry loop. The durable JSON path is intentionally
+appropriate for relatively infrequent persistent approvals. High-frequency
+hosts should keep session grants in memory or replace this host-owned storage
+behind the same API with a transactional backend such as SQLite.
 
 The store is host state, not application policy. Keep it in a host-controlled
 location and pass its path explicitly when the launch environment requires a

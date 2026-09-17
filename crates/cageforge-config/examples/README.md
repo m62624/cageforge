@@ -34,6 +34,7 @@ profile.
 | [`environment-order.toml`](environment-order.toml) | Explicit environment processing | `inherit → exclude → set/remove → include` |
 | [`trusted-metadata-write.toml`](trusted-metadata-write.toml) | Deliberate repository metadata opt-out | Additional protection and `dangerously_allow_git_write` |
 | [`network-gateway.toml`](network-gateway.toml) | Restricted outbound gateway runtime | Timeouts, resource bounds, inheritance, explicit unlimited relay mode |
+| [`permission-preflight.toml`](permission-preflight.toml) | One cross-platform approval profile | Persistent preflight, shared policy, and Linux/macOS/Windows native paths |
 | [`platform-targets-unix.toml`](platform-targets-unix.toml) | Linux/macOS path and socket syntax | All portable filesystem and network rule fields |
 | [`platform-targets-windows.toml`](platform-targets-windows.toml) | Windows-native equivalent | Drive-qualified paths and the same portable policy fields |
 

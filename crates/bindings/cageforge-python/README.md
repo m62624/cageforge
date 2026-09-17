@@ -75,6 +75,33 @@ launch. `PermissionRequest` is descriptive; only `PermissionApprover` can
 issue the opaque `PermissionGrant`. A grant never changes an already-running
 process.
 
+### Persistent grants and store paths
+
+The permission store is host state, not TOML policy. Choose its absolute path
+explicitly and use a persistent grant when the approval should survive a new
+process:
+
+```python
+from pathlib import Path
+
+from cageforge import PermissionApprover, PermissionStore
+
+store = PermissionStore(Path("/var/lib/my-tool/permissions.json"))
+request = Cageforge.permission_request(profile.read_text(), context=context)
+grant = PermissionApprover().approve(request, scope="persistent")
+store.put(grant, request)
+
+cached = store.get(request)
+assert cached is not None
+with Cageforge.from_toml_file(profile, context=context, grant=cached) as runtime:
+    ...
+```
+
+`PermissionStore` protects the file with owner-only permissions on Unix and an
+owner-only DACL on Windows. It uses a versioned JSON document, an advisory
+writer lock, and atomic replacement. A missing store record is not an
+approval; preflight remains deny-by-default.
+
 When `profile_name` is omitted, `Cageforge.from_toml` and `check_toml` use the
 TOML document's `default_profile`. `Cageforge.from_toml_file` reads a file and
 uses its parent directory as the default current directory. `RuntimeContext()`

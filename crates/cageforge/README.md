@@ -199,8 +199,36 @@ fn launch_with_preflight(
 The request is descriptive and the grant is opaque. A mismatched, expired, or
 insufficient grant returns a typed `PreflightError` before the backend can
 start a process; there is no permission escalation inside a running process.
+
+The three request types have different security roles:
+
+- `CommandRequest` describes what to execute: the program, arguments,
+  environment, working directory, and lifecycle settings.
+- `BackendRequest` couples that command to a composed `EffectiveSandbox` for
+  one native backend handoff.
+- `PermissionRequest` is the host-facing preflight description of what the
+  tool asks to receive before launch. It carries the tool identity and
+  version, manifest and configuration digests, platform and architecture, and
+  filesystem, network, and child-process capabilities.
+
+`PermissionRequest` is descriptive and has no authority. A trusted host turns
+it into an opaque `PermissionGrant`; the grant is checked against the request
+and the policy ceiling before the `BackendRequest` reaches Linux, macOS, or
+Windows enforcement. The permission request is generated from the resolved
+TOML profile and runtime context, so identity and native path data cannot be
+silently replaced by a hand-edited TOML grant.
 Rust hosts that persist decisions can use `PermissionStore` with the same
 request digest and audit metadata used by the language bindings.
+
+The store path belongs to the trusted host. `PermissionStore::open` accepts
+the chosen path; the CLI exposes the same choice as `--permission-store PATH`
+and defaults to `permissions.json` beside the selected TOML file. That
+default is a per-project convenience, not a mandatory system-wide database.
+A trusted host may deliberately share one path across projects or choose
+separate stores. The Python and Java bindings expose `PermissionStore` with
+the same `open/get/put` sequence. A store is used only for explicitly
+persistent grants and is protected by the native filesystem security rules of
+the host OS.
 
 ## How a sandbox instance works
 

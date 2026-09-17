@@ -77,16 +77,17 @@ class Cageforge private constructor(
             configDigest: String? = null,
         ): PermissionRequest {
             require(toml.isNotEmpty()) { "TOML must not be empty" }
-            val handle = NativeBridge.nativePermissionRequest(
-                toml,
-                profileName,
-                context.currentDirectory.toString(),
-                context.minimalPath?.toString(),
-                toolId,
-                toolVersion,
-                manifestDigest,
-                configDigest,
-            )
+            val handle =
+                NativeBridge.nativePermissionRequest(
+                    toml,
+                    profileName,
+                    context.currentDirectory.toString(),
+                    context.minimalPath?.toString(),
+                    toolId,
+                    toolVersion,
+                    manifestDigest,
+                    configDigest,
+                )
             if (handle == 0L) throw CageforgeException("Cageforge permission request failed")
             try {
                 return PermissionRequest(

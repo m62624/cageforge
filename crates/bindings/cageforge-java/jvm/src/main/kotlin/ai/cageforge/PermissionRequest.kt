@@ -18,23 +18,6 @@ class PermissionRequest internal constructor(
             values[0] to values[1]
         }
 
-    /** Issues a session-scoped grant through the native trusted host adapter. */
-    fun approve(): PermissionGrant {
-        val grant = NativeBridge.nativeApprovePermissionRequest(handle)
-        if (grant == 0L) throw CageforgeException("Cageforge permission approval failed")
-        return try {
-            PermissionGrant(
-                handle = grant,
-                requestDigest = NativeBridge.nativePermissionGrantRequestDigest(grant),
-                scope = NativeBridge.nativePermissionGrantScope(grant),
-                expiresAt = NativeBridge.nativePermissionGrantExpiresAt(grant).takeUnless { it < 0 },
-            )
-        } catch (error: Throwable) {
-            NativeBridge.nativeClosePermissionGrant(grant)
-            throw error
-        }
-    }
-
     override fun close() {
         if (handle != 0L) {
             val value = handle

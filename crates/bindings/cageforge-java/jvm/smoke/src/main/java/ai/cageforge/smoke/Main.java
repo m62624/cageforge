@@ -5,6 +5,7 @@ package ai.cageforge.smoke;
 import ai.cageforge.Cageforge;
 import ai.cageforge.CageforgeConfigurationException;
 import ai.cageforge.CageforgeException;
+import ai.cageforge.PermissionApprover;
 import ai.cageforge.RuntimeContext;
 import ai.cageforge.SandboxProcess;
 import ai.cageforge.WindowsSetup;
@@ -286,7 +287,7 @@ public final class Main {
 
     private static Cageforge openRuntime(String toml, RuntimeContext context) {
         try (PermissionRequest request = Cageforge.permissionRequest(toml, null, context);
-                PermissionGrant grant = request.approve()) {
+                PermissionGrant grant = new PermissionApprover().approve(request)) {
             return Cageforge.fromToml(toml, null, context, grant);
         }
     }

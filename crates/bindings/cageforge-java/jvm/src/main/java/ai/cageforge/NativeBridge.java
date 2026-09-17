@@ -47,7 +47,7 @@ final class NativeBridge {
 
     static native void nativeClosePermissionRequest(long request);
 
-    static native long nativeApprovePermissionRequest(long request);
+    static native long nativeApprovePermissionRequest(long request, String scope, long expiresAt);
 
     static native String nativePermissionGrantRequestDigest(long grant);
 
@@ -56,6 +56,14 @@ final class NativeBridge {
     static native long nativePermissionGrantExpiresAt(long grant);
 
     static native void nativeClosePermissionGrant(long grant);
+
+    static native long nativeOpenPermissionStore(String path);
+
+    static native long nativePermissionStoreGet(long store, long request);
+
+    static native void nativePermissionStorePut(long store, long grant, long request);
+
+    static native void nativeClosePermissionStore(long store);
 
     static native long nativeLaunch(long runtime, String[] argv);
 

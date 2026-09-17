@@ -167,6 +167,13 @@ pub struct PermissionGrant {
 #[pyclass(frozen, module = "cageforge._cageforge")]
 pub struct PermissionApprover;
 
+/// Host-owned persistent permission grant store.
+#[gen_stub_pyclass]
+#[pyclass(module = "cageforge._cageforge")]
+pub struct PermissionStore {
+    inner: cageforge::PermissionStore,
+}
+
 /// A launched sandbox process and its detached standard streams.
 #[gen_stub_pyclass]
 #[pyclass(module = "cageforge._cageforge")]
@@ -206,6 +213,10 @@ fn stream_error(error: impl ToString) -> PyErr {
 #[cfg(target_os = "windows")]
 fn setup_error(error: impl ToString) -> PyErr {
     CageforgeWindowsSetupError::new_err(error.to_string())
+}
+
+fn permission_scope(value: &str) -> Result<cageforge::PermissionScope, cageforge::PermissionError> {
+    cageforge::PermissionScope::parse(value)
 }
 
 fn absolute_path(path: PathBuf, name: &str) -> PyResult<PathBuf> {
@@ -926,10 +937,55 @@ impl PermissionApprover {
     }
 
     /// Approves the complete request through the trusted host capability.
-    fn approve(&self, request: &PermissionRequest) -> PermissionGrant {
-        PermissionGrant {
-            inner: cageforge::GrantAuthority::new().approve(&request.inner),
-        }
+    #[pyo3(signature = (request, scope="session", expires_at=None))]
+    fn approve(
+        &self,
+        request: &PermissionRequest,
+        scope: &str,
+        expires_at: Option<u64>,
+    ) -> PyResult<PermissionGrant> {
+        let scope = permission_scope(scope).map_err(permission_error)?;
+        let inner = cageforge::GrantAuthority::new()
+            .approve_with(
+                &request.inner,
+                request.inner.capabilities().clone(),
+                scope,
+                expires_at,
+            )
+            .map_err(permission_error)?;
+        Ok(PermissionGrant { inner })
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PermissionStore {
+    /// Opens a host-owned permission store at an absolute path.
+    #[new]
+    fn new(path: PathBuf) -> PyResult<Self> {
+        let path = absolute_path(path, "permission store path")?;
+        let inner = cageforge::PermissionStore::open(path).map_err(permission_error)?;
+        Ok(Self { inner })
+    }
+
+    /// Returns the configured store path.
+    fn path(&self) -> String {
+        self.inner.path().to_string_lossy().into_owned()
+    }
+
+    /// Returns a valid persisted grant for the exact request, if present.
+    fn get(&self, request: &PermissionRequest) -> PyResult<Option<PermissionGrant>> {
+        self.inner
+            .get(&request.inner)
+            .map(|grant| grant.map(|inner| PermissionGrant { inner }))
+            .map_err(permission_error)
+    }
+
+    /// Persists a persistent grant after validating it against the request.
+    fn put(&self, grant: &PermissionGrant, request: &PermissionRequest) -> PyResult<()> {
+        self.inner
+            .put(&grant.inner, &request.inner)
+            .map_err(permission_error)
     }
 }
 
@@ -1369,6 +1425,7 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PermissionRequest>()?;
     module.add_class::<PermissionGrant>()?;
     module.add_class::<PermissionApprover>()?;
+    module.add_class::<PermissionStore>()?;
     module.add_function(wrap_pyfunction!(native_target, module)?)?;
     module.add("CageforgeError", CageforgeError::type_object(module.py()))?;
     module.add(

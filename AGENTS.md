@@ -159,6 +159,24 @@ These rules are mandatory:
     to `stderr` only after it has attempted its structured failure report, or
     when it cannot establish that authenticated transport at all. Such text is
     for a direct human invocation and is never evidence for the library.
+19. Every crate under `crates/bindings/` and every crate that exposes an FFI
+    or host-language adapter must preserve typed failure semantics across the
+    boundary. Expected Rust failures must use structured error variants and a
+    stable, documented foreign-language exception/error category; do not
+    return a raw `String`, generic exception, sentinel success value, or
+    human-readable stderr text as the public error contract. Map nested Rust
+    sources without discarding the category, and test both the success and
+    failure paths from the foreign language.
+    FFI functions must never let a Rust panic cross the boundary. Opaque
+    handles require explicit closed/invalid checks, single ownership, exactly
+    one release path, and no use-after-close or double-free. Validate null
+    values, NUL-containing strings, path forms, buffer lengths, integer
+    conversions, and platform-specific encodings before native handoff.
+    Do not hold a GIL, JVM monitor, foreign callback lock, or a Cageforge
+    mutex while performing blocking native I/O, waiting for a child, invoking
+    a foreign callback, or re-entering FFI. Document lock ordering, avoid
+    callbacks while locks are held, and add concurrency tests for every
+    shared-handle/store path so deadlocks and lock-order inversions fail in CI.
 
 ## Specification ordering
 

@@ -280,6 +280,20 @@ pub enum PermissionScope {
     Persistent,
 }
 
+impl PermissionScope {
+    /// Parses the stable host-facing scope label.
+    pub fn parse(value: &str) -> Result<Self, PermissionError> {
+        match value {
+            "launch" => Ok(Self::Launch),
+            "session" => Ok(Self::Session),
+            "persistent" => Ok(Self::Persistent),
+            _ => Err(PermissionError::InvalidScope {
+                value: value.to_owned(),
+            }),
+        }
+    }
+}
+
 /// The typed capabilities requested by one tool invocation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionSet {
@@ -611,8 +625,11 @@ impl PermissionStore {
                 expires_at: stored.expires_at,
                 issued_at: stored.issued_at,
             };
-            (metadata_matches && grant.matches(request) && grant.is_valid_at(unix_timestamp()))
-                .then_some(grant)
+            (metadata_matches
+                && stored.scope == PermissionScope::Persistent
+                && grant.matches(request)
+                && grant.is_valid_at(unix_timestamp()))
+            .then_some(grant)
         }))
     }
 
@@ -679,6 +696,12 @@ pub enum PermissionError {
     InvalidDigest {
         /// The digest field that failed validation.
         field: &'static str,
+    },
+    /// A host supplied an unknown grant lifetime label.
+    #[error("invalid permission scope: {value:?}")]
+    InvalidScope {
+        /// The unknown scope label.
+        value: String,
     },
     /// An approved capability was not part of the request.
     #[error("permission grant exceeds the request")]
@@ -1117,6 +1140,21 @@ mod tests {
         store.put(&grant, &request).unwrap();
         let reopened = PermissionStore::open(&path).unwrap();
         assert_eq!(reopened.get(&request).unwrap(), Some(grant));
+    }
+
+    #[test]
+    fn store_rejects_nonpersistent_grants_without_creating_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("permissions.json");
+        let store = PermissionStore::open(&path).unwrap();
+        let request = request();
+        let grant = GrantAuthority::new().approve(&request);
+
+        assert!(matches!(
+            store.put(&grant, &request),
+            Err(StoreError::NonPersistentGrant)
+        ));
+        assert!(!path.exists());
     }
 
     #[test]

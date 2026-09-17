@@ -89,6 +89,33 @@ Profiles with `approval.mode = "preflight"` require a trusted
 `PermissionGrant` before launch. The request is descriptive and the grant is
 opaque; approval never changes permissions of an already-running process.
 
+### Persistent grants and store paths
+
+The permission store is host state rather than TOML policy. A Java host chooses
+the absolute path and persists only an explicitly persistent grant:
+
+```kotlin
+import ai.cageforge.PermissionApprover
+import ai.cageforge.PermissionStore
+
+val store = PermissionStore.open(Path.of("/var/lib/my-tool/permissions.json"))
+val request = Cageforge.permissionRequest(config, context = context)
+val grant = PermissionApprover().approve(request, scope = "persistent")
+store.put(grant, request)
+
+val cached = store.get(request) ?: error("preflight approval is missing")
+Cageforge.fromToml(config, context = context, grant = cached).use { runtime ->
+    // launch only after the exact persisted grant has been authorized
+}
+store.close()
+```
+
+The store uses a versioned JSON document, an advisory writer lock, atomic
+replacement, Unix owner-only permissions, and a Windows owner-only DACL. A
+missing record is not an approval. The CLI has the same behavior through
+`--permission-store PATH`, defaulting to `permissions.json` next to its TOML
+file.
+
 `Cageforge.fromToml` uses the named `default_profile` when no profile name is
 provided. Pass `profileName` when an application needs another profile.
 `Cageforge.fromTomlFile` reads a TOML file and, by default, uses that file's

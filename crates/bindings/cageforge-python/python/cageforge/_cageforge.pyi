@@ -18,6 +18,7 @@ __all__ = [
     "PermissionApprover",
     "PermissionGrant",
     "PermissionRequest",
+    "PermissionStore",
     "ProcessResult",
     "RuntimeContext",
     "SandboxProcess",
@@ -130,7 +131,7 @@ class PermissionApprover:
         r"""
         Creates a session-scoped grant for the complete request.
         """
-    def approve(self, request: PermissionRequest) -> PermissionGrant:
+    def approve(self, request: PermissionRequest, scope: builtins.str = ..., expires_at: typing.Optional[builtins.int] = None) -> PermissionGrant:
         r"""
         Approves the complete request through the trusted host capability.
         """
@@ -185,6 +186,28 @@ class PermissionRequest:
     def network(self) -> builtins.list[builtins.str]:
         r"""
         Returns requested network endpoints.
+        """
+
+@typing.final
+class PermissionStore:
+    r"""
+    Host-owned persistent permission grant store.
+    """
+    def __new__(cls, path: builtins.str | os.PathLike[str] | pathlib.Path) -> PermissionStore:
+        r"""
+        Opens a host-owned permission store at an absolute path.
+        """
+    def path(self) -> builtins.str:
+        r"""
+        Returns the configured store path.
+        """
+    def get(self, request: PermissionRequest) -> typing.Optional[PermissionGrant]:
+        r"""
+        Returns a valid persisted grant for the exact request, if present.
+        """
+    def put(self, grant: PermissionGrant, request: PermissionRequest) -> None:
+        r"""
+        Persists a persistent grant after validating it against the request.
         """
 
 @typing.final

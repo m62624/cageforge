@@ -14,6 +14,8 @@ from cageforge import (
     Cageforge,
     CageforgeProcessError,
     PermissionApprover,
+    PermissionGrant,
+    PermissionStore,
     RuntimeContext,
     WindowsSetup,
     wait_for_async,
@@ -60,7 +62,7 @@ def smoke_argv() -> list[str]:
     return ["/bin/echo", "cageforge-python-native"]
 
 
-def smoke_grant(context: RuntimeContext):
+def smoke_grant(context: RuntimeContext) -> PermissionGrant:
     request = Cageforge.permission_request(smoke_config().read_text(), context=context)
     return PermissionApprover().approve(request)
 
@@ -78,6 +80,19 @@ def long_running_argv() -> list[str]:
             ">nul",
         ]
     return ["/bin/sh", "-c", "sleep 30"]
+
+
+def test_persistent_grant_store_uses_the_explicit_path(tmp_path: Path) -> None:
+    context = runtime_context(tmp_path)
+    request = Cageforge.permission_request(smoke_config().read_text(), context=context)
+    grant = PermissionApprover().approve(request, scope="persistent")
+    path = tmp_path / "host-state" / "permissions.json"
+    store = PermissionStore(path)
+    assert store.path() == str(path)
+    store.put(grant, request)
+    cached = store.get(request)
+    assert cached is not None
+    assert cached.request_digest() == request.digest()
 
 
 def test_native_profile_launch_and_streams(tmp_path: Path) -> None:

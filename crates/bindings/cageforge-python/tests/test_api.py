@@ -9,6 +9,7 @@ JAVA_TO_PYTHON = {
     "Cageforge": {
         "profileNames": "profile_names",
         "checkToml": "check_toml",
+        "permissionRequest": "permission_request",
         "fromToml": "from_toml",
         "fromTomlFile": "from_toml_file",
         "nativeTarget": "native_target",
@@ -31,6 +32,14 @@ JAVA_TO_PYTHON = {
         "status": "status",
         "verify": "verify",
         "uninstall": "uninstall",
+    },
+    "PermissionApprover": {
+        "approve": "approve",
+    },
+    "PermissionStore": {
+        "get": "get",
+        "put": "put",
+        "path": "path",
     },
 }
 
