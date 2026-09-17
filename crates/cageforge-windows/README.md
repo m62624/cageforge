@@ -28,6 +28,9 @@ feature to use this backend through the shared execution API while retaining
 native configuration options. You can also use `cageforge-windows` directly, as
 shown below.
 
+For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
+`minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+
 ## Sandbox model
 
 Each `spawn` creates one sandbox boundary around one command and its complete
@@ -149,6 +152,18 @@ Native enforcement is performed by Windows APIs. Cross-compiling the library
 checks its target surface; native enforcement requires Windows.
 
 ## Basic use
+
+### TOML profile rule for the Windows runtime
+
+For a restricted Windows launch, include `minimal` read access (or the broader
+`root` read access) before preparation. The ACL planner requires one of those
+readable platform bases so a system executable and its dependencies can be
+opened. The CLI resolves `minimal` to `Windows\\System32` and supplies the
+system root separately. Windows has a `tmpdir` scope; it does not have the
+POSIX `slash-tmp` scope.
+
+The runnable example is
+[`runnable/windows/smoke.toml`](../cageforge-config/examples/runnable/windows/smoke.toml).
 
 Provision the setup explicitly, compose the portable values, then prepare and
 spawn through the same backend instance:

@@ -1,0 +1,22 @@
+# Runnable Windows smoke profile. Provision the backend once, then run from
+# the repository root with:
+# cargo run --locked -p cageforge-cli --no-default-features --features windows -- \
+#   run --config crates/cageforge-config/examples/runnable/windows/smoke.toml
+default_profile = "smoke"
+
+[profiles.smoke]
+workspace_roots = { "." = true }
+
+[profiles.smoke.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.smoke.network]
+mode = "disabled"
+
+[profiles.smoke.command]
+program = "C:/Windows/System32/cmd.exe"
+args = ["/d", "/c", "echo", "cageforge-windows-smoke"]

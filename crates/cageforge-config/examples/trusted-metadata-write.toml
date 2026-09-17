@@ -9,6 +9,7 @@ description = "Trusted metadata maintenance workflow"
 mode = "restricted"
 additional_protected_paths = [".cargo", ".env"]
 rules = [
+  { target = "minimal", access = "read" },
   { target = "workspace-root", access = "write" },
 ]
 

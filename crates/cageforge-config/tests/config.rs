@@ -114,11 +114,21 @@ fn documented_examples_cover_their_declared_behavior() {
             PathBuf::from("/work/project")
         ]
     );
-    assert_eq!(inherited.policy().filesystem().entries().len(), 2);
-    assert_eq!(
-        inherited.policy().filesystem().entries()[0].access(),
-        AccessMode::Write
+    assert_eq!(inherited.policy().filesystem().entries().len(), 3);
+    assert!(
+        inherited
+            .policy()
+            .filesystem()
+            .entries()
+            .iter()
+            .any(|entry| entry.access() == AccessMode::Write)
     );
+    assert!(inherited
+        .policy()
+        .filesystem()
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry.target(), FilesystemTarget::Scope(selector) if selector.is_minimal_scope())));
     assert_eq!(
         inherited.policy().network().domains()[1].access(),
         DomainAccess::Allow
@@ -276,7 +286,10 @@ fn platform_example_exercises_every_config_field() {
         .unwrap_or_else(|error| panic!("{name} should resolve: {error}"));
 
     let filesystem = resolved.policy().filesystem();
+    #[cfg(unix)]
     assert_eq!(filesystem.entries().len(), 9);
+    #[cfg(windows)]
+    assert_eq!(filesystem.entries().len(), 8);
     assert_eq!(filesystem.glob_scan_max_depth(), NonZeroUsize::new(6));
     assert_eq!(filesystem.protected_relative_paths().len(), 3);
 

@@ -27,6 +27,9 @@ feature to use this backend through the shared execution API while retaining
 native configuration options. You can also use `cageforge-linux` directly, as
 shown below.
 
+For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
+`minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+
 ## Sandbox model
 
 Each `spawn` creates one sandbox boundary around one command and its complete
@@ -198,6 +201,18 @@ and `ProcMountUnavailable` covers the procfs mount. Cageforge preserves the
 Bubblewrap diagnostic in each error.
 
 ## Basic use
+
+### TOML profile rule for the Linux runtime
+
+For a restricted Linux launch, the usual baseline is `minimal` read access
+plus a writable workspace rule. Bubblewrap starts restricted launches from a
+fresh root, so a command's executable and ELF loader must be visible through
+`minimal` or the broader `root` selector. The CLI supplies `/usr`, `/bin`,
+`/lib`, and `/lib64` for `minimal`; a direct backend caller must add the paths
+to its `PathResolutionContext`.
+
+The runnable example is
+[`runnable/linux/smoke.toml`](../cageforge-config/examples/runnable/linux/smoke.toml).
 
 Build and compose the portable values first, provide the runtime paths used by
 symbolic selectors, then prepare and spawn through the same backend instance:

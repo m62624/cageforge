@@ -17,6 +17,10 @@ variables, an exact network policy, and a timeout. The CLI does not guess which
 files or hosts a program needs. The command after `--` is passed as native argv;
 it is never interpreted as shell text.
 
+The [configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+contains one runnable profile for Linux, macOS, and Windows and explains the
+platform-specific `minimal` runtime scope.
+
 ## Install the CLI
 
 Release binaries are built for Linux, macOS, and Windows on x86_64 and ARM64
@@ -179,14 +183,13 @@ typed `SandboxChild` API from the `cageforge` facade directly.
 default_profile = "isolated"
 
 [profiles.isolated]
-workspace_roots = { "C:/Applications/Isolated" = true }
+workspace_roots = { "." = true }
 
 [profiles.isolated.filesystem]
 mode = "restricted"
 rules = [
-  { target = "root", access = "read" },
   { target = "minimal", access = "read" },
-  { target = "absolute", path = "C:/Applications/Isolated", access = "write" },
+  { target = "workspace-root", access = "write" },
 ]
 
 [profiles.isolated.network]
@@ -197,10 +200,12 @@ mode = "limit"
 milliseconds = 600000
 ```
 
-Use the path form appropriate for the target OS. The same profile model can
-describe a read-only system scope and a specific writable application scope on
-Linux, Windows, or macOS. A profile without a command can be paired with argv
-after `--`; a profile without either is rejected.
+This profile is portable because it uses symbolic `minimal` and
+`workspace-root` selectors. The CLI supplies the platform-specific runtime
+paths; use the matching runnable profile in the [configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+when the executable itself must also be selected per OS. A profile without a
+command can be paired with argv after `--`; a profile without either is
+rejected.
 
 `cageforge-cli schema` prints the configuration schema for editor tooling.
 

@@ -39,6 +39,9 @@ The portable model is available without an OS feature. Add `config` when the
 application wants to load TOML profiles. The standalone network gateway is
 available through the optional `network-runtime` feature.
 
+For the complete TOML flow and separate runnable profiles for each operating
+system, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+
 On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
 not want to build or provide Bubblewrap separately. It includes Cageforge's
 verified, fixed Bubblewrap `v0.12.0` resource; the embedded version is not

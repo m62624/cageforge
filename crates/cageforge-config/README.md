@@ -117,6 +117,10 @@ native Unix/macOS versus Windows path forms. The
 [`network-gateway.toml`](examples/network-gateway.toml) fixture demonstrates
 every gateway field and field-wise inheritance.
 
+For the end-to-end TOML-to-native-launch flow, including the separate runnable
+profiles and the platform-specific meaning of `minimal`, see the
+[configuration guide](examples/CONFIGURATION_GUIDE.md).
+
 Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minimal`,
 `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`. Network modes are
 `disabled`, `enabled`, and `external`; domain and Unix-socket defaults are

@@ -284,6 +284,9 @@ implementation.
 
 The TOML examples are in
 [`crates/cageforge-config/examples`](crates/cageforge-config/examples/README.md).
+The [configuration guide](crates/cageforge-config/examples/CONFIGURATION_GUIDE.md)
+shows which profile to run on Linux, macOS, or Windows and how `minimal` maps
+to each native runtime.
 The complete public API is available on [docs.rs](https://docs.rs/cageforge/latest/cageforge/)
 and in the package README files linked above.
 The legal and provenance records are maintained in
