@@ -74,7 +74,7 @@ def runtime_context(tmp_path: Path) -> RuntimeContext:
 def smoke_argv() -> list[str]:
     if sys.platform == "win32":
         return [
-            "C:/Windows/System32/cmd.exe",
+            r"C:\Windows\System32\cmd.exe",
             "/d",
             "/c",
             "echo",
@@ -91,7 +91,7 @@ def smoke_grant(toml: str, context: RuntimeContext) -> PermissionGrant:
 def long_running_argv() -> list[str]:
     if sys.platform == "win32":
         return [
-            "C:/Windows/System32/cmd.exe",
+            r"C:\Windows\System32\cmd.exe",
             "/d",
             "/c",
             "ping",
@@ -120,12 +120,15 @@ def test_native_profile_launch_and_streams(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
     context = runtime_context(tmp_path)
-    toml = smoke_toml()
+    argv = smoke_argv()
+    toml = toml_for_argv(argv)
+    profile = tmp_path / "smoke.toml"
+    profile.write_bytes(toml.encode("utf-8"))
     runtime = Cageforge.from_toml_file(
-        smoke_config(), context=context, grant=smoke_grant(toml, context)
+        profile, context=context, grant=smoke_grant(toml, context)
     )
     try:
-        process = runtime.launch(smoke_argv())
+        process = runtime.launch(argv)
         try:
             result = process.wait()
             assert result.exit_code == 0
@@ -146,7 +149,7 @@ def test_wait_releases_the_gil(tmp_path: Path) -> None:
     context = runtime_context(tmp_path)
     argv = (
         [
-            "C:/Windows/System32/cmd.exe",
+            r"C:\Windows\System32\cmd.exe",
             "/d",
             "/c",
             "ping",
