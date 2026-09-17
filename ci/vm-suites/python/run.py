@@ -26,7 +26,10 @@ workspace_roots = {{{workspace_root} = true}}
 
 [profiles.smoke.filesystem]
 mode = "restricted"
-rules = [{{ target = "minimal", access = "read" }}]
+rules = [
+  {{ target = "minimal", access = "read" }},
+  {{ target = "workspace-root", access = "write" }},
+]
 
 [profiles.smoke.network]
 mode = "disabled"
