@@ -798,12 +798,19 @@ impl SandboxProcess {
         let state = Arc::clone(&self.state);
         py.detach(move || {
             ensure_process_open(&state)?;
-            state
+            let mut child = state
                 .child
                 .lock()
-                .map_err(|_| process_error("process is poisoned"))?
-                .kill()
-                .map_err(process_error)
+                .map_err(|_| process_error("process is poisoned"))?;
+            if state
+                .completed_status
+                .lock()
+                .map_err(|_| process_error("process status is poisoned"))?
+                .is_some()
+            {
+                return Ok(());
+            }
+            child.kill().map_err(process_error)
         })
     }
 
@@ -814,12 +821,19 @@ impl SandboxProcess {
             if state.closed.swap(true, Ordering::AcqRel) {
                 return Ok(());
             }
-            state
+            let mut child = state
                 .child
                 .lock()
-                .map_err(|_| process_error("process is poisoned"))?
-                .kill()
-                .map_err(process_error)
+                .map_err(|_| process_error("process is poisoned"))?;
+            if state
+                .completed_status
+                .lock()
+                .map_err(|_| process_error("process status is poisoned"))?
+                .is_some()
+            {
+                return Ok(());
+            }
+            child.kill().map_err(process_error)
         })
     }
 
