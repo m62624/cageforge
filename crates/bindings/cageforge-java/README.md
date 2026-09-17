@@ -1,6 +1,6 @@
-> Cageforge is an independent project. It is not affiliated with, sponsored by,
-> or endorsed by OpenAI. Its sandbox design is reviewed against relevant
-> open-source sandboxing work; repository notices record that provenance.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or
+> endorsed by OpenAI. Its implementation and public API are independently
+> authored; repository notices document upstream behavioral references.
 
 # Cageforge Java binding
 
