@@ -502,6 +502,10 @@ fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
     cageforge::Config::from_toml(toml).map_err(|error| error.to_string())
 }
 
+fn normalize_toml_source(toml: String) -> String {
+    toml.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 fn build_preflight_request(
     toml: &str,
     profile_name: Option<&str>,
@@ -633,6 +637,7 @@ impl Cageforge {
         manifest_digest: Option<String>,
         config_digest: Option<String>,
     ) -> PyResult<PermissionRequest> {
+        let toml = normalize_toml_source(toml);
         let context = context
             .map(|value| (value.current_directory.clone(), value.minimal_path.clone()))
             .unwrap_or_else(|| {
@@ -692,6 +697,7 @@ impl Cageforge {
         context: Option<&RuntimeContext>,
         grant: Option<&PermissionGrant>,
     ) -> PyResult<Self> {
+        let toml = normalize_toml_source(toml);
         if toml.is_empty() {
             return Err(configuration_error("TOML must not be empty"));
         }

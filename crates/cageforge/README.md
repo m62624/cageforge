@@ -221,16 +221,18 @@ Rust hosts that persist decisions can use `PermissionStore` with the same
 request digest and audit metadata used by the language bindings.
 
 The store path belongs to the trusted host. `PermissionStore::open` accepts
-the chosen path; the CLI exposes the same choice as `--permission-store PATH`
-and defaults to `permissions.json` beside the selected TOML file. That
-default is a per-project convenience, not a mandatory system-wide database.
-A trusted host may deliberately share one path across projects or choose
-separate stores. The Python and Java bindings expose `PermissionStore` with
-the same `open/get/put` sequence. A store is used only for explicitly
-persistent grants and is protected by the native filesystem security rules of
-the host OS. It is revocable host state: the owner may delete it to clear all
-saved approvals. Hosts should keep it outside any workspace that the sandbox
-can write.
+the chosen path; the CLI exposes the same choice as `--permission-store PATH`,
+which takes priority over its OS-native per-user default. The CLI default is
+`$XDG_STATE_HOME/cageforge/permissions.json` (falling back to
+`~/.local/state/cageforge/permissions.json`) on Linux,
+`~/Library/Application Support/Cageforge/permissions.json` on macOS, and
+`%LOCALAPPDATA%\\Cageforge\\permissions.json` on Windows. A trusted host may
+deliberately share one path across projects or choose separate stores. The
+Python and Java bindings expose `PermissionStore` with the same explicit
+`open/get/put` sequence. A store is used only for explicitly persistent grants
+and is protected by the native filesystem security rules of the host OS. It is
+revocable host state: the owner may delete it to clear all saved approvals.
+Hosts should keep it outside any workspace that the sandbox can write.
 
 ## How a sandbox instance works
 

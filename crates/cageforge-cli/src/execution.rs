@@ -14,6 +14,25 @@ use crate::cli::SetupCommand;
 use crate::cli::{Cli, Command, RunArgs};
 use crate::error::CliError;
 
+#[cfg(all(feature = "config", any(target_os = "linux", target_os = "macos")))]
+const ENV_HOME: &str = "HOME";
+#[cfg(all(feature = "config", target_os = "windows"))]
+const ENV_LOCAL_APP_DATA: &str = "LOCALAPPDATA";
+#[cfg(all(feature = "config", target_os = "linux"))]
+const ENV_XDG_STATE_HOME: &str = "XDG_STATE_HOME";
+#[cfg(feature = "config")]
+const CAGEFORGE_STATE_DIRECTORY: &str = "cageforge";
+#[cfg(feature = "config")]
+const PERMISSION_STORE_FILE: &str = "permissions.json";
+#[cfg(all(feature = "config", target_os = "linux"))]
+const UNIX_LOCAL_DIRECTORY: &str = ".local";
+#[cfg(all(feature = "config", target_os = "linux"))]
+const UNIX_STATE_DIRECTORY: &str = "state";
+#[cfg(all(feature = "config", target_os = "macos"))]
+const MACOS_LIBRARY_DIRECTORY: &str = "Library";
+#[cfg(all(feature = "config", target_os = "macos"))]
+const MACOS_APPLICATION_SUPPORT_DIRECTORY: &str = "Application Support";
+
 #[cfg(feature = "config")]
 struct Invocation {
     command: cageforge::CommandRequest,
@@ -84,15 +103,7 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
                 identity,
             )?
             .with_process_program(program)?;
-            let store_path = args
-                .permission_store
-                .clone()
-                .or_else(|| {
-                    args.config
-                        .parent()
-                        .map(|parent| parent.join("permissions.json"))
-                })
-                .unwrap_or_else(|| PathBuf::from("permissions.json"));
+            let store_path = permission_store_path(args.permission_store.as_deref())?;
             let store = cageforge::PermissionStore::open(store_path)?;
             let grant = match store.get(plan.request())? {
                 Some(grant) => grant,
@@ -145,6 +156,107 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
     #[cfg(target_os = "windows")]
     warn_if_windows_setup_is_unavailable();
     execute_native(invocation)
+}
+
+#[cfg(feature = "config")]
+fn permission_store_path(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
+    if let Some(path) = explicit {
+        return Ok(path.to_path_buf());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let state_directory = match std::env::var_os(ENV_XDG_STATE_HOME) {
+            Some(value) if !value.is_empty() => absolute_environment_path(value)?,
+            _ => home_directory()?
+                .join(UNIX_LOCAL_DIRECTORY)
+                .join(UNIX_STATE_DIRECTORY),
+        };
+        Ok(store_path_in(state_directory))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Ok(store_path_in(
+            home_directory()?
+                .join(MACOS_LIBRARY_DIRECTORY)
+                .join(MACOS_APPLICATION_SUPPORT_DIRECTORY),
+        ))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let local_app_data = std::env::var_os(ENV_LOCAL_APP_DATA).ok_or(
+            CliError::PermissionStorePathUnavailable {
+                variable: ENV_LOCAL_APP_DATA,
+            },
+        )?;
+        Ok(store_path_in(absolute_environment_path(local_app_data)?))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Err(CliError::PermissionStorePathUnavailable {
+            variable: "a supported platform user-data directory",
+        })
+    }
+}
+
+#[cfg(all(feature = "config", any(target_os = "linux", target_os = "macos")))]
+fn home_directory() -> Result<PathBuf, CliError> {
+    let value = std::env::var_os(ENV_HOME)
+        .ok_or(CliError::PermissionStorePathUnavailable { variable: ENV_HOME })?;
+    absolute_environment_path(value)
+}
+
+#[cfg(all(
+    feature = "config",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+fn absolute_environment_path(value: std::ffi::OsString) -> Result<PathBuf, CliError> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(CliError::PermissionStorePathNotAbsolute { path })
+    }
+}
+
+#[cfg(all(
+    feature = "config",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+fn store_path_in(state_directory: PathBuf) -> PathBuf {
+    state_directory
+        .join(CAGEFORGE_STATE_DIRECTORY)
+        .join(PERMISSION_STORE_FILE)
+}
+
+#[cfg(all(test, feature = "config"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_store_path_has_priority() {
+        let explicit = Path::new("/tmp/cageforge-test/permissions.json");
+        assert_eq!(permission_store_path(Some(explicit)).unwrap(), explicit);
+    }
+
+    #[test]
+    fn default_store_path_uses_the_native_cageforge_suffix() {
+        let path = permission_store_path(None).unwrap();
+        assert!(path.ends_with(Path::new("cageforge/permissions.json")));
+    }
+
+    #[test]
+    fn environment_store_roots_must_be_absolute() {
+        let error = absolute_environment_path(std::ffi::OsString::from("relative/state"))
+            .expect_err("relative environment path must be rejected");
+        assert!(matches!(
+            error,
+            CliError::PermissionStorePathNotAbsolute { .. }
+        ));
+    }
 }
 
 #[cfg(feature = "config")]

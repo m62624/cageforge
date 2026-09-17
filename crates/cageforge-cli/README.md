@@ -179,12 +179,15 @@ $ cageforge-cli run --config permission-preflight.toml --approve \
     --permission-store /var/lib/my-tool/permissions.json -- tool
 ```
 
-`--permission-store PATH` selects the host-owned persistent grant store. If
-omitted, the CLI uses `permissions.json` beside the selected TOML file. The
-file is created only after a persistent approval, is protected by the host OS,
-and can be deleted by its owner to revoke saved approvals. A sandboxed command
-does not receive new permissions while it is running; a missing approval in a
-non-interactive invocation is denied rather than retried or auto-approved.
+`--permission-store PATH` explicitly selects the host-owned persistent grant
+store and takes priority. If omitted, the CLI uses the current user's native
+Cageforge state directory: `$XDG_STATE_HOME/cageforge` (falling back to
+`~/.local/state/cageforge`) on Linux, `~/Library/Application Support/Cageforge`
+on macOS, and `%LOCALAPPDATA%\\Cageforge` on Windows. The file is created only
+after a persistent approval, is protected by the host OS, and can be deleted
+by its owner to revoke saved approvals. A sandboxed command does not receive
+new permissions while it is running; a missing approval in a non-interactive
+invocation is denied rather than retried or auto-approved.
 
 ## Run one program
 

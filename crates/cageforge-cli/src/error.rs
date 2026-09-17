@@ -52,6 +52,18 @@ pub enum CliError {
     /// The host-owned permission store could not be read or written.
     #[error("permission store: {0}")]
     PermissionStore(#[from] cageforge::StoreError),
+    /// The CLI could not derive its secure per-user permission-store path.
+    #[error("permission store default path is unavailable: {variable} is not set")]
+    PermissionStorePathUnavailable {
+        /// Environment variable that supplies the platform user-data root.
+        variable: &'static str,
+    },
+    /// A platform user-data environment variable contained a relative path.
+    #[error("permission store default path must be absolute: {path:?}")]
+    PermissionStorePathNotAbsolute {
+        /// Invalid environment-provided path.
+        path: PathBuf,
+    },
     /// The trusted host denied the requested preflight.
     #[error("permission request denied")]
     PermissionDenied,

@@ -77,10 +77,13 @@ cannot be approved before launch is rejected with a typed error.
 `PermissionScope::Launch` and `PermissionScope::Session` remain in memory.
 `PermissionScope::Persistent` may be written to the store only after the
 trusted host approves it. The store path is always selected by the host: the
-CLI accepts `--permission-store PATH` and otherwise uses `permissions.json`
-next to the selected TOML file. That default is a per-project convenience,
-not a mandatory system-wide location. A trusted host may deliberately share
-one path across projects or choose separate stores. Rust callers pass an
+CLI accepts `--permission-store PATH`, which takes priority over its OS-native
+per-user default. Without an explicit path, Linux uses
+`$XDG_STATE_HOME/cageforge/permissions.json` (falling back to
+`~/.local/state/cageforge/permissions.json`), macOS uses
+`~/Library/Application Support/Cageforge/permissions.json`, and Windows uses
+`%LOCALAPPDATA%\\Cageforge\\permissions.json`. A trusted host may deliberately
+share one path across projects or choose separate stores. Rust callers pass an
 absolute path to `PermissionStore::open`, and the Python and Java bindings
 expose the same explicit store-path operation.
 

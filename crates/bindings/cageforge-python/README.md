@@ -54,8 +54,9 @@ profile = (
 ).resolve()
 
 context = RuntimeContext(profile.parent)
-Cageforge.check_toml(profile.read_text(), context=context)
-request = Cageforge.permission_request(profile.read_text(), context=context)
+toml = profile.read_bytes().decode("utf-8")
+Cageforge.check_toml(toml, context=context)
+request = Cageforge.permission_request(toml, context=context)
 grant = PermissionApprover().approve(request)
 with Cageforge.from_toml_file(profile, context=context, grant=grant) as runtime:
     with runtime.launch() as process:
@@ -87,7 +88,8 @@ from pathlib import Path
 from cageforge import PermissionApprover, PermissionStore
 
 store = PermissionStore(Path("/var/lib/my-tool/permissions.json"))
-request = Cageforge.permission_request(profile.read_text(), context=context)
+toml = profile.read_bytes().decode("utf-8")
+request = Cageforge.permission_request(toml, context=context)
 grant = PermissionApprover().approve(request, scope="persistent")
 store.put(grant, request)
 

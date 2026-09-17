@@ -113,8 +113,8 @@ store.close()
 The store uses a versioned JSON document, an advisory writer lock, atomic
 replacement, Unix owner-only permissions, and a Windows owner-only DACL. A
 missing record is not an approval. The CLI has the same behavior through
-`--permission-store PATH`, defaulting to `permissions.json` next to its TOML
-file.
+`--permission-store PATH`, which takes priority over its OS-native per-user
+default.
 
 `Cageforge.fromToml` uses the named `default_profile` when no profile name is
 provided. Pass `profileName` when an application needs another profile.
