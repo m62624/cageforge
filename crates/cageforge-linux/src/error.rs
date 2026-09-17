@@ -293,6 +293,13 @@ pub enum SetupHandshakeError {
         #[source]
         source: NetworkGatewayTransportError,
     },
+    /// The local-IPC policy frame could not be sent to the helper.
+    #[error("setup handshake local IPC frame failed: {source}")]
+    LocalIpcFrame {
+        /// Framing failure.
+        #[source]
+        source: crate::local_ipc::LocalIpcFrameError,
+    },
     /// The helper returned a wrong ready marker.
     #[error("setup handshake ready marker did not match")]
     InvalidReady,
@@ -326,6 +333,12 @@ pub enum NetworkGatewayTransportError {
         #[source]
         source: io::Error,
     },
+}
+
+impl From<crate::local_ipc::LocalIpcFrameError> for SetupHandshakeError {
+    fn from(source: crate::local_ipc::LocalIpcFrameError) -> Self {
+        Self::LocalIpcFrame { source }
+    }
 }
 
 /// A host gateway setup failure.
@@ -735,6 +748,10 @@ pub enum LinuxBackendError {
         #[source]
         source: GatewayError,
     },
+    /// The local IPC policy could not be serialized for the helper boundary.
+    #[error("local IPC policy transport failed: {0}")]
+    /// The local IPC policy could not be serialized for the helper boundary.
+    LocalIpcFrame(#[from] crate::local_ipc::LocalIpcFrameError),
     /// A per-run bridge authentication token could not be generated.
     #[error("failed to generate the Linux network bridge token: {source}")]
     NetworkBridgeTokenGeneration {

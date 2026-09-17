@@ -33,11 +33,13 @@ use crate::error::{
 };
 use crate::helper_protocol::{
     AUTH_FD_ENV, AUTH_TOKEN, BRIDGE_TOKEN_BYTES, GATEWAY_CONNECTION_LIMIT_ENV, GATEWAY_SOCKET_ENV,
-    HARDENING_REQUIRED_ENV, NETWORK_MODE_DIRECT_WITHOUT_UNIX, NETWORK_MODE_DISABLED,
-    NETWORK_MODE_ENV, NETWORK_MODE_PROXY, RELEASE, SETUP_RESULT_FAILURE, SETUP_RESULT_MAGIC,
+    HARDENING_REQUIRED_ENV, LOCAL_IPC_TRACE_MARKER, NETWORK_MODE_DIRECT_WITH_UNIX,
+    NETWORK_MODE_DIRECT_WITHOUT_UNIX, NETWORK_MODE_DISABLED, NETWORK_MODE_ENV, NETWORK_MODE_PROXY,
+    NETWORK_MODE_PROXY_WITH_UNIX, RELEASE, SETUP_RESULT_FAILURE, SETUP_RESULT_MAGIC,
     SETUP_RESULT_NO_ERRNO, SETUP_RESULT_READY, STATUS_MAGIC, STATUS_RESULT_COMMAND,
     STATUS_RESULT_FAILURE, STATUS_RESULT_NO_ERRNO,
 };
+use crate::local_ipc::{LocalIpcPolicy, read_frame};
 use bridge::LocalGatewayBridge;
 use environment::read_environment;
 
@@ -45,20 +47,24 @@ use environment::read_environment;
 enum NetworkHardeningMode {
     None,
     DirectWithoutUnixSockets,
+    DirectWithUnixSockets,
     Disabled,
     ProxyRouted,
+    ProxyRoutedWithUnixSockets,
 }
 
 #[derive(Debug)]
 struct TraceSupervisor {
     root_pid: libc::pid_t,
     tracees: HashSet<libc::pid_t>,
+    local_ipc: Option<LocalIpcPolicy>,
 }
 
 #[derive(Debug)]
 struct CommandSeccompFilter {
     clone3_compatibility: BpfProgram,
     policy: BpfProgram,
+    local_ipc: Option<BpfProgram>,
 }
 
 #[derive(Debug)]
@@ -90,6 +96,7 @@ const KEYCTL_JOIN_SESSION_KEYRING: libc::c_long = 1;
 fn prepare_hardening(
     hardening_required: bool,
     network_mode: NetworkHardeningMode,
+    local_ipc: Option<&LocalIpcPolicy>,
 ) -> Result<Option<CommandSeccompFilter>, LinuxHardeningError> {
     isolate_session_keyring().map_err(|source| LinuxHardeningError::Operation {
         operation: LinuxHardeningOperation::KeyringIsolation,
@@ -115,9 +122,14 @@ fn prepare_hardening(
         .map_err(|source| LinuxHardeningError::SeccompBuild { source })?;
     let policy = build_filter(network_mode, true)
         .map_err(|source| LinuxHardeningError::SeccompBuild { source })?;
+    let local_ipc_filter = local_ipc
+        .map(|_| build_local_ipc_trace_filter())
+        .transpose()
+        .map_err(|source| LinuxHardeningError::SeccompBuild { source })?;
     Ok(Some(CommandSeccompFilter {
         clone3_compatibility,
         policy,
+        local_ipc: local_ipc_filter,
     }))
 }
 
@@ -159,6 +171,25 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             );
         }
     };
+    let local_ipc = if matches!(
+        network_mode,
+        NetworkHardeningMode::DirectWithUnixSockets
+            | NetworkHardeningMode::ProxyRoutedWithUnixSockets
+    ) {
+        match read_frame(&mut authentication) {
+            Ok(policy) => Some(policy),
+            Err(source) => {
+                let error = LinuxHardeningError::LocalIpcFrame { source };
+                return report_setup_failure(
+                    &mut authentication,
+                    LinuxHelperSetupFailureKind::LocalIpcFrame,
+                    &error,
+                );
+            }
+        }
+    } else {
+        None
+    };
     let environment = match read_environment(&mut authentication) {
         Ok(environment) => environment,
         Err(error) => {
@@ -169,13 +200,14 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             );
         }
     };
-    let command_filter = match prepare_hardening(hardening_required, network_mode) {
-        Ok(filter) => filter,
-        Err(error) => {
-            let kind = process_hardening_failure_kind(&error);
-            return report_setup_failure(&mut authentication, kind, &error);
-        }
-    };
+    let command_filter =
+        match prepare_hardening(hardening_required, network_mode, local_ipc.as_ref()) {
+            Ok(filter) => filter,
+            Err(error) => {
+                let kind = process_hardening_failure_kind(&error);
+                return report_setup_failure(&mut authentication, kind, &error);
+            }
+        };
     if let Err(error) = set_close_on_exec(authentication.as_raw_fd(), true) {
         return report_setup_failure(
             &mut authentication,
@@ -217,7 +249,7 @@ pub(crate) fn run_helper(mut args: impl Iterator<Item = OsString>) -> ExitCode {
                 );
             }
         };
-        let supervisor = match prepare_trace_supervision(&child) {
+        let supervisor = match prepare_trace_supervision(&child, local_ipc) {
             Ok(supervisor) => supervisor,
             Err(error) => {
                 terminate_traced_command(&mut child);
@@ -309,6 +341,7 @@ fn process_hardening_failure_kind(error: &LinuxHardeningError) -> LinuxHelperSet
             ..
         } => LinuxHelperSetupFailureKind::KeyringIsolation,
         LinuxHardeningError::SeccompBuild { .. } => LinuxHelperSetupFailureKind::SeccompBuild,
+        LinuxHardeningError::LocalIpcFrame { .. } => LinuxHelperSetupFailureKind::LocalIpcFrame,
         _ => LinuxHelperSetupFailureKind::ProcessHardening,
     }
 }
@@ -422,10 +455,24 @@ fn prepare_traced_command(filter: &CommandSeccompFilter) -> io::Result<()> {
             },
         )
     })?;
+    if let Some(filter) = &filter.local_ipc {
+        apply_filter(filter).map_err(|source| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                SeccompApplyError {
+                    operation: "local IPC policy",
+                    source,
+                },
+            )
+        })?;
+    }
     request_parent_tracing()
 }
 
-fn prepare_trace_supervision(child: &Child) -> Result<TraceSupervisor, LinuxHardeningError> {
+fn prepare_trace_supervision(
+    child: &Child,
+    local_ipc: Option<LocalIpcPolicy>,
+) -> Result<TraceSupervisor, LinuxHardeningError> {
     let root_pid = child.id() as libc::pid_t;
     let initial_status = wait_for_tracee(root_pid)?;
     if !libc::WIFSTOPPED(initial_status) || libc::WSTOPSIG(initial_status) != libc::SIGTRAP {
@@ -438,6 +485,7 @@ fn prepare_trace_supervision(child: &Child) -> Result<TraceSupervisor, LinuxHard
     Ok(TraceSupervisor {
         root_pid,
         tracees: HashSet::from([root_pid]),
+        local_ipc,
     })
 }
 
@@ -479,12 +527,249 @@ fn supervise_traced_command(
             continue;
         }
         let event = status >> 16;
-        if event != 0 {
+        if event == libc::PTRACE_EVENT_SECCOMP {
+            if let Some(policy) = supervisor.local_ipc.as_ref()
+                && !handle_local_ipc_event(pid, policy)?
+            {
+                deny_traced_syscall(pid)?;
+            }
+            continue_tracee(pid, 0)?;
+        } else if event != 0 {
             continue_tracee(pid, 0)?;
         } else {
             continue_tracee(pid, libc::WSTOPSIG(status))?;
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TracedSyscall {
+    number: libc::c_long,
+    address: usize,
+    address_length: usize,
+}
+
+enum TracedEndpoint {
+    NonUnix,
+    UnixPath(Vec<u8>),
+    Invalid,
+}
+
+fn handle_local_ipc_event(
+    pid: libc::pid_t,
+    policy: &LocalIpcPolicy,
+) -> Result<bool, LinuxHardeningError> {
+    let syscall = read_traced_syscall(pid)?;
+    if syscall.number != libc::SYS_connect && syscall.number != libc::SYS_bind {
+        return Ok(true);
+    }
+    match read_traced_endpoint(pid, syscall)? {
+        TracedEndpoint::NonUnix => Ok(true),
+        TracedEndpoint::UnixPath(path) => Ok(policy.allows(&path)),
+        TracedEndpoint::Invalid => Ok(false),
+    }
+}
+
+#[allow(unsafe_code)]
+fn read_traced_syscall(pid: libc::pid_t) -> Result<TracedSyscall, LinuxHardeningError> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETREGS,
+                pid,
+                std::ptr::null_mut::<libc::c_void>(),
+                registers.as_mut_ptr().cast::<libc::c_void>(),
+            )
+        };
+        if result != 0 {
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceRegisters,
+                source: io::Error::last_os_error(),
+            });
+        }
+        let registers = unsafe { registers.assume_init() };
+        return Ok(TracedSyscall {
+            number: registers.orig_rax as libc::c_long,
+            address: registers.rsi as usize,
+            address_length: registers.rdx as usize,
+        });
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETREGS,
+                pid,
+                std::ptr::null_mut::<libc::c_void>(),
+                registers.as_mut_ptr().cast::<libc::c_void>(),
+            )
+        };
+        if result != 0 {
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceRegisters,
+                source: io::Error::last_os_error(),
+            });
+        }
+        let registers = unsafe { registers.assume_init() };
+        return Ok(TracedSyscall {
+            number: registers.regs[8] as libc::c_long,
+            address: registers.regs[1] as usize,
+            address_length: registers.regs[2] as usize,
+        });
+    }
+
+    #[allow(unreachable_code)]
+    Err(LinuxHardeningError::Operation {
+        operation: LinuxHardeningOperation::TraceRegisters,
+        source: io::Error::new(io::ErrorKind::Unsupported, "unsupported trace architecture"),
+    })
+}
+
+#[allow(unsafe_code)]
+fn deny_traced_syscall(pid: libc::pid_t) -> Result<(), LinuxHardeningError> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETREGS,
+                pid,
+                std::ptr::null_mut::<libc::c_void>(),
+                registers.as_mut_ptr().cast::<libc::c_void>(),
+            )
+        };
+        if result != 0 {
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceRegisters,
+                source: io::Error::last_os_error(),
+            });
+        }
+        let mut registers = unsafe { registers.assume_init() };
+        registers.orig_rax = u64::MAX;
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_SETREGS,
+                pid,
+                std::ptr::null_mut::<libc::c_void>(),
+                (&mut registers as *mut libc::user_regs_struct).cast::<libc::c_void>(),
+            )
+        };
+        if result != 0 {
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceRegisters,
+                source: io::Error::last_os_error(),
+            });
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETREGS,
+                pid,
+                std::ptr::null_mut::<libc::c_void>(),
+                registers.as_mut_ptr().cast::<libc::c_void>(),
+            )
+        };
+        if result != 0 {
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceRegisters,
+                source: io::Error::last_os_error(),
+            });
+        }
+        let mut registers = unsafe { registers.assume_init() };
+        registers.regs[8] = u64::MAX;
+        let result = unsafe {
+            libc::ptrace(
+                libc::PTRACE_SETREGS,
+                pid,
+                std::ptr::null_mut::<libc::c_void>(),
+                (&mut registers as *mut libc::user_regs_struct).cast::<libc::c_void>(),
+            )
+        };
+        if result != 0 {
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceRegisters,
+                source: io::Error::last_os_error(),
+            });
+        }
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err(LinuxHardeningError::Operation {
+        operation: LinuxHardeningOperation::TraceRegisters,
+        source: io::Error::new(io::ErrorKind::Unsupported, "unsupported trace architecture"),
+    })
+}
+
+fn read_traced_endpoint(
+    pid: libc::pid_t,
+    syscall: TracedSyscall,
+) -> Result<TracedEndpoint, LinuxHardeningError> {
+    const SOCKADDR_UN_BYTES: usize = 110;
+    if syscall.address == 0 || syscall.address_length < 2 {
+        return Ok(TracedEndpoint::Invalid);
+    }
+    let length = syscall.address_length.min(SOCKADDR_UN_BYTES);
+    let bytes = read_tracee_memory(pid, syscall.address, length)?;
+    let family = u16::from_ne_bytes([bytes[0], bytes[1]]);
+    if family != libc::AF_UNIX as u16 {
+        return Ok(TracedEndpoint::NonUnix);
+    }
+    if bytes.get(2) == Some(&0) {
+        return Ok(TracedEndpoint::Invalid);
+    }
+    let path = &bytes[2..length];
+    let path_length = path
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(path.len());
+    let path = &path[..path_length];
+    if path.first() != Some(&b'/') || path.is_empty() {
+        return Ok(TracedEndpoint::Invalid);
+    }
+    Ok(TracedEndpoint::UnixPath(path.to_vec()))
+}
+
+#[allow(unsafe_code)]
+fn read_tracee_memory(
+    pid: libc::pid_t,
+    address: usize,
+    length: usize,
+) -> Result<Vec<u8>, LinuxHardeningError> {
+    let word_bytes = size_of::<libc::c_long>();
+    let mut bytes = Vec::with_capacity(length);
+    let mut offset = 0;
+    while offset < length {
+        let value = unsafe {
+            libc::ptrace(
+                libc::PTRACE_PEEKDATA,
+                pid,
+                (address + offset) as *mut libc::c_void,
+                std::ptr::null_mut::<libc::c_void>(),
+            )
+        };
+        if value == -1 {
+            let source = io::Error::last_os_error();
+            return Err(LinuxHardeningError::Operation {
+                operation: LinuxHardeningOperation::TraceMemory,
+                source,
+            });
+        }
+        let word = (value as libc::c_long).to_ne_bytes();
+        let take = (length - offset).min(word_bytes);
+        bytes.extend_from_slice(&word[..take]);
+        offset += take;
+    }
+    Ok(bytes)
 }
 
 fn wait_for_tracee(pid: libc::pid_t) -> Result<libc::c_int, LinuxHardeningError> {
@@ -511,7 +796,8 @@ fn set_trace_options(pid: libc::pid_t) -> Result<(), LinuxHardeningError> {
         | libc::PTRACE_O_TRACECLONE
         | libc::PTRACE_O_TRACEEXEC
         | libc::PTRACE_O_TRACEFORK
-        | libc::PTRACE_O_TRACEVFORK;
+        | libc::PTRACE_O_TRACEVFORK
+        | libc::PTRACE_O_TRACESECCOMP;
     let result = unsafe {
         libc::ptrace(
             libc::PTRACE_SETOPTIONS,
@@ -574,8 +860,14 @@ fn network_hardening_mode() -> Result<NetworkHardeningMode, LinuxHardeningError>
         Some(value) if value == NETWORK_MODE_DIRECT_WITHOUT_UNIX => {
             Ok(NetworkHardeningMode::DirectWithoutUnixSockets)
         }
+        Some(value) if value == NETWORK_MODE_DIRECT_WITH_UNIX => {
+            Ok(NetworkHardeningMode::DirectWithUnixSockets)
+        }
         Some(value) if value == NETWORK_MODE_DISABLED => Ok(NetworkHardeningMode::Disabled),
         Some(value) if value == NETWORK_MODE_PROXY => Ok(NetworkHardeningMode::ProxyRouted),
+        Some(value) if value == NETWORK_MODE_PROXY_WITH_UNIX => {
+            Ok(NetworkHardeningMode::ProxyRoutedWithUnixSockets)
+        }
         Some(value) => Err(LinuxHardeningError::UnknownNetworkMode {
             value: value.to_string_lossy().into_owned(),
         }),
@@ -586,7 +878,10 @@ fn start_gateway_bridge(
     mode: NetworkHardeningMode,
     authentication: &mut File,
 ) -> Result<Option<LocalGatewayBridge>, LinuxHardeningError> {
-    if mode != NetworkHardeningMode::ProxyRouted {
+    if !matches!(
+        mode,
+        NetworkHardeningMode::ProxyRouted | NetworkHardeningMode::ProxyRoutedWithUnixSockets
+    ) {
         return Ok(None);
     }
     let socket = std::env::var_os(GATEWAY_SOCKET_ENV)
@@ -886,8 +1181,14 @@ fn build_filter(
         NetworkHardeningMode::DirectWithoutUnixSockets => {
             add_unix_socket_isolation_rules(&mut rules)?;
         }
+        NetworkHardeningMode::DirectWithUnixSockets => {
+            add_pathname_unix_socket_rules(&mut rules)?;
+        }
         NetworkHardeningMode::Disabled => add_disabled_network_rules(&mut rules)?,
         NetworkHardeningMode::ProxyRouted => add_proxy_network_rules(&mut rules)?,
+        NetworkHardeningMode::ProxyRoutedWithUnixSockets => {
+            add_proxy_network_rules_with_unix(&mut rules)?;
+        }
     }
 
     let filter = SeccompFilter::new(
@@ -901,6 +1202,22 @@ fn build_filter(
         .try_into()
         .map_err(|source: seccompiler::BackendError| SeccompBuildError::BpfConversion { source })?;
     Ok(program)
+}
+
+fn build_local_ipc_trace_filter() -> Result<BpfProgram, SeccompBuildError> {
+    let rules = BTreeMap::from([
+        (libc::SYS_bind, Vec::new()),
+        (libc::SYS_connect, Vec::new()),
+    ]);
+    SeccompFilter::new(
+        rules,
+        SeccompAction::Allow,
+        SeccompAction::Trace(LOCAL_IPC_TRACE_MARKER),
+        target_architecture()?,
+    )
+    .map_err(|source| SeccompBuildError::Filter { source })?
+    .try_into()
+    .map_err(|source: seccompiler::BackendError| SeccompBuildError::BpfConversion { source })
 }
 
 fn build_clone3_compatibility_filter() -> Result<BpfProgram, SeccompBuildError> {
@@ -998,6 +1315,59 @@ fn add_proxy_network_rules(
     ])
     .map_err(|source| SeccompBuildError::Rule { source })?;
     rules.insert(libc::SYS_socket, vec![ip_only]);
+    rules.insert(libc::SYS_socketpair, isolated_unix_socketpair_rules()?);
+    Ok(())
+}
+
+fn add_proxy_network_rules_with_unix(
+    rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
+) -> Result<(), SeccompBuildError> {
+    let non_ip_or_unix = SeccompRule::new(vec![
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_INET as u64,
+        )
+        .map_err(|source| SeccompBuildError::Condition { source })?,
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_INET6 as u64,
+        )
+        .map_err(|source| SeccompBuildError::Condition { source })?,
+        SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_UNIX as u64,
+        )
+        .map_err(|source| SeccompBuildError::Condition { source })?,
+    ])
+    .map_err(|source| SeccompBuildError::Rule { source })?;
+    rules.insert(
+        libc::SYS_socket,
+        vec![
+            non_ip_or_unix,
+            unix_socket_type_rule(libc::SOCK_DGRAM)?,
+            unix_socket_type_rule(libc::SOCK_SEQPACKET)?,
+        ],
+    );
+    rules.insert(libc::SYS_socketpair, isolated_unix_socketpair_rules()?);
+    Ok(())
+}
+
+fn add_pathname_unix_socket_rules(
+    rules: &mut BTreeMap<i64, Vec<SeccompRule>>,
+) -> Result<(), SeccompBuildError> {
+    rules.insert(
+        libc::SYS_socket,
+        vec![
+            unix_socket_type_rule(libc::SOCK_DGRAM)?,
+            unix_socket_type_rule(libc::SOCK_SEQPACKET)?,
+        ],
+    );
     rules.insert(libc::SYS_socketpair, isolated_unix_socketpair_rules()?);
     Ok(())
 }

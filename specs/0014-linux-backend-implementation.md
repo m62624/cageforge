@@ -330,7 +330,7 @@ restricted request to an unrestricted process.
 | domain rules | Enforce through an isolated namespace and backend-owned HTTP/SOCKS gateway that resolves once and applies both effective policy layers |
 | private/loopback/link-local restrictions | Enforce at the gateway using every resolved address before any exact connection attempt |
 | `ResolvedNetworkTarget` authorization | Require one captured target and immediate exact-address authorization; connect only with the consumed authorized address |
-| Unix socket rules | Proxy-routed mode denies pathname-capable AF_UNIX sockets while preserving AF_UNIX stream and sequenced-packet socketpair IPC; explicit allowlists remain typed unsupported on Linux |
+| Unix socket rules | Proxy-routed and direct restricted modes enforce bounded exact pathname rules through the authenticated helper's seccomp/ptrace boundary; process-local socketpairs remain available and unsupported address forms fail closed |
 | all/core/none environment bases | Apply the selected base; Linux `core` variables are selected by the backend |
 | environment filters | Apply include/exclude filters after selecting the base and preserve the portable ordering |
 | environment set/remove overrides | Apply after the selected base and filters according to `EnvironmentSpec` |
@@ -632,18 +632,17 @@ The frozen Codex restricted-network seccomp policy permits every AF_UNIX
 `socket()` and `socketpair()` type, blocks `connect` and `sendto`, but leaves
 `sendmsg` available. Linux datagram endpoints can supply a pathname through
 `sendmsg(msg_name=...)`, and datagram socketpair endpoints can also be
-redirected with `connect` or `sendto`. The frozen proxy-routed policy likewise
-permits every AF_UNIX socketpair type on the assumption that those descriptors
-cannot reach a pathname socket. Cageforge therefore permits AF_UNIX
-`SOCK_STREAM` sockets and socketpairs, including normal `CLOEXEC` and
-`NONBLOCK` flags, and permits process-local `SOCK_SEQPACKET` socketpairs. The
-latter is required by Rust's portable fork-and-exec implementation for its
-child-error channel and has no pathname endpoint to redirect. It continues to
-deny standalone `SOCK_SEQPACKET` sockets and `SOCK_DGRAM` endpoints whenever
-pathname Unix isolation is required. The base socket type is checked with the
-Linux UAPI type mask so creation flags cannot bypass or accidentally trigger
-the rule. This preserves process-local IPC without leaving a pathname
-Unix-socket route around disabled or proxy-routed networking.
+redirected with `connect` or `sendto`. Cageforge's exact pathname policy uses
+the authenticated helper as the native decision point: a second seccomp
+program emits `PTRACE_EVENT_SECCOMP` for `connect` and `bind`, and the helper
+reads the bounded `sockaddr_un` from the traced process before continuing or
+rewriting the syscall to fail. Abstract, malformed, and non-absolute paths
+fail closed. The socket filter denies standalone AF_UNIX `SOCK_DGRAM` and
+`SOCK_SEQPACKET` endpoints while retaining stream sockets and process-local
+socketpairs; the Linux UAPI type mask makes `CLOEXEC` and `NONBLOCK` flags
+unable to bypass the decision. This preserves process-local IPC without
+leaving a pathname Unix-socket route around restricted or proxy-routed
+networking.
 
 Before the command is released, the authenticated helper channel carries a
 framed setup result. A rejected setup includes a stable typed failure category
@@ -855,6 +854,10 @@ job is an enforcement gate.
 - disabled networking rejects loopback and public destinations;
 - disabled networking rejects pathname Unix datagrams sent through `sendmsg`
   while preserving process-local stream and sequenced-packet socketpair IPC;
+- restricted pathname Unix-socket policy permits the exact configured stream
+  endpoint and rejects a sibling endpoint, including when the TCP policy is
+  proxy-routed;
+- malformed, abstract, and oversized pathname endpoints fail closed; and
 - unrestricted networking is not accidentally treated as disabled;
 - hostname-only decisions cannot authorize a connection;
 - an address outside the captured `ResolvedNetworkTarget` is rejected;

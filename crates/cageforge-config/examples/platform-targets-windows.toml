@@ -27,16 +27,15 @@ rules = [
 [profiles.all-targets.network]
 mode = "enabled"
 domain_mode = "restricted"
-unix_socket_mode = "restricted"
+# POSIX pathname Unix sockets are not Windows named pipes. Keep this disabled
+# until a separate native named-pipe policy is available.
+unix_socket_mode = "disabled"
 local_network_access = "deny"
 domains = [
   { pattern = "**.example.com", access = "allow" },
   { pattern = "API.Example.com:443", access = "allow" },
   { pattern = "[2001:DB8::1]:443", access = "allow" },
   { pattern = "blocked.example.com", access = "deny" },
-]
-unix_sockets = [
-  { path = "C:/cageforge-example/run/cageforge.sock", access = "allow" },
 ]
 
 [profiles.all-targets.command]

@@ -9,7 +9,7 @@ use std::num::NonZeroUsize;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixDatagram, UnixStream};
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,9 +17,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cageforge_backend_api::{
-    BackendCapability, BackendContractError, BackendRequest, SandboxBackend,
-};
+use cageforge_backend_api::{BackendCapability, BackendRequest, SandboxBackend};
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioSpec};
 use cageforge_config::Config;
 use cageforge_linux::{
@@ -296,6 +294,14 @@ fn network_environment(mode: &str, target: SocketAddr) -> EnvironmentSpec {
         .expect("target")
 }
 
+fn unix_network_environment(mode: &str, target: &Path) -> EnvironmentSpec {
+    EnvironmentSpec::inherit_all()
+        .with_var("CAGEFORGE_NETWORK_TEST_MODE", mode)
+        .expect("mode")
+        .with_var("CAGEFORGE_NETWORK_TEST_UNIX_TARGET", target.as_os_str())
+        .expect("Unix target")
+}
+
 fn spawn_network_client(
     policy: SandboxPolicy,
     mode: &str,
@@ -456,23 +462,44 @@ fn network_client_fixture() {
     let Ok(mode) = std::env::var("CAGEFORGE_NETWORK_TEST_MODE") else {
         return;
     };
-    let target: SocketAddr = std::env::var("CAGEFORGE_NETWORK_TEST_TARGET")
-        .expect("target")
-        .parse()
-        .expect("socket address");
+    let target = std::env::var("CAGEFORGE_NETWORK_TEST_TARGET")
+        .ok()
+        .map(|target| target.parse().expect("socket address"));
     match mode.as_str() {
-        "http" => assert!(send_http_proxy_request(target).starts_with(b"HTTP/1.1 200")),
-        "http-denied" => {
-            assert!(!send_http_proxy_request(target).starts_with(b"HTTP/1.1 200"));
+        "http" => {
+            assert!(send_http_proxy_request(target.expect("target")).starts_with(b"HTTP/1.1 200"))
         }
-        "socks" => assert!(send_socks_request(target).starts_with(b"HTTP/1.1 200")),
-        "direct" => assert!(send_direct_request(target).starts_with(b"HTTP/1.1 200")),
+        "http-denied" => {
+            assert!(!send_http_proxy_request(target.expect("target")).starts_with(b"HTTP/1.1 200"));
+        }
+        "socks" => {
+            assert!(send_socks_request(target.expect("target")).starts_with(b"HTTP/1.1 200"))
+        }
+        "direct" => {
+            assert!(send_direct_request(target.expect("target")).starts_with(b"HTTP/1.1 200"))
+        }
         "direct-denied" => {
-            assert!(TcpStream::connect_timeout(&target, Duration::from_millis(250)).is_err());
+            assert!(
+                TcpStream::connect_timeout(&target.expect("target"), Duration::from_millis(250))
+                    .is_err()
+            );
         }
         "unix-denied" => {
             assert!(UnixStream::connect("/dev/.cageforge-runtime/network/gateway.sock").is_err());
             assert!(UnixStream::pair().is_ok());
+        }
+        "unix-allowed" => {
+            let target = PathBuf::from(
+                std::env::var_os("CAGEFORGE_NETWORK_TEST_UNIX_TARGET").expect("Unix target"),
+            );
+            let mut stream = UnixStream::connect(target).expect("allowed Unix socket");
+            stream.write_all(b"allowed").expect("allowed Unix payload");
+        }
+        "unix-path-denied" => {
+            let target = PathBuf::from(
+                std::env::var_os("CAGEFORGE_NETWORK_TEST_UNIX_TARGET").expect("Unix target"),
+            );
+            assert!(UnixStream::connect(target).is_err());
         }
         "stalled-proxy-slot" => {
             let mut stalled =
@@ -488,7 +515,7 @@ fn network_client_fixture() {
             );
             let deadline = Instant::now() + Duration::from_secs(3);
             loop {
-                match try_send_http_proxy_request(target) {
+                match try_send_http_proxy_request(target.expect("target")) {
                     Ok(response) if response.starts_with(b"HTTP/1.1 200") => break,
                     Ok(_) | Err(_) if Instant::now() < deadline => {
                         thread::sleep(Duration::from_millis(1));
@@ -2548,9 +2575,14 @@ fn restricted_network_capabilities_are_advertised_for_exact_gateway_enforcement(
             .supports(BackendCapability::NetworkLocalIpcIsolation)
     );
     assert!(
-        !backend
+        backend
             .capabilities()
             .supports(BackendCapability::NetworkLocalIpcRules)
+    );
+    assert!(
+        backend
+            .capabilities()
+            .supports(BackendCapability::NetworkLocalIpcDenyRules)
     );
 }
 
@@ -2716,25 +2748,115 @@ fn proxy_routed_process_cannot_connect_directly_or_open_the_gateway_unix_socket(
 }
 
 #[test]
-fn explicit_unix_socket_policy_remains_a_typed_unsupported_requirement() {
+fn restricted_unix_socket_policy_allows_only_the_exact_path() {
     let temp = TempDir::new().expect("temporary workspace");
+    let allowed_path = temp.path().join("allowed.sock");
+    let denied_path = temp.path().join("denied.sock");
+    let allowed_listener = UnixListener::bind(&allowed_path).expect("allowed listener");
+    let denied_listener = UnixListener::bind(&denied_path).expect("denied listener");
     let network = NetworkPolicy::enabled()
+        .with_domain_mode(DomainMode::Restricted)
+        .with_domain("example.com", DomainAccess::Allow)
+        .expect("domain policy")
         .with_unix_socket_mode(UnixSocketMode::Restricted)
-        .with_unix_socket("/run/example.sock", DomainAccess::Allow)
+        .with_unix_socket(&allowed_path, DomainAccess::Allow)
         .expect("Unix socket policy");
     let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
-    let command = CommandSpec::new("/bin/true").expect("command");
-    let (command, effective, runtime) = request(temp.path(), policy, command);
     let backend = backend();
-    let error = backend
+    let command = network_client_command();
+    let (command, effective, runtime) = request_with_environment(
+        temp.path(),
+        policy.clone(),
+        command,
+        unix_network_environment("unix-allowed", &allowed_path),
+    );
+    let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &runtime)
-        .expect_err("explicit Unix socket enforcement is unavailable");
-    assert!(matches!(
-        error,
-        LinuxBackendError::Contract(BackendContractError::UnsupportedCapability {
-            capability: BackendCapability::NetworkLocalIpcRules,
-        })
-    ));
+        .expect("local IPC preflight");
+    let mut child = backend.spawn(prepared).expect("local IPC spawn");
+    let status = child.wait().expect("allowed wait");
+    if !status.success() {
+        let mut stderr = String::new();
+        child
+            .stderr()
+            .expect("allowed stderr")
+            .read_to_string(&mut stderr)
+            .expect("allowed stderr read");
+        panic!("allowed local IPC fixture failed with {status}: {stderr}");
+    }
+    let (mut stream, _) = allowed_listener.accept().expect("allowed accept");
+    let mut payload = [0; 7];
+    stream.read_exact(&mut payload).expect("allowed payload");
+    assert_eq!(&payload, b"allowed");
+
+    let (command, effective, runtime) = request_with_environment(
+        temp.path(),
+        policy,
+        network_client_command(),
+        unix_network_environment("unix-path-denied", &denied_path),
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("denied local IPC preflight");
+    let mut child = backend.spawn(prepared).expect("denied local IPC spawn");
+    assert_eq!(child.wait().expect("denied wait").code(), Some(0));
+    denied_listener
+        .set_nonblocking(true)
+        .expect("nonblocking denied listener");
+    assert!(
+        denied_listener.accept().is_err(),
+        "denied socket accepted a client"
+    );
+}
+
+#[test]
+fn enabled_unix_socket_policy_rejects_only_the_explicit_deny_path() {
+    let temp = TempDir::new().expect("temporary workspace");
+    let allowed_path = temp.path().join("allowed.sock");
+    let denied_path = temp.path().join("denied.sock");
+    let allowed_listener = UnixListener::bind(&allowed_path).expect("allowed listener");
+    let denied_listener = UnixListener::bind(&denied_path).expect("denied listener");
+    let network = NetworkPolicy::enabled()
+        .with_unix_socket_mode(UnixSocketMode::Enabled)
+        .with_unix_socket(&denied_path, DomainAccess::Deny)
+        .expect("Unix socket deny policy");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
+    let backend = backend();
+
+    let (command, effective, runtime) = request_with_environment(
+        temp.path(),
+        policy.clone(),
+        network_client_command(),
+        unix_network_environment("unix-allowed", &allowed_path),
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("local IPC deny preflight");
+    let mut child = backend.spawn(prepared).expect("local IPC deny spawn");
+    assert_eq!(child.wait().expect("allowed wait").code(), Some(0));
+    let (mut stream, _) = allowed_listener.accept().expect("allowed accept");
+    let mut payload = [0; 7];
+    stream.read_exact(&mut payload).expect("allowed payload");
+    assert_eq!(&payload, b"allowed");
+
+    let (command, effective, runtime) = request_with_environment(
+        temp.path(),
+        policy,
+        network_client_command(),
+        unix_network_environment("unix-path-denied", &denied_path),
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("denied local IPC preflight");
+    let mut child = backend.spawn(prepared).expect("denied local IPC spawn");
+    assert_eq!(child.wait().expect("denied wait").code(), Some(0));
+    denied_listener
+        .set_nonblocking(true)
+        .expect("nonblocking denied listener");
+    assert!(
+        denied_listener.accept().is_err(),
+        "denied socket accepted a client"
+    );
 }
 
 #[test]
