@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import threading
@@ -9,7 +10,13 @@ import time
 from pathlib import Path
 
 import pytest
-from cageforge import Cageforge, CageforgeProcessError, RuntimeContext, WindowsSetup
+from cageforge import (
+    Cageforge,
+    CageforgeProcessError,
+    RuntimeContext,
+    WindowsSetup,
+    wait_for_async,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -50,6 +57,21 @@ def smoke_argv() -> list[str]:
             "cageforge-python-native",
         ]
     return ["/bin/echo", "cageforge-python-native"]
+
+
+def long_running_argv() -> list[str]:
+    if sys.platform == "win32":
+        return [
+            r"C:\Windows\System32\cmd.exe",
+            "/d",
+            "/c",
+            "ping",
+            "127.0.0.1",
+            "-n",
+            "30",
+            ">nul",
+        ]
+    return ["/bin/sh", "-c", "sleep 30"]
 
 
 def test_native_profile_launch_and_streams(tmp_path: Path) -> None:
@@ -96,10 +118,11 @@ def test_wait_releases_the_gil(tmp_path: Path) -> None:
             argv = ["/bin/sh", "-c", "sleep 1"]
         process = runtime.launch(argv)
         completed = threading.Event()
+        wait_result: list[int | None] = []
 
         def waiter() -> None:
             try:
-                assert process.wait().exit_code == 0
+                wait_result.append(process.wait().exit_code)
             finally:
                 completed.set()
 
@@ -110,9 +133,39 @@ def test_wait_releases_the_gil(tmp_path: Path) -> None:
         while time.monotonic() < deadline:
             counter += 1
         assert counter > 1_000
-        process.kill()
         thread.join(timeout=5)
+        if not completed.is_set():
+            process.kill()
+            thread.join(timeout=5)
         assert completed.is_set()
+        assert wait_result and wait_result[0] in (0, None)
         process.close()
     finally:
+        runtime.close()
+
+
+def test_async_wait_cancellation_terminates_the_process(tmp_path: Path) -> None:
+    require_linux_guest()
+    ensure_windows_setup()
+    runtime = Cageforge.from_toml_file(
+        smoke_config(), context=runtime_context(tmp_path)
+    )
+    process = runtime.launch(long_running_argv())
+    try:
+        async def cancel_wait() -> None:
+            task = asyncio.create_task(wait_for_async(process))
+            await asyncio.sleep(0.1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(cancel_wait())
+        deadline = time.monotonic() + 5
+        while process.try_wait() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        result = process.try_wait()
+        assert result is not None
+        assert result.exit_code is None
+    finally:
+        process.close()
         runtime.close()

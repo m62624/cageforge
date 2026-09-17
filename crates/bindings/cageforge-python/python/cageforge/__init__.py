@@ -41,4 +41,12 @@ __all__ = [
 async def wait_for_async(process: SandboxProcess) -> ProcessResult:
     """Wait for a process without blocking the current asyncio event loop."""
 
-    return await asyncio.to_thread(process.wait)
+    wait_task = asyncio.create_task(asyncio.to_thread(process.wait))
+    try:
+        return await wait_task
+    except asyncio.CancelledError:
+        try:
+            await asyncio.to_thread(process.kill)
+        except CageforgeError:
+            pass
+        raise

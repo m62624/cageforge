@@ -47,7 +47,8 @@ finally:
 argv is passed directly to the backend; it is never interpreted as shell
 syntax. `SandboxProcess` exposes `read_stdout`, `read_stderr`,
 `write_stdin`, `try_wait`, `wait`, `kill`, and `close` for the same lifecycle
-operations available in the JVM binding.
+operations available in the JVM binding. Cancelling `wait_for_async()` also
+terminates the sandbox boundary, matching the JVM async-wait contract.
 
 The configuration model and policy semantics are documented in the workspace
 [configuration guide](../../cageforge-config/examples/CONFIGURATION_GUIDE.md).

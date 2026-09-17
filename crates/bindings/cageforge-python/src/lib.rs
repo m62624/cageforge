@@ -13,8 +13,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 #[cfg(all(feature = "linux", target_os = "linux"))]
 use std::time::Duration;
@@ -82,13 +81,37 @@ struct RuntimeState {
     profile_command: Option<cageforge::CommandRequest>,
 }
 
+struct LifecycleState {
+    closing: bool,
+    closed: bool,
+    active_operations: usize,
+}
+
 struct ChildState {
     child: Mutex<Box<dyn cageforge::SandboxChild<Error = cageforge::SandboxExecutionError> + Send>>,
     stdin: Mutex<Option<Box<dyn Write + Send>>>,
     stdout: Mutex<Option<Box<dyn Read + Send>>>,
     stderr: Mutex<Option<Box<dyn Read + Send>>>,
     completed_status: Mutex<Option<Option<i32>>>,
-    closed: AtomicBool,
+    lifecycle: Mutex<LifecycleState>,
+    no_active_operations: Condvar,
+    close_lock: Mutex<()>,
+}
+
+struct OperationGuard {
+    state: Arc<ChildState>,
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        let Ok(mut lifecycle) = self.state.lifecycle.lock() else {
+            return;
+        };
+        lifecycle.active_operations = lifecycle.active_operations.saturating_sub(1);
+        if lifecycle.active_operations == 0 {
+            self.state.no_active_operations.notify_all();
+        }
+    }
 }
 
 /// Runtime paths deliberately supplied by the host application.
@@ -406,7 +429,9 @@ fn validate_native_resources(directory: &Path) -> PyResult<()> {
 }
 
 fn module_native_directory(py: Python<'_>) -> PyResult<PathBuf> {
-    let imported = py.import("cageforge._cageforge")?;
+    let imported = py
+        .import("cageforge._cageforge")
+        .map_err(initialization_error)?;
     let module = imported
         .cast_into::<PyModule>()
         .map_err(|error| initialization_error(error.to_string()))?;
@@ -459,12 +484,6 @@ fn command_request(
         }
     }
     Ok(request)
-}
-
-fn status_result(status: std::process::ExitStatus) -> ProcessResult {
-    ProcessResult {
-        exit_code: status.code(),
-    }
 }
 
 fn status_value(status: Option<std::process::ExitStatus>) -> Option<Option<i32>> {
@@ -626,7 +645,13 @@ impl Cageforge {
                 stderr: Mutex::new(child.take_stderr()),
                 child: Mutex::new(child),
                 completed_status: Mutex::new(None),
-                closed: AtomicBool::new(false),
+                lifecycle: Mutex::new(LifecycleState {
+                    closing: false,
+                    closed: false,
+                    active_operations: 0,
+                }),
+                no_active_operations: Condvar::new(),
+                close_lock: Mutex::new(()),
             })
         })?;
         Ok(SandboxProcess {
@@ -666,7 +691,7 @@ impl SandboxProcess {
     fn id(&self, py: Python<'_>) -> PyResult<u32> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            ensure_process_open(&state)?;
+            let _operation = begin_operation(&state)?;
             let child = state
                 .child
                 .lock()
@@ -677,31 +702,26 @@ impl SandboxProcess {
 
     /// Returns whether stdin is connected to a pipe.
     fn has_stdin(&self, py: Python<'_>) -> PyResult<bool> {
-        ensure_process_open(&self.state)?;
         stream_present(py, &self.state, StreamKind::Stdin)
     }
 
     /// Returns whether stdout is connected to a pipe.
     fn has_stdout(&self, py: Python<'_>) -> PyResult<bool> {
-        ensure_process_open(&self.state)?;
         stream_present(py, &self.state, StreamKind::Stdout)
     }
 
     /// Returns whether stderr is connected to a pipe.
     fn has_stderr(&self, py: Python<'_>) -> PyResult<bool> {
-        ensure_process_open(&self.state)?;
         stream_present(py, &self.state, StreamKind::Stderr)
     }
 
     /// Reads up to `size` bytes from stdout.
     fn read_stdout(&self, py: Python<'_>, size: usize) -> PyResult<Py<PyBytes>> {
-        ensure_process_open(&self.state)?;
         read_stream(py, &self.state, StreamKind::Stdout, size)
     }
 
     /// Reads up to `size` bytes from stderr.
     fn read_stderr(&self, py: Python<'_>, size: usize) -> PyResult<Py<PyBytes>> {
-        ensure_process_open(&self.state)?;
         read_stream(py, &self.state, StreamKind::Stderr, size)
     }
 
@@ -709,7 +729,7 @@ impl SandboxProcess {
     fn write_stdin(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<usize> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            ensure_process_open(&state)?;
+            let _operation = begin_operation(&state)?;
             let mut stream_guard = state
                 .stdin
                 .lock()
@@ -725,7 +745,7 @@ impl SandboxProcess {
     fn close_stdin(&self, py: Python<'_>) -> PyResult<()> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            ensure_process_open(&state)?;
+            let _operation = begin_operation(&state)?;
             state
                 .stdin
                 .lock()
@@ -739,22 +759,19 @@ impl SandboxProcess {
     fn try_wait(&self, py: Python<'_>) -> PyResult<Option<ProcessResult>> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            ensure_process_open(&state)?;
+            let _operation = begin_operation(&state)?;
+            let mut child = state
+                .child
+                .lock()
+                .map_err(|_| process_error("process is poisoned"))?;
             if let Some(status) = *state
                 .completed_status
                 .lock()
                 .map_err(|_| process_error("process status is poisoned"))?
             {
-                return Ok(status.map(|exit_code| ProcessResult {
-                    exit_code: Some(exit_code),
-                }));
+                return Ok(Some(ProcessResult { exit_code: status }));
             }
-            let status = state
-                .child
-                .lock()
-                .map_err(|_| process_error("process is poisoned"))?
-                .try_wait()
-                .map_err(process_error)?;
+            let status = child.try_wait().map_err(process_error)?;
             if let Some(value) = status_value(status) {
                 *state
                     .completed_status
@@ -770,26 +787,31 @@ impl SandboxProcess {
     fn wait(&self, py: Python<'_>) -> PyResult<ProcessResult> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            ensure_process_open(&state)?;
-            if let Some(status) = *state
-                .completed_status
-                .lock()
-                .map_err(|_| process_error("process status is poisoned"))?
-            {
-                return Ok(ProcessResult { exit_code: status });
+            let _operation = begin_operation(&state)?;
+            loop {
+                {
+                    let mut child = state
+                        .child
+                        .lock()
+                        .map_err(|_| process_error("process is poisoned"))?;
+                    if let Some(status) = *state
+                        .completed_status
+                        .lock()
+                        .map_err(|_| process_error("process status is poisoned"))?
+                    {
+                        return Ok(ProcessResult { exit_code: status });
+                    }
+                    if let Some(value) = status_value(child.try_wait().map_err(process_error)?) {
+                        *state
+                            .completed_status
+                            .lock()
+                            .map_err(|_| process_error("process status is poisoned"))? =
+                            Some(value);
+                        return Ok(ProcessResult { exit_code: value });
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            let status = state
-                .child
-                .lock()
-                .map_err(|_| process_error("process is poisoned"))?
-                .wait()
-                .map_err(process_error)?;
-            let result = status_result(status);
-            *state
-                .completed_status
-                .lock()
-                .map_err(|_| process_error("process status is poisoned"))? = Some(result.exit_code);
-            Ok(result)
         })
     }
 
@@ -797,20 +819,8 @@ impl SandboxProcess {
     fn kill(&self, py: Python<'_>) -> PyResult<()> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            ensure_process_open(&state)?;
-            let mut child = state
-                .child
-                .lock()
-                .map_err(|_| process_error("process is poisoned"))?;
-            if state
-                .completed_status
-                .lock()
-                .map_err(|_| process_error("process status is poisoned"))?
-                .is_some()
-            {
-                return Ok(());
-            }
-            child.kill().map_err(process_error)
+            let _operation = begin_operation(&state)?;
+            terminate_child(&state)
         })
     }
 
@@ -818,22 +828,33 @@ impl SandboxProcess {
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            if state.closed.swap(true, Ordering::AcqRel) {
-                return Ok(());
-            }
-            let mut child = state
-                .child
+            let _close = state
+                .close_lock
                 .lock()
-                .map_err(|_| process_error("process is poisoned"))?;
-            if state
-                .completed_status
-                .lock()
-                .map_err(|_| process_error("process status is poisoned"))?
-                .is_some()
+                .map_err(|_| process_error("process close lock is poisoned"))?;
             {
-                return Ok(());
+                let mut lifecycle = state
+                    .lifecycle
+                    .lock()
+                    .map_err(|_| process_error("process lifecycle is poisoned"))?;
+                if lifecycle.closed {
+                    return Ok(());
+                }
+                lifecycle.closing = true;
             }
-            child.kill().map_err(process_error)
+            let termination = terminate_child(&state);
+            let mut lifecycle = state
+                .lifecycle
+                .lock()
+                .map_err(|_| process_error("process lifecycle is poisoned"))?;
+            while lifecycle.active_operations != 0 {
+                lifecycle = state
+                    .no_active_operations
+                    .wait(lifecycle)
+                    .map_err(|_| process_error("process lifecycle is poisoned"))?;
+            }
+            lifecycle.closed = true;
+            termination
         })
     }
 
@@ -867,6 +888,7 @@ enum StreamKind {
 fn stream_present(py: Python<'_>, state: &Arc<ChildState>, stream: StreamKind) -> PyResult<bool> {
     let state = Arc::clone(state);
     py.detach(move || {
+        let _operation = begin_operation(&state)?;
         let present = match stream {
             StreamKind::Stdin => state
                 .stdin
@@ -888,10 +910,34 @@ fn stream_present(py: Python<'_>, state: &Arc<ChildState>, stream: StreamKind) -
     })
 }
 
-fn ensure_process_open(state: &ChildState) -> PyResult<()> {
-    if state.closed.load(Ordering::Acquire) {
+fn begin_operation(state: &Arc<ChildState>) -> PyResult<OperationGuard> {
+    let mut lifecycle = state
+        .lifecycle
+        .lock()
+        .map_err(|_| process_error("process lifecycle is poisoned"))?;
+    if lifecycle.closing || lifecycle.closed {
         return Err(process_error("sandbox process is closed"));
     }
+    lifecycle.active_operations += 1;
+    Ok(OperationGuard {
+        state: Arc::clone(state),
+    })
+}
+
+fn terminate_child(state: &Arc<ChildState>) -> PyResult<()> {
+    let mut child = state
+        .child
+        .lock()
+        .map_err(|_| process_error("process is poisoned"))?;
+    let mut completed_status = state
+        .completed_status
+        .lock()
+        .map_err(|_| process_error("process status is poisoned"))?;
+    if completed_status.is_some() {
+        return Ok(());
+    }
+    child.kill().map_err(process_error)?;
+    *completed_status = Some(None);
     Ok(())
 }
 
@@ -906,6 +952,7 @@ fn read_stream(
     }
     let state = Arc::clone(state);
     let bytes = py.detach(move || {
+        let _operation = begin_operation(&state)?;
         let target = match stream {
             StreamKind::Stdout => &state.stdout,
             StreamKind::Stderr => &state.stderr,
