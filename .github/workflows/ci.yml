@@ -824,7 +824,9 @@ jobs:
         run: |
           .venv/bin/maturin build --locked --release --features "${{ matrix.feature }}" --compatibility linux --out dist
           mkdir -p "$RUNNER_TEMP/cageforge-python-consumer"
-          cp dist/*.whl "$RUNNER_TEMP/cageforge-python-consumer/cageforge-python.whl"
+          wheel=$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)
+          test -n "$wheel"
+          cp "$wheel" "$RUNNER_TEMP/cageforge-python-consumer/$(basename "$wheel")"
           cp "$GITHUB_WORKSPACE/ci/vm-suites/python/run.py" "$RUNNER_TEMP/cageforge-python-consumer/"
           tar --create --gzip --file="$RUNNER_TEMP/cageforge-python-consumer-smoke.tar.gz" --directory="$RUNNER_TEMP/cageforge-python-consumer" .
       - name: Upload the tested Linux Python consumer
