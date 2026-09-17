@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 import pytest
-from cageforge import Cageforge, CageforgeProcessError
+from cageforge import Cageforge, CageforgeProcessError, WindowsSetup
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -27,8 +27,16 @@ def require_linux_guest() -> None:
         pytest.skip("Linux native consumer runs in the dedicated QEMU guest")
 
 
+def ensure_windows_setup() -> None:
+    if sys.platform == "win32":
+        if WindowsSetup.status() != "ready":
+            WindowsSetup.install()
+        WindowsSetup.verify()
+
+
 def test_native_profile_launch_and_streams() -> None:
     require_linux_guest()
+    ensure_windows_setup()
     runtime = Cageforge.from_toml_file(smoke_config())
     try:
         process = runtime.launch()
@@ -48,6 +56,7 @@ def test_native_profile_launch_and_streams() -> None:
 
 def test_wait_releases_the_gil() -> None:
     require_linux_guest()
+    ensure_windows_setup()
     runtime = Cageforge.from_toml_file(smoke_config())
     try:
         if sys.platform == "win32":
