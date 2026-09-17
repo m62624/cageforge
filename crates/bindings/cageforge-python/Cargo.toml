@@ -1,0 +1,42 @@
+[package]
+name = "cageforge-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Python bindings for the Cageforge cross-platform sandbox"
+readme = "README.md"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[features]
+default = ["config"]
+config = ["cageforge/config"]
+linux = ["config", "cageforge/linux"]
+linux-bundled-bubblewrap = ["linux", "cageforge/linux-bundled-bubblewrap"]
+macos = ["config", "cageforge/macos"]
+windows = ["config", "cageforge/windows"]
+
+[lib]
+name = "_cageforge"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+
+[dependencies]
+cageforge.workspace = true
+pyo3.workspace = true
+pyo3-stub-gen.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "deny"
+
+[lints.clippy]
+all = "warn"

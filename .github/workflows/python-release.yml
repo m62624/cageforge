@@ -1,0 +1,263 @@
+name: Python release artifacts
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Tested release tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: "Python wheel (${{ matrix.resource }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - resource: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            python_arch: x64
+            manylinux: auto
+            feature: linux-bundled-bubblewrap
+            helper_package: cageforge-linux
+            helper_arguments: "--bin cageforge-linux-helper"
+          - resource: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            python_arch: arm64
+            manylinux: auto
+            feature: linux-bundled-bubblewrap
+            helper_package: cageforge-linux
+            helper_arguments: "--bin cageforge-linux-helper"
+          - resource: macos-x86_64
+            runner: macos-26-intel
+            target: x86_64-apple-darwin
+            python_arch: x64
+            manylinux: "off"
+            feature: macos
+            helper_package: cageforge-macos
+            helper_arguments: "--bin cageforge-macos-helper"
+          - resource: macos-aarch64
+            runner: macos-26
+            target: aarch64-apple-darwin
+            python_arch: arm64
+            manylinux: "off"
+            feature: macos
+            helper_package: cageforge-macos
+            helper_arguments: "--bin cageforge-macos-helper"
+          - resource: windows-x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            python_arch: x64
+            manylinux: "off"
+            feature: windows
+            helper_package: cageforge-windows
+            helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
+          - resource: windows-aarch64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            python_arch: arm64
+            manylinux: "off"
+            feature: windows
+            helper_package: cageforge-windows
+            helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Stage package license and attribution files
+        run: |
+          cp LICENSE crates/bindings/cageforge-python/LICENSE
+          cp NOTICE crates/bindings/cageforge-python/NOTICE
+          cp THIRD_PARTY_NOTICES.md crates/bindings/cageforge-python/THIRD_PARTY_NOTICES.md
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux Bubblewrap build dependencies
+        if: startsWith(matrix.resource, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential pkg-config libcap-dev binutils
+      - name: Build the pinned Linux Bubblewrap resource
+        if: startsWith(matrix.resource, 'linux-')
+        run: |
+          set -euo pipefail
+          arch=x86_64
+          [[ "${{ matrix.resource }}" == linux-aarch64 ]] && arch=aarch64
+          output_dir="crates/cageforge-bwrap/assets/linux-$arch"
+          mkdir -p "$output_dir"
+          cargo run --locked --release -p cageforge-bwrap -- --output "$output_dir/bwrap"
+      - name: Build the extension and native helpers
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p cageforge-python --target "${{ matrix.target }}" --no-default-features --features "${{ matrix.feature }}"
+          cargo build --locked --release -p "${{ matrix.helper_package }}" --target "${{ matrix.target }}" ${{ matrix.helper_arguments }}
+      - name: Stage every helper in the target-specific Python resource directory
+        run: |
+          set -euo pipefail
+          source_dir="target/${{ matrix.target }}/release"
+          resource_dir="crates/bindings/cageforge-python/python/cageforge/native/${{ matrix.resource }}"
+          mkdir -p "$resource_dir"
+          case "${{ matrix.resource }}" in
+            linux-*)
+              arch=x86_64
+              [[ "${{ matrix.resource }}" == linux-aarch64 ]] && arch=aarch64
+              cp "$source_dir/lib_cageforge.so" "$resource_dir/"
+              cp "$source_dir/cageforge-linux-helper" "$resource_dir/"
+              cp "crates/cageforge-bwrap/assets/linux-$arch/bwrap" "$resource_dir/"
+              cp "crates/cageforge-bwrap/assets/linux-$arch/bwrap.sha256" "$resource_dir/"
+              cp crates/cageforge-bwrap/licenses/bubblewrap-COPYING "$resource_dir/"
+              ;;
+            macos-*)
+              cp "$source_dir/lib_cageforge.dylib" "$resource_dir/"
+              cp "$source_dir/cageforge-macos-helper" "$resource_dir/"
+              ;;
+            windows-*)
+              cp "$source_dir/_cageforge.dll" "$resource_dir/"
+              cp "$source_dir/cageforge-windows-setup.exe" "$resource_dir/"
+              cp "$source_dir/cageforge-windows-command-runner.exe" "$resource_dir/"
+              ;;
+          esac
+      - uses: actions/setup-python@v7
+        if: matrix.manylinux == 'off'
+        with:
+          python-version: '3.10'
+          architecture: ${{ matrix.python_arch }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          working-directory: crates/bindings/cageforge-python
+          args: --release --out dist --features ${{ matrix.feature }}
+          sccache: "true"
+      - name: Verify wheel metadata and target resources
+        working-directory: crates/bindings/cageforge-python
+        run: |
+          set -euo pipefail
+          wheel=$(find dist -name '*.whl' -type f -print -quit)
+          test -n "$wheel"
+          python - "$wheel" "${{ matrix.resource }}" <<'PY'
+          import sys
+          import zipfile
+
+          wheel, resource = sys.argv[1:]
+          with zipfile.ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+
+          prefix = f"cageforge/native/{resource}/"
+          if resource.startswith("linux-"):
+              files = (
+                  "lib_cageforge.so",
+                  "cageforge-linux-helper",
+                  "bwrap",
+                  "bwrap.sha256",
+                  "bubblewrap-COPYING",
+              )
+          elif resource.startswith("macos-"):
+              files = ("lib_cageforge.dylib", "cageforge-macos-helper")
+          elif resource.startswith("windows-"):
+              files = (
+                  "_cageforge.dll",
+                  "cageforge-windows-setup.exe",
+                  "cageforge-windows-command-runner.exe",
+              )
+          else:
+              raise SystemExit(f"unknown Python resource target: {resource}")
+
+          required = {prefix + name for name in files}
+          required.update({"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"})
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f"missing wheel members: {missing}")
+          if any(name.startswith("cageforge/native/native/") for name in names):
+              raise SystemExit("wheel contains an extra native nesting level")
+
+          dist_infos = {
+              name.split("/", 1)[0]
+              for name in names
+              if name.endswith(".dist-info/METADATA")
+          }
+          if len(dist_infos) != 1:
+              raise SystemExit(f"expected one dist-info directory, got {dist_infos}")
+          dist_info = next(iter(dist_infos))
+          for name in ("LICENSE", "NOTICE"):
+              member = f"{dist_info}/licenses/{name}"
+              if member not in names:
+                  raise SystemExit(f"missing wheel license member: {member}")
+          print("wheel member audit: ok")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-python-wheel-${{ matrix.resource }}
+          path: crates/bindings/cageforge-python/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: Python source distribution
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Stage package license and attribution files
+        run: |
+          cp LICENSE crates/bindings/cageforge-python/LICENSE
+          cp NOTICE crates/bindings/cageforge-python/NOTICE
+          cp THIRD_PARTY_NOTICES.md crates/bindings/cageforge-python/THIRD_PARTY_NOTICES.md
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          working-directory: crates/bindings/cageforge-python
+          args: --out dist
+      - name: Verify source distribution metadata
+        working-directory: crates/bindings/cageforge-python
+        run: |
+          set -euo pipefail
+          archive=$(find dist -name '*.tar.gz' -type f -print -quit)
+          test -n "$archive"
+          python - "$archive" <<'PY'
+          import sys
+          import tarfile
+
+          with tarfile.open(sys.argv[1], "r:gz") as archive:
+              names = archive.getnames()
+          prefix = names[0].split("/", 1)[0] + "/"
+          if not all(name.startswith(prefix) for name in names):
+              raise SystemExit("sdist contains more than one top-level directory")
+          relative = {name[len(prefix):] for name in names}
+          required = {
+              "LICENSE",
+              "NOTICE",
+              "THIRD_PARTY_NOTICES.md",
+              "Cargo.toml",
+              "pyproject.toml",
+              "README.md",
+              "crates/bindings/cageforge-python/src/lib.rs",
+              "python/cageforge/__init__.py",
+              "python/cageforge/_cageforge.pyi",
+          }
+          missing = sorted(required - relative)
+          if missing:
+              raise SystemExit(f"missing sdist members: {missing}")
+          native_prefix = "crates/bindings/cageforge-python/python/cageforge/native/"
+          if any(name.startswith(native_prefix) for name in relative):
+              raise SystemExit("wheel-only native resources leaked into sdist")
+          print("sdist member audit: ok")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-python-sdist
+          path: crates/bindings/cageforge-python/dist/*.tar.gz
+          if-no-files-found: error

@@ -1,0 +1,58 @@
+[build-system]
+requires = ["maturin>=1.14,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cageforge"
+description = "Python bindings for the Cageforge cross-platform sandbox"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "Mansur Azatbek", email = "mansur62624@gmail.com" }]
+requires-python = ">=3.10"
+keywords = ["sandbox", "security", "isolation", "rust", "cageforge"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/m62624/cageforge"
+Repository = "https://github.com/m62624/cageforge"
+Documentation = "https://github.com/m62624/cageforge/blob/main/crates/bindings/cageforge-python/README.md"
+
+[tool.maturin]
+python-source = "python"
+module-name = "cageforge._cageforge"
+include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "NOTICE", format = "sdist" },
+    { path = "THIRD_PARTY_NOTICES.md", format = "sdist" },
+    { path = "LICENSE", format = "wheel" },
+    { path = "NOTICE", format = "wheel" },
+    { path = "THIRD_PARTY_NOTICES.md", format = "wheel" },
+    { path = "python/cageforge/native/**/*", format = "wheel" },
+]
+features = ["pyo3/extension-module"]
+compatibility = "manylinux2014"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+files = ["python", "tests"]
+
+[tool.ruff]
+extend-exclude = ["python/cageforge/_cageforge.pyi"]
+
+[tool.ruff.lint]
+extend-select = ["I", "UP", "B", "RUF", "PIE", "FURB"]

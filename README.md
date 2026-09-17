@@ -196,7 +196,7 @@ For the CLI command reference, see the [`cageforge-cli` README](crates/cageforge
 
 ## Workspace packages
 
-The workspace currently contains 15 Cargo packages: 14 reusable library,
+The workspace currently contains 16 Cargo packages: 15 reusable library,
 resource, binding, or CLI packages and one internal upstream-review tool.
 
 | Package | Role | Native target or feature |
@@ -204,6 +204,7 @@ resource, binding, or CLI packages and one internal upstream-review tool.
 | [`cageforge`](crates/cageforge/README.md) | Unified application-facing facade | `linux`, `windows`, or `macos` |
 | [`cageforge-cli`](crates/cageforge-cli/README.md) | Explicit command-line adapter over the facade | Matching OS feature |
 | [`cageforge-java`](crates/bindings/cageforge-java/README.md) | Internal JNI implementation for the JVM binding | Linux, macOS, or Windows |
+| [`cageforge-python`](crates/bindings/cageforge-python/README.md) | PyO3 implementation for the Python binding published through maturin | Linux, macOS, or Windows |
 | [`cageforge-backend-api`](crates/cageforge-backend-api/README.md) | Capability preflight and backend-bound handoff | Portable |
 | [`cageforge-command`](crates/cageforge-command/README.md) | Validated command, environment, stdio, and timeout values | Portable |
 | [`cageforge-config`](crates/cageforge-config/README.md) | TOML profiles and inheritance resolution | Portable, optional facade feature `config` |
@@ -218,7 +219,8 @@ resource, binding, or CLI packages and one internal upstream-review tool.
 | `cageforge-upstream-review` | Read-only internal upstream comparison tool | `publish = false` |
 
 The native backend README files are the platform-specific guides. The
-`cageforge-java` README covers the JVM binding and its Maven artifact. The
+`cageforge-java` and `cageforge-python` READMEs cover their language
+bindings and Maven/PyPI artifacts. The
 `cageforge-bwrap` README covers the separately licensed Bubblewrap build
 component.
 

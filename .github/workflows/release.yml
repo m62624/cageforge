@@ -118,7 +118,10 @@ jobs:
 
   publish-jvm:
     name: Publish JVM package to Maven Central
-    needs: [prepare, jvm]
+    # TODO(release-hardening): after the first successful Cageforge PyPI
+    # release confirms the pending publisher, consider removing this gate and
+    # returning registry publications to parallel execution.
+    needs: [prepare, jvm, python, publish-python]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -174,9 +177,38 @@ jobs:
             --header "Authorization: Bearer $auth" \
             "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/$MAVEN_CENTRAL_NAMESPACE?publishing_type=automatic"
 
+  python:
+    name: Build Python artifacts
+    needs: [prepare, tests, tag]
+    uses: ./.github/workflows/python-release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+
+  publish-python:
+    name: Publish Python package to PyPI (trusted publishing)
+    # PyPI's pending trusted publisher may be configured before cageforge
+    # exists. The first publish then creates the project and subsequent
+    # releases use the same keyless OIDC path.
+    needs: [prepare, tag, python]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cageforge-python-*
+          path: dist
+          merge-multiple: true
+      - name: Publish tested wheels and source distribution
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
   release-notes:
     name: Create draft GitHub release
-    needs: [prepare, dist, jvm, publish-jvm, publish-crates]
+    needs: [prepare, dist, jvm, publish-jvm, python, publish-python, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -218,7 +250,7 @@ jobs:
 
   publish-release:
     name: Publish completed GitHub release
-    needs: [prepare, dist, jvm, publish-jvm, release-notes, publish-crates]
+    needs: [prepare, dist, jvm, publish-jvm, python, publish-python, release-notes, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -231,7 +263,13 @@ jobs:
 
   publish-crates:
     name: Publish workspace crates
-    needs: [prepare, dist, jvm, publish-jvm]
+    # Python publication is an upstream registry gate for the remaining
+    # immutable package indexes. This keeps a failed first PyPI publisher
+    # configuration from publishing the Rust workspace alone.
+    # TODO(release-hardening): after the first successful Cageforge PyPI
+    # release confirms the pending publisher, consider removing this gate and
+    # returning registry publications to parallel execution.
+    needs: [prepare, dist, jvm, publish-jvm, python, publish-python]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -256,7 +294,7 @@ jobs:
 
   sync:
     name: Open version-sync PR
-    needs: [prepare, dist, jvm, publish-jvm, publish-crates]
+    needs: [prepare, dist, jvm, publish-jvm, python, publish-python, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
