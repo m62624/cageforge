@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
-#[cfg(all(feature = "linux", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use pyo3::PyTypeInfo;
@@ -51,6 +51,12 @@ create_exception!(
 );
 create_exception!(
     cageforge._cageforge,
+    CageforgePermissionError,
+    CageforgeError,
+    "The trusted preflight grant was missing, invalid, expired, or insufficient."
+);
+create_exception!(
+    cageforge._cageforge,
     CageforgeProcessError,
     CageforgeError,
     "A sandbox process lifecycle operation failed."
@@ -79,6 +85,8 @@ struct RuntimeState {
     context: cageforge::PathResolutionContext,
     effective: cageforge::EffectiveSandbox,
     profile_command: Option<cageforge::CommandRequest>,
+    preflight_required: bool,
+    approved_program: Option<String>,
 }
 
 struct LifecycleState {
@@ -140,6 +148,32 @@ pub struct Cageforge {
     state: Arc<Mutex<Option<RuntimeState>>>,
 }
 
+/// A structured, non-authoritative permission request for one launch plan.
+#[gen_stub_pyclass]
+#[pyclass(frozen, module = "cageforge._cageforge")]
+pub struct PermissionRequest {
+    inner: cageforge::PermissionRequest,
+}
+
+/// An opaque trusted-host approval for a permission request.
+#[gen_stub_pyclass]
+#[pyclass(frozen, module = "cageforge._cageforge")]
+pub struct PermissionGrant {
+    inner: cageforge::PermissionGrant,
+}
+
+/// Trusted host capability that can issue an opaque grant.
+#[gen_stub_pyclass]
+#[pyclass(frozen, module = "cageforge._cageforge")]
+pub struct PermissionApprover;
+
+/// Host-owned persistent permission grant store.
+#[gen_stub_pyclass]
+#[pyclass(module = "cageforge._cageforge")]
+pub struct PermissionStore {
+    inner: cageforge::PermissionStore,
+}
+
 /// A launched sandbox process and its detached standard streams.
 #[gen_stub_pyclass]
 #[pyclass(module = "cageforge._cageforge")]
@@ -164,6 +198,10 @@ fn launch_error(error: impl ToString) -> PyErr {
     CageforgeLaunchError::new_err(error.to_string())
 }
 
+fn permission_error(error: impl ToString) -> PyErr {
+    CageforgePermissionError::new_err(error.to_string())
+}
+
 fn process_error(error: impl ToString) -> PyErr {
     CageforgeProcessError::new_err(error.to_string())
 }
@@ -172,9 +210,13 @@ fn stream_error(error: impl ToString) -> PyErr {
     CageforgeStreamError::new_err(error.to_string())
 }
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 fn setup_error(error: impl ToString) -> PyErr {
     CageforgeWindowsSetupError::new_err(error.to_string())
+}
+
+fn permission_scope(value: &str) -> Result<cageforge::PermissionScope, cageforge::PermissionError> {
+    cageforge::PermissionScope::parse(value)
 }
 
 fn absolute_path(path: PathBuf, name: &str) -> PyResult<PathBuf> {
@@ -303,6 +345,24 @@ fn runtime_inputs(
     ),
     String,
 > {
+    let (context, effective, _, _) =
+        runtime_inputs_with_ceiling(profile, current_directory, minimal_path)?;
+    Ok((context, effective))
+}
+
+fn runtime_inputs_with_ceiling(
+    profile: &cageforge::ResolvedProfile,
+    current_directory: &Path,
+    minimal_path: Option<&Path>,
+) -> Result<
+    (
+        cageforge::PathResolutionContext,
+        cageforge::EffectiveSandbox,
+        cageforge::EnvironmentSpec,
+        cageforge::PolicyCeiling,
+    ),
+    String,
+> {
     let workspace_roots = resolve_workspace_roots(current_directory, profile.workspace_roots())?;
     let context = runtime_context(current_directory, &workspace_roots, minimal_path)?;
     let environment = profile
@@ -323,14 +383,14 @@ fn runtime_inputs(
             .map_err(|error| error.to_string())?;
     }
     let effective = cageforge::compose(composition).map_err(|error| error.to_string())?;
-    Ok((context, effective))
+    Ok((context, effective, environment, ceiling))
 }
 
 fn native_backend(
     native_directory: &Path,
     network_gateway: cageforge::GatewayConfig,
 ) -> Result<Box<dyn cageforge::DynSandbox>, String> {
-    #[cfg(all(feature = "linux", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
         let config = cageforge::NativeSandboxConfig::new()
             .with_system_then_bundled_bubblewrap()
@@ -341,7 +401,7 @@ fn native_backend(
             .map_err(|error| error.to_string())?;
         return cageforge::native_sandbox_with(config).map_err(|error| error.to_string());
     }
-    #[cfg(all(feature = "macos", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     {
         let config = cageforge::NativeSandboxConfig::new()
             .with_helper_executable(native_directory.join("cageforge-macos-helper"))
@@ -349,7 +409,7 @@ fn native_backend(
             .with_network_gateway(network_gateway);
         return cageforge::native_sandbox_with(config).map_err(|error| error.to_string());
     }
-    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     {
         let setup = cageforge::WindowsSetupConfig::new()
             .with_setup_helper_path(native_directory.join("cageforge-windows-setup.exe"))
@@ -368,7 +428,7 @@ fn native_backend(
         let _ = native_directory;
         let _ = network_gateway;
         Err(format!(
-            "no Cageforge native feature is enabled for {}",
+            "no Cageforge native backend is available for {}",
             std::env::consts::OS
         ))
     }
@@ -442,13 +502,57 @@ fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
     cageforge::Config::from_toml(toml).map_err(|error| error.to_string())
 }
 
+fn normalize_toml_source(toml: String) -> String {
+    toml.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn build_preflight_request(
+    toml: &str,
+    profile_name: Option<&str>,
+    context: &(PathBuf, Option<PathBuf>),
+    tool_id: String,
+    tool_version: String,
+    manifest_digest: String,
+    config_digest: String,
+) -> Result<cageforge::PermissionRequest, String> {
+    let config = config_from_toml(toml)?;
+    let profile = resolve_profile(&config, profile_name)?;
+    let (resolution, effective, environment, ceiling) =
+        runtime_inputs_with_ceiling(&profile, &context.0, context.1.as_deref())?;
+    let identity = cageforge::PreflightIdentity::new(
+        tool_id,
+        tool_version,
+        manifest_digest,
+        config_digest,
+        cageforge::PlatformId::current().map_err(|error| error.to_string())?,
+        std::env::consts::ARCH,
+    );
+    let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
+        profile.policy(),
+        &resolution,
+        effective,
+        &environment,
+        &ceiling,
+        identity,
+    )
+    .map_err(|error| error.to_string())?;
+    if let Some(command) = profile.command() {
+        return plan
+            .with_process_program(command.command().program().to_string_lossy().into_owned())
+            .map(|plan| plan.request().clone())
+            .map_err(|error| error.to_string());
+    }
+    Ok(plan.request().clone())
+}
+
 fn resolve_profile(
     config: &cageforge::Config,
     profile_name: Option<&str>,
 ) -> Result<cageforge::ResolvedProfile, String> {
+    let platform = cageforge::PlatformId::current().map_err(|error| error.to_string())?;
     match profile_name {
-        Some(name) if !name.is_empty() => config.resolve(name),
-        _ => config.resolve_default(),
+        Some(name) if !name.is_empty() => config.resolve_for_platform(name, platform),
+        _ => config.resolve_default_for_platform(platform),
     }
     .map_err(|error| error.to_string())
 }
@@ -521,6 +625,40 @@ impl Cageforge {
         Ok(config.profile_names().map(str::to_owned).collect())
     }
 
+    /// Returns the shared typed preflight request for a TOML profile.
+    #[staticmethod]
+    #[pyo3(signature = (toml, profile_name=None, context=None, tool_id="cageforge-python", tool_version=env!("CARGO_PKG_VERSION"), manifest_digest=None, config_digest=None))]
+    fn permission_request(
+        toml: String,
+        profile_name: Option<String>,
+        context: Option<&RuntimeContext>,
+        tool_id: &str,
+        tool_version: &str,
+        manifest_digest: Option<String>,
+        config_digest: Option<String>,
+    ) -> PyResult<PermissionRequest> {
+        let toml = normalize_toml_source(toml);
+        let context = context
+            .map(|value| (value.current_directory.clone(), value.minimal_path.clone()))
+            .unwrap_or_else(|| {
+                (
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                    None,
+                )
+            });
+        let request = build_preflight_request(
+            &toml,
+            profile_name.as_deref(),
+            &context,
+            tool_id.to_owned(),
+            tool_version.to_owned(),
+            manifest_digest.unwrap_or_else(|| cageforge::sha256_digest(b"cageforge-python")),
+            config_digest.unwrap_or_else(|| cageforge::sha256_digest(toml.as_bytes())),
+        )
+        .map_err(configuration_error)?;
+        Ok(PermissionRequest { inner: request })
+    }
+
     /// Checks TOML parsing, profile resolution, and policy composition.
     #[staticmethod]
     #[pyo3(signature = (toml, profile_name=None, context=None))]
@@ -551,13 +689,15 @@ impl Cageforge {
 
     /// Creates a native runtime from TOML and the selected profile.
     #[staticmethod]
-    #[pyo3(signature = (toml, profile_name=None, context=None))]
+    #[pyo3(signature = (toml, profile_name=None, context=None, grant=None))]
     fn from_toml(
         py: Python<'_>,
         toml: String,
         profile_name: Option<String>,
         context: Option<&RuntimeContext>,
+        grant: Option<&PermissionGrant>,
     ) -> PyResult<Self> {
+        let toml = normalize_toml_source(toml);
         if toml.is_empty() {
             return Err(configuration_error("TOML must not be empty"));
         }
@@ -570,13 +710,62 @@ impl Cageforge {
                 )
             });
         let module_directory = module_native_directory(py)?;
+        let grant = grant.map(|grant| grant.inner.clone());
         let state = py.detach(move || {
             let config = config_from_toml(&toml).map_err(configuration_error)?;
             let profile =
                 resolve_profile(&config, profile_name.as_deref()).map_err(configuration_error)?;
-            let (resolution, effective) =
-                runtime_inputs(&profile, &context.0, context.1.as_deref())
+            let (resolution, effective, environment, ceiling) =
+                runtime_inputs_with_ceiling(&profile, &context.0, context.1.as_deref())
                     .map_err(configuration_error)?;
+            if profile.approval().mode() == cageforge::PermissionMode::Disabled {
+                let backend = native_backend(&module_directory, profile.network_gateway().clone())
+                    .map_err(initialization_error)?;
+                return Ok::<_, PyErr>(RuntimeState {
+                    backend,
+                    context: resolution,
+                    effective,
+                    profile_command: profile.command().cloned(),
+                    preflight_required: false,
+                    approved_program: None,
+                });
+            }
+            let identity = cageforge::PreflightIdentity::new(
+                "cageforge-python",
+                env!("CARGO_PKG_VERSION"),
+                cageforge::sha256_digest(b"cageforge-python"),
+                cageforge::sha256_digest(toml.as_bytes()),
+                cageforge::PlatformId::current().map_err(configuration_error)?,
+                std::env::consts::ARCH,
+            );
+            let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
+                profile.policy(),
+                &resolution,
+                effective,
+                &environment,
+                &ceiling,
+                identity,
+            )
+            .map_err(permission_error)?;
+            let plan = if let Some(command) = profile.command() {
+                plan.with_process_program(
+                    command.command().program().to_string_lossy().into_owned(),
+                )
+                .map_err(permission_error)?
+            } else {
+                plan
+            };
+            let grant = grant.ok_or_else(|| {
+                permission_error("preflight approval is required; call permission_request and pass its trusted grant")
+            })?;
+            let effective = plan
+                .authorize(grant)
+                .map_err(permission_error)?
+                .effective()
+                .clone();
+            let approved_program = profile.command().map(|command| {
+                command.command().program().to_string_lossy().into_owned()
+            });
             let backend = native_backend(&module_directory, profile.network_gateway().clone())
                 .map_err(initialization_error)?;
             Ok::<_, PyErr>(RuntimeState {
@@ -584,6 +773,8 @@ impl Cageforge {
                 context: resolution,
                 effective,
                 profile_command: profile.command().cloned(),
+                preflight_required: true,
+                approved_program,
             })
         })?;
         Ok(Self {
@@ -593,12 +784,13 @@ impl Cageforge {
 
     /// Reads a TOML file and creates a runtime using its parent directory.
     #[staticmethod]
-    #[pyo3(signature = (file, profile_name=None, context=None))]
+    #[pyo3(signature = (file, profile_name=None, context=None, grant=None))]
     fn from_toml_file(
         py: Python<'_>,
         file: PathBuf,
         profile_name: Option<String>,
         context: Option<&RuntimeContext>,
+        grant: Option<&PermissionGrant>,
     ) -> PyResult<Self> {
         let file = absolute_path(file, "file")?;
         let source_file = file.clone();
@@ -612,7 +804,7 @@ impl Cageforge {
                 current_directory,
                 minimal_path,
             });
-        Self::from_toml(py, source, profile_name, context.as_ref())
+        Self::from_toml(py, source, profile_name, context.as_ref(), grant)
     }
 
     /// Returns the native resource target selected by this interpreter.
@@ -634,6 +826,14 @@ impl Cageforge {
                 .as_ref()
                 .ok_or_else(|| launch_error("runtime is closed"))?;
             let request = command_request(runtime, argv).map_err(launch_error)?;
+            if runtime.preflight_required {
+                let program = request.command().program().to_string_lossy();
+                if runtime.approved_program.as_deref() != Some(program.as_ref()) {
+                    return Err(permission_error(
+                        "preflight grant is bound to the profile command; prepare and authorize the requested argv first",
+                    ));
+                }
+            }
             let backend_request = cageforge::BackendRequest::new(&request, &runtime.effective);
             let mut child = runtime
                 .backend
@@ -681,6 +881,136 @@ impl Cageforge {
     ) -> PyResult<bool> {
         self.close()?;
         Ok(false)
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PermissionRequest {
+    /// Returns the stable JSON representation used by host adapters.
+    fn json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.inner).map_err(permission_error)
+    }
+
+    /// Returns the requesting tool identifier.
+    fn tool_id(&self) -> &str {
+        self.inner.tool_id()
+    }
+    /// Returns the tool version.
+    fn tool_version(&self) -> &str {
+        self.inner.tool_version()
+    }
+    /// Returns the selected platform.
+    fn platform(&self) -> &str {
+        self.inner.platform().as_str()
+    }
+    /// Returns the request digest.
+    fn digest(&self) -> String {
+        self.inner.digest()
+    }
+    /// Returns filesystem capabilities as `(operation, path)` pairs.
+    fn filesystem(&self) -> Vec<(String, String)> {
+        self.inner
+            .capabilities()
+            .filesystem()
+            .iter()
+            .map(|capability| {
+                (
+                    format!("{:?}", capability.operation()).to_lowercase(),
+                    capability.path().to_owned(),
+                )
+            })
+            .collect()
+    }
+    /// Returns requested network endpoints.
+    fn network(&self) -> Vec<String> {
+        self.inner
+            .capabilities()
+            .network()
+            .iter()
+            .map(|capability| capability.endpoint().to_owned())
+            .collect()
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PermissionApprover {
+    /// Creates a session-scoped grant for the complete request.
+    #[new]
+    fn new() -> Self {
+        Self
+    }
+
+    /// Approves the complete request through the trusted host capability.
+    #[pyo3(signature = (request, scope="session", expires_at=None))]
+    fn approve(
+        &self,
+        request: &PermissionRequest,
+        scope: &str,
+        expires_at: Option<u64>,
+    ) -> PyResult<PermissionGrant> {
+        let scope = permission_scope(scope).map_err(permission_error)?;
+        let inner = cageforge::GrantAuthority::new()
+            .approve_with(
+                &request.inner,
+                request.inner.capabilities().clone(),
+                scope,
+                expires_at,
+            )
+            .map_err(permission_error)?;
+        Ok(PermissionGrant { inner })
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PermissionStore {
+    /// Opens a host-owned permission store at an absolute path.
+    #[new]
+    fn new(path: PathBuf) -> PyResult<Self> {
+        let path = absolute_path(path, "permission store path")?;
+        let inner = cageforge::PermissionStore::open(path).map_err(permission_error)?;
+        Ok(Self { inner })
+    }
+
+    /// Returns the configured store path.
+    fn path(&self) -> String {
+        self.inner.path().to_string_lossy().into_owned()
+    }
+
+    /// Returns a valid persisted grant for the exact request, if present.
+    fn get(&self, request: &PermissionRequest) -> PyResult<Option<PermissionGrant>> {
+        self.inner
+            .get(&request.inner)
+            .map(|grant| grant.map(|inner| PermissionGrant { inner }))
+            .map_err(permission_error)
+    }
+
+    /// Persists a persistent grant after validating it against the request.
+    fn put(&self, grant: &PermissionGrant, request: &PermissionRequest) -> PyResult<()> {
+        self.inner
+            .put(&grant.inner, &request.inner)
+            .map_err(permission_error)
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PermissionGrant {
+    /// Returns the digest of the request this grant authorizes.
+    fn request_digest(&self) -> &str {
+        self.inner.request_digest()
+    }
+
+    /// Returns the grant lifetime as `launch`, `session`, or `persistent`.
+    fn scope(&self) -> String {
+        format!("{:?}", self.inner.scope()).to_lowercase()
+    }
+
+    /// Returns the optional Unix expiration timestamp.
+    fn expires_at(&self) -> Option<u64> {
+        self.inner.expires_at()
     }
 }
 
@@ -1020,7 +1350,7 @@ fn windows_setup_call(py: Python<'_>, operation: WindowsSetupOperation) -> PyRes
     }
     let native_directory = module_native_directory(py)?;
     py.detach(move || {
-        #[cfg(all(feature = "windows", target_os = "windows"))]
+        #[cfg(target_os = "windows")]
         {
             let setup_config = cageforge::WindowsSetupConfig::new()
                 .with_setup_helper_path(native_directory.join("cageforge-windows-setup.exe"))
@@ -1037,7 +1367,7 @@ fn windows_setup_call(py: Python<'_>, operation: WindowsSetupOperation) -> PyRes
             }
             .map_err(setup_error)
         }
-        #[cfg(not(all(feature = "windows", target_os = "windows")))]
+        #[cfg(not(target_os = "windows"))]
         {
             let _ = native_directory;
             let _ = operation;
@@ -1056,7 +1386,7 @@ fn windows_setup_status(py: Python<'_>) -> PyResult<String> {
     }
     let native_directory = module_native_directory(py)?;
     py.detach(move || {
-        #[cfg(all(feature = "windows", target_os = "windows"))]
+        #[cfg(target_os = "windows")]
         {
             let setup_config = cageforge::WindowsSetupConfig::new()
                 .with_setup_helper_path(native_directory.join("cageforge-windows-setup.exe"))
@@ -1074,7 +1404,7 @@ fn windows_setup_status(py: Python<'_>) -> PyResult<String> {
                 cageforge::WindowsSetupStatus::Ready(_) => Ok("ready".to_string()),
             }
         }
-        #[cfg(not(all(feature = "windows", target_os = "windows")))]
+        #[cfg(not(target_os = "windows"))]
         {
             let _ = native_directory;
             Err(UnsupportedPlatformError::new_err(
@@ -1098,6 +1428,10 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<SandboxProcess>()?;
     module.add_class::<ProcessResult>()?;
     module.add_class::<WindowsSetup>()?;
+    module.add_class::<PermissionRequest>()?;
+    module.add_class::<PermissionGrant>()?;
+    module.add_class::<PermissionApprover>()?;
+    module.add_class::<PermissionStore>()?;
     module.add_function(wrap_pyfunction!(native_target, module)?)?;
     module.add("CageforgeError", CageforgeError::type_object(module.py()))?;
     module.add(
@@ -1111,6 +1445,10 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "CageforgeLaunchError",
         CageforgeLaunchError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgePermissionError",
+        CageforgePermissionError::type_object(module.py()),
     )?;
     module.add(
         "CageforgeProcessError",

@@ -6,8 +6,8 @@ changes. This crate is a thin command-line adapter over `cageforge`.
 - Keep sandbox policy, path validation, composition, native lowering, process
   ownership, and network enforcement in the existing crates. Do not reimplement
   those mechanisms here.
-- Require an explicit matching OS feature for native execution. Never fall
-  back to an ordinary unsandboxed child when the feature or target is absent.
+- Select the native backend from the compilation target automatically. Never
+  fall back to an ordinary unsandboxed child when the target is unsupported.
 - Preserve native typed errors at the library boundary and keep CLI rendering
   separate from the execution protocol.
 - Keep argv explicit after `--`; never parse shell strings or construct a

@@ -11,6 +11,7 @@ pub(crate) enum BindingErrorKind {
     Configuration,
     Initialization,
     Launch,
+    Permission,
     Process,
     Stream,
     WindowsSetup,
@@ -27,6 +28,9 @@ impl BindingErrorKind {
                 "ai/cageforge/CageforgeInitializationException"
             )),
             Self::Launch => env.find_class(jni::jni_str!("ai/cageforge/CageforgeLaunchException")),
+            Self::Permission => {
+                env.find_class(jni::jni_str!("ai/cageforge/CageforgePermissionException"))
+            }
             Self::Process => {
                 env.find_class(jni::jni_str!("ai/cageforge/CageforgeProcessException"))
             }

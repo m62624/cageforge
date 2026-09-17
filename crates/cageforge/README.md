@@ -22,21 +22,15 @@ native backend instead of implementing a separate sandbox.
 
 ## Add the crate
 
-Supported operating systems are:
-
-- Linux — enable the `linux` feature;
-- Windows — enable the `windows` feature; and
-- macOS — enable the `macos` feature.
-
-Choose the feature that matches the target operating system:
-
 ```toml
 [dependencies]
-cageforge = { version = "x.y.z", features = ["linux", "config"] }
+cageforge = { version = "x.y.z", features = ["config"] }
 ```
 
-The portable model is available without an OS feature. Add `config` when the
-application wants to load TOML profiles. The standalone network gateway is
+The facade selects `cageforge-linux`, `cageforge-windows`, or
+`cageforge-macos` automatically from the compilation target. The portable
+model and native backend are therefore available without an OS feature. Add
+`config` when the application wants to load TOML profiles. The standalone network gateway is
 available through the optional `network-runtime` feature.
 
 For the complete TOML flow and separate runnable profiles for each operating
@@ -47,24 +41,21 @@ not want to build or provide Bubblewrap separately. It includes Cageforge's
 verified, fixed Bubblewrap `v0.12.0` resource; the embedded version is not
 selected dynamically.
 
-The feature surface is explicit:
+The feature surface is small and intentional:
 
 | Feature | Adds | Use it when |
 | --- | --- | --- |
-| `linux` | Linux backend API | The program runs on Linux |
 | `linux-bundled-bubblewrap` | Embedded verified Bubblewrap resource | The Linux binary should carry its fallback resource |
-| `windows` | Windows backend API | The program runs on Windows |
-| `macos` | macOS backend API | The program runs on macOS |
 | `config` | TOML profile API | Configuration is supplied as named profiles |
 | `network-runtime` | Gateway and resolver runtime | The application uses the standalone gateway API |
 
-The default feature set is empty. The portable API is available without an OS
-feature, while a native backend feature must match the compilation target.
+The default feature set is empty. `linux-bundled-bubblewrap` changes only how
+the Linux Bubblewrap resource is packaged; it is not a backend selector.
 
 ## Unified execution API
 
 `native_sandbox()` selects the native backend for the current operating system
-and enabled Cargo feature. It returns `Box<dyn DynSandbox>`, so an application
+target operating system. It returns `Box<dyn DynSandbox>`, so an application
 can launch commands through one API without naming a Linux, Windows, or macOS
 backend type. The static `Sandbox` API is available when the application needs
 direct access to a concrete backend and its native configuration.
@@ -157,9 +148,91 @@ location. On Windows, explicitly install setup through `WindowsSetup` first;
 backend construction verifies that installation without requesting UAC.
 macOS uses a per-launch unprivileged helper beside the application, or at the
 explicitly configured path; the CLI embeds it and requires no setup command.
-Missing features or native prerequisites produce `NativeSandboxError`.
+Unsupported targets or native prerequisites produce `NativeSandboxError`.
 `SandboxExecutionError` identifies the failed execution operation and retains
 the concrete native error in its source chain.
+
+## Rust preflight integration
+
+The facade exposes the same typed permission flow used by the CLI, Python, and
+Java adapters. A `PreflightPlan` describes the exact launch identity and
+capabilities; only a trusted `GrantAuthority` can produce the opaque grant
+that authorizes it. The grant is checked before native launch and is combined
+with the existing policy ceiling:
+
+```rust,no_run
+use cageforge::{
+    native_sandbox, sha256_digest, BackendRequest, CommandRequest, EffectiveSandbox,
+    GrantAuthority, PathResolutionContext, PreflightPlan, SandboxPolicy,
+};
+
+fn launch_with_preflight(
+    requested: &SandboxPolicy,
+    context: &PathResolutionContext,
+    effective: EffectiveSandbox,
+    command: &CommandRequest,
+    config_bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plan = PreflightPlan::from_policy_current(
+        requested,
+        context,
+        effective,
+        "my-tool",
+        env!("CARGO_PKG_VERSION"),
+        sha256_digest(b"my-tool-manifest"),
+        sha256_digest(config_bytes),
+    )?;
+
+    // This authority belongs to the trusted host or approval adapter.
+    let grant = GrantAuthority::new().approve(plan.request());
+    let authorized = plan.authorize(grant)?;
+    let sandbox = native_sandbox()?;
+    let mut child = sandbox.launch(
+        BackendRequest::new(command, authorized.effective()),
+        context,
+    )?;
+    let _status = child.wait()?;
+    Ok(())
+}
+```
+
+The request is descriptive and the grant is opaque. A mismatched, expired, or
+insufficient grant returns a typed `PreflightError` before the backend can
+start a process; there is no permission escalation inside a running process.
+
+The three request types have different security roles:
+
+- `CommandRequest` describes what to execute: the program, arguments,
+  environment, working directory, and lifecycle settings.
+- `BackendRequest` couples that command to a composed `EffectiveSandbox` for
+  one native backend handoff.
+- `PermissionRequest` is the host-facing preflight description of what the
+  tool asks to receive before launch. It carries the tool identity and
+  version, manifest and configuration digests, platform and architecture, and
+  filesystem, network, and child-process capabilities.
+
+`PermissionRequest` is descriptive and has no authority. A trusted host turns
+it into an opaque `PermissionGrant`; the grant is checked against the request
+and the policy ceiling before the `BackendRequest` reaches Linux, macOS, or
+Windows enforcement. The permission request is generated from the resolved
+TOML profile and runtime context, so identity and native path data cannot be
+silently replaced by a hand-edited TOML grant.
+Rust hosts that persist decisions can use `PermissionStore` with the same
+request digest and audit metadata used by the language bindings.
+
+The store path belongs to the trusted host. `PermissionStore::open` accepts
+the chosen path; the CLI exposes the same choice as `--permission-store PATH`,
+which takes priority over its OS-native per-user default. The CLI default is
+`$XDG_STATE_HOME/cageforge/permissions.json` (falling back to
+`~/.local/state/cageforge/permissions.json`) on Linux,
+`~/Library/Application Support/Cageforge/permissions.json` on macOS, and
+`%LOCALAPPDATA%\\Cageforge\\permissions.json` on Windows. A trusted host may
+deliberately share one path across projects or choose separate stores. The
+Python and Java bindings expose `PermissionStore` with the same explicit
+`open/get/put` sequence. A store is used only for explicitly persistent grants
+and is protected by the native filesystem security rules of the host OS. It is
+revocable host state: the owner may delete it to clear all saved approvals.
+Hosts should keep it outside any workspace that the sandbox can write.
 
 ## How a sandbox instance works
 
@@ -219,8 +292,8 @@ gateway and resolver runtime as well. Native backends use that runtime
 internally when their effective policy requires routed networking.
 The `config` feature also re-exports
 [`cageforge-config`](https://docs.rs/cageforge-config/latest/cageforge_config/).
-The matching OS feature re-exports that backend's configuration, child, and
-typed error types.
+The target OS re-exports that backend's configuration, child, and typed error
+types.
 
 `Sandbox` is the common high-level trait for `prepare` and `spawn`.
 `SandboxChild` covers the common child lifecycle: standard streams, polling,

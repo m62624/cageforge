@@ -32,13 +32,13 @@ pub enum Command {
     /// Print the JSON schema for Cageforge TOML profiles.
     Schema,
     /// Provision, inspect, or remove the Windows-native Cageforge setup.
-    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     #[command(subcommand)]
     Setup(SetupCommand),
 }
 
 /// Windows-native setup operations.
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 #[derive(Debug, Eq, PartialEq, Subcommand)]
 pub enum SetupCommand {
     /// Create or reconcile the persistent elevated Windows setup.
@@ -61,6 +61,17 @@ pub struct RunArgs {
     #[arg(long, value_name = "NAME")]
     pub profile: Option<String>,
 
+    /// Explicitly approve the displayed preflight request without reading
+    /// interactive input. This is intended for a caller that is itself the
+    /// trusted approval host.
+    #[arg(long)]
+    pub approve: bool,
+
+    /// Host-owned grant store. When omitted, uses the current user's native
+    /// Cageforge state directory for the target operating system.
+    #[arg(long, value_name = "PATH")]
+    pub permission_store: Option<PathBuf>,
+
     /// Program and native argv values after `--`. Shell syntax is not
     /// interpreted; use an explicit shell executable when one is intended.
     #[arg(
@@ -71,10 +82,10 @@ pub struct RunArgs {
     pub command: Vec<OsString>,
 }
 
-const LONG_ABOUT: &str = "Run one explicitly selected program inside the native Cageforge sandbox.\n\nThe TOML profile supplies the access policy: system paths to read, application paths to write, environment rules, network destinations, and timeout. The command after `--` is passed as argv. One invocation creates one boundary around the program and all of its descendants.\n\nBuild this binary with one matching OS feature: `linux`, `windows`, or `macos`. On Linux, `linux-bundled-bubblewrap` also embeds the verified Bubblewrap resource. There is no unsandboxed fallback.";
+const LONG_ABOUT: &str = "Run one explicitly selected program inside the native Cageforge sandbox.\n\nThe TOML profile supplies the access policy: system paths to read, application paths to write, environment rules, network destinations, and timeout. The command after `--` is passed as argv. One invocation creates one boundary around the program and all of its descendants.\n\nThe native backend is selected automatically from the target OS. On Linux, `linux-bundled-bubblewrap` also embeds the verified Bubblewrap resource. There is no unsandboxed fallback.\n\nPreflight approval is disabled unless the selected TOML profile sets `approval.mode = \"preflight\"`. In preflight mode the CLI shows the exact command capabilities before launch. `--approve` is for a trusted host and never bypasses the policy ceiling; non-interactive runs without an approval fail closed. Persistent approvals are stored only when the profile selects persistent persistence.";
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
-const AFTER_HELP: &str = "EXAMPLES:\n  cageforge-cli run --config sandbox.toml --profile isolated -- untrusted-program --safe-mode\n  cageforge-cli run --config sandbox.toml --profile build -- cargo test --workspace\n  cageforge-cli setup status\n  cageforge-cli schema\n\nOn Windows, run `cageforge-cli setup install` once before the first `run`. It may request UAC and keeps the setup for later launches.\n\nThe CLI is a thin adapter. For native host requirements and the library API, see:\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-linux\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-windows\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-macos";
+#[cfg(target_os = "windows")]
+const AFTER_HELP: &str = "EXAMPLES:\n  cageforge-cli run --config sandbox.toml --profile isolated -- untrusted-program --safe-mode\n  cageforge-cli run --config sandbox.toml --profile build -- cargo test --workspace\n  cageforge-cli run --config permission-preflight.toml --approve --permission-store /path/to/permissions.json -- tool\n  cageforge-cli setup status\n  cageforge-cli schema\n\n`--permission-store PATH` explicitly selects the host-owned persistent grant store and takes priority. Without it, the CLI uses the current user's native Cageforge state directory. The file is created only after a persistent approval; deleting it revokes saved approvals.\n\nOn Windows, run `cageforge-cli setup install` once before the first `run`. It may request UAC and keeps the setup for later launches.\n\nThe CLI is a thin adapter. For native host requirements and the library API, see:\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-linux\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-windows\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-macos";
 
-#[cfg(not(all(feature = "windows", target_os = "windows")))]
-const AFTER_HELP: &str = "EXAMPLES:\n  cageforge-cli run --config sandbox.toml --profile isolated -- untrusted-program --safe-mode\n  cageforge-cli run --config sandbox.toml --profile build -- cargo test --workspace\n  cageforge-cli schema\n\nThe CLI is a thin adapter. For native host requirements and the library API, see:\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-linux\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-windows\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-macos";
+#[cfg(not(target_os = "windows"))]
+const AFTER_HELP: &str = "EXAMPLES:\n  cageforge-cli run --config sandbox.toml --profile isolated -- untrusted-program --safe-mode\n  cageforge-cli run --config sandbox.toml --profile build -- cargo test --workspace\n  cageforge-cli run --config permission-preflight.toml --approve --permission-store /path/to/permissions.json -- tool\n  cageforge-cli schema\n\n`--permission-store PATH` explicitly selects the host-owned persistent grant store and takes priority. Without it, the CLI uses the current user's native Cageforge state directory. The file is created only after a persistent approval; deleting it revokes saved approvals.\n\nThe CLI is a thin adapter. For native host requirements and the library API, see:\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-linux\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-windows\n  https://github.com/m62624/cageforge/tree/main/crates/cageforge-macos";

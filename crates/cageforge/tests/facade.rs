@@ -21,7 +21,7 @@ fn network_runtime_public_api_is_available_from_the_root_crate() {
     assert_resolver::<SystemResolver>();
 }
 
-#[cfg(all(feature = "linux", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn linux_backend_implements_the_unified_facade_contract() {
     use cageforge::{Sandbox, SandboxChild};
@@ -33,7 +33,7 @@ fn linux_backend_implements_the_unified_facade_contract() {
     assert_child::<cageforge::LinuxChild>();
 }
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 #[test]
 fn windows_backend_implements_the_unified_facade_contract() {
     use cageforge::{Sandbox, SandboxChild};
@@ -45,7 +45,7 @@ fn windows_backend_implements_the_unified_facade_contract() {
     assert_child::<cageforge::WindowsChild>();
 }
 
-#[cfg(all(feature = "macos", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 #[test]
 fn macos_backend_implements_the_unified_facade_contract() {
     use cageforge::{Sandbox, SandboxChild};
@@ -57,33 +57,20 @@ fn macos_backend_implements_the_unified_facade_contract() {
     assert_child::<cageforge::MacosChild>();
 }
 
-#[cfg(not(any(
-    all(feature = "linux", target_os = "linux"),
-    all(feature = "windows", target_os = "windows"),
-    all(feature = "macos", target_os = "macos")
-)))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 #[test]
-fn native_selection_reports_a_missing_feature_or_unsupported_host() {
+fn native_selection_reports_an_unsupported_host() {
     let error = cageforge::native_sandbox()
         .err()
         .expect("no native backend");
-    match std::env::consts::OS {
-        "linux" | "windows" | "macos" => {
-            assert!(
-                matches!(error, cageforge::NativeSandboxError::FeatureDisabled {
-                target_os, feature
-            } if target_os == std::env::consts::OS && feature == target_os)
-            );
-        }
-        _ => assert!(
-            matches!(error, cageforge::NativeSandboxError::UnsupportedPlatform {
-            target_os
-        } if target_os == std::env::consts::OS)
-        ),
-    }
+    assert!(matches!(
+        error,
+        cageforge::NativeSandboxError::UnsupportedPlatform { target_os }
+            if target_os == std::env::consts::OS
+    ));
 }
 
-#[cfg(all(feature = "linux", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn native_selection_preserves_the_typed_initialization_error() {
     use std::error::Error;

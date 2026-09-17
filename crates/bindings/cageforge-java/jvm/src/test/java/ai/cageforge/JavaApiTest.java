@@ -31,11 +31,20 @@ class JavaApiTest {
         Function<String, List<String>> profileNames = Cageforge::profileNames;
         TriFunction<String, String, RuntimeContext, Cageforge> fromToml = Cageforge::fromToml;
         TriConsumer<String, String, RuntimeContext> checkToml = Cageforge::checkToml;
+        TriFunction<String, String, RuntimeContext, PermissionRequest> permissionRequest =
+                Cageforge::permissionRequest;
         Function<Path, Cageforge> fromTomlFile = Cageforge::fromTomlFile;
         Supplier<String> nativeTarget = Cageforge::nativeTarget;
         Function<Cageforge, SandboxProcess> launch = Cageforge::launch;
         BiFunction<Cageforge, List<String>, SandboxProcess> launchArgv = Cageforge::launch;
         Consumer<Cageforge> closeRuntime = Cageforge::close;
+        Function<PermissionRequest, PermissionGrant> approve = new PermissionApprover()::approve;
+        Function<Path, PermissionStore> openStore = PermissionStore::open;
+        BiFunction<PermissionStore, PermissionRequest, PermissionGrant> getGrant =
+                PermissionStore::get;
+        TriConsumer<PermissionStore, PermissionGrant, PermissionRequest> putGrant =
+                PermissionStore::put;
+        Consumer<PermissionStore> closeStore = PermissionStore::close;
         Function<SandboxProcess, Integer> processId = SandboxProcess::getId;
         Function<SandboxProcess, InputStream> stdout = SandboxProcess::getStdout;
         Function<SandboxProcess, InputStream> stderr = SandboxProcess::getStderr;
@@ -55,11 +64,17 @@ class JavaApiTest {
         assertNotNull(profileNames);
         assertNotNull(fromToml);
         assertNotNull(checkToml);
+        assertNotNull(permissionRequest);
         assertNotNull(fromTomlFile);
         assertNotNull(nativeTarget);
         assertNotNull(launch);
         assertNotNull(launchArgv);
         assertNotNull(closeRuntime);
+        assertNotNull(approve);
+        assertNotNull(openStore);
+        assertNotNull(getGrant);
+        assertNotNull(putGrant);
+        assertNotNull(closeStore);
         assertNotNull(processId);
         assertNotNull(stdout);
         assertNotNull(stderr);

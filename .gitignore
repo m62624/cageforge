@@ -1,3 +1,8 @@
 /target/
 /coverage/
 .DS_Store
+
+# Host-owned Cageforge permission stores and their advisory locks.
+permissions.json
+*.json.lock
+*.json.tmp.*

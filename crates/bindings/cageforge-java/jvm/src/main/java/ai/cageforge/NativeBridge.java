@@ -10,7 +10,8 @@ final class NativeBridge {
             String profile,
             String currentDirectory,
             String nativeDirectory,
-            String minimalDirectory);
+            String minimalDirectory,
+            long grant);
 
     static native String[] nativeProfileNames(String toml);
 
@@ -19,6 +20,50 @@ final class NativeBridge {
             String profile,
             String currentDirectory,
             String minimalDirectory);
+
+    static native long nativePermissionRequest(
+            String toml,
+            String profile,
+            String currentDirectory,
+            String minimalDirectory,
+            String toolId,
+            String toolVersion,
+            String manifestDigest,
+            String configDigest);
+
+    static native String nativePermissionRequestJson(long request);
+
+    static native String nativePermissionRequestToolId(long request);
+
+    static native String nativePermissionRequestToolVersion(long request);
+
+    static native String nativePermissionRequestPlatform(long request);
+
+    static native String nativePermissionRequestDigest(long request);
+
+    static native String[] nativePermissionRequestFilesystem(long request);
+
+    static native String[] nativePermissionRequestNetwork(long request);
+
+    static native void nativeClosePermissionRequest(long request);
+
+    static native long nativeApprovePermissionRequest(long request, String scope, long expiresAt);
+
+    static native String nativePermissionGrantRequestDigest(long grant);
+
+    static native String nativePermissionGrantScope(long grant);
+
+    static native long nativePermissionGrantExpiresAt(long grant);
+
+    static native void nativeClosePermissionGrant(long grant);
+
+    static native long nativeOpenPermissionStore(String path);
+
+    static native long nativePermissionStoreGet(long store, long request);
+
+    static native void nativePermissionStorePut(long store, long grant, long request);
+
+    static native void nativeClosePermissionStore(long store);
 
     static native long nativeLaunch(long runtime, String[] argv);
 

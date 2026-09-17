@@ -44,6 +44,7 @@ This example selects the profile for the current host and uses
 
 ```kotlin
 import ai.cageforge.Cageforge
+import ai.cageforge.PermissionGrant
 import ai.cageforge.RuntimeContext
 import java.nio.file.Files
 import java.nio.file.Path
@@ -62,12 +63,17 @@ val config = Files.readString(profile)
 val context = RuntimeContext(profile.parent)
 Cageforge.checkToml(config, context = context)
 
-Cageforge.fromTomlFile(profile, context = context).use { sandbox ->
-    sandbox.launch().use { process ->
-        process.stdout?.bufferedReader()?.use { reader ->
-            print(reader.readText())
+val request = Cageforge.permissionRequest(config, context = context)
+request.use { preflight ->
+    preflight.approve().use { grant ->
+        Cageforge.fromTomlFile(profile, context = context, grant = grant).use { sandbox ->
+            sandbox.launch().use { process ->
+                process.stdout?.bufferedReader()?.use { reader ->
+                    print(reader.readText())
+                }
+                check(process.waitFor().exitCode == 0)
+            }
         }
-        check(process.waitFor().exitCode == 0)
     }
 }
 ```
@@ -78,6 +84,37 @@ and [`windows/smoke.toml`](../../cageforge-config/examples/runnable/windows/smok
 They use the current Cageforge TOML schema, include `minimal` read access,
 declare a workspace root, allow writes to `workspace-root`, and disable the
 network. The Windows profile uses `cmd.exe`; the POSIX profiles use `/bin/echo`.
+
+Profiles with `approval.mode = "preflight"` require a trusted
+`PermissionGrant` before launch. The request is descriptive and the grant is
+opaque; approval never changes permissions of an already-running process.
+
+### Persistent grants and store paths
+
+The permission store is host state rather than TOML policy. A Java host chooses
+the absolute path and persists only an explicitly persistent grant:
+
+```kotlin
+import ai.cageforge.PermissionApprover
+import ai.cageforge.PermissionStore
+
+val store = PermissionStore.open(Path.of("/var/lib/my-tool/permissions.json"))
+val request = Cageforge.permissionRequest(config, context = context)
+val grant = PermissionApprover().approve(request, scope = "persistent")
+store.put(grant, request)
+
+val cached = store.get(request) ?: error("preflight approval is missing")
+Cageforge.fromToml(config, context = context, grant = cached).use { runtime ->
+    // launch only after the exact persisted grant has been authorized
+}
+store.close()
+```
+
+The store uses a versioned JSON document, an advisory writer lock, atomic
+replacement, Unix owner-only permissions, and a Windows owner-only DACL. A
+missing record is not an approval. The CLI has the same behavior through
+`--permission-store PATH`, which takes priority over its OS-native per-user
+default.
 
 `Cageforge.fromToml` uses the named `default_profile` when no profile name is
 provided. Pass `profileName` when an application needs another profile.

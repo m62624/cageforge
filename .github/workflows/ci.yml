@@ -139,6 +139,7 @@ jobs:
             cageforge-path
             cageforge-policy
             cageforge-policy-compose
+            cageforge-permissions
           )
           # Windows: cageforge-windows, the CLI's Windows feature, and the
           # portable crates used by their runtime and integration tests.
@@ -153,6 +154,7 @@ jobs:
             cageforge-path
             cageforge-policy
             cageforge-policy-compose
+            cageforge-permissions
           )
           # macOS: cageforge-macos plus the portable backend-facing crates
           # shared by every native backend.
@@ -167,6 +169,7 @@ jobs:
             cageforge-path
             cageforge-policy
             cageforge-policy-compose
+            cageforge-permissions
           )
           # Packages consumed by the JVM binding through the public facade.
           # Unrelated crate-only PRs can therefore skip the final JVM stage.
@@ -183,6 +186,7 @@ jobs:
             cageforge-path
             cageforge-policy
             cageforge-policy-compose
+            cageforge-permissions
           )
           python_binding_packages=(
             cageforge
@@ -197,6 +201,7 @@ jobs:
             cageforge-path
             cageforge-policy
             cageforge-policy-compose
+            cageforge-permissions
           )
 
           for label in ${PR_LABELS:-}; do
@@ -420,6 +425,7 @@ jobs:
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
+          -p cageforge-permissions
           -p cageforge-upstream-review
           -p cageforge-cli
           -- --check
@@ -434,6 +440,7 @@ jobs:
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
+          -p cageforge-permissions
           -p cageforge-upstream-review
           -p cageforge-cli
           --all-targets -- -D warnings
@@ -448,6 +455,7 @@ jobs:
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
+          -p cageforge-permissions
           -p cageforge-upstream-review
           -p cageforge-cli
       # Keep every public feature mode explicit. Workspace feature unification
@@ -491,6 +499,7 @@ jobs:
           -p cageforge-path
           -p cageforge-policy
           -p cageforge-policy-compose
+          -p cageforge-permissions
           -p cageforge-upstream-review
           -p cageforge-cli
           --no-deps
@@ -514,12 +523,12 @@ jobs:
             helper_arguments: "--bin cageforge-linux-helper"
           - target: macOS
             runner: macos-15
-            feature: macos
+            feature: config
             helper_package: cageforge-macos
             helper_arguments: "--bin cageforge-macos-helper"
           - target: Windows
             runner: windows-2025
-            feature: windows
+            feature: config
             helper_package: cageforge-windows
             helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
     runs-on: ${{ matrix.runner }}
@@ -699,12 +708,12 @@ jobs:
             helper_arguments: "--bin cageforge-linux-helper"
           - target: macOS
             runner: macos-15
-            feature: macos
+            feature: config
             helper_package: cageforge-macos
             helper_arguments: "--bin cageforge-macos-helper"
           - target: Windows
             runner: windows-2025
-            feature: windows
+            feature: config
             helper_package: cageforge-windows
             helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
     runs-on: ${{ matrix.runner }}
@@ -957,19 +966,19 @@ jobs:
             zig: true
           - target: x86_64-pc-windows-msvc
             runner: windows-2025
-            feature: windows
+            feature: config
             zig: false
           - target: aarch64-pc-windows-msvc
             runner: windows-2025
-            feature: windows
+            feature: config
             zig: false
           - target: x86_64-apple-darwin
             runner: macos-26-intel
-            feature: macos
+            feature: config
             zig: false
           - target: aarch64-apple-darwin
             runner: macos-26
-            feature: macos
+            feature: config
             zig: false
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -1027,8 +1036,8 @@ jobs:
           set -euo pipefail
           cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --lib --all-targets --no-default-features
           cargo check -p cageforge-linux --target aarch64-unknown-linux-gnu --bin cageforge-linux-helper --no-default-features
-          cargo check -p cageforge --target aarch64-unknown-linux-gnu --no-default-features --features linux
-          cargo check -p cageforge-cli --target aarch64-unknown-linux-gnu --no-default-features --features linux
+          cargo check -p cageforge --target aarch64-unknown-linux-gnu --no-default-features
+          cargo check -p cageforge-cli --target aarch64-unknown-linux-gnu --no-default-features --features config
           cargo check -p cageforge-cli --target aarch64-unknown-linux-gnu --no-default-features --features linux-bundled-bubblewrap
 
   linux-bwrap-resources:
@@ -1187,32 +1196,32 @@ jobs:
         run: cargo fmt --package cageforge-macos --package cageforge -- --check
       - name: Lint macOS backend
         run: cargo clippy -p cageforge-macos --all-targets -- -D warnings
-      - name: Lint the unified facade with the macOS feature
-        run: cargo clippy -p cageforge --no-default-features --features macos --all-targets -- -D warnings
+      - name: Lint the unified facade on macOS
+        run: cargo clippy -p cageforge --no-default-features --all-targets -- -D warnings
       - name: Test macOS backend
         run: cargo test -p cageforge-macos --all-targets
       - name: Check macOS backend documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p cageforge-macos --no-deps
-      - name: Test the unified facade with the macOS feature
-        run: cargo test -p cageforge --no-default-features --features macos --all-targets
+      - name: Test the unified facade on macOS
+        run: cargo test -p cageforge --no-default-features --all-targets
       - name: Check macOS facade documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc -p cageforge --no-default-features --features macos --no-deps
-      - name: Lint and test the CLI with the macOS feature
+        run: cargo doc -p cageforge --no-default-features --no-deps
+      - name: Lint and test the CLI on macOS
         run: |
           set -euo pipefail
-          cargo clippy -p cageforge-cli --no-default-features --features macos --all-targets -- -D warnings
-          cargo test -p cageforge-cli --no-default-features --features macos --all-targets
-          cargo doc -p cageforge-cli --no-default-features --features macos --no-deps
+          cargo clippy -p cageforge-cli --no-default-features --features config --all-targets -- -D warnings
+          cargo test -p cageforge-cli --no-default-features --features config --all-targets
+          cargo doc -p cageforge-cli --no-default-features --features config --no-deps
       - name: Run the macOS-only configuration profile
         run: |
           set -euo pipefail
           output=$(cargo run --locked --release -p cageforge-cli \
-            --no-default-features --features macos -- \
-            run --config crates/cageforge-config/examples/runnable/macos/smoke.toml)
+            --no-default-features --features config -- \
+            run --approve --config crates/cageforge-config/examples/runnable/macos/smoke.toml)
           grep -Fx 'cageforge-macos-smoke' <<<"$output"
 
   native-windows:
@@ -1242,7 +1251,7 @@ jobs:
           cargo clippy -p cageforge-windows --all-targets --features bundled-helpers -- -D warnings
           cargo clippy -p cageforge-windows --all-targets --all-features -- -D warnings
           cargo fmt --package cageforge -- --check
-          cargo clippy -p cageforge --no-default-features --features windows --all-targets -- -D warnings
+          cargo clippy -p cageforge --no-default-features --all-targets -- -D warnings
       - name: Test Windows backend in every feature mode
         shell: pwsh
         run: |
@@ -1316,22 +1325,22 @@ jobs:
           set -euo pipefail
           cargo check -p cageforge-windows --target aarch64-pc-windows-msvc --lib --all-targets --no-default-features
           cargo check -p cageforge-windows --target aarch64-pc-windows-msvc --lib --all-targets --all-features
-          cargo check -p cageforge --target aarch64-pc-windows-msvc --no-default-features --features windows
+          cargo check -p cageforge --target aarch64-pc-windows-msvc --no-default-features
       - name: Check Windows backend documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p cageforge-windows --no-deps
-      - name: Test and document the unified facade with the Windows feature
+      - name: Test and document the unified facade on Windows
         run: |
           set -euo pipefail
-          cargo test -p cageforge --no-default-features --features windows --all-targets
-          cargo doc -p cageforge --no-default-features --features windows --no-deps
-      - name: Lint and test the CLI with the Windows feature
+          cargo test -p cageforge --no-default-features --all-targets
+          cargo doc -p cageforge --no-default-features --no-deps
+      - name: Lint and test the CLI on Windows
         run: |
           set -euo pipefail
-          cargo clippy -p cageforge-cli --no-default-features --features windows --all-targets -- -D warnings
-          cargo test -p cageforge-cli --no-default-features --features windows --all-targets
-          cargo doc -p cageforge-cli --no-default-features --features windows --no-deps
+          cargo clippy -p cageforge-cli --no-default-features --features config --all-targets -- -D warnings
+          cargo test -p cageforge-cli --no-default-features --features config --all-targets
+          cargo doc -p cageforge-cli --no-default-features --features config --no-deps
       - name: Upload Windows native test report
         if: ${{ failure() && hashFiles('test-reports/**') != '' }}
         uses: actions/upload-artifact@v4
@@ -1380,6 +1389,7 @@ jobs:
           cageforge-path
           cageforge-policy
           cageforge-policy-compose
+          cageforge-permissions
           cageforge-upstream-review
           -- --test-threads=1
       - name: Upload coverage artifact

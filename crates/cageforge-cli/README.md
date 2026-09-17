@@ -68,31 +68,28 @@ $ cargo binstall cageforge-cli
 
 ### From source
 
-Source installation requires a Rust toolchain. After publication, use the
-feature matching the target operating system:
+Source installation requires a Rust toolchain. The native backend is selected
+automatically for the target operating system:
 
 ```console
 # Linux, using a system Bubblewrap
-$ cargo install --locked cageforge-cli --no-default-features --features linux
+$ cargo install --locked cageforge-cli
 
 # Linux, with the verified embedded Bubblewrap resource
-$ cargo install --locked cageforge-cli --no-default-features --features linux-bundled-bubblewrap
+$ cargo install --locked cageforge-cli --features linux-bundled-bubblewrap
 
-# Windows
-$ cargo install --locked cageforge-cli --no-default-features --features windows
-
-# macOS
-$ cargo install --locked cageforge-cli --no-default-features --features macos
+# Windows and macOS use the same command on their respective runners.
 ```
 
 From a local Cageforge checkout:
 
 ```console
-$ cargo install --path crates/cageforge-cli --locked --no-default-features --features <matching-os-feature>
+$ cargo install --path crates/cageforge-cli --locked
 ```
 
-The native feature is explicit: `linux`, `linux-bundled-bubblewrap`, `windows`,
-or `macos`. There is no unsandboxed fallback when a matching feature is absent.
+`linux-bundled-bubblewrap` is the only platform-specific build option. It
+embeds the verified Bubblewrap resource for Linux; unsupported targets never
+fall back to an ordinary unsandboxed process.
 
 ### Uninstall
 
@@ -146,19 +143,51 @@ killed. After confirmed termination it removes the per-launch registration and
 known files; unfamiliar or replaced files are left untouched. There are no
 persistent sandbox accounts to uninstall on macOS.
 
-## Build from source and select the backend
+## Build from source
 
-Build the binary with exactly one feature matching its target:
+The backend is selected from the target OS. The CLI enables its configuration
+layer by default:
 
 ```toml
 [dependencies]
-cageforge-cli = { version = "0.1.0", features = ["linux"] }
+cageforge-cli = "x.y.z"
 ```
 
-Supported features are `linux`, `linux-bundled-bubblewrap`, `windows`, and
-`macos`. The Linux bundled feature includes the verified embedded Bubblewrap
-resource. The crate has no default native feature and never falls back to an
-unsandboxed process when the matching feature is absent.
+The only optional native packaging feature is
+`linux-bundled-bubblewrap`; the CLI enables its `config` feature by default
+for normal installs. It never falls back to an unsandboxed process on an
+unsupported target.
+
+## Preflight approval and persistent grants
+
+Approval is disabled by default. To make the CLI ask the trusted host before
+launch, enable preflight in the selected profile:
+
+```toml
+[profiles.tool.approval]
+mode = "preflight"
+timeout_ms = 10000
+on_timeout = "deny"
+persistence = "persistent"
+```
+
+Run it interactively, or use `--approve` only when the caller is itself the
+trusted approval host:
+
+```console
+$ cageforge-cli run --config permission-preflight.toml --approve \
+    --permission-store /var/lib/my-tool/permissions.json -- tool
+```
+
+`--permission-store PATH` explicitly selects the host-owned persistent grant
+store and takes priority. If omitted, the CLI uses the current user's native
+Cageforge state directory: `$XDG_STATE_HOME/cageforge` (falling back to
+`~/.local/state/cageforge`) on Linux, `~/Library/Application Support/Cageforge`
+on macOS, and `%LOCALAPPDATA%\\Cageforge` on Windows. The file is created only
+after a persistent approval, is protected by the host OS, and can be deleted
+by its owner to revoke saved approvals. A sandboxed command does not receive
+new permissions while it is running; a missing approval in a non-interactive
+invocation is denied rather than retried or auto-approved.
 
 ## Run one program
 

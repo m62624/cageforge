@@ -28,28 +28,22 @@ native enforcement, and a correct Cageforge implementation.
 ## Start with the facade
 
 Most applications should begin with [`cageforge`](https://docs.rs/cageforge/latest/cageforge/).
-Supported operating systems are:
-
-- Linux — enable the `linux` feature;
-- Windows — enable the `windows` feature; and
-- macOS — enable the `macos` feature.
-
-Choose the feature that matches the target operating system:
-
 ```toml
 [dependencies]
-cageforge = { version = "x.y.z", features = ["linux"] }
+cageforge = "x.y.z"
 ```
 
-Add `config` when profiles should come from TOML.
+The facade selects `cageforge-linux`, `cageforge-windows`, or
+`cageforge-macos` automatically from the compilation target. Add `config` only
+when profiles should come from TOML.
 
 On Linux, `linux-bundled-bubblewrap` is an optional alternative when the
 application should carry its Bubblewrap resource. It includes Cageforge's
 pinned Bubblewrap `v0.12.0` resource; the embedded version is fixed at build
 time.
 
-`native_sandbox()` chooses the backend for the current OS and enabled Cargo
-feature, returning `Box<dyn DynSandbox>`. The command-running part of an
+`native_sandbox()` chooses the backend for the current OS, returning
+`Box<dyn DynSandbox>`. The command-running part of an
 application uses the same API on all three operating systems:
 
 ```rust,ignore
@@ -148,31 +142,28 @@ $ cargo binstall cageforge-cli
 
 ### From source
 
-Source installation requires a Rust toolchain. After publication, select the
-feature matching the target operating system:
+Source installation requires a Rust toolchain. The native backend is selected
+automatically for the target operating system:
 
 ```console
 # Linux, using a system Bubblewrap
-$ cargo install --locked cageforge-cli --no-default-features --features linux
+$ cargo install --locked cageforge-cli
 
 # Linux, with the verified embedded Bubblewrap resource
 $ cargo install --locked cageforge-cli --no-default-features --features linux-bundled-bubblewrap
 
-# Windows
-$ cargo install --locked cageforge-cli --no-default-features --features windows
-
-# macOS
-$ cargo install --locked cageforge-cli --no-default-features --features macos
+# Windows and macOS use the same command on their respective runners.
 ```
 
 From a local Cageforge checkout, replace the package name with the path:
 
 ```console
-$ cargo install --path crates/cageforge-cli --locked --no-default-features --features <matching-os-feature>
+$ cargo install --path crates/cageforge-cli --locked
 ```
 
-The native feature is explicit: `linux`, `linux-bundled-bubblewrap`, `windows`,
-or `macos`. There is no unsandboxed fallback when a matching feature is absent.
+`linux-bundled-bubblewrap` is the only platform-specific build option: it
+embeds the verified Bubblewrap resource in a Linux binary. There is no
+unsandboxed fallback on an unsupported target.
 
 ### Uninstall
 
@@ -196,13 +187,14 @@ For the CLI command reference, see the [`cageforge-cli` README](crates/cageforge
 
 ## Workspace packages
 
-The workspace currently contains 16 Cargo packages: 15 reusable library,
+The workspace currently contains 17 Cargo packages: 16 reusable library,
 resource, binding, or CLI packages and one internal upstream-review tool.
 
 | Package | Role | Native target or feature |
 | --- | --- | --- |
-| [`cageforge`](crates/cageforge/README.md) | Unified application-facing facade | `linux`, `windows`, or `macos` |
-| [`cageforge-cli`](crates/cageforge-cli/README.md) | Explicit command-line adapter over the facade | Matching OS feature |
+| [`cageforge`](crates/cageforge/README.md) | Unified application-facing facade | Native backend selected from `target_os` |
+| [`cageforge-cli`](crates/cageforge-cli/README.md) | Explicit command-line adapter over the facade | Native backend selected from `target_os` |
+| [`cageforge-permissions`](crates/cageforge-permissions/README.md) | Typed preflight requests, grants, and host-owned permission store | Portable |
 | [`cageforge-java`](crates/bindings/cageforge-java/README.md) | Internal JNI implementation for the JVM binding | Linux, macOS, or Windows |
 | [`cageforge-python`](crates/bindings/cageforge-python/README.md) | PyO3 implementation for the Python binding published through maturin | Linux, macOS, or Windows |
 | [`cageforge-backend-api`](crates/cageforge-backend-api/README.md) | Capability preflight and backend-bound handoff | Portable |

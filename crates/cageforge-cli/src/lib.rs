@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub use cli::SetupCommand;
 pub use cli::{Cli, Command, RunArgs};
 pub use error::CliError;
@@ -28,14 +28,14 @@ pub use execution::execute;
 /// Parses the process arguments, executes the selected command, and renders
 /// a concise diagnostic on failure.
 pub fn run() -> ExitCode {
-    #[cfg(all(feature = "macos", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     if std::env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == cageforge::MACOS_HELPER_ARGUMENT)
     {
         return cageforge::run_macos_helper();
     }
-    #[cfg(all(feature = "linux", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
         let mut arguments = std::env::args_os();
         arguments.next();

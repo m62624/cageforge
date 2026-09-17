@@ -21,6 +21,7 @@ cageforge-command = { workspace = true }
 cageforge-network-proxy = { workspace = true, default-features = false }
 cageforge-path = { workspace = true }
 cageforge-policy = { workspace = true }
+cageforge-permissions = { workspace = true }
 serde = { workspace = true }
 schemars = { workspace = true }
 serde_json = { workspace = true }

@@ -36,24 +36,21 @@ instances. The CLI does not intercept programs started outside it.
 
 ## Backend selection and features
 
-The crate has no default native backend. The release binary is built with
-exactly one matching OS feature:
+The crate has no default configuration feature. Its native backend is selected
+automatically from the compilation target:
 
 | Feature | Native backend | Target |
 |---|---|---|
-| `linux` | `cageforge-linux` | Linux |
 | `linux-bundled-bubblewrap` | Linux plus verified embedded Bubblewrap | Linux |
-| `windows` | `cageforge-windows` | Windows |
-| `macos` | `cageforge-macos` | macOS |
+| `config` | TOML profile loading | all targets |
 
-Each native feature enables the CLI's `config` feature because a usable CLI
-must load profiles. A build without a matching feature remains cross-target
-compilable and returns a typed configuration error when `run` is requested;
-it never launches an unsandboxed fallback.
+`linux-bundled-bubblewrap` enables only the embedded Linux resource. A build
+without `config` can still expose non-profile CLI commands with a typed
+configuration error, and it never launches an unsandboxed fallback.
 
-The CLI uses the platform-native backend only when its feature and target
-match. A Windows build does not compile Linux or macOS enforcement, and a
-Linux build does not compile Windows or macOS enforcement. Linux's bundled
+The CLI uses the platform-native backend selected for its target. A Windows
+build does not compile Linux or macOS enforcement, and a Linux build does not
+compile Windows or macOS enforcement. Linux's bundled
 Bubblewrap option is explicit and keeps the same fixed verified resource
 contract as `cageforge-linux`.
 
@@ -73,8 +70,8 @@ The adapter performs this sequence:
    preparation and spawn on the same instance; and
 6. wait for the common child result with the native error preserved as a source.
 
-The CLI reports configuration, composition, missing-feature, and native
-backend failures to stderr and returns a nonzero exit code. A child that
+The CLI reports configuration, composition, missing-configuration-feature,
+and native backend failures to stderr and returns a nonzero exit code. A child that
 exits normally returns its exit code; a signal or native lifecycle failure is
 reported without parsing human display strings as a protocol.
 
@@ -83,8 +80,8 @@ remain visible. Applications needing captured output should use
 `CommandRequest` and `SandboxChild` directly.
 
 On Windows, the CLI exposes `setup install`, `setup status`, and
-`setup uninstall` only when built with the `windows` feature for a Windows
-target. `setup install` is the explicit administrator-approved provisioning
+`setup uninstall` for a Windows target. `setup install` is the explicit
+administrator-approved provisioning
 step and may request UAC; it creates or reconciles the persistent
 owner-scoped Windows accounts, ACLs, firewall/WFP state, protected resources,
 and setup marker. `run` verifies that setup but never provisions it implicitly.

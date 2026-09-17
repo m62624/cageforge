@@ -36,7 +36,7 @@ This example selects the profile for the current host and uses
 import platform
 from pathlib import Path
 
-from cageforge import Cageforge, RuntimeContext
+from cageforge import Cageforge, PermissionApprover, RuntimeContext
 
 platform_name = platform.system().lower()
 profile_name = {
@@ -54,8 +54,11 @@ profile = (
 ).resolve()
 
 context = RuntimeContext(profile.parent)
-Cageforge.check_toml(profile.read_text(), context=context)
-with Cageforge.from_toml_file(profile, context=context) as runtime:
+toml = profile.read_bytes().decode("utf-8")
+Cageforge.check_toml(toml, context=context)
+request = Cageforge.permission_request(toml, context=context)
+grant = PermissionApprover().approve(request)
+with Cageforge.from_toml_file(profile, context=context, grant=grant) as runtime:
     with runtime.launch() as process:
         print(process.read_stdout(4096).decode().strip())
         assert process.wait().exit_code == 0
@@ -67,6 +70,39 @@ and [`windows/smoke.toml`](../../cageforge-config/examples/runnable/windows/smok
 They use the current Cageforge TOML schema, include `minimal` read access,
 declare a workspace root, allow writes to `workspace-root`, and disable the
 network. The Windows profile uses `cmd.exe`; the POSIX profiles use `/bin/echo`.
+
+Profiles with `approval.mode = "preflight"` require a trusted host grant before
+launch. `PermissionRequest` is descriptive; only `PermissionApprover` can
+issue the opaque `PermissionGrant`. A grant never changes an already-running
+process.
+
+### Persistent grants and store paths
+
+The permission store is host state, not TOML policy. Choose its absolute path
+explicitly and use a persistent grant when the approval should survive a new
+process:
+
+```python
+from pathlib import Path
+
+from cageforge import PermissionApprover, PermissionStore
+
+store = PermissionStore(Path("/var/lib/my-tool/permissions.json"))
+toml = profile.read_bytes().decode("utf-8")
+request = Cageforge.permission_request(toml, context=context)
+grant = PermissionApprover().approve(request, scope="persistent")
+store.put(grant, request)
+
+cached = store.get(request)
+assert cached is not None
+with Cageforge.from_toml_file(profile, context=context, grant=cached) as runtime:
+    ...
+```
+
+`PermissionStore` protects the file with owner-only permissions on Unix and an
+owner-only DACL on Windows. It uses a versioned JSON document, an advisory
+writer lock, and atomic replacement. A missing store record is not an
+approval; preflight remains deny-by-default.
 
 When `profile_name` is omitted, `Cageforge.from_toml` and `check_toml` use the
 TOML document's `default_profile`. `Cageforge.from_toml_file` reads a file and

@@ -16,10 +16,7 @@ dist = false
 [features]
 default = ["config"]
 config = ["cageforge/config"]
-linux = ["config", "cageforge/linux"]
-linux-bundled-bubblewrap = ["linux", "cageforge/linux-bundled-bubblewrap"]
-macos = ["config", "cageforge/macos"]
-windows = ["config", "cageforge/windows"]
+linux-bundled-bubblewrap = ["config", "cageforge/linux-bundled-bubblewrap"]
 
 [lib]
 name = "_cageforge"
@@ -33,6 +30,7 @@ path = "src/bin/stub_gen.rs"
 cageforge.workspace = true
 pyo3.workspace = true
 pyo3-stub-gen.workspace = true
+serde_json.workspace = true
 
 [lints.rust]
 unsafe_code = "deny"

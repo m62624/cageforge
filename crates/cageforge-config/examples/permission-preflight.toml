@@ -1,0 +1,40 @@
+# One portable profile with platform-specific path additions.
+# The profile policy and approval settings are shared; only native paths are
+# selected by the resolver for the current PlatformId.
+# The host selects the persistent permissions.json path separately with
+# --permission-store; it is deliberately not part of the policy TOML.
+default_profile = "tool"
+
+[profiles.tool]
+workspace_roots = { "." = true }
+
+[profiles.tool.approval]
+mode = "preflight"
+timeout_ms = 10000
+on_timeout = "deny"
+persistence = "persistent"
+
+[profiles.tool.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.tool.network]
+mode = "disabled"
+
+[profiles.tool.platforms.linux.filesystem]
+rules = [
+  { target = "absolute", path = "/etc/tool/config", access = "read" },
+]
+
+[profiles.tool.platforms.macos.filesystem]
+rules = [
+  { target = "absolute", path = "/Library/Application Support/tool/config", access = "read" },
+]
+
+[profiles.tool.platforms.windows.filesystem]
+rules = [
+  { target = "absolute", path = "C:/ProgramData/tool/config", access = "read" },
+]

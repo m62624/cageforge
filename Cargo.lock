@@ -203,9 +203,11 @@ dependencies = [
  "cageforge-macos",
  "cageforge-network-proxy",
  "cageforge-path",
+ "cageforge-permissions",
  "cageforge-policy",
  "cageforge-policy-compose",
  "cageforge-windows",
+ "sha2",
  "thiserror",
 ]
 
@@ -260,6 +262,7 @@ dependencies = [
  "cageforge-command",
  "cageforge-network-proxy",
  "cageforge-path",
+ "cageforge-permissions",
  "cageforge-policy",
  "jsonschema",
  "pretty_assertions",
@@ -277,6 +280,7 @@ version = "0.3.0"
 dependencies = [
  "cageforge",
  "jni",
+ "serde_json",
 ]
 
 [[package]]
@@ -348,6 +352,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cageforge-permissions"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "cageforge-policy"
 version = "0.3.0"
 dependencies = [
@@ -376,6 +394,7 @@ dependencies = [
  "cageforge",
  "pyo3",
  "pyo3-stub-gen",
+ "serde_json",
 ]
 
 [[package]]

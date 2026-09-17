@@ -64,6 +64,48 @@ class Cageforge private constructor(
             )
         }
 
+        /** Returns the shared typed preflight request for a TOML profile. */
+        @JvmStatic
+        @JvmOverloads
+        fun permissionRequest(
+            toml: String,
+            profileName: String? = null,
+            context: RuntimeContext = RuntimeContext(),
+            toolId: String = "cageforge-java",
+            toolVersion: String? = null,
+            manifestDigest: String? = null,
+            configDigest: String? = null,
+        ): PermissionRequest {
+            require(toml.isNotEmpty()) { "TOML must not be empty" }
+            val handle =
+                NativeBridge.nativePermissionRequest(
+                    toml,
+                    profileName,
+                    context.currentDirectory.toString(),
+                    context.minimalPath?.toString(),
+                    toolId,
+                    toolVersion,
+                    manifestDigest,
+                    configDigest,
+                )
+            if (handle == 0L) throw CageforgeException("Cageforge permission request failed")
+            try {
+                return PermissionRequest(
+                    handle = handle,
+                    json = NativeBridge.nativePermissionRequestJson(handle),
+                    toolId = NativeBridge.nativePermissionRequestToolId(handle),
+                    toolVersion = NativeBridge.nativePermissionRequestToolVersion(handle),
+                    platform = NativeBridge.nativePermissionRequestPlatform(handle),
+                    digest = NativeBridge.nativePermissionRequestDigest(handle),
+                    filesystemValues = NativeBridge.nativePermissionRequestFilesystem(handle),
+                    network = NativeBridge.nativePermissionRequestNetwork(handle).toList(),
+                )
+            } catch (error: Throwable) {
+                NativeBridge.nativeClosePermissionRequest(handle)
+                throw error
+            }
+        }
+
         /** Creates a runtime from TOML and the selected profile. */
         @JvmStatic
         @JvmOverloads
@@ -71,6 +113,7 @@ class Cageforge private constructor(
             toml: String,
             profileName: String? = null,
             context: RuntimeContext = RuntimeContext(),
+            grant: PermissionGrant? = null,
         ): Cageforge {
             require(toml.isNotEmpty()) { "TOML must not be empty" }
             val directory = NativeLoader.load()
@@ -81,6 +124,7 @@ class Cageforge private constructor(
                     context.currentDirectory.toString(),
                     directory.toString(),
                     context.minimalPath?.toString(),
+                    grant?.handle ?: 0L,
                 )
             if (handle == 0L) throw CageforgeException("Cageforge runtime creation failed")
             return Cageforge(handle, directory)
@@ -97,6 +141,7 @@ class Cageforge private constructor(
             file: Path,
             profileName: String? = null,
             context: RuntimeContext = RuntimeContext(file.toAbsolutePath().parent ?: Path.of(".")),
-        ): Cageforge = fromToml(Files.readString(file), profileName, context)
+            grant: PermissionGrant? = null,
+        ): Cageforge = fromToml(Files.readString(file), profileName, context, grant)
     }
 }

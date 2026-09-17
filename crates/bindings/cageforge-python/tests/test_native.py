@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import threading
@@ -13,6 +14,9 @@ import pytest
 from cageforge import (
     Cageforge,
     CageforgeProcessError,
+    PermissionApprover,
+    PermissionGrant,
+    PermissionStore,
     RuntimeContext,
     WindowsSetup,
     wait_for_async,
@@ -27,6 +31,26 @@ def smoke_config() -> Path:
     if sys.platform == "darwin":
         return ROOT / "crates/cageforge-config/examples/runnable/macos/smoke.toml"
     return ROOT / "crates/cageforge-config/examples/runnable/linux/smoke.toml"
+
+
+def smoke_toml() -> str:
+    """Read TOML bytes without newline normalization on Windows."""
+    return smoke_config().read_bytes().decode("utf-8")
+
+
+def toml_for_argv(argv: list[str]) -> str:
+    source = smoke_toml()
+    prefix, separator, _command = source.partition("[profiles.smoke.command]")
+    assert separator
+    return (
+        prefix
+        + separator
+        + "\nprogram = "
+        + json.dumps(argv[0])
+        + "\nargs = "
+        + json.dumps(argv[1:])
+        + "\n"
+    )
 
 
 def require_linux_guest() -> None:
@@ -59,6 +83,11 @@ def smoke_argv() -> list[str]:
     return ["/bin/echo", "cageforge-python-native"]
 
 
+def smoke_grant(toml: str, context: RuntimeContext) -> PermissionGrant:
+    request = Cageforge.permission_request(toml, context=context)
+    return PermissionApprover().approve(request)
+
+
 def long_running_argv() -> list[str]:
     if sys.platform == "win32":
         return [
@@ -74,14 +103,32 @@ def long_running_argv() -> list[str]:
     return ["/bin/sh", "-c", "sleep 30"]
 
 
+def test_persistent_grant_store_uses_the_explicit_path(tmp_path: Path) -> None:
+    context = runtime_context(tmp_path)
+    request = Cageforge.permission_request(smoke_toml(), context=context)
+    grant = PermissionApprover().approve(request, scope="persistent")
+    path = tmp_path / "host-state" / "permissions.json"
+    store = PermissionStore(path)
+    assert store.path() == str(path)
+    store.put(grant, request)
+    cached = store.get(request)
+    assert cached is not None
+    assert cached.request_digest() == request.digest()
+
+
 def test_native_profile_launch_and_streams(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
+    context = runtime_context(tmp_path)
+    argv = smoke_argv()
+    toml = toml_for_argv(argv)
+    profile = tmp_path / "smoke.toml"
+    profile.write_bytes(toml.encode("utf-8"))
     runtime = Cageforge.from_toml_file(
-        smoke_config(), context=runtime_context(tmp_path)
+        profile, context=context, grant=smoke_grant(toml, context)
     )
     try:
-        process = runtime.launch(smoke_argv())
+        process = runtime.launch(argv)
         try:
             result = process.wait()
             assert result.exit_code == 0
@@ -99,23 +146,26 @@ def test_native_profile_launch_and_streams(tmp_path: Path) -> None:
 def test_wait_releases_the_gil(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
-    runtime = Cageforge.from_toml_file(
-        smoke_config(), context=runtime_context(tmp_path)
+    context = runtime_context(tmp_path)
+    argv = (
+        [
+            r"C:\Windows\System32\cmd.exe",
+            "/d",
+            "/c",
+            "ping",
+            "127.0.0.1",
+            "-n",
+            "3",
+            ">nul",
+        ]
+        if sys.platform == "win32"
+        else ["/bin/sh", "-c", "sleep 1"]
+    )
+    toml = toml_for_argv(argv)
+    runtime = Cageforge.from_toml(
+        toml, context=context, grant=smoke_grant(toml, context)
     )
     try:
-        if sys.platform == "win32":
-            argv = [
-                r"C:\Windows\System32\cmd.exe",
-                "/d",
-                "/c",
-                "ping",
-                "127.0.0.1",
-                "-n",
-                "3",
-                ">nul",
-            ]
-        else:
-            argv = ["/bin/sh", "-c", "sleep 1"]
         process = runtime.launch(argv)
         completed = threading.Event()
         wait_result: list[int | None] = []
@@ -147,10 +197,13 @@ def test_wait_releases_the_gil(tmp_path: Path) -> None:
 def test_async_wait_cancellation_terminates_the_process(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
-    runtime = Cageforge.from_toml_file(
-        smoke_config(), context=runtime_context(tmp_path)
+    context = runtime_context(tmp_path)
+    argv = long_running_argv()
+    toml = toml_for_argv(argv)
+    runtime = Cageforge.from_toml(
+        toml, context=context, grant=smoke_grant(toml, context)
     )
-    process = runtime.launch(long_running_argv())
+    process = runtime.launch(argv)
     try:
         async def cancel_wait() -> None:
             task = asyncio.create_task(wait_for_async(process))

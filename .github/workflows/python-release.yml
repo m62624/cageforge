@@ -48,7 +48,7 @@ jobs:
             python_arch: x64
             freethreaded: true
             manylinux: "off"
-            feature: macos
+            feature: config
             helper_package: cageforge-macos
             helper_arguments: "--bin cageforge-macos-helper"
           - resource: macos-aarch64
@@ -57,7 +57,7 @@ jobs:
             python_arch: arm64
             freethreaded: true
             manylinux: "off"
-            feature: macos
+            feature: config
             helper_package: cageforge-macos
             helper_arguments: "--bin cageforge-macos-helper"
           - resource: windows-x86_64
@@ -66,7 +66,7 @@ jobs:
             python_arch: x64
             freethreaded: true
             manylinux: "off"
-            feature: windows
+            feature: config
             helper_package: cageforge-windows
             helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
           - resource: windows-aarch64
@@ -75,7 +75,7 @@ jobs:
             python_arch: arm64
             freethreaded: true
             manylinux: "off"
-            feature: windows
+            feature: config
             helper_package: cageforge-windows
             helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
     runs-on: ${{ matrix.runner }}
