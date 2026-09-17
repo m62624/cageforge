@@ -7,7 +7,9 @@ use std::process::Command as ProcessCommand;
 use cageforge_cli::SetupCommand;
 use cageforge_cli::{Cli, Command, RunArgs};
 use clap::Parser;
-#[cfg(all(feature = "config", target_os = "linux"))]
+// This is a native Bubblewrap smoke test. Keep it out of common portable
+// component checks; the Linux bundled/native lane owns execution tests.
+#[cfg(all(feature = "linux-bundled-bubblewrap", target_os = "linux"))]
 use tempfile::TempDir;
 
 #[test]
@@ -83,7 +85,7 @@ fn parses_windows_setup_commands() {
     }
 }
 
-#[cfg(all(feature = "config", target_os = "linux"))]
+#[cfg(all(feature = "linux-bundled-bubblewrap", target_os = "linux"))]
 #[test]
 fn linux_cli_starts_a_sandbox_with_its_self_hosted_helper_entrypoint() {
     let workspace = TempDir::new().expect("temporary workspace");
