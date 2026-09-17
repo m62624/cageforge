@@ -14,6 +14,10 @@ permissions:
 jobs:
   wheel:
     name: "Python wheel (${{ matrix.resource }})"
+    # Each platform row builds one ABI3 wheel and one free-threaded wheel
+    # after staging the same target-specific native resources. The Linux rows
+    # use the native manylinux host for both builds; macOS and Windows install
+    # the matching CPython architectures explicitly below.
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +26,8 @@ jobs:
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             python_arch: x64
+            freethreaded: true
+            expected_machine: "Advanced Micro Devices X86-64"
             manylinux: auto
             feature: linux-bundled-bubblewrap
             helper_package: cageforge-linux
@@ -30,6 +36,8 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             python_arch: arm64
+            freethreaded: true
+            expected_machine: AArch64
             manylinux: auto
             feature: linux-bundled-bubblewrap
             helper_package: cageforge-linux
@@ -38,6 +46,7 @@ jobs:
             runner: macos-26-intel
             target: x86_64-apple-darwin
             python_arch: x64
+            freethreaded: true
             manylinux: "off"
             feature: macos
             helper_package: cageforge-macos
@@ -46,6 +55,7 @@ jobs:
             runner: macos-26
             target: aarch64-apple-darwin
             python_arch: arm64
+            freethreaded: true
             manylinux: "off"
             feature: macos
             helper_package: cageforge-macos
@@ -54,6 +64,7 @@ jobs:
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             python_arch: x64
+            freethreaded: true
             manylinux: "off"
             feature: windows
             helper_package: cageforge-windows
@@ -62,6 +73,7 @@ jobs:
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             python_arch: arm64
+            freethreaded: true
             manylinux: "off"
             feature: windows
             helper_package: cageforge-windows
@@ -98,6 +110,18 @@ jobs:
           output_dir="crates/cageforge-bwrap/assets/linux-$arch"
           mkdir -p "$output_dir"
           cargo run --locked --release -p cageforge-bwrap -- --output "$output_dir/bwrap"
+      - name: Verify the staged Bubblewrap resource
+        if: startsWith(matrix.resource, 'linux-')
+        run: |
+          set -euo pipefail
+          arch=x86_64
+          [[ "${{ matrix.resource }}" == linux-aarch64 ]] && arch=aarch64
+          resource="crates/cageforge-bwrap/assets/linux-$arch/bwrap"
+          test -x "$resource"
+          readelf -h "$resource" | grep -F "${{ matrix.expected_machine }}"
+          expected=$(tr -d '[:space:]' < "$resource.sha256")
+          actual=$(sha256sum "$resource" | awk '{print $1}')
+          test "$actual" = "$expected"
       - name: Build the extension and native helpers
         run: |
           set -euo pipefail
@@ -141,19 +165,51 @@ jobs:
           working-directory: crates/bindings/cageforge-python
           args: --release --out dist --features ${{ matrix.feature }}
           sccache: "true"
+      - name: Install free-threaded CPython
+        if: ${{ matrix.freethreaded && matrix.manylinux == 'off' }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14t'
+          architecture: ${{ matrix.python_arch }}
+      - name: Build the free-threaded wheel
+        if: ${{ matrix.freethreaded }}
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          working-directory: crates/bindings/cageforge-python
+          args: --release --out dist --features ${{ matrix.feature }} -i python3.14t
+          sccache: "true"
       - name: Verify wheel metadata and target resources
         working-directory: crates/bindings/cageforge-python
         run: |
           set -euo pipefail
-          wheel=$(find dist -name '*.whl' -type f -print -quit)
-          test -n "$wheel"
-          python - "$wheel" "${{ matrix.resource }}" <<'PY'
+          wheels=()
+          while IFS= read -r wheel; do
+            wheels+=("$wheel")
+          done < <(find dist -maxdepth 1 -name '*.whl' -type f -print | sort)
+          if (( ${#wheels[@]} != 2 )); then
+            printf 'expected exactly two wheels, found %s:\n' "${#wheels[@]}" >&2
+            printf '  %s\n' "${wheels[@]}" >&2
+            exit 1
+          fi
+          python "${wheels[@]}" "${{ matrix.resource }}" <<'PY'
+          from pathlib import Path
           import sys
           import zipfile
 
-          wheel, resource = sys.argv[1:]
-          with zipfile.ZipFile(wheel) as archive:
-              names = set(archive.namelist())
+          wheels = sys.argv[1:-1]
+          resource = sys.argv[-1]
+          wheel_names = {Path(wheel).name for wheel in wheels}
+          abi_tags = {
+              name.removesuffix(".whl").split("-")[-2]
+              for name in wheel_names
+          }
+          if abi_tags != {"abi3", "cp314t"}:
+              raise SystemExit(
+                  f"expected abi3 and cp314t wheels, got {sorted(abi_tags)}: "
+                  f"{sorted(wheel_names)}"
+              )
 
           prefix = f"cageforge/native/{resource}/"
           if resource.startswith("linux-"):
@@ -175,27 +231,51 @@ jobs:
           else:
               raise SystemExit(f"unknown Python resource target: {resource}")
 
-          required = {prefix + name for name in files}
-          required.update({"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"})
-          missing = sorted(required - names)
-          if missing:
-              raise SystemExit(f"missing wheel members: {missing}")
-          if any(name.startswith("cageforge/native/native/") for name in names):
-              raise SystemExit("wheel contains an extra native nesting level")
+          for wheel in wheels:
+              with zipfile.ZipFile(wheel) as archive:
+                  names = set(archive.namelist())
 
-          dist_infos = {
-              name.split("/", 1)[0]
-              for name in names
-              if name.endswith(".dist-info/METADATA")
-          }
-          if len(dist_infos) != 1:
-              raise SystemExit(f"expected one dist-info directory, got {dist_infos}")
-          dist_info = next(iter(dist_infos))
-          for name in ("LICENSE", "NOTICE"):
-              member = f"{dist_info}/licenses/{name}"
-              if member not in names:
-                  raise SystemExit(f"missing wheel license member: {member}")
-          print("wheel member audit: ok")
+              required = {prefix + name for name in files}
+              required.update({"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"})
+              missing = sorted(required - names)
+              if missing:
+                  raise SystemExit(
+                      f"{Path(wheel).name} missing wheel members: {missing}"
+                  )
+              if any(name.startswith("cageforge/native/native/") for name in names):
+                  raise SystemExit(
+                      f"{Path(wheel).name} contains an extra native nesting level"
+                  )
+              other_resources = sorted(
+                  name
+                  for name in names
+                  if name.startswith("cageforge/native/")
+                  and not name.startswith(prefix)
+              )
+              if other_resources:
+                  raise SystemExit(
+                      f"{Path(wheel).name} contains resources for another target: "
+                      f"{other_resources}"
+                  )
+
+              dist_infos = {
+                  name.split("/", 1)[0]
+                  for name in names
+                  if name.endswith(".dist-info/METADATA")
+              }
+              if len(dist_infos) != 1:
+                  raise SystemExit(
+                      f"{Path(wheel).name} expected one dist-info directory, "
+                      f"got {dist_infos}"
+                  )
+              dist_info = next(iter(dist_infos))
+              for name in ("LICENSE", "NOTICE"):
+                  member = f"{dist_info}/licenses/{name}"
+                  if member not in names:
+                      raise SystemExit(
+                          f"{Path(wheel).name} missing wheel license member: {member}"
+                      )
+              print(f"{Path(wheel).name}: wheel member audit: ok")
           PY
       - uses: actions/upload-artifact@v4
         with:

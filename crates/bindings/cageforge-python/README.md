@@ -22,6 +22,10 @@ operating-system and architecture target. Linux wheels include the pinned
 Bubblewrap resource. Applications do not need to install a separate native
 helper or provide a host-specific resource path.
 
+The release also includes free-threaded CPython 3.14 wheels for each supported
+operating-system and architecture target. Standard CPython 3.10 and newer
+builds use the stable `abi3` wheel for their platform.
+
 ## Quick start with the repository smoke profile
 
 The repository already contains one runnable profile for each supported OS.
