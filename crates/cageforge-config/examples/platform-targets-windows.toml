@@ -20,7 +20,6 @@ rules = [
   { target = "workspace-root", access = "read" },
   { target = "minimal", access = "read" },
   { target = "tmpdir", access = "write" },
-  { target = "slash-tmp", access = "write" },
   { target = "absolute-glob", pattern = "C:/cageforge-example/**/*.json", access = "deny" },
   { target = "workspace-glob", pattern = "target/**/*.rlib", access = "deny" },
 ]

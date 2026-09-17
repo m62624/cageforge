@@ -12,6 +12,10 @@ applications on Linux, macOS, and Windows. Detailed sandbox policy remains in
 Cageforge TOML configuration; the JVM layer provides the API for loading a
 profile, launching a command, and managing its process.
 
+The shared [configuration guide](../../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+shows the separate runnable TOML profiles and explains how `minimal` is
+resolved on each operating system.
+
 ## Maven artifact
 
 ```text
@@ -40,6 +44,13 @@ try {
 The same JVM-compatible classes are available from Java. Commands are passed
 as an argument list, and the selected TOML profile controls filesystem,
 network, environment, timeout, and standard-stream policy.
+
+The profile must explicitly allow the symbolic `minimal` read scope when the
+command needs the platform runtime. The binding supplies the platform path in
+its `RuntimeContext`; passing a path without the corresponding TOML rule does
+not grant access. Use the host-specific file under
+`cageforge-config/examples/runnable/` rather than copying a Windows command
+into a POSIX application or vice versa.
 
 ## Native resources
 

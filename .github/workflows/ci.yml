@@ -997,6 +997,13 @@ jobs:
           cargo clippy -p cageforge-cli --no-default-features --features macos --all-targets -- -D warnings
           cargo test -p cageforge-cli --no-default-features --features macos --all-targets
           cargo doc -p cageforge-cli --no-default-features --features macos --no-deps
+      - name: Run the macOS-only configuration profile
+        run: |
+          set -euo pipefail
+          output=$(cargo run --locked --release -p cageforge-cli \
+            --no-default-features --features macos -- \
+            run --config crates/cageforge-config/examples/runnable/macos/smoke.toml)
+          grep -Fx 'cageforge-macos-smoke' <<<"$output"
 
   native-windows:
     name: "Windows sandbox (Windows Server 2025)"

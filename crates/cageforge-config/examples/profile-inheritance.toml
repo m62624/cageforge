@@ -13,6 +13,7 @@ description = "Shared CI baseline"
 [profiles.base.filesystem]
 mode = "restricted"
 rules = [
+  { target = "minimal", access = "read" },
   { target = "workspace-root", access = "read" },
 ]
 

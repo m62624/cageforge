@@ -10,6 +10,7 @@ description = "Read project files and deny outbound networking"
 [profiles.read-only.filesystem]
 mode = "restricted"
 rules = [
+  { target = "minimal", access = "read" },
   { target = "workspace-root", access = "read" },
 ]
 

@@ -11,6 +11,19 @@ default_profile = "ordered-environment"
 [profiles.ordered-environment.command]
 program = "env-print"
 
+[profiles.ordered-environment.workspace_roots]
+"." = true
+
+[profiles.ordered-environment.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "read" },
+]
+
+[profiles.ordered-environment.network]
+mode = "disabled"
+
 [profiles.ordered-environment.command.environment]
 inherit = "all"
 filters = { "*TOKEN*" = "exclude", "PATH" = "include", "OVERRIDE" = "include" }

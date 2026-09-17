@@ -25,6 +25,9 @@ feature to use this backend through the shared execution API while retaining
 native configuration options. You can also use `cageforge-macos` directly, as
 shown below.
 
+For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
+`minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+
 ## Sandbox model
 
 Each `spawn` creates one sandbox boundary around one command and its complete
@@ -104,6 +107,19 @@ with `with_network_gateway`. These settings apply to each spawned instance;
 the backend itself is reusable.
 
 ## Basic use
+
+### TOML profile rule for the macOS runtime
+
+`minimal` is a symbolic platform scope, not a literal `/usr` path. The CLI
+supplies `/usr` and the Seatbelt profile includes the standard system runtime
+baseline needed by ordinary macOS command-line programs. Include `minimal`
+read access in application profiles when the profile relies on the platform
+runtime explicitly; it keeps the policy portable and makes the dependency
+visible. Use the workspace rule for application data rather than broadening
+the policy to `root`.
+
+The runnable example is
+[`runnable/macos/smoke.toml`](../cageforge-config/examples/runnable/macos/smoke.toml).
 
 Compose the portable values first, provide the runtime paths used by symbolic
 selectors, then prepare and spawn through the same backend instance:
