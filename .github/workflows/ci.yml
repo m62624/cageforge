@@ -72,8 +72,11 @@ concurrency:
 # 5. Sandbox crates never enter the common-component jobs. The Windows sandbox
 #    lane runs every cageforge-windows feature combination and its native tests;
 #    macOS still reports its missing native backend in its own sandbox job.
-# 6. The JVM binding is scheduled only for binding/facade/backend dependency
-#    changes (or full/main validation), and runs after all selected Rust jobs.
+# 6. JVM and Python bindings are scheduled independently. A core API/backend
+#    dependency selects both bindings, a binding crate selects only its own
+#    consumer, and CLI-only changes select neither final consumer.
+# 7. Release workflow changes select only the binding artifact workflow they
+#    affect; changes to this CI router itself remain shared and select both.
 #
 jobs:
   changes:
@@ -271,36 +274,26 @@ jobs:
 
           for path in "${changed_paths[@]}"; do
             case "$path" in
-              .github/workflows/*)
+              .github/workflows/python-release.yml)
+                python_binding=true
+                ;;
+              .github/workflows/jvm-release.yml)
+                java_binding=true
+                ;;
+              .github/workflows/release.yml)
                 java_binding=true
                 python_binding=true
-                mapfile -t workflow_jobs < <(
-                  git diff --unified=0 "${BASE_SHA}...${HEAD_SHA}" -- "$path" \
-                    | sed -n 's/^+  \([[:alnum:]_-][[:alnum:]_-]*\):$/\1/p'
-                )
-                if ((${#workflow_jobs[@]} == 0)); then
-                  shared_change=true
-                else
-                  for job in "${workflow_jobs[@]}"; do
-                    case "$job" in
-                      native-linux|native-linux-arm64|linux-bwrap-resources)
-                        linux_sandbox=true
-                        ;;
-                      native-macos)
-                        macos_sandbox=true
-                        ;;
-                      native-windows)
-                        windows_sandbox=true
-                        ;;
-                      changes|common-components|ci-pass|coverage-portable)
-                        shared_change=true
-                        ;;
-                      *)
-                        shared_change=true
-                        ;;
-                    esac
-                  done
-                fi
+                ;;
+              .github/workflows/ci.yml)
+                shared_change=true
+                java_binding=true
+                python_binding=true
+                ;;
+              .github/workflows/native-linux-vm.yml)
+                linux_sandbox=true
+                ;;
+              .github/workflows/*)
+                shared_change=true
                 ;;
               Cargo.toml)
                 root_manifest_change=true
