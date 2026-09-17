@@ -36,6 +36,20 @@ JAVA_TO_PYTHON = {
     "PermissionApprover": {
         "approve": "approve",
     },
+    "PermissionRequest": {
+        "getJson": "json",
+        "getToolId": "tool_id",
+        "getToolVersion": "tool_version",
+        "getPlatform": "platform",
+        "getDigest": "digest",
+        "getFilesystem": "filesystem",
+        "getNetwork": "network",
+    },
+    "PermissionGrant": {
+        "getRequestDigest": "request_digest",
+        "getScope": "scope",
+        "getExpiresAt": "expires_at",
+    },
     "PermissionStore": {
         "get": "get",
         "put": "put",
