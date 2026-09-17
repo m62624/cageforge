@@ -85,6 +85,7 @@ jobs:
       macos_sandbox: ${{ steps.classify.outputs.macos_sandbox }}
       windows_sandbox: ${{ steps.classify.outputs.windows_sandbox }}
       java_binding: ${{ steps.classify.outputs.java_binding }}
+      python_binding: ${{ steps.classify.outputs.python_binding }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -108,6 +109,7 @@ jobs:
           macos_sandbox=false
           windows_sandbox=false
           java_binding=false
+          python_binding=false
           shared_change=false
           changed_paths=()
           manual_linux=false
@@ -179,6 +181,20 @@ jobs:
             cageforge-policy
             cageforge-policy-compose
           )
+          python_binding_packages=(
+            cageforge
+            cageforge-bwrap
+            cageforge-linux
+            cageforge-macos
+            cageforge-windows
+            cageforge-config
+            cageforge-backend-api
+            cageforge-command
+            cageforge-network-proxy
+            cageforge-path
+            cageforge-policy
+            cageforge-policy-compose
+          )
 
           for label in ${PR_LABELS:-}; do
             case "$label" in
@@ -206,18 +222,21 @@ jobs:
             macos_sandbox=true
             windows_sandbox=true
             java_binding=true
+            python_binding=true
             mode=release
           elif [[ "$EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
             java_binding=true
+            python_binding=true
             mode=main
           elif [[ "$EVENT_NAME" == "workflow_call" ]]; then
             linux_sandbox=true
             macos_sandbox=true
             windows_sandbox=true
             java_binding=true
+            python_binding=true
             mode=called
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "${MANUAL_SCOPE:-auto}" in
@@ -226,6 +245,7 @@ jobs:
                 macos_sandbox=true
                 windows_sandbox=true
                 java_binding=true
+                python_binding=true
                 mode=manual-full
                 ;;
               default|auto) ;;
@@ -253,6 +273,7 @@ jobs:
             case "$path" in
               .github/workflows/*)
                 java_binding=true
+                python_binding=true
                 mapfile -t workflow_jobs < <(
                   git diff --unified=0 "${BASE_SHA}...${HEAD_SHA}" -- "$path" \
                     | sed -n 's/^+  \([[:alnum:]_-][[:alnum:]_-]*\):$/\1/p'
@@ -284,10 +305,12 @@ jobs:
               Cargo.toml)
                 root_manifest_change=true
                 java_binding=true
+                python_binding=true
                 ;;
               Cargo.lock|rust-toolchain|rust-toolchain.toml|.cargo/*|ci/*)
                 shared_change=true
                 java_binding=true
+                python_binding=true
                 ;;
               *) ;;
             esac
@@ -300,6 +323,10 @@ jobs:
                 # Rust native lanes before the final Java consumer stage.
                 shared_change=true
                 java_binding=true
+                ;;
+              crates/bindings/cageforge-python/*)
+                package=cageforge-python
+                python_binding=true
                 ;;
               crates/*/*)
                 package=${path#crates/}
@@ -315,6 +342,7 @@ jobs:
               package_in_list "$package" "${windows_sandbox_packages[@]}" && windows_sandbox=true
               package_in_list "$package" "${macos_sandbox_packages[@]}" && macos_sandbox=true
               package_in_list "$package" "${java_binding_packages[@]}" && java_binding=true
+              package_in_list "$package" "${python_binding_packages[@]}" && python_binding=true
             fi
           done
 
@@ -347,6 +375,7 @@ jobs:
             echo "macos_sandbox=${macos_sandbox}"
             echo "windows_sandbox=${windows_sandbox}"
             echo "java_binding=${java_binding}"
+            echo "python_binding=${python_binding}"
           } >> "$GITHUB_OUTPUT"
 
   common-components:
@@ -661,6 +690,192 @@ jobs:
           name: cageforge-java-linux-consumer-smoke
           path: ${{ runner.temp }}/cageforge-java-consumer-smoke.tar.gz
           if-no-files-found: error
+
+  python-binding:
+    name: "Cageforge Python binding (${{ matrix.target }})"
+    needs: [changes, common-components, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows]
+    if: ${{ always() && needs.changes.outputs.python_binding == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Linux
+            runner: ubuntu-24.04
+            feature: linux-bundled-bubblewrap
+            helper_package: cageforge-linux
+            helper_arguments: "--bin cageforge-linux-helper"
+          - target: macOS
+            runner: macos-15
+            feature: macos
+            helper_package: cageforge-macos
+            helper_arguments: "--bin cageforge-macos-helper"
+          - target: Windows
+            runner: windows-2025
+            feature: windows
+            helper_package: cageforge-windows
+            helper_arguments: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Stage package license and attribution files
+        run: |
+          cp LICENSE crates/bindings/cageforge-python/LICENSE
+          cp NOTICE crates/bindings/cageforge-python/NOTICE
+          cp THIRD_PARTY_NOTICES.md crates/bindings/cageforge-python/THIRD_PARTY_NOTICES.md
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux Bubblewrap verification dependencies
+        if: matrix.target == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential pkg-config libcap-dev binutils
+      - name: Build the pinned Linux Bubblewrap resource
+        if: matrix.target == 'Linux'
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          output_dir="crates/cageforge-bwrap/assets/linux-$([[ "$arch" == x86_64 ]] && echo x86_64 || echo aarch64)"
+          mkdir -p "$output_dir"
+          cargo run --locked --release -p cageforge-bwrap -- --output "$output_dir/bwrap"
+      - name: Check and lint the Rust binding
+        run: |
+          cargo fmt --package cageforge-python -- --check
+          cargo clippy --locked -p cageforge-python --no-default-features --features "${{ matrix.feature }}" --all-targets -- -D warnings
+      - name: Build the binding and every target helper
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p cageforge-python --no-default-features --features "${{ matrix.feature }}"
+          cargo build --locked --release -p "${{ matrix.helper_package }}" ${{ matrix.helper_arguments }}
+      - name: Stage the complete native resource directory
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) os_name=linux; library=lib_cageforge.so ;;
+            macOS) os_name=macos; library=lib_cageforge.dylib ;;
+            Windows) os_name=windows; library=_cageforge.dll ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64) arch=x86_64 ;;
+            aarch64|arm64) arch=aarch64 ;;
+            *) echo "unsupported architecture" >&2; exit 1 ;;
+          esac
+          resource_dir="crates/bindings/cageforge-python/python/cageforge/native/$os_name-$arch"
+          mkdir -p "$resource_dir"
+          cp "target/release/$library" "$resource_dir/"
+          case "$RUNNER_OS" in
+            Linux)
+              cp target/release/cageforge-linux-helper "$resource_dir/"
+              cp "crates/cageforge-bwrap/assets/linux-$arch/bwrap" "$resource_dir/"
+              cp "crates/cageforge-bwrap/assets/linux-$arch/bwrap.sha256" "$resource_dir/"
+              cp crates/cageforge-bwrap/licenses/bubblewrap-COPYING "$resource_dir/"
+              ;;
+            macOS) cp target/release/cageforge-macos-helper "$resource_dir/" ;;
+            Windows)
+              cp target/release/cageforge-windows-setup.exe "$resource_dir/"
+              cp target/release/cageforge-windows-command-runner.exe "$resource_dir/"
+              ;;
+          esac
+      - name: Install maturin and Python test tools
+        working-directory: crates/bindings/cageforge-python
+        run: |
+          python -m venv .venv
+          if [[ "$RUNNER_OS" == Windows ]]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
+          "$py" -m pip install --upgrade pip
+          "$py" -m pip install "maturin>=1.14,<2" pytest mypy ruff
+      - name: Build and install the Python extension with maturin
+        working-directory: crates/bindings/cageforge-python
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then maturin=.venv/Scripts/maturin.exe; else maturin=.venv/bin/maturin; fi
+          "$maturin" develop --locked --release --features "${{ matrix.feature }}"
+      - name: Verify generated stubs, typing, lint, and Python tests
+        working-directory: crates/bindings/cageforge-python
+        env:
+          CAGEFORGE_PYTHON_NATIVE_SMOKE: ${{ matrix.target != 'Linux' && '1' || '' }}
+        run: |
+          cargo run --locked --quiet --bin stub_gen --no-default-features --features "${{ matrix.feature }}"
+          git diff --exit-code -- python/cageforge/_cageforge.pyi
+          if [[ "$RUNNER_OS" == Windows ]]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
+          "$py" -m mypy --strict
+          "$py" -m ruff check python tests
+          "$py" -m pytest -q
+      - name: Build and install the tested source distribution
+        if: matrix.target == 'Linux'
+        working-directory: crates/bindings/cageforge-python
+        run: |
+          set -euo pipefail
+          .venv/bin/maturin sdist --out dist
+          PATH="$PWD/.venv/bin:$PATH" CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
+            .venv/bin/pip install --quiet --no-build-isolation --force-reinstall dist/cageforge-*.tar.gz
+          .venv/bin/python -c "import cageforge; assert cageforge.native_target(); print('sdist import: ok')"
+      - name: Build the tested Linux wheel for its QEMU consumer
+        if: matrix.target == 'Linux'
+        working-directory: crates/bindings/cageforge-python
+        run: |
+          .venv/bin/maturin build --locked --release --features "${{ matrix.feature }}" --compatibility linux --out dist
+          mkdir -p "$RUNNER_TEMP/cageforge-python-consumer"
+          cp dist/*.whl "$RUNNER_TEMP/cageforge-python-consumer/cageforge-python.whl"
+          cp "$GITHUB_WORKSPACE/ci/vm-suites/python/run.py" "$RUNNER_TEMP/cageforge-python-consumer/"
+          tar --create --gzip --file="$RUNNER_TEMP/cageforge-python-consumer-smoke.tar.gz" --directory="$RUNNER_TEMP/cageforge-python-consumer" .
+      - name: Upload the tested Linux Python consumer
+        if: matrix.target == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cageforge-python-linux-consumer-smoke
+          path: ${{ runner.temp }}/cageforge-python-consumer-smoke.tar.gz
+          if-no-files-found: error
+
+  python-linux-qemu:
+    name: "Cageforge Python Linux consumer in QEMU"
+    needs: [changes, python-binding]
+    if: ${{ always() && needs.changes.outputs.python_binding == 'true' && needs.python-binding.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Install QEMU tooling
+        run: sudo apt-get update && sudo apt-get install --yes genisoimage qemu-system-x86 qemu-utils
+      - name: Verify KVM access
+        run: |
+          test -c /dev/kvm || { echo "::error title=CAGEFORGE_KVM_UNAVAILABLE::GitHub runner did not expose /dev/kvm"; exit 86; }
+          sudo chmod 0666 /dev/kvm
+      - name: Download the tested Python consumer
+        uses: actions/download-artifact@v4
+        with:
+          name: cageforge-python-linux-consumer-smoke
+          path: ${{ runner.temp }}/cageforge-python-consumer
+      - name: Download and verify the pinned Ubuntu guest image
+        env:
+          CAGEFORGE_VM_IMAGE_URL: https://cloud-images.ubuntu.com/noble/20260814/noble-server-cloudimg-amd64.img
+          CAGEFORGE_VM_IMAGE_SHA256: 6e40c07ae715f744f84af0bec76415cc1987dd115b4b8de437818561f01a3733
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
+          curl --fail --silent --show-error --location --retry 3 --max-filesize 1073741824 --max-time 900 "$CAGEFORGE_VM_IMAGE_URL" --output "$image"
+          printf '%s  %s\n' "$CAGEFORGE_VM_IMAGE_SHA256" "$image" | sha256sum --check --status
+          echo "CAGEFORGE_VM_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Archive the checked-out source
+        run: git archive --format=tar.gz --prefix=cageforge-source/ --output="$RUNNER_TEMP/cageforge-source.tar.gz" HEAD
+      - name: Run the Python consumer in the Cageforge QEMU guest
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python_archive=$(find "$RUNNER_TEMP/cageforge-python-consumer" -name 'cageforge-python-consumer-smoke.tar.gz' -type f -print -quit)
+          test -n "$python_archive"
+          ./ci/run-native-linux-vm.sh --image "$CAGEFORGE_VM_IMAGE" --source-archive "$RUNNER_TEMP/cageforge-source.tar.gz" --suite python --payload "python-wheel=$python_archive"
 
   java-linux-qemu:
     name: "Cageforge JVM Linux consumer in QEMU"
@@ -1188,7 +1403,7 @@ jobs:
     name: CI passed
     if: ${{ always() }}
     needs:
-      [changes, common-components, java-binding, java-linux-qemu, cli-build, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
+      [changes, common-components, java-binding, java-linux-qemu, python-binding, python-linux-qemu, cli-build, native-linux, native-linux-arm64, linux-bwrap-resources, native-macos, native-windows, coverage-portable]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if a selected job failed or was cancelled
