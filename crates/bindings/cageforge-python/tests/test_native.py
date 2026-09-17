@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 import pytest
-from cageforge import Cageforge, CageforgeProcessError, WindowsSetup
+from cageforge import Cageforge, CageforgeProcessError, RuntimeContext, WindowsSetup
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -34,12 +34,32 @@ def ensure_windows_setup() -> None:
         WindowsSetup.verify()
 
 
-def test_native_profile_launch_and_streams() -> None:
+def runtime_context(tmp_path: Path) -> RuntimeContext:
+    minimal_path = tmp_path / "minimal"
+    minimal_path.mkdir()
+    return RuntimeContext(tmp_path, minimal_path)
+
+
+def smoke_argv() -> list[str]:
+    if sys.platform == "win32":
+        return [
+            r"C:\Windows\System32\cmd.exe",
+            "/d",
+            "/c",
+            "echo",
+            "cageforge-python-native",
+        ]
+    return ["/bin/echo", "cageforge-python-native"]
+
+
+def test_native_profile_launch_and_streams(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
-    runtime = Cageforge.from_toml_file(smoke_config())
+    runtime = Cageforge.from_toml_file(
+        smoke_config(), context=runtime_context(tmp_path)
+    )
     try:
-        process = runtime.launch()
+        process = runtime.launch(smoke_argv())
         try:
             result = process.wait()
             assert result.exit_code == 0
@@ -54,10 +74,12 @@ def test_native_profile_launch_and_streams() -> None:
         runtime.close()
 
 
-def test_wait_releases_the_gil() -> None:
+def test_wait_releases_the_gil(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
-    runtime = Cageforge.from_toml_file(smoke_config())
+    runtime = Cageforge.from_toml_file(
+        smoke_config(), context=runtime_context(tmp_path)
+    )
     try:
         if sys.platform == "win32":
             argv = [
