@@ -7,8 +7,8 @@ Status: accepted; implemented
 The final public crate is named `cageforge`. It is the ergonomic entry point
 for applications that need to describe and launch sandboxed commands. It
 re-exports the portable Cageforge model crates, exposes one common execution
-trait over the native backends, and keeps each operating-system implementation
-behind an opt-in Cargo feature.
+trait over the native backends, and selects the target operating system's
+implementation automatically.
 
 The facade is a library for agent harnesses, build tools, developer tools,
 plugin hosts, and mod systems. It is not a system-wide command interceptor.
@@ -29,20 +29,16 @@ The package exposes these features:
 
 | Feature | Enables | Target |
 | --- | --- | --- |
-| `linux` | `cageforge-linux` | Linux |
 | `linux-bundled-bubblewrap` | `cageforge-linux` with its embedded Bubblewrap resource | Linux |
-| `windows` | `cageforge-windows` | Windows |
-| `macos` | `cageforge-macos` | macOS |
 | `config` | `cageforge-config` and TOML profile re-exports | all targets |
 | `network-runtime` | `cageforge-network-proxy` runtime | all targets |
 
 The default feature set is empty. Portable model crates are always available;
-the config and native backend crates are optional. Native dependencies remain
-inside target-specific dependency sections, so enabling one OS feature does
-not pull native libraries for another operating system. The facade must not
-compile a native backend module on a different target, and CI must check each
-supported OS with only its matching native feature plus the portable feature
-combinations relevant to that target.
+the config crate is optional. Native dependencies are unconditional inside
+target-specific dependency sections, so Cargo selects only the backend for the
+compilation target. The facade must not compile a native backend module on a
+different target, and CI checks each supported OS natively and with explicit
+cross-target checks.
 
 The facade must not depend on Bubblewrap source or compile third-party native
 source. Linux's optional dependency consumes the staged resource according to
@@ -50,8 +46,8 @@ Specification 0015.
 
 The package metadata for docs.rs must build the facade with all features for
 the supported x86_64 and AArch64 Linux, Windows, and macOS targets. Each
-target still receives only its matching native re-export; the other native
-features remain inactive through target-specific dependencies and guards.
+target still receives only its matching native re-export through
+target-specific dependencies and guards.
 
 ## Public re-exports
 
@@ -70,7 +66,7 @@ types. When `network-runtime` is enabled, it re-exports the complete public
 network gateway API. Selecting a native backend does not implicitly make the
 standalone gateway API part of the facade's public feature surface. Native
 backend types, configuration, child types, and typed errors are
-re-exported only when their matching feature and target are active. The root
+re-exported only when their target is active. The root
 documentation links to each native crate README and docs.rs page for the
 platform-specific setup and enforcement details instead of repeating those
 implementation inventories.
@@ -105,11 +101,11 @@ runtime. Async applications may run the blocking facade calls in their own
 blocking-task facility.
 
 `DynSandbox` adds object-safe `launch` over the same static contract.
-`native_sandbox()` selects the host backend through its matching opt-in feature
-and returns `Box<dyn DynSandbox>`. `native_sandbox_with` accepts the host's
+`native_sandbox()` selects the host backend through `target_os` and returns
+`Box<dyn DynSandbox>`. `native_sandbox_with` accepts the host's
 existing configuration type, re-exported as `NativeSandboxConfig`, without
-duplicating its builders. Missing features, unsupported platforms, and native
-initialization failures return separate `NativeSandboxError` variants.
+duplicating its builders. Unsupported platforms and native initialization
+failures return separate `NativeSandboxError` variants.
 Windows setup remains explicit. `Arc<dyn DynSandbox>` allows backend sharing;
 each returned child retains its original native ownership and cleanup.
 
@@ -117,8 +113,7 @@ each returned child retains its original native ownership and cleanup.
 
 The README must present a short practical flow:
 
-1. enable the matching OS feature (and `config` only when TOML profiles are
-   needed);
+1. add `cageforge` (and `config` only when TOML profiles are needed);
 2. create one reusable native backend;
 3. construct or load a command and policy;
 4. compose the requested policy with its ceiling;
@@ -140,12 +135,12 @@ platform security inventories or discuss internal locks and synchronization.
 ## CI contract
 
 The existing sandbox CI jobs remain the authoritative native checks. After
-their platform-specific backend checks, each job runs the facade crate with
-the matching feature:
+their platform-specific backend checks, each job runs the facade crate without
+an OS feature:
 
-- Linux native VM: `cageforge --features linux`;
-- Windows Server 2025 runner: `cageforge --features windows`; and
-- macOS runner: `cageforge --features macos`.
+- Linux native VM: `cargo test -p cageforge`;
+- Windows Server 2025 runner: `cargo test -p cageforge`; and
+- macOS runner: `cargo test -p cageforge`.
 
 Portable checks also run the facade with `config` and its supported portable
 feature combinations, including `network-runtime`. The Linux Bubblewrap source

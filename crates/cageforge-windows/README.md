@@ -23,10 +23,10 @@ process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
 firewall/WFP, and per-process network-route enforcement.
 
 For most applications, start with [`cageforge`](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
-the unified library API for Linux, macOS, and Windows. Enable its `windows`
-feature to use this backend through the shared execution API while retaining
-native configuration options. You can also use `cageforge-windows` directly, as
-shown below.
+the unified library API for Linux, macOS, and Windows. The facade selects this
+backend automatically when compiled for Windows while retaining the native
+configuration options. You can also use `cageforge-windows` directly, as shown
+below.
 
 For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
 `minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).

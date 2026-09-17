@@ -22,6 +22,9 @@ class CageforgeInitializationException(message: String) : CageforgeException(mes
 /** Raised when a command cannot be launched through the native sandbox. */
 class CageforgeLaunchException(message: String) : CageforgeException(message)
 
+/** Raised when a trusted preflight grant is missing, invalid, or insufficient. */
+class CageforgePermissionException(message: String) : CageforgeException(message)
+
 /** Raised when a native process lifecycle operation fails. */
 class CageforgeProcessException(message: String) : CageforgeException(message)
 

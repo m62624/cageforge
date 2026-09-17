@@ -68,31 +68,28 @@ $ cargo binstall cageforge-cli
 
 ### From source
 
-Source installation requires a Rust toolchain. After publication, use the
-feature matching the target operating system:
+Source installation requires a Rust toolchain. The native backend is selected
+automatically for the target operating system:
 
 ```console
 # Linux, using a system Bubblewrap
-$ cargo install --locked cageforge-cli --no-default-features --features linux
+$ cargo install --locked cageforge-cli
 
 # Linux, with the verified embedded Bubblewrap resource
 $ cargo install --locked cageforge-cli --no-default-features --features linux-bundled-bubblewrap
 
-# Windows
-$ cargo install --locked cageforge-cli --no-default-features --features windows
-
-# macOS
-$ cargo install --locked cageforge-cli --no-default-features --features macos
+# Windows and macOS use the same command on their respective runners.
 ```
 
 From a local Cageforge checkout:
 
 ```console
-$ cargo install --path crates/cageforge-cli --locked --no-default-features --features <matching-os-feature>
+$ cargo install --path crates/cageforge-cli --locked
 ```
 
-The native feature is explicit: `linux`, `linux-bundled-bubblewrap`, `windows`,
-or `macos`. There is no unsandboxed fallback when a matching feature is absent.
+`linux-bundled-bubblewrap` is the only platform-specific build option. It
+embeds the verified Bubblewrap resource for Linux; unsupported targets never
+fall back to an ordinary unsandboxed process.
 
 ### Uninstall
 
@@ -146,19 +143,19 @@ killed. After confirmed termination it removes the per-launch registration and
 known files; unfamiliar or replaced files are left untouched. There are no
 persistent sandbox accounts to uninstall on macOS.
 
-## Build from source and select the backend
+## Build from source
 
-Build the binary with exactly one feature matching its target:
+The backend is selected from the target OS. A library depending on the CLI
+needs only the configuration feature:
 
 ```toml
 [dependencies]
-cageforge-cli = { version = "0.1.0", features = ["linux"] }
+cageforge-cli = { version = "0.1.0", features = ["config"] }
 ```
 
-Supported features are `linux`, `linux-bundled-bubblewrap`, `windows`, and
-`macos`. The Linux bundled feature includes the verified embedded Bubblewrap
-resource. The crate has no default native feature and never falls back to an
-unsandboxed process when the matching feature is absent.
+The only optional native packaging feature is
+`linux-bundled-bubblewrap`; the crate has no default configuration feature and
+never falls back to an unsandboxed process on an unsupported target.
 
 ## Run one program
 

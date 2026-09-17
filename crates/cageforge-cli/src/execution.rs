@@ -5,9 +5,11 @@
 #[cfg(feature = "config")]
 use std::ffi::OsString;
 #[cfg(feature = "config")]
+use std::io::{self, IsTerminal, Write};
+#[cfg(feature = "config")]
 use std::path::{Path, PathBuf};
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 use crate::cli::SetupCommand;
 use crate::cli::{Cli, Command, RunArgs};
 use crate::error::CliError;
@@ -25,7 +27,7 @@ pub fn execute(cli: Cli) -> Result<u8, CliError> {
     match cli.command {
         Command::Run(args) => execute_run(args),
         Command::Schema => execute_schema(),
-        #[cfg(all(feature = "windows", target_os = "windows"))]
+        #[cfg(target_os = "windows")]
         Command::Setup(operation) => execute_setup(operation),
     }
 }
@@ -33,9 +35,16 @@ pub fn execute(cli: Cli) -> Result<u8, CliError> {
 #[cfg(feature = "config")]
 fn execute_run(args: RunArgs) -> Result<u8, CliError> {
     let config = cageforge::Config::from_file(&args.config)?;
+    let platform = cageforge::PlatformId::current().map_err(|error| {
+        CliError::Config(cageforge::ConfigError::InvalidValue {
+            profile: args.profile.clone().unwrap_or_else(|| "default".to_owned()),
+            field: "platform".to_owned(),
+            value: error.to_string(),
+        })
+    })?;
     let profile = match args.profile.as_deref() {
-        Some(name) => config.resolve(name)?,
-        None => config.resolve_default()?,
+        Some(name) => config.resolve_for_platform(name, platform)?,
+        None => config.resolve_default_for_platform(platform)?,
     };
     let command = command_from_args(&profile, args.command)?;
     let current_directory = std::env::current_dir()?;
@@ -52,18 +61,134 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
         composition = composition.with_workspace_roots(workspace_roots)?;
     }
     let effective = cageforge::compose(composition)?;
+    let effective = match profile.approval().mode() {
+        cageforge::PermissionMode::Disabled => effective,
+        cageforge::PermissionMode::Preflight => {
+            let config_bytes = std::fs::read(&args.config)?;
+            let executable_bytes = std::fs::read(std::env::current_exe()?)?;
+            let program = command.command().program().to_string_lossy().into_owned();
+            let identity = cageforge::PreflightIdentity::new(
+                "cageforge-cli",
+                env!("CARGO_PKG_VERSION"),
+                cageforge::sha256_digest(&executable_bytes),
+                cageforge::sha256_digest(&config_bytes),
+                platform,
+                std::env::consts::ARCH,
+            );
+            let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
+                profile.policy(),
+                &context,
+                effective,
+                &environment,
+                &ceiling,
+                identity,
+            )?
+            .with_process_program(program)?;
+            let store_path = args
+                .permission_store
+                .clone()
+                .or_else(|| {
+                    args.config
+                        .parent()
+                        .map(|parent| parent.join("permissions.json"))
+                })
+                .unwrap_or_else(|| PathBuf::from("permissions.json"));
+            let store = cageforge::PermissionStore::open(store_path)?;
+            let grant = match store.get(plan.request())? {
+                Some(grant) => grant,
+                None => {
+                    if args.approve
+                        || prompt_for_approval(plan.request(), profile.approval().timeout_ms())?
+                    {
+                        let scope = match profile.approval().persistence() {
+                            cageforge::ApprovalPersistence::Launch => {
+                                cageforge::PermissionScope::Launch
+                            }
+                            cageforge::ApprovalPersistence::Session => {
+                                cageforge::PermissionScope::Session
+                            }
+                            cageforge::ApprovalPersistence::Persistent => {
+                                cageforge::PermissionScope::Persistent
+                            }
+                        };
+                        let grant = cageforge::GrantAuthority::new()
+                            .approve_with(
+                                plan.request(),
+                                plan.request().capabilities().clone(),
+                                scope,
+                                None,
+                            )
+                            .map_err(cageforge::PreflightError::from)?;
+                        if scope == cageforge::PermissionScope::Persistent {
+                            store.put(&grant, plan.request())?;
+                        }
+                        grant
+                    } else {
+                        return Err(CliError::PermissionDenied);
+                    }
+                }
+            };
+            plan.authorize(grant)?.effective().clone()
+        }
+        mode => {
+            return Err(CliError::Preflight(
+                cageforge::PreflightError::UnsupportedMode(mode),
+            ));
+        }
+    };
     let invocation = Invocation {
         command,
         effective,
         context,
         gateway: profile.network_gateway().clone(),
     };
-    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     warn_if_windows_setup_is_unavailable();
     execute_native(invocation)
 }
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(feature = "config")]
+fn prompt_for_approval(
+    request: &cageforge::PermissionRequest,
+    timeout_ms: u64,
+) -> Result<bool, CliError> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return Ok(false);
+    }
+    eprintln!(
+        "Cageforge preflight request for {} {} on {}:",
+        request.tool_id(),
+        request.tool_version(),
+        request.platform()
+    );
+    for capability in request.capabilities().filesystem() {
+        eprintln!(
+            "  filesystem {:?}: {}",
+            capability.operation(),
+            capability.path()
+        );
+    }
+    for capability in request.capabilities().network() {
+        eprintln!("  network: {}", capability.endpoint());
+    }
+    for capability in request.capabilities().child_processes() {
+        eprintln!("  child process: {}", capability.program());
+    }
+    eprint!("Approve this request? [y/N] ");
+    io::stderr().flush()?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut answer = String::new();
+        let _ = io::stdin().read_line(&mut answer);
+        let _ = sender.send(answer);
+    });
+    let answer = receiver
+        .recv_timeout(std::time::Duration::from_millis(timeout_ms))
+        .map_err(|_| CliError::Preflight(cageforge::PreflightError::ApprovalTimeout))?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES"))
+}
+
+#[cfg(target_os = "windows")]
 fn execute_setup(operation: SetupCommand) -> Result<u8, CliError> {
     let setup = cageforge::WindowsSetup::new(cageforge::WindowsSetupConfig::new());
     match operation {
@@ -100,7 +225,7 @@ fn execute_setup(operation: SetupCommand) -> Result<u8, CliError> {
     Ok(0)
 }
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(all(feature = "config", target_os = "windows"))]
 fn warn_if_windows_setup_is_unavailable() {
     let setup = cageforge::WindowsSetup::new(cageforge::WindowsSetupConfig::new());
     match setup.status() {
@@ -245,17 +370,13 @@ fn platform_minimal_root(current_directory: &Path) -> PathBuf {
 
 #[cfg(all(
     feature = "config",
-    any(
-        all(feature = "linux", target_os = "linux"),
-        all(feature = "windows", target_os = "windows"),
-        all(feature = "macos", target_os = "macos"),
-    )
+    any(target_os = "linux", target_os = "windows", target_os = "macos",)
 ))]
 fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
     let config = cageforge::NativeSandboxConfig::new().with_network_gateway(invocation.gateway);
-    #[cfg(all(feature = "linux", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     let config = config.with_hardening_helper_path(std::env::current_exe()?);
-    #[cfg(all(feature = "macos", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     let config = config.with_helper_executable(std::env::current_exe()?)?;
     let backend = cageforge::native_sandbox_with(config)?;
     let mut child = backend.launch(
@@ -267,11 +388,7 @@ fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
 
 #[cfg(all(
     feature = "config",
-    not(any(
-        all(feature = "linux", target_os = "linux"),
-        all(feature = "windows", target_os = "windows"),
-        all(feature = "macos", target_os = "macos"),
-    ))
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos",))
 ))]
 fn execute_native(_invocation: Invocation) -> Result<u8, CliError> {
     let Invocation {
@@ -281,7 +398,11 @@ fn execute_native(_invocation: Invocation) -> Result<u8, CliError> {
         gateway,
     } = _invocation;
     drop((command, effective, context, gateway));
-    Err(CliError::NativeFeatureRequired)
+    Err(CliError::NativeSandbox(
+        cageforge::NativeSandboxError::UnsupportedPlatform {
+            target_os: std::env::consts::OS,
+        },
+    ))
 }
 
 #[cfg(feature = "config")]

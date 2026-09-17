@@ -41,7 +41,7 @@ macOS needs Seatbelt and the native Cageforge helper; the CLI packages the
 helper and needs no install command:
 
 ```console
-cargo run --locked -p cageforge-cli --no-default-features --features macos -- \
+cargo run --locked -p cageforge-cli --no-default-features --features config -- \
   run --config crates/cageforge-config/examples/runnable/macos/smoke.toml
 ```
 
@@ -50,7 +50,7 @@ executables, and an administrator-approved UAC operation. Build the CLI and
 helpers beside one another, then run the release CLI:
 
 ```powershell
-cargo build --locked --release -p cageforge-cli --no-default-features --features windows
+cargo build --locked --release -p cageforge-cli --no-default-features --features config
 cargo build --locked --release -p cageforge-windows --bins --features bundled-helpers
 & target/release/cageforge-cli.exe setup install
 & target/release/cageforge-cli.exe run `
@@ -141,10 +141,10 @@ argv is provided after `--`.
 
 ## Rust, CLI, and JVM integration
 
-For Rust, enable `cageforge`'s `config` feature and one matching OS feature,
-then resolve the profile, build the runtime context, compose an effective
-policy, and call `native_sandbox().launch` or the concrete backend's
-`prepare`/`spawn`.
+For Rust, enable `cageforge`'s `config` feature. The facade selects the native
+backend from the compilation target; resolve the profile, build the runtime
+context, compose an effective policy, and call `native_sandbox().launch` or
+the concrete backend's `prepare`/`spawn`.
 
 For the CLI:
 

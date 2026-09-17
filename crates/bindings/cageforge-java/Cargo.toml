@@ -13,10 +13,7 @@ publish = false
 [features]
 default = ["config"]
 config = ["cageforge/config"]
-linux = ["config", "cageforge/linux"]
-linux-bundled-bubblewrap = ["linux", "cageforge/linux-bundled-bubblewrap"]
-macos = ["config", "cageforge/macos"]
-windows = ["config", "cageforge/windows"]
+linux-bundled-bubblewrap = ["config", "cageforge/linux-bundled-bubblewrap"]
 
 [lib]
 crate-type = ["cdylib"]
@@ -24,6 +21,7 @@ crate-type = ["cdylib"]
 [dependencies]
 cageforge.workspace = true
 jni.workspace = true
+serde_json.workspace = true
 
 [lints.rust]
 unsafe_code = "allow"

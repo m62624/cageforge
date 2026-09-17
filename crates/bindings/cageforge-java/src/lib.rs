@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use jni::objects::{JByteArray, JClass, JObjectArray, JString};
-use jni::sys::{jbyteArray, jint, jlong, jobjectArray};
+use jni::sys::{jbyteArray, jint, jlong, jobjectArray, jstring};
 use jni::{Env, EnvUnowned};
 
 use crate::error::{BindingError, BindingErrorKind, ffi_call_kind};
@@ -27,6 +27,8 @@ struct RuntimeState {
     context: cageforge::PathResolutionContext,
     effective: cageforge::EffectiveSandbox,
     profile_command: Option<cageforge::CommandRequest>,
+    preflight_required: bool,
+    approved_program: Option<String>,
 }
 
 struct ChildState {
@@ -179,7 +181,7 @@ fn native_backend(
     native_directory: &Path,
     _network_gateway: cageforge::GatewayConfig,
 ) -> Result<Box<dyn cageforge::DynSandbox>, String> {
-    #[cfg(all(feature = "linux", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
         let config = cageforge::NativeSandboxConfig::new()
             .with_system_then_bundled_bubblewrap()
@@ -190,7 +192,7 @@ fn native_backend(
             .map_err(|error| error.to_string())?;
         return cageforge::native_sandbox_with(config).map_err(|error| error.to_string());
     }
-    #[cfg(all(feature = "macos", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     {
         let config = cageforge::NativeSandboxConfig::new()
             .with_helper_executable(native_directory.join("cageforge-macos-helper"))
@@ -198,7 +200,7 @@ fn native_backend(
             .with_network_gateway(_network_gateway);
         return cageforge::native_sandbox_with(config).map_err(|error| error.to_string());
     }
-    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     {
         let setup = cageforge::WindowsSetupConfig::new()
             .with_setup_helper_path(native_directory.join("cageforge-windows-setup.exe"))
@@ -216,7 +218,7 @@ fn native_backend(
     {
         let _ = native_directory;
         Err(format!(
-            "no Cageforge native feature is enabled for {}",
+            "no Cageforge native backend is available for {}",
             std::env::consts::OS
         ))
     }
@@ -228,6 +230,7 @@ fn runtime_from_toml(
     current_directory: String,
     native_directory: String,
     minimal_directory: Option<String>,
+    grant_handle: jlong,
 ) -> Result<jlong, BindingError> {
     let current_directory = path(current_directory, "current directory")?;
     let native_directory = path(native_directory, "native resource directory")?;
@@ -238,9 +241,56 @@ fn runtime_from_toml(
         .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
     let profile = resolve_profile(&config, profile_name.as_deref())
         .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
-    let (context, effective) =
-        runtime_inputs(&profile, &current_directory, minimal_directory.as_deref())
+    let (context, effective, environment, ceiling) =
+        runtime_inputs_with_ceiling(&profile, &current_directory, minimal_directory.as_deref())
             .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    if profile.approval().mode() == cageforge::PermissionMode::Disabled {
+        let backend = native_backend(&native_directory, profile.network_gateway().clone())
+            .map_err(|error| BindingError::new(BindingErrorKind::Initialization, error))?;
+        let state = RuntimeState {
+            backend,
+            context,
+            effective,
+            profile_command: profile.command().cloned(),
+            preflight_required: false,
+            approved_program: None,
+        };
+        return Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong);
+    }
+    let identity = cageforge::PreflightIdentity::new(
+        "cageforge-java",
+        env!("CARGO_PKG_VERSION"),
+        cageforge::sha256_digest(b"cageforge-java"),
+        cageforge::sha256_digest(toml.as_bytes()),
+        cageforge::PlatformId::current().map_err(|error| {
+            BindingError::new(BindingErrorKind::Configuration, error.to_string())
+        })?,
+        std::env::consts::ARCH,
+    );
+    let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
+        profile.policy(),
+        &context,
+        effective,
+        &environment,
+        &ceiling,
+        identity,
+    )
+    .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+    let plan = if let Some(command) = profile.command() {
+        plan.with_process_program(command.command().program().to_string_lossy().into_owned())
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?
+    } else {
+        plan
+    };
+    let grant = grant_ref(grant_handle)?.clone();
+    let effective = plan
+        .authorize(grant)
+        .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?
+        .effective()
+        .clone();
+    let approved_program = profile
+        .command()
+        .map(|command| command.command().program().to_string_lossy().into_owned());
     let backend = native_backend(&native_directory, profile.network_gateway().clone())
         .map_err(|error| BindingError::new(BindingErrorKind::Initialization, error))?;
     let state = RuntimeState {
@@ -248,6 +298,8 @@ fn runtime_from_toml(
         context,
         effective,
         profile_command: profile.command().cloned(),
+        preflight_required: true,
+        approved_program,
     };
     Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong)
 }
@@ -256,13 +308,48 @@ fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
     cageforge::Config::from_toml(toml).map_err(|error| error.to_string())
 }
 
+fn permission_request_from_toml(
+    toml: &str,
+    profile_name: Option<&str>,
+    current_directory: &Path,
+    minimal_directory: Option<&Path>,
+    identity: cageforge::PreflightIdentity,
+) -> Result<cageforge::PermissionRequest, BindingError> {
+    let config = config_from_toml(toml)
+        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let profile = resolve_profile(&config, profile_name)
+        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let (context, effective, environment, ceiling) =
+        runtime_inputs_with_ceiling(&profile, current_directory, minimal_directory)
+            .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
+        profile.policy(),
+        &context,
+        effective,
+        &environment,
+        &ceiling,
+        identity,
+    )
+    .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error.to_string()))?;
+    let plan = if let Some(command) = profile.command() {
+        plan.with_process_program(command.command().program().to_string_lossy().into_owned())
+            .map_err(|error| {
+                BindingError::new(BindingErrorKind::Configuration, error.to_string())
+            })?
+    } else {
+        plan
+    };
+    Ok(plan.request().clone())
+}
+
 fn resolve_profile(
     config: &cageforge::Config,
     profile_name: Option<&str>,
 ) -> Result<cageforge::ResolvedProfile, String> {
+    let platform = cageforge::PlatformId::current().map_err(|error| error.to_string())?;
     match profile_name {
-        Some(name) if !name.is_empty() => config.resolve(name),
-        _ => config.resolve_default(),
+        Some(name) if !name.is_empty() => config.resolve_for_platform(name, platform),
+        _ => config.resolve_default_for_platform(platform),
     }
     .map_err(|error| error.to_string())
 }
@@ -275,6 +362,24 @@ fn runtime_inputs(
     (
         cageforge::PathResolutionContext,
         cageforge::EffectiveSandbox,
+    ),
+    String,
+> {
+    let (context, effective, _, _) =
+        runtime_inputs_with_ceiling(profile, current_directory, minimal_path)?;
+    Ok((context, effective))
+}
+
+fn runtime_inputs_with_ceiling(
+    profile: &cageforge::ResolvedProfile,
+    current_directory: &Path,
+    minimal_path: Option<&Path>,
+) -> Result<
+    (
+        cageforge::PathResolutionContext,
+        cageforge::EffectiveSandbox,
+        cageforge::EnvironmentSpec,
+        cageforge::PolicyCeiling,
     ),
     String,
 > {
@@ -298,7 +403,7 @@ fn runtime_inputs(
             .map_err(|error| error.to_string())?;
     }
     let effective = cageforge::compose(composition).map_err(|error| error.to_string())?;
-    Ok((context, effective))
+    Ok((context, effective, environment, ceiling))
 }
 
 fn java_string_array<'local>(
@@ -349,6 +454,267 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCheckToml<'caller>(
         let _ = runtime_inputs(&profile, &current_directory, minimal_directory.as_deref())?;
         Ok(())
     });
+}
+
+/// Creates an opaque native preflight request handle for the JVM API.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequest<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    toml: JString<'caller>,
+    profile: JString<'caller>,
+    current_directory: JString<'caller>,
+    minimal_directory: JString<'caller>,
+    tool_id: JString<'caller>,
+    tool_version: JString<'caller>,
+    manifest_digest: JString<'caller>,
+    config_digest: JString<'caller>,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Configuration, |env| {
+        let toml = java_string(env, toml, "TOML")?;
+        let profile = optional_profile(env, profile)?;
+        let current_directory = path(
+            java_string(env, current_directory, "current directory")?,
+            "current directory",
+        )?;
+        let minimal_directory = optional_path(env, minimal_directory, "minimal directory")?;
+        let tool_id = java_string(env, tool_id, "tool id")?;
+        let tool_version = if tool_version.is_null() {
+            env!("CARGO_PKG_VERSION").to_owned()
+        } else {
+            java_string(env, tool_version, "tool version")?
+        };
+        let manifest_digest = if manifest_digest.is_null() {
+            cageforge::sha256_digest(b"cageforge-java")
+        } else {
+            java_string(env, manifest_digest, "manifest digest")?
+        };
+        let config_digest = if config_digest.is_null() {
+            cageforge::sha256_digest(toml.as_bytes())
+        } else {
+            java_string(env, config_digest, "config digest")?
+        };
+        let identity = cageforge::PreflightIdentity::new(
+            tool_id,
+            tool_version,
+            manifest_digest,
+            config_digest,
+            cageforge::PlatformId::current().map_err(|error| {
+                BindingError::new(BindingErrorKind::Configuration, error.to_string())
+            })?,
+            std::env::consts::ARCH,
+        );
+        let request = permission_request_from_toml(
+            &toml,
+            profile.as_deref(),
+            &current_directory,
+            minimal_directory.as_deref(),
+            identity,
+        )?;
+        Ok(Box::into_raw(Box::new(request)) as jlong)
+    })
+}
+
+fn request_ref(handle: jlong) -> Result<&'static cageforge::PermissionRequest, BindingError> {
+    if handle == 0 {
+        return Err(BindingError::new(
+            BindingErrorKind::Permission,
+            "permission request handle is closed",
+        ));
+    }
+    // SAFETY: the handle is created by nativePermissionRequest and reclaimed
+    // exactly once by nativeClosePermissionRequest.
+    Ok(unsafe { &*(handle as *const cageforge::PermissionRequest) })
+}
+
+/// Returns a read-only JSON representation of an opaque request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestJson<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Configuration, |env| {
+        let request = request_ref(request)?;
+        let json = serde_json::to_string(request)
+            .map_err(|error| BindingError::from(error.to_string()))?;
+        Ok(env.new_string(json)?.into_raw())
+    })
+}
+
+macro_rules! permission_request_string_getter {
+    ($name:ident, $getter:ident) => {
+        /// Returns one string field from an opaque permission request.
+        #[unsafe(no_mangle)]
+        pub extern "system" fn $name<'caller>(
+            mut unowned_env: EnvUnowned<'caller>,
+            _class: JClass<'caller>,
+            request: jlong,
+        ) -> jstring {
+            ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+                let value = request_ref(request)?.$getter();
+                Ok(env.new_string(value)?.into_raw())
+            })
+        }
+    };
+}
+
+permission_request_string_getter!(
+    Java_ai_cageforge_NativeBridge_nativePermissionRequestToolId,
+    tool_id
+);
+permission_request_string_getter!(
+    Java_ai_cageforge_NativeBridge_nativePermissionRequestToolVersion,
+    tool_version
+);
+
+/// Returns the target platform from an opaque permission request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestPlatform<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        let value = request_ref(request)?.platform().as_str();
+        Ok(env.new_string(value)?.into_raw())
+    })
+}
+
+/// Returns the canonical digest of an opaque permission request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestDigest<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        let digest = request_ref(request)?.digest();
+        Ok(env.new_string(digest)?.into_raw())
+    })
+}
+
+/// Returns filesystem capabilities from an opaque permission request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestFilesystem<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: jlong,
+) -> jobjectArray {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        let values = request_ref(request)?
+            .capabilities()
+            .filesystem()
+            .iter()
+            .flat_map(|capability| {
+                [
+                    format!("{:?}", capability.operation()).to_lowercase(),
+                    capability.path().to_owned(),
+                ]
+            });
+        java_string_array(env, values)
+    })
+}
+
+/// Returns network capabilities from an opaque permission request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestNetwork<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: jlong,
+) -> jobjectArray {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        let values = request_ref(request)?
+            .capabilities()
+            .network()
+            .iter()
+            .map(|capability| capability.endpoint().to_owned());
+        java_string_array(env, values)
+    })
+}
+
+/// Releases an opaque JVM permission request handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeClosePermissionRequest(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    request: jlong,
+) {
+    if request != 0 {
+        // SAFETY: the handle is owned by PermissionRequest and is closed once.
+        unsafe { drop(Box::from_raw(request as *mut cageforge::PermissionRequest)) };
+    }
+}
+
+/// Issues an opaque session grant from a request presented by the JVM host.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeApprovePermissionRequest<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: jlong,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |_env| {
+        let request = request_ref(request)?.clone();
+        let grant = cageforge::GrantAuthority::new().approve(&request);
+        Ok(Box::into_raw(Box::new(grant)) as jlong)
+    })
+}
+
+/// Returns the request digest bound to an opaque JVM permission grant.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionGrantRequestDigest<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    grant: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        Ok(env
+            .new_string(grant_ref(grant)?.request_digest())?
+            .into_raw())
+    })
+}
+
+/// Returns the lifetime of an opaque JVM permission grant.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionGrantScope<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    grant: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        let scope = format!("{:?}", grant_ref(grant)?.scope()).to_lowercase();
+        Ok(env.new_string(scope)?.into_raw())
+    })
+}
+
+/// Returns a grant's expiration timestamp, or `-1` when it has no expiry.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionGrantExpiresAt(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    grant: jlong,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |_env| {
+        Ok(grant_ref(grant)?
+            .expires_at()
+            .map_or(-1, |value| value as jlong))
+    })
+}
+
+/// Releases an opaque JVM permission grant handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeClosePermissionGrant(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    grant: jlong,
+) {
+    if grant != 0 {
+        // SAFETY: the handle is owned by the JVM PermissionGrant object and is
+        // closed at most once by that object.
+        unsafe { drop(Box::from_raw(grant as *mut cageforge::PermissionGrant)) };
+    }
 }
 
 fn command_from_array<'local>(
@@ -419,6 +785,18 @@ fn child_ref(handle: jlong) -> Result<&'static ChildState, String> {
     Ok(unsafe { &*(handle as *const ChildState) })
 }
 
+fn grant_ref(handle: jlong) -> Result<&'static cageforge::PermissionGrant, BindingError> {
+    if handle == 0 {
+        return Err(BindingError::new(
+            BindingErrorKind::Permission,
+            "preflight approval grant is required",
+        ));
+    }
+    // SAFETY: the handle is created by nativeApprovePermissionRequest and is
+    // reclaimed exactly once by nativeClosePermissionGrant.
+    Ok(unsafe { &*(handle as *const cageforge::PermissionGrant) })
+}
+
 /// Creates a native runtime from an in-memory TOML document.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
@@ -429,6 +807,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
     current_directory: JString<'caller>,
     native_directory: JString<'caller>,
     minimal_directory: JString<'caller>,
+    grant: jlong,
 ) -> jlong {
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Initialization, |env| {
         runtime_from_toml(
@@ -441,6 +820,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
             } else {
                 Some(java_string(env, minimal_directory, "minimal directory")?)
             },
+            grant,
         )
     })
 }
@@ -459,6 +839,12 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
             .lock()
             .map_err(|_| "runtime handle is poisoned".to_string())?;
         let request = command_request(&state, command_from_array(env, argv)?)?;
+        if state.preflight_required {
+            let program = request.command().program().to_string_lossy();
+            if state.approved_program.as_deref() != Some(program.as_ref()) {
+                return Err("preflight grant is bound to the profile command; prepare and authorize the requested argv first".to_owned().into());
+            }
+        }
         let backend_request = cageforge::BackendRequest::new(&request, &state.effective);
         let mut child = state
             .backend

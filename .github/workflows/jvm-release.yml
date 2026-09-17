@@ -40,7 +40,7 @@ jobs:
             arch: x86_64
             runner: macos-26-intel
             rust_target: x86_64-apple-darwin
-            feature: macos
+            feature: config
             helper_package: cageforge-macos
             helper_args: "--bin cageforge-macos-helper"
             library: libcageforge_java.dylib
@@ -49,7 +49,7 @@ jobs:
             arch: aarch64
             runner: macos-26
             rust_target: aarch64-apple-darwin
-            feature: macos
+            feature: config
             helper_package: cageforge-macos
             helper_args: "--bin cageforge-macos-helper"
             library: libcageforge_java.dylib
@@ -58,7 +58,7 @@ jobs:
             arch: x86_64
             runner: windows-2025
             rust_target: x86_64-pc-windows-msvc
-            feature: windows
+            feature: config
             helper_package: cageforge-windows
             helper_args: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
             library: cageforge_java.dll
@@ -67,7 +67,7 @@ jobs:
             arch: aarch64
             runner: windows-2025
             rust_target: aarch64-pc-windows-msvc
-            feature: windows
+            feature: config
             helper_package: cageforge-windows
             helper_args: "--bin cageforge-windows-setup --bin cageforge-windows-command-runner"
             library: cageforge_java.dll

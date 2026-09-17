@@ -27,10 +27,7 @@ targets = [
 default = []
 config = ["dep:cageforge-config"]
 network-runtime = ["cageforge-network-proxy/runtime"]
-linux = ["dep:cageforge-linux"]
-linux-bundled-bubblewrap = ["linux", "cageforge-linux/bundled-bubblewrap"]
-windows = ["dep:cageforge-windows"]
-macos = ["dep:cageforge-macos"]
+linux-bundled-bubblewrap = ["cageforge-linux/bundled-bubblewrap"]
 
 [dependencies]
 thiserror.workspace = true
@@ -40,16 +37,18 @@ cageforge-network-proxy = { workspace = true, default-features = false }
 cageforge-path.workspace = true
 cageforge-policy.workspace = true
 cageforge-policy-compose.workspace = true
+cageforge-permissions.workspace = true
+sha2.workspace = true
 cageforge-config = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cageforge-linux = { workspace = true, optional = true }
+cageforge-linux.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-cageforge-windows = { workspace = true, optional = true }
+cageforge-windows.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cageforge-macos = { workspace = true, optional = true }
+cageforge-macos.workspace = true
 
 [lints]
 workspace = true

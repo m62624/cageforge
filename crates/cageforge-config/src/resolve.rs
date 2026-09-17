@@ -12,10 +12,11 @@ use crate::error::{ConfigError, invalid_value};
 use crate::merge::{
     MergedProfile, ProfileMerger, domain_rule_key, environment_filter_key, filesystem_rule_key,
 };
-use crate::model::{RawConfig, RawProfile};
+use crate::model::{RawApproval, RawConfig, RawProfile};
 use cageforge_command::{CommandRequest, EnvironmentNameKey};
 use cageforge_network_proxy::GatewayConfig;
 use cageforge_path::{NativePathKey, contains_parent_traversal};
+use cageforge_permissions::{ApprovalConfig, PermissionMode, PlatformId};
 use cageforge_policy::SandboxPolicy;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
@@ -35,6 +36,7 @@ pub struct ResolvedProfile {
     policy: SandboxPolicy,
     command: Option<CommandRequest>,
     network_gateway: GatewayConfig,
+    approval: ApprovalConfig,
 }
 
 struct ResolveFrame {
@@ -75,7 +77,24 @@ impl Config {
 
     /// Resolves one named profile through its inheritance graph.
     pub fn resolve(&self, name: &str) -> Result<ResolvedProfile, ConfigError> {
-        let merged = self.resolve_raw(name)?;
+        self.resolve_with_platform(name, None)
+    }
+
+    /// Resolves one named profile and applies its overlay for `platform`.
+    pub fn resolve_for_platform(
+        &self,
+        name: &str,
+        platform: PlatformId,
+    ) -> Result<ResolvedProfile, ConfigError> {
+        self.resolve_with_platform(name, Some(platform))
+    }
+
+    fn resolve_with_platform(
+        &self,
+        name: &str,
+        platform: Option<PlatformId>,
+    ) -> Result<ResolvedProfile, ConfigError> {
+        let merged = self.resolve_raw(name, platform)?;
         let policy =
             build::build_policy(merged.filesystem.as_ref(), merged.network.as_ref(), name)?;
         let command = build::build_command(merged.command.as_ref(), name)?;
@@ -91,12 +110,14 @@ impl Config {
             .into_iter()
             .filter_map(|(path, enabled)| enabled.then_some(PathBuf::from(path)))
             .collect();
+        let approval = build_approval(merged.approval.as_ref(), name)?;
         Ok(ResolvedProfile {
             description: merged.description,
             workspace_roots,
             policy,
             command,
             network_gateway,
+            approval,
         })
     }
 
@@ -108,7 +129,22 @@ impl Config {
         self.resolve(name)
     }
 
-    fn resolve_raw(&self, name: &str) -> Result<MergedProfile, ConfigError> {
+    /// Resolves the configured default profile with its platform overlay.
+    pub fn resolve_default_for_platform(
+        &self,
+        platform: PlatformId,
+    ) -> Result<ResolvedProfile, ConfigError> {
+        let name = self
+            .default_profile_name()
+            .ok_or(ConfigError::NoDefaultProfile)?;
+        self.resolve_for_platform(name, platform)
+    }
+
+    fn resolve_raw(
+        &self,
+        name: &str,
+        platform: Option<PlatformId>,
+    ) -> Result<MergedProfile, ConfigError> {
         if !self.raw.profiles.contains_key(name) {
             return Err(ConfigError::UnknownProfile {
                 name: name.to_owned(),
@@ -176,7 +212,7 @@ impl Config {
             let Some(profile) = self.raw.profiles.get(&profile_name) else {
                 return Err(ConfigError::UnknownProfile { name: profile_name });
             };
-            merger.apply(profile);
+            merger.apply(profile, platform);
         }
         Ok(merger.finish())
     }
@@ -211,6 +247,11 @@ impl ResolvedProfile {
     pub fn network_gateway(&self) -> &GatewayConfig {
         &self.network_gateway
     }
+
+    /// Returns the resolved host-approval settings.
+    pub fn approval(&self) -> ApprovalConfig {
+        self.approval
+    }
 }
 
 impl ResolveFrame {
@@ -234,6 +275,10 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
     for (name, profile) in &config.profiles {
         validate_profile_name(name)?;
         validate_profile_policy_duplicates(name, profile)?;
+        validate_approval(name, profile.approval.as_ref())?;
+        for overlay in profile.platforms.values() {
+            validate_approval(name, overlay.approval.as_ref())?;
+        }
         let mut roots = HashSet::with_capacity(profile.workspace_roots.len());
         for root in profile.workspace_roots.keys() {
             validate_workspace_root(name, root)?;
@@ -300,6 +345,42 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
         }
     }
     Ok(())
+}
+
+fn validate_approval(profile: &str, approval: Option<&RawApproval>) -> Result<(), ConfigError> {
+    if approval
+        .and_then(|value| value.timeout_ms)
+        .is_some_and(|timeout| timeout == 0)
+    {
+        return Err(invalid_value(
+            profile,
+            "approval.timeout_ms",
+            "timeout must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn build_approval(
+    approval: Option<&RawApproval>,
+    profile: &str,
+) -> Result<ApprovalConfig, ConfigError> {
+    let Some(approval) = approval else {
+        return Ok(ApprovalConfig::default());
+    };
+    ApprovalConfig::new(
+        approval.mode.unwrap_or(PermissionMode::Disabled),
+        approval
+            .timeout_ms
+            .unwrap_or(ApprovalConfig::default().timeout_ms()),
+        approval
+            .on_timeout
+            .unwrap_or(ApprovalConfig::default().on_timeout()),
+        approval
+            .persistence
+            .unwrap_or(ApprovalConfig::default().persistence()),
+    )
+    .map_err(|error| invalid_value(profile, "approval", error.to_string()))
 }
 
 fn validate_profile_policy_duplicates(name: &str, profile: &RawProfile) -> Result<(), ConfigError> {

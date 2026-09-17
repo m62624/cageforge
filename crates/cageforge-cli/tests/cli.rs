@@ -3,11 +3,11 @@
 use std::ffi::OsString;
 use std::process::Command as ProcessCommand;
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 use cageforge_cli::SetupCommand;
 use cageforge_cli::{Cli, Command, RunArgs};
 use clap::Parser;
-#[cfg(all(feature = "linux", target_os = "linux"))]
+#[cfg(all(feature = "config", target_os = "linux"))]
 use tempfile::TempDir;
 
 #[test]
@@ -64,7 +64,7 @@ fn no_command_is_a_usage_error() {
     assert_eq!(output.status.code(), Some(2));
 }
 
-#[cfg(all(feature = "windows", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 #[test]
 fn parses_windows_setup_commands() {
     for (arguments, expected) in [
@@ -83,7 +83,7 @@ fn parses_windows_setup_commands() {
     }
 }
 
-#[cfg(all(feature = "linux", target_os = "linux"))]
+#[cfg(all(feature = "config", target_os = "linux"))]
 #[test]
 fn linux_cli_starts_a_sandbox_with_its_self_hosted_helper_entrypoint() {
     let workspace = TempDir::new().expect("temporary workspace");
@@ -92,7 +92,7 @@ fn linux_cli_starts_a_sandbox_with_its_self_hosted_helper_entrypoint() {
     std::fs::write(
         &config,
         format!(
-            "default_profile = \"test\"\n\n[profiles.test]\nworkspace_roots = {{ \"{workspace_path}\" = true }}\n\n[profiles.test.filesystem]\nmode = \"restricted\"\nrules = [\n  {{ target = \"minimal\", access = \"read\" }},\n  {{ target = \"workspace-root\", access = \"write\" }},\n]\n\n[profiles.test.network]\nmode = \"disabled\"\n"
+            "default_profile = \"test\"\n\n[profiles.test]\nworkspace_roots = {{ \"{workspace_path}\" = true }}\n\n[profiles.test.approval]\nmode = \"preflight\"\npersistence = \"session\"\n\n[profiles.test.filesystem]\nmode = \"restricted\"\nrules = [\n  {{ target = \"minimal\", access = \"read\" }},\n  {{ target = \"workspace-root\", access = \"write\" }},\n]\n\n[profiles.test.network]\nmode = \"disabled\"\n"
         ),
     )
     .expect("sandbox configuration");
@@ -103,6 +103,7 @@ fn linux_cli_starts_a_sandbox_with_its_self_hosted_helper_entrypoint() {
             "run",
             "--config",
             config.to_str().expect("UTF-8 config path"),
+            "--approve",
             "--",
             "/bin/true",
         ])

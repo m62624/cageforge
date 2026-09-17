@@ -6,6 +6,12 @@ default_profile = "smoke"
 [profiles.smoke]
 workspace_roots = { "." = true }
 
+[profiles.smoke.approval]
+mode = "preflight"
+timeout_ms = 10000
+on_timeout = "deny"
+persistence = "session"
+
 [profiles.smoke.filesystem]
 mode = "restricted"
 rules = [

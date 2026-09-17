@@ -36,7 +36,7 @@ This example selects the profile for the current host and uses
 import platform
 from pathlib import Path
 
-from cageforge import Cageforge, RuntimeContext
+from cageforge import Cageforge, PermissionApprover, RuntimeContext
 
 platform_name = platform.system().lower()
 profile_name = {
@@ -55,7 +55,9 @@ profile = (
 
 context = RuntimeContext(profile.parent)
 Cageforge.check_toml(profile.read_text(), context=context)
-with Cageforge.from_toml_file(profile, context=context) as runtime:
+request = Cageforge.permission_request(profile.read_text(), context=context)
+grant = PermissionApprover().approve(request)
+with Cageforge.from_toml_file(profile, context=context, grant=grant) as runtime:
     with runtime.launch() as process:
         print(process.read_stdout(4096).decode().strip())
         assert process.wait().exit_code == 0
@@ -67,6 +69,11 @@ and [`windows/smoke.toml`](../../cageforge-config/examples/runnable/windows/smok
 They use the current Cageforge TOML schema, include `minimal` read access,
 declare a workspace root, allow writes to `workspace-root`, and disable the
 network. The Windows profile uses `cmd.exe`; the POSIX profiles use `/bin/echo`.
+
+Profiles with `approval.mode = "preflight"` require a trusted host grant before
+launch. `PermissionRequest` is descriptive; only `PermissionApprover` can
+issue the opaque `PermissionGrant`. A grant never changes an already-running
+process.
 
 When `profile_name` is omitted, `Cageforge.from_toml` and `check_toml` use the
 TOML document's `default_profile`. `Cageforge.from_toml_file` reads a file and

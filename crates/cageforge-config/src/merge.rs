@@ -13,12 +13,13 @@ use std::path::{Component, Path, PathBuf};
 
 use cageforge_command::{EnvironmentNameKey, EnvironmentPattern};
 use cageforge_path::{NativePathKey, case_fold, normalize_lexical_path};
+use cageforge_permissions::PlatformId;
 use cageforge_policy::{DomainAccess, DomainRule, PathPattern, PathSelector};
 
 use crate::model::{
-    RawCommand, RawEnvironment, RawFilesystem, RawFilesystemMode, RawFilesystemRule,
-    RawFilesystemTarget, RawGatewayConfig, RawNetwork, RawNetworkMode, RawProfile, RawStdio,
-    RawTimeout,
+    RawApproval, RawCommand, RawEnvironment, RawFilesystem, RawFilesystemMode, RawFilesystemRule,
+    RawFilesystemTarget, RawGatewayConfig, RawNetwork, RawNetworkMode, RawPlatformProfile,
+    RawProfile, RawStdio, RawTimeout,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -28,6 +29,7 @@ pub(crate) struct MergedProfile {
     pub(crate) filesystem: Option<RawFilesystem>,
     pub(crate) network: Option<RawNetwork>,
     pub(crate) command: Option<RawCommand>,
+    pub(crate) approval: Option<RawApproval>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,7 +74,7 @@ pub(crate) struct ProfileMerger {
 }
 
 impl ProfileMerger {
-    pub(crate) fn apply(&mut self, profile: &RawProfile) {
+    pub(crate) fn apply(&mut self, profile: &RawProfile, platform: Option<PlatformId>) {
         self.merged.description = profile.description.clone();
         self.merge_workspace_roots(&profile.workspace_roots);
         if let Some(filesystem) = &profile.filesystem {
@@ -83,6 +85,52 @@ impl ProfileMerger {
         }
         if let Some(command) = &profile.command {
             self.merge_command(command);
+        }
+        if let Some(approval) = &profile.approval {
+            self.merge_approval(approval);
+        }
+        if let Some(platform) = platform
+            && let Some(overlay) = profile.platforms.get(&platform)
+        {
+            self.apply_platform_overlay(overlay);
+        }
+    }
+
+    fn apply_platform_overlay(&mut self, overlay: &RawPlatformProfile) {
+        if overlay.description.is_some() {
+            self.merged.description = overlay.description.clone();
+        }
+        self.merge_workspace_roots(&overlay.workspace_roots);
+        if let Some(filesystem) = &overlay.filesystem {
+            self.merge_filesystem(filesystem);
+        }
+        if let Some(network) = &overlay.network {
+            self.merge_network(network);
+        }
+        if let Some(command) = &overlay.command {
+            self.merge_command(command);
+        }
+        if let Some(approval) = &overlay.approval {
+            self.merge_approval(approval);
+        }
+    }
+
+    fn merge_approval(&mut self, child: &RawApproval) {
+        let merged = self
+            .merged
+            .approval
+            .get_or_insert_with(RawApproval::default);
+        if child.mode.is_some() {
+            merged.mode = child.mode;
+        }
+        if child.timeout_ms.is_some() {
+            merged.timeout_ms = child.timeout_ms;
+        }
+        if child.on_timeout.is_some() {
+            merged.on_timeout = child.on_timeout;
+        }
+        if child.persistence.is_some() {
+            merged.persistence = child.persistence;
         }
     }
 

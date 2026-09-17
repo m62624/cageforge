@@ -17,13 +17,8 @@ pub enum CliError {
     #[error(transparent)]
     Execution(#[from] cageforge::SandboxExecutionError),
     /// The config feature is required for `run`.
-    #[error("the CLI was built without the `config` feature; rebuild with one matching OS feature")]
+    #[error("the CLI was built without the `config` feature; rebuild with `--features config`")]
     ConfigFeatureRequired,
-    /// No native backend feature matches the current target.
-    #[error(
-        "no matching native backend feature is enabled for this target; rebuild with `linux`, `windows`, or `macos`"
-    )]
-    NativeFeatureRequired,
     /// The selected profile did not contain a command and argv was empty.
     #[error(
         "no command was supplied; provide a program after `--` or configure one in the profile"
@@ -51,6 +46,15 @@ pub enum CliError {
     /// Policy composition rejected the requested and outer values.
     #[error("policy composition: {0}")]
     Composition(#[from] cageforge::CompositionError),
+    /// Preflight request or grant validation failed.
+    #[error("preflight: {0}")]
+    Preflight(#[from] cageforge::PreflightError),
+    /// The host-owned permission store could not be read or written.
+    #[error("permission store: {0}")]
+    PermissionStore(#[from] cageforge::StoreError),
+    /// The trusted host denied the requested preflight.
+    #[error("permission request denied")]
+    PermissionDenied,
     /// Reading the current directory or schema failed.
     #[error("I/O: {0}")]
     Io(#[from] io::Error),
@@ -58,23 +62,23 @@ pub enum CliError {
     #[error("schema: {0}")]
     Schema(#[from] serde_json::Error),
     /// Linux native setup or execution failed.
-    #[cfg(all(feature = "linux", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     #[error("Linux backend: {0}")]
     Linux(#[from] cageforge::LinuxBackendError),
     /// Windows native setup or execution failed.
-    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     #[error("Windows backend: {0}")]
     Windows(#[from] cageforge::WindowsBackendError),
     /// Windows persistent setup provisioning or removal failed.
-    #[cfg(all(feature = "windows", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     #[error("Windows setup: {0}")]
     WindowsSetup(#[from] cageforge::WindowsSetupError),
     /// macOS native setup or execution failed.
-    #[cfg(all(feature = "macos", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     #[error("macOS backend: {0}")]
     Macos(#[from] cageforge::MacosBackendError),
     /// macOS helper configuration could not be validated.
-    #[cfg(all(feature = "macos", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     #[error(transparent)]
     MacosConfig(#[from] cageforge::MacosBackendConfigError),
 }

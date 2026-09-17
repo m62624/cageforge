@@ -11,9 +11,13 @@ __all__ = [
     "CageforgeError",
     "CageforgeInitializationError",
     "CageforgeLaunchError",
+    "CageforgePermissionError",
     "CageforgeProcessError",
     "CageforgeStreamError",
     "CageforgeWindowsSetupError",
+    "PermissionApprover",
+    "PermissionGrant",
+    "PermissionRequest",
     "ProcessResult",
     "RuntimeContext",
     "SandboxProcess",
@@ -33,17 +37,22 @@ class Cageforge:
         Returns validated profile names in deterministic lexical order.
         """
     @staticmethod
+    def permission_request(toml: builtins.str, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None, tool_id: builtins.str = ..., tool_version: builtins.str = ..., manifest_digest: typing.Optional[builtins.str] = None, config_digest: typing.Optional[builtins.str] = None) -> PermissionRequest:
+        r"""
+        Returns the shared typed preflight request for a TOML profile.
+        """
+    @staticmethod
     def check_toml(toml: builtins.str, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None) -> None:
         r"""
         Checks TOML parsing, profile resolution, and policy composition.
         """
     @staticmethod
-    def from_toml(toml: builtins.str, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None) -> Cageforge:
+    def from_toml(toml: builtins.str, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None, grant: typing.Optional[PermissionGrant] = None) -> Cageforge:
         r"""
         Creates a native runtime from TOML and the selected profile.
         """
     @staticmethod
-    def from_toml_file(file: builtins.str | os.PathLike[str] | pathlib.Path, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None) -> Cageforge:
+    def from_toml_file(file: builtins.str | os.PathLike[str] | pathlib.Path, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None, grant: typing.Optional[PermissionGrant] = None) -> Cageforge:
         r"""
         Reads a TOML file and creates a runtime using its parent directory.
         """
@@ -88,6 +97,12 @@ class CageforgeLaunchError(CageforgeError):
     """
     ...
 
+class CageforgePermissionError(CageforgeError):
+    r"""
+    The trusted preflight grant was missing, invalid, expired, or insufficient.
+    """
+    ...
+
 class CageforgeProcessError(CageforgeError):
     r"""
     A sandbox process lifecycle operation failed.
@@ -105,6 +120,72 @@ class CageforgeWindowsSetupError(CageforgeError):
     Windows setup provisioning or verification failed.
     """
     ...
+
+@typing.final
+class PermissionApprover:
+    r"""
+    Trusted host capability that can issue an opaque grant.
+    """
+    def __new__(cls) -> PermissionApprover:
+        r"""
+        Creates a session-scoped grant for the complete request.
+        """
+    def approve(self, request: PermissionRequest) -> PermissionGrant:
+        r"""
+        Approves the complete request through the trusted host capability.
+        """
+
+@typing.final
+class PermissionGrant:
+    r"""
+    An opaque trusted-host approval for a permission request.
+    """
+    def request_digest(self) -> builtins.str:
+        r"""
+        Returns the digest of the request this grant authorizes.
+        """
+    def scope(self) -> builtins.str:
+        r"""
+        Returns the grant lifetime as `launch`, `session`, or `persistent`.
+        """
+    def expires_at(self) -> typing.Optional[builtins.int]:
+        r"""
+        Returns the optional Unix expiration timestamp.
+        """
+
+@typing.final
+class PermissionRequest:
+    r"""
+    A structured, non-authoritative permission request for one launch plan.
+    """
+    def json(self) -> builtins.str:
+        r"""
+        Returns the stable JSON representation used by host adapters.
+        """
+    def tool_id(self) -> builtins.str:
+        r"""
+        Returns the requesting tool identifier.
+        """
+    def tool_version(self) -> builtins.str:
+        r"""
+        Returns the tool version.
+        """
+    def platform(self) -> builtins.str:
+        r"""
+        Returns the selected platform.
+        """
+    def digest(self) -> builtins.str:
+        r"""
+        Returns the request digest.
+        """
+    def filesystem(self) -> builtins.list[tuple[builtins.str, builtins.str]]:
+        r"""
+        Returns filesystem capabilities as `(operation, path)` pairs.
+        """
+    def network(self) -> builtins.list[builtins.str]:
+        r"""
+        Returns requested network endpoints.
+        """
 
 @typing.final
 class ProcessResult:

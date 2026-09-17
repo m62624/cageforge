@@ -52,6 +52,36 @@ launch anything. A backend or harness resolves declared workspace roots in its
 runtime context, and an optional policy-composition layer can narrow the
 result before execution.
 
+For a portable profile with host-specific paths, keep the common declaration at
+the profile root and add a platform overlay. The resolver selects the current
+host explicitly through `resolve_for_platform`; it does not merge Linux paths
+into a macOS or Windows launch:
+
+```toml
+[profiles.tool]
+description = "Portable tool profile"
+
+[profiles.tool.approval]
+mode = "preflight"
+timeout_ms = 10000
+on_timeout = "deny"
+persistence = "session"
+
+[profiles.tool.platforms.linux]
+read = ["/etc/tool/config"]
+
+[profiles.tool.platforms.macos]
+read = ["/Library/Application Support/tool/config"]
+
+[profiles.tool.platforms.windows]
+read = ["C:/ProgramData/tool/config"]
+```
+
+The platform overlay can also override `filesystem`, `network`, `command`,
+`workspace_roots`, and `approval`. `resolve` remains available for consumers
+that intentionally want the unselected portable declaration; execution layers
+should use `resolve_for_platform` or `resolve_default_for_platform`.
+
 ## Workspace role
 
 `cageforge-config` is the strict configuration adapter.

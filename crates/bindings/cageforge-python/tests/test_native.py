@@ -13,6 +13,7 @@ import pytest
 from cageforge import (
     Cageforge,
     CageforgeProcessError,
+    PermissionApprover,
     RuntimeContext,
     WindowsSetup,
     wait_for_async,
@@ -59,6 +60,11 @@ def smoke_argv() -> list[str]:
     return ["/bin/echo", "cageforge-python-native"]
 
 
+def smoke_grant(context: RuntimeContext):
+    request = Cageforge.permission_request(smoke_config().read_text(), context=context)
+    return PermissionApprover().approve(request)
+
+
 def long_running_argv() -> list[str]:
     if sys.platform == "win32":
         return [
@@ -77,8 +83,9 @@ def long_running_argv() -> list[str]:
 def test_native_profile_launch_and_streams(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
+    context = runtime_context(tmp_path)
     runtime = Cageforge.from_toml_file(
-        smoke_config(), context=runtime_context(tmp_path)
+        smoke_config(), context=context, grant=smoke_grant(context)
     )
     try:
         process = runtime.launch(smoke_argv())
@@ -99,8 +106,9 @@ def test_native_profile_launch_and_streams(tmp_path: Path) -> None:
 def test_wait_releases_the_gil(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
+    context = runtime_context(tmp_path)
     runtime = Cageforge.from_toml_file(
-        smoke_config(), context=runtime_context(tmp_path)
+        smoke_config(), context=context, grant=smoke_grant(context)
     )
     try:
         if sys.platform == "win32":
@@ -147,8 +155,9 @@ def test_wait_releases_the_gil(tmp_path: Path) -> None:
 def test_async_wait_cancellation_terminates_the_process(tmp_path: Path) -> None:
     require_linux_guest()
     ensure_windows_setup()
+    context = runtime_context(tmp_path)
     runtime = Cageforge.from_toml_file(
-        smoke_config(), context=runtime_context(tmp_path)
+        smoke_config(), context=context, grant=smoke_grant(context)
     )
     process = runtime.launch(long_running_argv())
     try:

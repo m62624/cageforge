@@ -285,7 +285,10 @@ public final class Main {
     }
 
     private static Cageforge openRuntime(String toml, RuntimeContext context) {
-        return Cageforge.fromToml(toml, null, context);
+        try (PermissionRequest request = Cageforge.permissionRequest(toml, null, context);
+                PermissionGrant grant = request.approve()) {
+            return Cageforge.fromToml(toml, null, context, grant);
+        }
     }
 
     private static void runCommand(Cageforge runtime, List<String> argv) {

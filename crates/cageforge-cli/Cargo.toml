@@ -25,10 +25,7 @@ all-features = true
 [features]
 default = []
 config = ["cageforge/config"]
-linux = ["config", "cageforge/linux"]
-linux-bundled-bubblewrap = ["linux", "cageforge/linux-bundled-bubblewrap"]
-windows = ["config", "cageforge/windows"]
-macos = ["config", "cageforge/macos"]
+linux-bundled-bubblewrap = ["config", "cageforge/linux-bundled-bubblewrap"]
 
 [dependencies]
 cageforge.workspace = true

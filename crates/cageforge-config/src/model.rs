@@ -7,6 +7,9 @@
 //! lets the TOML syntax evolve without exposing unvalidated fields as library
 //! state.
 
+use cageforge_permissions::{
+    ApprovalPersistence, ApprovalTimeoutAction, PermissionMode, PlatformId,
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -140,6 +143,33 @@ pub(crate) struct RawProfile {
     pub(crate) filesystem: Option<RawFilesystem>,
     pub(crate) network: Option<RawNetwork>,
     pub(crate) command: Option<RawCommand>,
+    pub(crate) approval: Option<RawApproval>,
+    #[serde(default)]
+    pub(crate) platforms: BTreeMap<PlatformId, RawPlatformProfile>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawPlatformProfile {
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
+    pub(crate) workspace_roots: BTreeMap<String, bool>,
+    pub(crate) filesystem: Option<RawFilesystem>,
+    pub(crate) network: Option<RawNetwork>,
+    pub(crate) command: Option<RawCommand>,
+    pub(crate) approval: Option<RawApproval>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawApproval {
+    pub(crate) mode: Option<PermissionMode>,
+    pub(crate) timeout_ms: Option<u64>,
+    pub(crate) on_timeout: Option<ApprovalTimeoutAction>,
+    pub(crate) persistence: Option<ApprovalPersistence>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]

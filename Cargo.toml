@@ -12,6 +12,7 @@ members = [
     "crates/cageforge-path",
     "crates/cageforge-policy",
     "crates/cageforge-policy-compose",
+    "crates/cageforge-permissions",
     "crates/cageforge",
     "crates/cageforge-cli",
     "crates/bindings/cageforge-java",
@@ -75,6 +76,7 @@ cageforge-macos = { path = "crates/cageforge-macos", version = "0.3.0" }
 cageforge-network-proxy = { path = "crates/cageforge-network-proxy", version = "0.3.0", default-features = false }
 cageforge-policy = { path = "crates/cageforge-policy", version = "0.3.0" }
 cageforge-policy-compose = { path = "crates/cageforge-policy-compose", version = "0.3.0" }
+cageforge-permissions = { path = "crates/cageforge-permissions", version = "0.1.0" }
 cageforge-path = { path = "crates/cageforge-path", version = "0.3.0" }
 cageforge-windows = { path = "crates/cageforge-windows", version = "0.3.0" }
 command-fds = "0.3.3"
