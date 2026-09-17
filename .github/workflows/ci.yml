@@ -409,7 +409,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            build-essential pkg-config libcap-dev
+            build-essential bubblewrap pkg-config libcap-dev
       - name: Check workspace packages publish cleanly
         if: matrix.target == 'Linux'
         run: cargo publish --workspace --dry-run --locked

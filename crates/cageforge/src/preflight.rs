@@ -519,12 +519,18 @@ mod tests {
         FilesystemDecision, FilesystemPolicy, FilesystemRule, NetworkPolicy, PathSelector,
     };
     use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
+    use std::path::PathBuf;
+
+    fn test_absolute_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("cageforge-preflight-{name}"))
+    }
 
     #[test]
     fn authorization_requires_the_exact_request() {
+        let tool_path = test_absolute_path("tool");
         let policy = SandboxPolicy::new(
             FilesystemPolicy::restricted([FilesystemRule::new(
-                PathSelector::absolute("/tmp/tool").unwrap(),
+                PathSelector::absolute(tool_path).unwrap(),
                 AccessMode::Read,
             )]),
             NetworkPolicy::disabled(),
@@ -557,14 +563,16 @@ mod tests {
 
     #[test]
     fn a_partial_grant_narrows_the_effective_filesystem_policy() {
+        let approved_path = test_absolute_path("approved");
+        let denied_path = test_absolute_path("denied");
         let policy = SandboxPolicy::new(
             FilesystemPolicy::restricted([
                 FilesystemRule::new(
-                    PathSelector::absolute("/tmp/approved").unwrap(),
+                    PathSelector::absolute(approved_path.clone()).unwrap(),
                     AccessMode::Read,
                 ),
                 FilesystemRule::new(
-                    PathSelector::absolute("/tmp/denied").unwrap(),
+                    PathSelector::absolute(denied_path.clone()).unwrap(),
                     AccessMode::Read,
                 ),
             ]),
@@ -591,7 +599,11 @@ mod tests {
         )
         .unwrap();
         let approved = PermissionSet::new().with_filesystem(
-            FilesystemCapability::new(FilesystemOperation::Read, "/tmp/approved").unwrap(),
+            FilesystemCapability::new(
+                FilesystemOperation::Read,
+                approved_path.to_string_lossy().into_owned(),
+            )
+            .unwrap(),
         );
         let grant = GrantAuthority::new()
             .approve_subset(plan.request(), approved)
@@ -602,7 +614,7 @@ mod tests {
             authorized
                 .effective()
                 .filesystem()
-                .access_for_path(Path::new("/tmp/approved"), &context)
+                .access_for_path(&approved_path, &context)
                 .unwrap(),
             FilesystemDecision::Read
         );
@@ -610,7 +622,7 @@ mod tests {
             authorized
                 .effective()
                 .filesystem()
-                .access_for_path(Path::new("/tmp/denied"), &context)
+                .access_for_path(&denied_path, &context)
                 .unwrap(),
             FilesystemDecision::Deny
         );

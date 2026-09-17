@@ -23,7 +23,7 @@ dist = true
 all-features = true
 
 [features]
-default = []
+default = ["config"]
 config = ["cageforge/config"]
 linux-bundled-bubblewrap = ["config", "cageforge/linux-bundled-bubblewrap"]
 
