@@ -990,11 +990,6 @@ jobs:
       - name: Install Zig for ARM64 Linux cross-build
         if: matrix.zig
         uses: mlugg/setup-zig@v2
-        with:
-          # Cageforge is not a Zig project and has no build.zig.zon. Keep
-          # setup-zig's post-job cache hook from trying to derive a Zig cache
-          # key from that absent manifest.
-          use-cache: false
       - name: Install cargo-zigbuild for ARM64 Linux cross-build
         if: matrix.zig
         run: cargo install cargo-zigbuild --locked
