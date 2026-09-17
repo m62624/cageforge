@@ -186,6 +186,6 @@ cargo test --locked -p cageforge-config --all-targets
 ```
 
 For backend requirements and lifecycle behavior, continue to the [facade
-README](../cageforge/README.md), [Linux README](../cageforge-linux/README.md),
-[macOS README](../cageforge-macos/README.md), [Windows README](../cageforge-windows/README.md),
-or [JVM binding README](../bindings/cageforge-java/README.md).
+README](../../cageforge/README.md), [Linux README](../../cageforge-linux/README.md),
+[macOS README](../../cageforge-macos/README.md), [Windows README](../../cageforge-windows/README.md),
+or [JVM binding README](../../bindings/cageforge-java/README.md).
