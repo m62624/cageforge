@@ -188,6 +188,12 @@ jobs:
           working-directory: crates/bindings/cageforge-python
           args: --release --out dist --features ${{ matrix.feature }} -i python3.14t
           sccache: "true"
+      - name: Restore regular CPython for wheel audit
+        if: ${{ matrix.freethreaded && matrix.manylinux == 'off' }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python_build_version }}
+          architecture: ${{ matrix.python_arch }}
       - name: Verify wheel metadata and target resources
         working-directory: crates/bindings/cageforge-python
         run: |
