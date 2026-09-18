@@ -102,6 +102,10 @@ fn help_output_is_snapshotted() {
     let help = String::from_utf8_lossy(&output.stdout)
         .replace("\r\n", "\n")
         .replace("cageforge-cli.exe", "cageforge-cli")
+        .replace(
+            "  setup        Provision, inspect, or remove the Windows-native Cageforge setup\n",
+            "",
+        )
         .replace("  cageforge-cli setup status\n", "")
         .replace(
             "On Windows, run `cageforge-cli setup install` once before the first `run`. It may request UAC and keeps the setup for later launches.\n\n",
