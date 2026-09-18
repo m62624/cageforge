@@ -15,8 +15,8 @@ if grep -F -- 'python "${wheels[@]}"' "$python_workflow" >/dev/null; then
     exit 1
 fi
 
-# Keep the first PyPI release on the deliberate bootstrap gate, while proving
-# that its authentication is keyless and its package directory is complete.
+# Keep PyPI keyless and verify that every registry publication shares the
+# complete tested-artifact gate instead of waiting on another registry.
 publish_block="$(awk '
     /^  publish-python:/ { inside=1; print; next }
     inside && /^  [[:alnum:]_-]+:/ { exit }
@@ -26,7 +26,21 @@ grep -F -- 'id-token: write' <<<"$publish_block" >/dev/null
 grep -F -- 'pypa/gh-action-pypi-publish@release/v1' <<<"$publish_block" >/dev/null
 grep -F -- 'packages-dir: dist' <<<"$publish_block" >/dev/null
 grep -F -- 'skip-existing: true' <<<"$publish_block" >/dev/null
-grep -F -- 'needs: [prepare, tag, python]' <<<"$publish_block" >/dev/null
+
+registry_needs='needs: [prepare, tests, dist, jvm, python]'
+for job in publish-jvm publish-python publish-crates; do
+    block="$(awk -v job="$job" '
+        $0 == "  " job ":" { inside=1; print; next }
+        inside && /^  [[:alnum:]_-]+:/ { exit }
+        inside { print }
+    ' "$release_workflow")"
+    grep -F -- "$registry_needs" <<<"$block" >/dev/null
+    needs_line="$(grep -F -- 'needs:' <<<"$block")"
+    if grep -Eq 'publish-(jvm|python|crates)' <<<"$needs_line"; then
+        echo "$job must not wait for another registry publication" >&2
+        exit 1
+    fi
+done
 
 # Local Gradle builds and the JVM smoke consumer must follow the workspace
 # version; a stale 0.2.x fallback would publish or consume the wrong artifact.
