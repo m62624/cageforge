@@ -549,6 +549,13 @@ struct TracedSyscall {
     address_length: usize,
 }
 
+// Linux UAPI keeps these ptrace request numbers stable across the supported
+// architectures, while libc does not expose the legacy names on aarch64.
+#[cfg(target_os = "linux")]
+const PTRACE_GETREGS_REQUEST: libc::c_uint = 12;
+#[cfg(target_os = "linux")]
+const PTRACE_SETREGS_REQUEST: libc::c_uint = 13;
+
 enum TracedEndpoint {
     NonUnix,
     UnixPath(Vec<u8>),
@@ -577,7 +584,7 @@ fn read_traced_syscall(pid: libc::pid_t) -> Result<TracedSyscall, LinuxHardening
         let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
         let result = unsafe {
             libc::ptrace(
-                libc::PTRACE_GETREGS,
+                PTRACE_GETREGS_REQUEST,
                 pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 registers.as_mut_ptr().cast::<libc::c_void>(),
@@ -602,7 +609,7 @@ fn read_traced_syscall(pid: libc::pid_t) -> Result<TracedSyscall, LinuxHardening
         let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
         let result = unsafe {
             libc::ptrace(
-                libc::PTRACE_GETREGS,
+                PTRACE_GETREGS_REQUEST,
                 pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 registers.as_mut_ptr().cast::<libc::c_void>(),
@@ -636,7 +643,7 @@ fn deny_traced_syscall(pid: libc::pid_t) -> Result<(), LinuxHardeningError> {
         let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
         let result = unsafe {
             libc::ptrace(
-                libc::PTRACE_GETREGS,
+                PTRACE_GETREGS_REQUEST,
                 pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 registers.as_mut_ptr().cast::<libc::c_void>(),
@@ -652,7 +659,7 @@ fn deny_traced_syscall(pid: libc::pid_t) -> Result<(), LinuxHardeningError> {
         registers.orig_rax = u64::MAX;
         let result = unsafe {
             libc::ptrace(
-                libc::PTRACE_SETREGS,
+                PTRACE_SETREGS_REQUEST,
                 pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 (&mut registers as *mut libc::user_regs_struct).cast::<libc::c_void>(),
@@ -672,7 +679,7 @@ fn deny_traced_syscall(pid: libc::pid_t) -> Result<(), LinuxHardeningError> {
         let mut registers = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
         let result = unsafe {
             libc::ptrace(
-                libc::PTRACE_GETREGS,
+                PTRACE_GETREGS_REQUEST,
                 pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 registers.as_mut_ptr().cast::<libc::c_void>(),
@@ -688,7 +695,7 @@ fn deny_traced_syscall(pid: libc::pid_t) -> Result<(), LinuxHardeningError> {
         registers.regs[8] = u64::MAX;
         let result = unsafe {
             libc::ptrace(
-                libc::PTRACE_SETREGS,
+                PTRACE_SETREGS_REQUEST,
                 pid,
                 std::ptr::null_mut::<libc::c_void>(),
                 (&mut registers as *mut libc::user_regs_struct).cast::<libc::c_void>(),
