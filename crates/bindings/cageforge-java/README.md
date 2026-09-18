@@ -139,6 +139,33 @@ streams are captured by default. `waitForAsync()` uses the JVM common pool when
 no executor is supplied; applications can pass a bounded executor of their own.
 Cancelling the returned future terminates the process boundary.
 
+For integrations that accept the standard Java process abstraction, use
+`Cageforge.launchProcess` or adapt an existing launch with
+`SandboxProcess.asJavaProcess()`. Both return `CageforgeProcess`, a
+`java.lang.Process` subclass that is also `AutoCloseable`:
+
+```java
+Process process = runtime.launchProcess(argv);
+try (InputStream stdout = process.getInputStream()) {
+    String output = new String(stdout.readAllBytes(), StandardCharsets.UTF_8);
+    if (!process.waitFor(30, TimeUnit.SECONDS)) {
+        process.destroyForcibly();
+        process.waitFor();
+    }
+    int exitCode = process.exitValue();
+}
+```
+
+This `Process` is a Java facade over the same Rust-owned native sandbox child;
+it never starts a second process. `waitFor(timeout, unit)` delegates to the
+native wait future without Java polling, `isAlive`, `exitValue`, and `pid` read
+the native handle, and `destroy`/`destroyForcibly` terminate the complete
+native boundary. `onExit()` completes from that native wait future. A profile
+that does not pipe a standard stream returns Java's null stream for that
+direction. Java `Process` has no representation for a signal-only exit, so
+`exitValue()` uses `-1` for a completed native result without an integer exit
+code.
+
 Configuration, initialization, launch, process, stream, and Windows setup
 failures use typed subclasses of `CageforgeException`, including
 `CageforgeConfigurationException`, `CageforgeLaunchException`, and

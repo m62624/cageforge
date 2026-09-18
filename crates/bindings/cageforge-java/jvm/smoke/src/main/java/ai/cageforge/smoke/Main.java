@@ -5,6 +5,8 @@ package ai.cageforge.smoke;
 import ai.cageforge.Cageforge;
 import ai.cageforge.CageforgeConfigurationException;
 import ai.cageforge.CageforgeException;
+import ai.cageforge.CageforgeProcessException;
+import ai.cageforge.CageforgeProcess;
 import ai.cageforge.PermissionApprover;
 import ai.cageforge.PermissionGrant;
 import ai.cageforge.PermissionRequest;
@@ -124,6 +126,50 @@ public final class Main {
                 }
                 System.out.println("consumer-smoke=ok");
             }
+            List<String> longRunningArgv = windows
+                    ? List.of(
+                            windowsSystemPath(WINDOWS_POWERSHELL,
+                                    WINDOWS_POWERSHELL_VERSION, POWERSHELL).toString(),
+                            "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                            "Start-Sleep -Seconds 30")
+                    : List.of(Path.of("/bin/sh").toString(), "-c", "sleep 30");
+            System.out.println("stage=java-process-facade");
+            try (Cageforge runtime = openRuntime(toml, context, argv.get(0))) {
+                CageforgeProcess javaProcess = runtime.launchProcess(argv);
+                String javaStdout = new String(
+                        javaProcess.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                if (!javaStdout.contains(SMOKE_OUTPUT)) {
+                    throw new CageforgeException("unexpected Java Process stdout: " + javaStdout);
+                }
+                if (!javaProcess.waitFor(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    throw new CageforgeProcessException("Java Process did not finish in time");
+                }
+                if (javaProcess.exitValue() != 0 || javaProcess.isAlive()
+                        || javaProcess.pid() <= 0) {
+                    throw new CageforgeProcessException("invalid Java Process completion state");
+                }
+                if (javaProcess.onExit().get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        != javaProcess) {
+                    throw new CageforgeProcessException("onExit returned a different Process");
+                }
+            }
+            try (Cageforge runtime = openRuntime(toml, context, longRunningArgv.get(0))) {
+                CageforgeProcess javaProcess = runtime.launchProcess(longRunningArgv);
+                if (javaProcess.waitFor(1, TimeUnit.MILLISECONDS)) {
+                    throw new CageforgeProcessException(
+                            "timed Java Process wait unexpectedly completed");
+                }
+                if (!javaProcess.isAlive()) {
+                    throw new CageforgeProcessException("timed Java Process wait killed the child");
+                }
+                javaProcess.destroyForcibly();
+                if (!javaProcess.waitFor(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        || javaProcess.isAlive()) {
+                    throw new CageforgeProcessException(
+                            "destroyForcibly did not terminate the child");
+                }
+            }
+            System.out.println("java-process-facade=ok");
             System.out.println("stage=closed-handles");
             Cageforge closedRuntime = openRuntime(toml, context, argv.get(0));
             closedRuntime.close();
@@ -154,13 +200,6 @@ public final class Main {
                 throw new CageforgeException("closed process accepted a status query");
             }
             System.out.println("closed-handles=ok");
-            List<String> longRunningArgv = windows
-                    ? List.of(
-                            windowsSystemPath(WINDOWS_POWERSHELL,
-                                    WINDOWS_POWERSHELL_VERSION, POWERSHELL).toString(),
-                            "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                            "Start-Sleep -Seconds 30")
-                    : List.of(Path.of("/bin/sh").toString(), "-c", "sleep 30");
             System.out.println("stage=wait-kill");
             try (Cageforge runtime = openRuntime(toml, context, longRunningArgv.get(0));
                  SandboxProcess process = runtime.launch(longRunningArgv)) {

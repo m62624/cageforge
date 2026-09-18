@@ -119,6 +119,14 @@ class SandboxProcess private constructor(private var handle: Long) : Closeable {
         return future
     }
 
+    /**
+     * Adapts this native child to the standard Java `Process` contract.
+     *
+     * The returned facade owns this sandbox process; callers should use the
+     * returned `Process` instead of continuing to operate on this object.
+     */
+    fun asJavaProcess(): CageforgeProcess = CageforgeProcess(this)
+
     /** Terminates and confirms the complete sandbox boundary. */
     fun kill() = withHandle { NativeBridge.nativeKill(it) }
 

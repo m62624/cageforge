@@ -27,6 +27,10 @@ class Cageforge private constructor(
             SandboxProcess.fromHandle(process)
         }
 
+    /** Launches a native sandbox child through the standard Java `Process` API. */
+    @JvmOverloads
+    fun launchProcess(argv: List<String> = emptyList()): CageforgeProcess = launch(argv).asJavaProcess()
+
     /** Releases the native backend. Active processes must be closed first. */
     override fun close() = native.close()
 
