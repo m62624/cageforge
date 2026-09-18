@@ -296,12 +296,18 @@ fn platform_example_exercises_every_config_field() {
     let network = resolved.policy().network();
     assert_eq!(network.mode(), NetworkMode::Enabled);
     assert_eq!(network.domain_mode(), DomainMode::Restricted);
+    #[cfg(unix)]
     assert_eq!(network.unix_socket_mode(), UnixSocketMode::Restricted);
+    #[cfg(windows)]
+    assert_eq!(network.unix_socket_mode(), UnixSocketMode::Disabled);
     assert_eq!(network.local_network_access(), LocalNetworkAccess::Deny);
     assert_eq!(network.domains().len(), 4);
     assert_eq!(network.domains()[1].pattern(), "api.example.com");
     assert_eq!(network.domains()[2].pattern(), "2001:db8::1");
+    #[cfg(unix)]
     assert_eq!(network.unix_sockets().len(), 1);
+    #[cfg(windows)]
+    assert!(network.unix_sockets().is_empty());
 
     let command = resolved.command().expect("platform command");
     assert_eq!(
