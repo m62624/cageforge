@@ -100,6 +100,7 @@ fn help_output_is_snapshotted() {
         .expect("run cageforge-cli --help");
     assert!(output.status.success());
     let help = String::from_utf8_lossy(&output.stdout)
+        .replace("cageforge-cli.exe", "cageforge-cli")
         .replace("  cageforge-cli setup status\n", "")
         .replace(
             "On Windows, run `cageforge-cli setup install` once before the first `run`. It may request UAC and keeps the setup for later launches.\n\n",

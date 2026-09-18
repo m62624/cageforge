@@ -11,10 +11,9 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
 use crate::cli::SetupCommand;
-use crate::cli::{
-    Cli, Command, PermissionsCommand, PermissionsListArgs, PermissionsRevokeAllArgs,
-    PermissionsRevokeArgs, RunArgs,
-};
+use crate::cli::{Cli, Command, PermissionsCommand, RunArgs};
+#[cfg(feature = "config")]
+use crate::cli::{PermissionsListArgs, PermissionsRevokeAllArgs, PermissionsRevokeArgs};
 use crate::error::CliError;
 
 #[cfg(all(feature = "config", any(target_os = "linux", target_os = "macos")))]
