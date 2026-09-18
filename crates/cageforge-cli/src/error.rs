@@ -67,6 +67,9 @@ pub enum CliError {
     /// The trusted host denied the requested preflight.
     #[error("permission request denied")]
     PermissionDenied,
+    /// The destructive revoke-all operation needs explicit confirmation.
+    #[error("revoking all permission grants requires --yes")]
+    PermissionStoreConfirmationRequired,
     /// Reading the current directory or schema failed.
     #[error("I/O: {0}")]
     Io(#[from] io::Error),

@@ -95,9 +95,10 @@ workspace or directory that it grants to the sandbox with write access.
 ## Persistent grant store
 
 `PermissionStore` stores grants in one versioned `permissions.json` document.
-It loads and indexes the document once when the store is opened, validates the
-stored audit metadata against each request, and writes updates through a
-temporary file, sync, and atomic rename. A writer refreshes the latest
+It validates the document when the store is opened, then loads and indexes the
+current file for each operation. The stored audit metadata is checked against
+each request. An absent file is always treated as an empty store. Updates use
+a temporary file, sync, and atomic rename. A writer refreshes the latest
 document while holding the OS lock before replacing it. Unix stores are
 restricted to the owner; the Windows implementation applies and verifies an
 owner-only ACL. A persistent OS advisory lock serializes concurrent writers
@@ -139,12 +140,34 @@ requires a new approval.
 
 Every `get` for an existing store and every `put` takes the kernel lock and
 refreshes the latest document before evaluating or replacing it. A not-yet-
-persisted store is served from its empty in-process document without creating a
-sidecar file. `put` then performs one durable atomic replacement; there is no
-userspace polling delay or fixed retry loop. The lock, file I/O, and JSON
-serialization are never performed while the store's short-lived in-process
-cache mutex is held. The durable JSON path is intentionally appropriate for
-relatively infrequent persistent approvals.
+persisted store is treated as empty without creating a sidecar file. `put`
+then performs one durable atomic replacement; there is no userspace polling
+delay or fixed retry loop. The store does not use a userspace mutex for
+cross-process coordination; the OS lock is the authority. The durable JSON
+path is intentionally appropriate for relatively infrequent persistent
+approvals.
+
+## Inspecting and revoking grants
+
+The store exposes bounded, metadata-only pages. A request gets the same stable
+ID in every language binding:
+
+```rust
+let page = store.list_page(GrantPageRequest::new(50, None)?)?;
+for grant in page.entries() {
+    println!("{} {}", grant.id, grant.tool_id);
+}
+if let Some(cursor) = page.next_cursor() {
+    let _next = store.list_page(GrantPageRequest::new(50, Some(cursor.clone()))?)?;
+}
+store.revoke(request.grant_id())?;
+```
+
+`GrantSummary` contains only tool identity, target, scope, and timestamps. It
+does not expose the approved capability set or secret material. A cursor is
+opaque and becomes invalid when the JSON document changes. `revoke` affects
+future launches only; `revoke_all` retains the owner-protected file and is
+intended for an explicit host-management action.
 High-frequency hosts should keep session grants in memory or replace this
 host-owned storage behind the same API with a transactional backend such as
 SQLite.

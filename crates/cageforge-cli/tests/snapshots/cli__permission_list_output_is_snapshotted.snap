@@ -1,0 +1,5 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: normalized
+---
+<grant-id>	snapshot-tool	1.0.0	linux	x86_64	persistent	-

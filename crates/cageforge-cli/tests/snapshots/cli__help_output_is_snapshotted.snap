@@ -1,0 +1,44 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: "String::from_utf8_lossy(&output.stdout)"
+---
+Run one explicitly selected program inside the native Cageforge sandbox.
+
+The TOML profile supplies the access policy: system paths to read, application paths to write, environment rules, network destinations, and timeout. The command after `--` is passed as argv. One invocation creates one boundary around the program and all of its descendants.
+
+The native backend is selected automatically from the target OS. On Linux, `linux-bundled-bubblewrap` also embeds the verified Bubblewrap resource. There is no unsandboxed fallback.
+
+Preflight approval is disabled unless the selected TOML profile sets `approval.mode = "preflight"`. In preflight mode the CLI shows the exact command capabilities before launch. `--approve` is for a trusted host and never bypasses the policy ceiling; non-interactive runs without an approval fail closed. Persistent approvals are stored only when the profile selects persistent persistence.
+
+The `permissions` subcommands list one bounded page or revoke host-owned persistent approvals without changing a running sandbox.
+
+Usage: cageforge-cli <COMMAND>
+
+Commands:
+  run          Resolve a TOML profile and run one explicit program
+  schema       Print the JSON schema for Cageforge TOML profiles
+  permissions  Inspect and revoke host-owned persistent permission grants
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+EXAMPLES:
+  cageforge-cli run --config sandbox.toml --profile isolated -- untrusted-program --safe-mode
+  cageforge-cli run --config sandbox.toml --profile build -- cargo test --workspace
+  cageforge-cli run --config permission-preflight.toml --approve --permission-store /path/to/permissions.json -- tool
+  cageforge-cli permissions list --page-size 50
+  cageforge-cli permissions revoke --id <grant-id>
+  cageforge-cli permissions revoke-all --yes
+  cageforge-cli schema
+
+`--permission-store PATH` explicitly selects the host-owned persistent grant store and takes priority. Without it, the CLI uses the current user's native Cageforge state directory. The file is created only after a persistent approval; deleting it revokes saved approvals. Listing cursors are valid only while the store document remains unchanged.
+
+The CLI is a thin adapter. For native host requirements and the library API, see:
+  https://github.com/m62624/cageforge/tree/main/crates/cageforge-linux
+  https://github.com/m62624/cageforge/tree/main/crates/cageforge-windows
+  https://github.com/m62624/cageforge/tree/main/crates/cageforge-macos

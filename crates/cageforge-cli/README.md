@@ -189,6 +189,27 @@ by its owner to revoke saved approvals. A sandboxed command does not receive
 new permissions while it is running; a missing approval in a non-interactive
 invocation is denied rather than retried or auto-approved.
 
+To inspect saved approvals, list one bounded page. The command prints safe
+metadata and a `next-cursor` line when another page exists:
+
+```console
+$ cageforge-cli permissions list --permission-store /path/permissions.json --page-size 50
+$ cageforge-cli permissions list --permission-store /path/permissions.json --page-size 50 --cursor '<opaque-cursor>'
+```
+
+Revoke one future approval by its stable 64-character grant ID; no command,
+argv, or TOML needs to be entered again:
+
+```console
+$ cageforge-cli permissions revoke --permission-store /path/permissions.json --id <grant-id>
+$ cageforge-cli permissions revoke-all --permission-store /path/permissions.json --yes
+```
+
+`revoke-all` requires explicit `--yes` and retains the store file. A cursor is
+valid only while the store document remains unchanged. Listing and revocation
+fail with typed diagnostics rather than silently widening or restarting a
+sandbox.
+
 ## Run one program
 
 ```text

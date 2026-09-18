@@ -17,8 +17,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -381,6 +381,61 @@ pub struct PermissionRequest {
     capabilities: PermissionSet,
 }
 
+/// Stable identity of the persistent grant for one exact permission request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct GrantId([u8; 32]);
+
+/// Safe metadata returned when listing persistent grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantSummary {
+    /// Stable grant identity.
+    pub id: GrantId,
+    /// Requesting tool identifier.
+    pub tool_id: String,
+    /// Requesting tool version.
+    pub tool_version: String,
+    /// Target platform.
+    pub platform: PlatformId,
+    /// Target architecture.
+    pub architecture: String,
+    /// Grant lifetime.
+    pub scope: PermissionScope,
+    /// Unix timestamp at which the grant was issued.
+    pub issued_at: u64,
+    /// Optional Unix expiration timestamp.
+    pub expires_at: Option<u64>,
+}
+
+/// Opaque continuation token for one stable store snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantPageCursor {
+    snapshot: GrantId,
+    last_id: GrantId,
+}
+
+/// One bounded page of persistent grant metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantPage {
+    entries: Vec<GrantSummary>,
+    next_cursor: Option<GrantPageCursor>,
+}
+
+/// Input for one bounded persistent-grant listing operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantPageRequest {
+    page_size: NonZeroUsize,
+    cursor: Option<GrantPageCursor>,
+}
+
+/// Result of removing one persistent grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevokeResult {
+    /// Exactly one grant was removed.
+    Revoked,
+    /// No grant with that identity existed.
+    NotFound,
+}
+
 impl PermissionRequest {
     /// Creates and validates a preflight request.
     pub fn new(
@@ -434,7 +489,107 @@ impl PermissionRequest {
 
     /// Computes the canonical request digest used to bind a grant.
     pub fn digest(&self) -> String {
-        canonical_digest(self)
+        digest_hex(canonical_digest(self))
+    }
+
+    /// Returns the stable identity used by the persistent grant store.
+    pub fn grant_id(&self) -> GrantId {
+        GrantId::from_request(self)
+    }
+}
+
+impl GrantId {
+    /// Parses a lowercase or uppercase 64-character hexadecimal grant ID.
+    pub fn from_hex(value: &str) -> Result<Self, PermissionError> {
+        if value.len() != 64 {
+            return Err(PermissionError::InvalidGrantId);
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+            let high = hex_nibble(pair[0]).ok_or(PermissionError::InvalidGrantId)?;
+            let low = hex_nibble(pair[1]).ok_or(PermissionError::InvalidGrantId)?;
+            bytes[index] = (high << 4) | low;
+        }
+        Ok(Self(bytes))
+    }
+
+    /// Returns the canonical lowercase hexadecimal representation.
+    pub fn to_hex(self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn from_request(request: &PermissionRequest) -> Self {
+        Self(canonical_digest(request))
+    }
+
+    fn from_document(document: &StoreDocument) -> Self {
+        Self(canonical_digest(document))
+    }
+}
+
+impl std::fmt::Display for GrantId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.to_hex())
+    }
+}
+
+impl GrantPageCursor {
+    /// Serializes the opaque cursor for a CLI or language binding.
+    pub fn to_token(&self) -> String {
+        format!("v1.{}.{}", self.snapshot, self.last_id)
+    }
+
+    /// Parses a cursor previously returned by [`GrantPage::next_cursor`].
+    pub fn from_token(value: &str) -> Result<Self, StoreError> {
+        let parts: Vec<_> = value.split('.').collect();
+        if parts.len() != 3 || parts[0] != "v1" {
+            return Err(StoreError::InvalidCursor);
+        }
+        let snapshot = GrantId::from_hex(parts[1]).map_err(|_| StoreError::InvalidCursor)?;
+        let last_id = GrantId::from_hex(parts[2]).map_err(|_| StoreError::InvalidCursor)?;
+        Ok(Self { snapshot, last_id })
+    }
+}
+
+impl GrantPageRequest {
+    /// Maximum number of summaries returned by one page.
+    pub const MAX_PAGE_SIZE: usize = 1_000;
+
+    /// Creates a bounded page request.
+    pub fn new(page_size: usize, cursor: Option<GrantPageCursor>) -> Result<Self, StoreError> {
+        let page_size = NonZeroUsize::new(page_size).ok_or(StoreError::InvalidPageSize {
+            requested: page_size,
+            maximum: Self::MAX_PAGE_SIZE,
+        })?;
+        if page_size.get() > Self::MAX_PAGE_SIZE {
+            return Err(StoreError::InvalidPageSize {
+                requested: page_size.get(),
+                maximum: Self::MAX_PAGE_SIZE,
+            });
+        }
+        Ok(Self { page_size, cursor })
+    }
+
+    /// Returns the requested page size.
+    pub const fn page_size(&self) -> usize {
+        self.page_size.get()
+    }
+
+    /// Returns the opaque continuation cursor, if any.
+    pub fn cursor(&self) -> Option<&GrantPageCursor> {
+        self.cursor.as_ref()
+    }
+}
+
+impl GrantPage {
+    /// Returns the summaries in this page.
+    pub fn entries(&self) -> &[GrantSummary] {
+        &self.entries
+    }
+
+    /// Returns the cursor for the next page, if this is not the end.
+    pub fn next_cursor(&self) -> Option<&GrantPageCursor> {
+        self.next_cursor.as_ref()
     }
 }
 
@@ -493,13 +648,13 @@ impl GrantAuthority {
 
     /// Approves the complete request.
     pub fn approve(&self, request: &PermissionRequest) -> PermissionGrant {
-        self.approve_with(
-            request,
-            request.capabilities.clone(),
-            PermissionScope::Session,
-            None,
-        )
-        .expect("a request is always a subset of itself")
+        PermissionGrant {
+            request_digest: request.digest(),
+            approved: request.capabilities.clone(),
+            scope: PermissionScope::Session,
+            expires_at: None,
+            issued_at: unix_timestamp(),
+        }
     }
 
     /// Approves a request with an explicit scope and optional expiration.
@@ -557,10 +712,9 @@ struct StoreDocument {
     grants: BTreeMap<String, StoredGrant>,
 }
 
-/// A versioned host-owned grant store loaded and indexed in memory.
+/// A versioned host-owned grant store whose current document is indexed per operation.
 pub struct PermissionStore {
     path: PathBuf,
-    document: Mutex<StoreDocument>,
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -581,18 +735,10 @@ impl PermissionStore {
     /// Opens an existing store or creates an empty in-memory store.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let document = if path.exists() {
-            read_document(&path)?
-        } else {
-            StoreDocument {
-                schema_version: Self::SCHEMA_VERSION,
-                grants: BTreeMap::new(),
-            }
-        };
-        Ok(Self {
-            path,
-            document: Mutex::new(document),
-        })
+        if path.exists() {
+            read_document(&path)?;
+        }
+        Ok(Self { path })
     }
 
     /// Returns the store path.
@@ -611,15 +757,8 @@ impl PermissionStore {
             let _lock = acquire_file_lock(&self.path)?;
             read_document(&self.path)?
         } else {
-            self.document
-                .lock()
-                .map_err(|_| StoreError::Poisoned)?
-                .clone()
+            empty_document()
         };
-        {
-            let mut cached = self.document.lock().map_err(|_| StoreError::Poisoned)?;
-            *cached = document.clone();
-        }
         Ok(document.grants.get(&request.digest()).and_then(|stored| {
             let metadata_matches = stored.request_digest == request.digest()
                 && stored.tool_id == request.tool_id
@@ -659,10 +798,7 @@ impl PermissionStore {
         let mut document = if self.path.exists() {
             read_document(&self.path)?
         } else {
-            self.document
-                .lock()
-                .map_err(|_| StoreError::Poisoned)?
-                .clone()
+            empty_document()
         };
         document.grants.insert(
             request.digest(),
@@ -681,9 +817,82 @@ impl PermissionStore {
             },
         );
         write_document(&self.path, &document)?;
-        let mut cached = self.document.lock().map_err(|_| StoreError::Poisoned)?;
-        *cached = document;
         Ok(())
+    }
+
+    /// Lists one bounded page of safe grant metadata.
+    pub fn list_page(&self, request: GrantPageRequest) -> Result<GrantPage, StoreError> {
+        let document = self.read_current_document()?;
+        let snapshot = GrantId::from_document(&document);
+        if request
+            .cursor()
+            .is_some_and(|cursor| cursor.snapshot != snapshot)
+        {
+            return Err(StoreError::ListingSnapshotExpired);
+        }
+
+        let after = request.cursor().map(|cursor| cursor.last_id);
+        let mut entries = Vec::with_capacity(request.page_size());
+        let mut has_more = false;
+        for (key, stored) in &document.grants {
+            let id = GrantId::from_hex(key).map_err(|_| StoreError::InvalidGrantId)?;
+            if after.is_some_and(|after| id <= after) {
+                continue;
+            }
+            if entries.len() == request.page_size() {
+                has_more = true;
+                break;
+            }
+            entries.push(summary_from_stored(id, stored));
+        }
+        let next_cursor = if has_more {
+            entries.last().map(|entry| GrantPageCursor {
+                snapshot,
+                last_id: entry.id,
+            })
+        } else {
+            None
+        };
+        Ok(GrantPage {
+            entries,
+            next_cursor,
+        })
+    }
+
+    /// Revokes one persistent grant for future launches.
+    pub fn revoke(&self, id: GrantId) -> Result<RevokeResult, StoreError> {
+        if !self.path.exists() {
+            return Ok(RevokeResult::NotFound);
+        }
+        let _lock = acquire_file_lock(&self.path)?;
+        let mut document = read_document(&self.path)?;
+        if document.grants.remove(&id.to_hex()).is_none() {
+            return Ok(RevokeResult::NotFound);
+        }
+        write_document(&self.path, &document)?;
+        Ok(RevokeResult::Revoked)
+    }
+
+    /// Revokes all persistent grants while retaining the store file.
+    pub fn revoke_all(&self) -> Result<(), StoreError> {
+        if !self.path.exists() {
+            return Ok(());
+        }
+        let _lock = acquire_file_lock(&self.path)?;
+        let mut document = read_document(&self.path)?;
+        document.grants.clear();
+        write_document(&self.path, &document)?;
+        Ok(())
+    }
+
+    fn read_current_document(&self) -> Result<StoreDocument, StoreError> {
+        let document = if self.path.exists() {
+            let _lock = acquire_file_lock(&self.path)?;
+            read_document(&self.path)?
+        } else {
+            empty_document()
+        };
+        Ok(document)
     }
 }
 
@@ -708,6 +917,9 @@ pub enum PermissionError {
         /// The digest field that failed validation.
         field: &'static str,
     },
+    /// A grant identifier was not a 64-character hexadecimal digest.
+    #[error("invalid grant id")]
+    InvalidGrantId,
     /// A host supplied an unknown grant lifetime label.
     #[error("invalid permission scope: {value:?}")]
     InvalidScope {
@@ -758,6 +970,32 @@ pub enum StoreError {
         /// The underlying I/O or serialization message.
         message: String,
     },
+    /// The requested grant identifier is invalid.
+    #[error("invalid grant id")]
+    InvalidGrantId,
+    /// The requested grant does not exist.
+    #[error("permission grant was not found")]
+    GrantNotFound,
+    /// The store changed between two pages.
+    #[error("permission grant listing snapshot expired")]
+    ListingSnapshotExpired,
+    /// The page size is zero or exceeds the safe maximum.
+    #[error("invalid permission grant page size {requested}; maximum is {maximum}")]
+    InvalidPageSize {
+        /// The requested page size.
+        requested: usize,
+        /// The maximum supported page size.
+        maximum: usize,
+    },
+    /// The cursor was not produced by this store API.
+    #[error("invalid permission grant listing cursor")]
+    InvalidCursor,
+    /// The operating-system lock could not be acquired.
+    #[error("permission store lock failed: {message}")]
+    StoreLocked {
+        /// The underlying lock error.
+        message: String,
+    },
 }
 
 impl StoreError {
@@ -775,6 +1013,28 @@ impl StoreError {
         Self::Write {
             message: error.to_string(),
         }
+    }
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn summary_from_stored(id: GrantId, stored: &StoredGrant) -> GrantSummary {
+    GrantSummary {
+        id,
+        tool_id: stored.tool_id.clone(),
+        tool_version: stored.tool_version.clone(),
+        platform: stored.platform,
+        architecture: stored.architecture.clone(),
+        scope: stored.scope,
+        issued_at: stored.issued_at,
+        expires_at: stored.expires_at,
     }
 }
 
@@ -805,10 +1065,40 @@ fn validate_digest(value: String, field: &'static str) -> Result<String, Permiss
     Ok(value)
 }
 
-fn canonical_digest<T: Serialize>(value: &T) -> String {
-    let encoded = serde_json::to_vec(value).expect("permission models are serializable");
-    let digest = Sha256::digest(encoded);
+fn canonical_digest<T: Serialize>(value: &T) -> [u8; 32] {
+    let mut writer = DigestWriter(Sha256::new());
+    if serde_json::to_writer(&mut writer, value).is_err() {
+        // All current permission models are composed of infallibly serializable
+        // fields. Keep the public digest API total if a future custom serializer
+        // violates that invariant, while ensuring the fallback cannot equal a
+        // successfully serialized document.
+        writer.0.update(b"\0cageforge-serialization-error");
+    }
+    writer.0.finalize().into()
+}
+
+fn digest_hex(digest: [u8; 32]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+struct DigestWriter(Sha256);
+
+impl io::Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn empty_document() -> StoreDocument {
+    StoreDocument {
+        schema_version: PermissionStore::SCHEMA_VERSION,
+        grants: BTreeMap::new(),
+    }
 }
 
 fn unix_timestamp() -> u64 {
@@ -823,6 +1113,17 @@ fn read_document(path: &Path) -> Result<StoreDocument, StoreError> {
     let document: StoreDocument = serde_json::from_slice(&bytes).map_err(StoreError::format)?;
     if document.schema_version != PermissionStore::SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(document.schema_version));
+    }
+    for (key, grant) in &document.grants {
+        let id = GrantId::from_hex(key).map_err(|_| StoreError::InvalidGrantId)?;
+        if id.to_hex() != *key {
+            return Err(StoreError::InvalidGrantId);
+        }
+        if grant.request_digest != *key {
+            return Err(StoreError::Format {
+                message: "grant key does not match request digest".to_owned(),
+            });
+        }
     }
     Ok(document)
 }
@@ -880,7 +1181,9 @@ fn acquire_file_lock(path: &Path) -> Result<FileLock, StoreError> {
             )
         };
         if result == 0 {
-            return Err(StoreError::write(io::Error::last_os_error()));
+            return Err(StoreError::StoreLocked {
+                message: io::Error::last_os_error().to_string(),
+            });
         }
         Ok(FileLock {
             file,
@@ -894,7 +1197,9 @@ fn acquire_file_lock(path: &Path) -> Result<FileLock, StoreError> {
         #[allow(unsafe_code)]
         let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
         if result != 0 {
-            return Err(StoreError::write(io::Error::last_os_error()));
+            return Err(StoreError::StoreLocked {
+                message: io::Error::last_os_error().to_string(),
+            });
         }
         Ok(FileLock { file })
     }
@@ -1145,6 +1450,23 @@ mod tests {
     }
 
     #[test]
+    fn identical_requests_have_identical_grant_ids_and_identity_changes_do_not() {
+        let request = request();
+        assert_eq!(request.grant_id(), request.clone().grant_id());
+        assert_eq!(request.grant_id().to_hex(), request.digest());
+        let serialized = serde_json::to_vec(&request).unwrap();
+        let expected = Sha256::digest(serialized)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(request.digest(), expected);
+        assert!(GrantId::from_hex(&request.digest()).is_ok());
+
+        let changed = request_with_id("other");
+        assert_ne!(request.grant_id(), changed.grant_id());
+    }
+
+    #[test]
     fn store_loads_and_indexes_grants() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("permissions.json");
@@ -1233,5 +1555,135 @@ mod tests {
                 assert!(store.get(&request).unwrap().is_some());
             }
         }
+    }
+
+    #[test]
+    fn listing_is_bounded_and_cursor_continues_the_same_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("permissions.json");
+        let store = PermissionStore::open(&path).unwrap();
+        for id in ["tool-a", "tool-b", "tool-c"] {
+            let request = request_with_id(id);
+            let grant = GrantAuthority::new()
+                .approve_with(
+                    &request,
+                    request.capabilities().clone(),
+                    PermissionScope::Persistent,
+                    None,
+                )
+                .unwrap();
+            store.put(&grant, &request).unwrap();
+        }
+
+        let first = store
+            .list_page(GrantPageRequest::new(1, None).unwrap())
+            .unwrap();
+        assert_eq!(first.entries().len(), 1);
+        let cursor = first.next_cursor().cloned().unwrap();
+        let second = store
+            .list_page(GrantPageRequest::new(1, Some(cursor)).unwrap())
+            .unwrap();
+        assert_eq!(second.entries().len(), 1);
+        assert_ne!(first.entries()[0].id, second.entries()[0].id);
+    }
+
+    #[test]
+    fn changed_store_rejects_an_old_listing_cursor() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("permissions.json");
+        let store = PermissionStore::open(&path).unwrap();
+        for id in ["tool-a", "tool-b"] {
+            let request = request_with_id(id);
+            let grant = GrantAuthority::new()
+                .approve_with(
+                    &request,
+                    request.capabilities().clone(),
+                    PermissionScope::Persistent,
+                    None,
+                )
+                .unwrap();
+            store.put(&grant, &request).unwrap();
+        }
+        let first = store
+            .list_page(GrantPageRequest::new(1, None).unwrap())
+            .unwrap();
+        let cursor = first.next_cursor().cloned().unwrap();
+
+        let request = request_with_id("tool-c");
+        let grant = GrantAuthority::new()
+            .approve_with(
+                &request,
+                request.capabilities().clone(),
+                PermissionScope::Persistent,
+                None,
+            )
+            .unwrap();
+        store.put(&grant, &request).unwrap();
+
+        assert!(matches!(
+            store.list_page(GrantPageRequest::new(1, Some(cursor)).unwrap()),
+            Err(StoreError::ListingSnapshotExpired)
+        ));
+    }
+
+    #[test]
+    fn revoke_removes_one_grant_and_retains_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("permissions.json");
+        let store = PermissionStore::open(&path).unwrap();
+        let first_request = request_with_id("tool-a");
+        let second_request = request_with_id("tool-b");
+        for request in [&first_request, &second_request] {
+            let grant = GrantAuthority::new()
+                .approve_with(
+                    request,
+                    request.capabilities().clone(),
+                    PermissionScope::Persistent,
+                    None,
+                )
+                .unwrap();
+            store.put(&grant, request).unwrap();
+        }
+
+        assert_eq!(
+            store.revoke(first_request.grant_id()).unwrap(),
+            RevokeResult::Revoked
+        );
+        assert!(path.is_file());
+        assert!(store.get(&first_request).unwrap().is_none());
+        assert!(store.get(&second_request).unwrap().is_some());
+        assert_eq!(
+            store.revoke(first_request.grant_id()).unwrap(),
+            RevokeResult::NotFound
+        );
+    }
+
+    #[test]
+    fn deleting_the_store_does_not_resurrect_cached_grants() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("permissions.json");
+        let store = PermissionStore::open(&path).unwrap();
+        let request = request();
+        let grant = GrantAuthority::new()
+            .approve_with(
+                &request,
+                request.capabilities().clone(),
+                PermissionScope::Persistent,
+                None,
+            )
+            .unwrap();
+        store.put(&grant, &request).unwrap();
+        assert!(store.get(&request).unwrap().is_some());
+
+        fs::remove_file(&path).unwrap();
+
+        assert!(store.get(&request).unwrap().is_none());
+        assert!(
+            store
+                .list_page(GrantPageRequest::new(1, None).unwrap())
+                .unwrap()
+                .entries()
+                .is_empty()
+        );
     }
 }

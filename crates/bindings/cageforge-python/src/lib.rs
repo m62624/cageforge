@@ -57,6 +57,66 @@ create_exception!(
 );
 create_exception!(
     cageforge._cageforge,
+    CageforgeStoreError,
+    CageforgePermissionError,
+    "The host-owned permission store could not complete the requested operation."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeGrantNotFoundError,
+    CageforgeStoreError,
+    "The requested persistent permission grant was not found."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeListingSnapshotExpiredError,
+    CageforgeStoreError,
+    "The permission listing changed before the next page was requested."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeInvalidGrantIdError,
+    CageforgeStoreError,
+    "The persistent permission grant ID is invalid."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeInvalidCursorError,
+    CageforgeStoreError,
+    "The persistent permission listing cursor is invalid."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeInvalidPageSizeError,
+    CageforgeStoreError,
+    "The persistent permission page size is invalid."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeStoreLockedError,
+    CageforgeStoreError,
+    "The persistent permission store lock could not be acquired."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeStoreReadError,
+    CageforgeStoreError,
+    "The persistent permission store could not be read."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeStoreWriteError,
+    CageforgeStoreError,
+    "The persistent permission store could not be written."
+);
+create_exception!(
+    cageforge._cageforge,
+    CageforgeStoreFormatError,
+    CageforgeStoreError,
+    "The persistent permission store has an invalid format."
+);
+create_exception!(
+    cageforge._cageforge,
     CageforgeProcessError,
     CageforgeError,
     "A sandbox process lifecycle operation failed."
@@ -154,6 +214,74 @@ pub struct PermissionRequest {
     inner: Option<cageforge::PermissionRequest>,
 }
 
+/// Stable identity of one exact permission request.
+#[gen_stub_pyclass]
+#[pyclass(frozen, from_py_object, module = "cageforge._cageforge")]
+#[derive(Clone)]
+pub struct GrantId {
+    inner: cageforge::GrantId,
+}
+
+/// Opaque cursor for one permission-store snapshot.
+#[gen_stub_pyclass]
+#[pyclass(frozen, from_py_object, module = "cageforge._cageforge")]
+#[derive(Clone)]
+pub struct GrantPageCursor {
+    inner: cageforge::GrantPageCursor,
+}
+
+/// Safe metadata for one persistent permission grant.
+#[gen_stub_pyclass]
+#[pyclass(frozen, skip_from_py_object, module = "cageforge._cageforge")]
+#[derive(Clone)]
+pub struct GrantSummary {
+    /// Stable grant ID.
+    #[pyo3(get)]
+    pub id: GrantId,
+    /// Tool identifier.
+    #[pyo3(get)]
+    pub tool_id: String,
+    /// Tool version.
+    #[pyo3(get)]
+    pub tool_version: String,
+    /// Target platform.
+    #[pyo3(get)]
+    pub platform: String,
+    /// Target architecture.
+    #[pyo3(get)]
+    pub architecture: String,
+    /// Grant scope.
+    #[pyo3(get)]
+    pub scope: String,
+    /// Issuance timestamp.
+    #[pyo3(get)]
+    pub issued_at: u64,
+    /// Optional expiration timestamp.
+    #[pyo3(get)]
+    pub expires_at: Option<u64>,
+}
+
+/// One bounded page of persistent-grant metadata.
+#[gen_stub_pyclass]
+#[pyclass(frozen, skip_from_py_object, module = "cageforge._cageforge")]
+#[derive(Clone)]
+pub struct GrantPage {
+    /// Page entries.
+    #[pyo3(get)]
+    pub entries: Vec<GrantSummary>,
+    /// Cursor for the next page, if any.
+    #[pyo3(get)]
+    pub next_cursor: Option<GrantPageCursor>,
+}
+
+/// Result of removing one persistent grant.
+#[gen_stub_pyclass]
+#[pyclass(frozen, skip_from_py_object, module = "cageforge._cageforge")]
+#[derive(Clone)]
+pub struct RevokeResult {
+    value: String,
+}
+
 /// An opaque trusted-host approval for a permission request.
 #[gen_stub_pyclass]
 #[pyclass(module = "cageforge._cageforge")]
@@ -200,6 +328,30 @@ fn launch_error(error: impl ToString) -> PyErr {
 
 fn permission_error(error: impl ToString) -> PyErr {
     CageforgePermissionError::new_err(error.to_string())
+}
+
+fn store_error(error: cageforge::StoreError) -> PyErr {
+    let message = error.to_string();
+    match error {
+        cageforge::StoreError::GrantNotFound => {
+            CageforgeGrantNotFoundError::new_err("permission grant was not found")
+        }
+        cageforge::StoreError::ListingSnapshotExpired => {
+            CageforgeListingSnapshotExpiredError::new_err(message)
+        }
+        cageforge::StoreError::InvalidGrantId => {
+            CageforgeInvalidGrantIdError::new_err("invalid grant id")
+        }
+        cageforge::StoreError::InvalidCursor => CageforgeInvalidCursorError::new_err(message),
+        cageforge::StoreError::InvalidPageSize { .. } => {
+            CageforgeInvalidPageSizeError::new_err(message)
+        }
+        cageforge::StoreError::StoreLocked { .. } => CageforgeStoreLockedError::new_err(message),
+        cageforge::StoreError::Read { .. } => CageforgeStoreReadError::new_err(message),
+        cageforge::StoreError::Write { .. } => CageforgeStoreWriteError::new_err(message),
+        cageforge::StoreError::Format { .. } => CageforgeStoreFormatError::new_err(message),
+        _ => CageforgeStoreError::new_err(message),
+    }
 }
 
 fn process_error(error: impl ToString) -> PyErr {
@@ -975,6 +1127,13 @@ impl PermissionRequest {
     fn digest(&self) -> PyResult<String> {
         Ok(request_inner(self)?.digest())
     }
+
+    /// Returns the stable ID used by the persistent grant store.
+    fn grant_id(&self) -> PyResult<GrantId> {
+        Ok(GrantId {
+            inner: request_inner(self)?.grant_id(),
+        })
+    }
     /// Returns filesystem capabilities as `(operation, path)` pairs.
     fn filesystem(&self) -> PyResult<Vec<(String, String)>> {
         Ok(request_inner(self)?
@@ -1059,11 +1218,8 @@ impl PermissionStore {
     fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         let path = absolute_path(path, "permission store path")?;
         let open_path = path.clone();
-        let inner = py
-            .detach(move || {
-                cageforge::PermissionStore::open(open_path).map_err(|error| error.to_string())
-            })
-            .map_err(permission_error)?;
+        let inner =
+            py.detach(move || cageforge::PermissionStore::open(open_path).map_err(store_error))?;
         Ok(Self {
             inner: Some(Arc::new(inner)),
             path,
@@ -1087,7 +1243,7 @@ impl PermissionStore {
             store
                 .get(&request)
                 .map(|grant| grant.map(|inner| PermissionGrant { inner: Some(inner) }))
-                .map_err(permission_error)
+                .map_err(store_error)
         })
     }
 
@@ -1101,7 +1257,67 @@ impl PermissionStore {
         let store = store_inner(self)?.clone();
         let grant = grant_inner(grant)?.clone();
         let request = request_inner(request)?.clone();
-        py.detach(move || store.put(&grant, &request).map_err(permission_error))
+        py.detach(move || store.put(&grant, &request).map_err(store_error))
+    }
+
+    /// Lists one bounded page of safe persistent-grant summaries.
+    #[pyo3(signature = (page_size=50, cursor=None))]
+    fn list_page(
+        &self,
+        py: Python<'_>,
+        page_size: usize,
+        cursor: Option<&GrantPageCursor>,
+    ) -> PyResult<GrantPage> {
+        let store = store_inner(self)?.clone();
+        let cursor = cursor.map(|value| value.inner.clone());
+        py.detach(move || {
+            let request =
+                cageforge::GrantPageRequest::new(page_size, cursor).map_err(store_error)?;
+            let page = store.list_page(request).map_err(store_error)?;
+            Ok(GrantPage {
+                entries: page
+                    .entries()
+                    .iter()
+                    .map(|entry| GrantSummary {
+                        id: GrantId { inner: entry.id },
+                        tool_id: entry.tool_id.clone(),
+                        tool_version: entry.tool_version.clone(),
+                        platform: entry.platform.as_str().to_owned(),
+                        architecture: entry.architecture.clone(),
+                        scope: format!("{:?}", entry.scope).to_lowercase(),
+                        issued_at: entry.issued_at,
+                        expires_at: entry.expires_at,
+                    })
+                    .collect(),
+                next_cursor: page
+                    .next_cursor()
+                    .cloned()
+                    .map(|inner| GrantPageCursor { inner }),
+            })
+        })
+    }
+
+    /// Revokes one persistent grant for future launches.
+    fn revoke(&self, py: Python<'_>, id: &GrantId) -> PyResult<RevokeResult> {
+        let store = store_inner(self)?.clone();
+        let id = id.inner;
+        py.detach(move || {
+            store
+                .revoke(id)
+                .map(|result| RevokeResult {
+                    value: match result {
+                        cageforge::RevokeResult::Revoked => "revoked".to_owned(),
+                        cageforge::RevokeResult::NotFound => "not-found".to_owned(),
+                    },
+                })
+                .map_err(store_error)
+        })
+    }
+
+    /// Revokes all persistent grants while retaining the store file.
+    fn revoke_all(&self, py: Python<'_>) -> PyResult<()> {
+        let store = store_inner(self)?.clone();
+        py.detach(move || store.revoke_all().map_err(store_error))
     }
 
     /// Releases the store and makes later operations fail closed.
@@ -1159,6 +1375,57 @@ impl PermissionGrant {
     ) -> PyResult<bool> {
         self.close();
         Ok(false)
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl GrantId {
+    /// Parses a stable hexadecimal grant ID.
+    #[staticmethod]
+    fn from_hex(value: &str) -> PyResult<Self> {
+        cageforge::GrantId::from_hex(value)
+            .map(|inner| Self { inner })
+            .map_err(|_| CageforgeInvalidGrantIdError::new_err("invalid grant id"))
+    }
+
+    /// Returns the canonical lowercase hexadecimal ID.
+    fn hex(&self) -> String {
+        self.inner.to_hex()
+    }
+
+    fn __str__(&self) -> String {
+        self.hex()
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl GrantPageCursor {
+    /// Returns the opaque cursor token.
+    fn token(&self) -> String {
+        self.inner.to_token()
+    }
+
+    /// Parses a cursor token returned by a previous page.
+    #[staticmethod]
+    fn from_token(value: &str) -> PyResult<Self> {
+        cageforge::GrantPageCursor::from_token(value)
+            .map(|inner| Self { inner })
+            .map_err(store_error)
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl RevokeResult {
+    /// Returns `revoked` or `not-found`.
+    fn value(&self) -> &str {
+        &self.value
+    }
+
+    fn __str__(&self) -> &str {
+        &self.value
     }
 }
 
@@ -1581,6 +1848,11 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ProcessResult>()?;
     module.add_class::<WindowsSetup>()?;
     module.add_class::<PermissionRequest>()?;
+    module.add_class::<GrantId>()?;
+    module.add_class::<GrantPageCursor>()?;
+    module.add_class::<GrantSummary>()?;
+    module.add_class::<GrantPage>()?;
+    module.add_class::<RevokeResult>()?;
     module.add_class::<PermissionGrant>()?;
     module.add_class::<PermissionApprover>()?;
     module.add_class::<PermissionStore>()?;
@@ -1601,6 +1873,46 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "CageforgePermissionError",
         CageforgePermissionError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeStoreError",
+        CageforgeStoreError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeGrantNotFoundError",
+        CageforgeGrantNotFoundError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeListingSnapshotExpiredError",
+        CageforgeListingSnapshotExpiredError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeInvalidGrantIdError",
+        CageforgeInvalidGrantIdError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeInvalidCursorError",
+        CageforgeInvalidCursorError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeInvalidPageSizeError",
+        CageforgeInvalidPageSizeError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeStoreLockedError",
+        CageforgeStoreLockedError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeStoreReadError",
+        CageforgeStoreReadError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeStoreWriteError",
+        CageforgeStoreWriteError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeStoreFormatError",
+        CageforgeStoreFormatError::type_object(module.py()),
     )?;
     module.add(
         "CageforgeProcessError",

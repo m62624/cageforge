@@ -111,6 +111,25 @@ owner-only DACL on Windows. It uses a versioned JSON document, a kernel file
 lock, and atomic replacement. A missing store record is not an
 approval; preflight remains deny-by-default.
 
+Persistent grants can be inspected and revoked by stable ID without exposing
+their approved capability payload:
+
+```python
+page = store.list_page(page_size=50)
+for summary in page.entries:
+    print(summary.id, summary.tool_id)
+if page.next_cursor is not None:
+    page = store.list_page(page_size=50, cursor=page.next_cursor)
+
+result = store.revoke(request.grant_id())
+assert str(result) in {"revoked", "not-found"}
+```
+
+`GrantPageCursor` is opaque and becomes stale when the store changes. The
+binding exposes stable store exception subclasses for invalid IDs, invalid
+cursors, page size, stale cursors, lock, read, write, and format failures. All
+digest and store validation is performed by the shared Rust implementation.
+
 When `profile_name` is omitted, `Cageforge.from_toml` and `check_toml` use the
 TOML document's `default_profile`. `Cageforge.from_toml_file` reads a file and
 uses its parent directory as the default current directory. `RuntimeContext()`

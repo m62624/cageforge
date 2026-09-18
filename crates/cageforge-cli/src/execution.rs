@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
 use crate::cli::SetupCommand;
-use crate::cli::{Cli, Command, RunArgs};
+use crate::cli::{
+    Cli, Command, PermissionsCommand, PermissionsListArgs, PermissionsRevokeAllArgs,
+    PermissionsRevokeArgs, RunArgs,
+};
 use crate::error::CliError;
 
 #[cfg(all(feature = "config", any(target_os = "linux", target_os = "macos")))]
@@ -46,9 +49,86 @@ pub fn execute(cli: Cli) -> Result<u8, CliError> {
     match cli.command {
         Command::Run(args) => execute_run(args),
         Command::Schema => execute_schema(),
+        Command::Permissions(command) => execute_permissions(command),
         #[cfg(target_os = "windows")]
         Command::Setup(operation) => execute_setup(operation),
     }
+}
+
+#[cfg(feature = "config")]
+fn execute_permissions(command: PermissionsCommand) -> Result<u8, CliError> {
+    match command {
+        PermissionsCommand::List(args) => execute_permissions_list(args),
+        PermissionsCommand::Revoke(args) => execute_permissions_revoke(args),
+        PermissionsCommand::RevokeAll(args) => execute_permissions_revoke_all(args),
+    }
+}
+
+#[cfg(not(feature = "config"))]
+fn execute_permissions(_command: PermissionsCommand) -> Result<u8, CliError> {
+    Err(CliError::ConfigFeatureRequired)
+}
+
+#[cfg(feature = "config")]
+fn open_permission_store(path: Option<&Path>) -> Result<cageforge::PermissionStore, CliError> {
+    Ok(cageforge::PermissionStore::open(permission_store_path(
+        path,
+    )?)?)
+}
+
+#[cfg(feature = "config")]
+fn execute_permissions_list(args: PermissionsListArgs) -> Result<u8, CliError> {
+    let cursor = args
+        .cursor
+        .as_deref()
+        .map(cageforge::GrantPageCursor::from_token)
+        .transpose()?;
+    let request = cageforge::GrantPageRequest::new(args.page_size, cursor)?;
+    let store = open_permission_store(args.permission_store.as_deref())?;
+    let page = store.list_page(request)?;
+    for entry in page.entries() {
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            entry.id,
+            entry.tool_id,
+            entry.tool_version,
+            entry.platform,
+            entry.architecture,
+            format!("{:?}", entry.scope).to_lowercase(),
+            entry
+                .expires_at
+                .map_or_else(|| "-".to_owned(), |value| value.to_string()),
+        );
+    }
+    if let Some(cursor) = page.next_cursor() {
+        println!("next-cursor\t{}", cursor.to_token());
+    }
+    Ok(0)
+}
+
+#[cfg(feature = "config")]
+fn execute_permissions_revoke(args: PermissionsRevokeArgs) -> Result<u8, CliError> {
+    let id = cageforge::GrantId::from_hex(&args.id)
+        .map_err(|_| cageforge::StoreError::InvalidGrantId)?;
+    let store = open_permission_store(args.permission_store.as_deref())?;
+    match store.revoke(id)? {
+        cageforge::RevokeResult::Revoked => {
+            println!("revoked\t{id}");
+            Ok(0)
+        }
+        cageforge::RevokeResult::NotFound => Err(cageforge::StoreError::GrantNotFound.into()),
+    }
+}
+
+#[cfg(feature = "config")]
+fn execute_permissions_revoke_all(args: PermissionsRevokeAllArgs) -> Result<u8, CliError> {
+    if !args.yes {
+        return Err(CliError::PermissionStoreConfirmationRequired);
+    }
+    let store = open_permission_store(args.permission_store.as_deref())?;
+    store.revoke_all()?;
+    println!("revoked-all");
+    Ok(0)
 }
 
 #[cfg(feature = "config")]

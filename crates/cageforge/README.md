@@ -234,6 +234,13 @@ and is protected by the native filesystem security rules of the host OS. It is
 revocable host state: the owner may delete it to clear all saved approvals.
 Hosts should keep it outside any workspace that the sandbox can write.
 
+For management, `PermissionRequest::grant_id()` yields a stable lowercase
+SHA-256 ID. `PermissionStore::list_page` returns bounded `GrantSummary` values
+and an opaque cursor; `PermissionStore::revoke` removes one future approval
+without changing an already-running sandbox. The CLI, Python, and Java
+bindings expose the same page and revoke semantics. Summary values contain
+only safe audit metadata, never approved capability payloads or secrets.
+
 ## How a sandbox instance works
 
 Each call to `spawn` starts one root command inside a new sandbox instance. The

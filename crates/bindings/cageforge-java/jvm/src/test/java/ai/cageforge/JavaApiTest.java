@@ -41,11 +41,16 @@ class JavaApiTest {
         Function<SandboxProcess, Process> asJavaProcess = SandboxProcess::asJavaProcess;
         Consumer<Cageforge> closeRuntime = Cageforge::close;
         Function<PermissionRequest, PermissionGrant> approve = new PermissionApprover()::approve;
+        Function<PermissionRequest, GrantId> grantId = PermissionRequest::getGrantId;
         Function<Path, PermissionStore> openStore = PermissionStore::open;
         BiFunction<PermissionStore, PermissionRequest, PermissionGrant> getGrant =
                 PermissionStore::get;
         TriConsumer<PermissionStore, PermissionGrant, PermissionRequest> putGrant =
                 PermissionStore::put;
+        TriFunction<PermissionStore, Integer, GrantPageCursor, GrantPage> listPage =
+                PermissionStore::listPage;
+        BiFunction<PermissionStore, GrantId, RevokeResult> revoke = PermissionStore::revoke;
+        Consumer<PermissionStore> revokeAll = PermissionStore::revokeAll;
         Consumer<PermissionStore> closeStore = PermissionStore::close;
         Function<SandboxProcess, Integer> processId = SandboxProcess::getId;
         Function<SandboxProcess, InputStream> stdout = SandboxProcess::getStdout;
@@ -75,9 +80,13 @@ class JavaApiTest {
         assertNotNull(asJavaProcess);
         assertNotNull(closeRuntime);
         assertNotNull(approve);
+        assertNotNull(grantId);
         assertNotNull(openStore);
         assertNotNull(getGrant);
         assertNotNull(putGrant);
+        assertNotNull(listPage);
+        assertNotNull(revoke);
+        assertNotNull(revokeAll);
         assertNotNull(closeStore);
         assertNotNull(processId);
         assertNotNull(stdout);

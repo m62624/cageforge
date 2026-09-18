@@ -12,6 +12,16 @@ pub(crate) enum BindingErrorKind {
     Initialization,
     Launch,
     Permission,
+    PermissionStore,
+    GrantNotFound,
+    ListingSnapshotExpired,
+    InvalidGrantId,
+    InvalidCursor,
+    InvalidPageSize,
+    StoreLocked,
+    StoreRead,
+    StoreWrite,
+    StoreFormat,
     Process,
     Stream,
     WindowsSetup,
@@ -30,6 +40,36 @@ impl BindingErrorKind {
             Self::Launch => env.find_class(jni::jni_str!("ai/cageforge/CageforgeLaunchException")),
             Self::Permission => {
                 env.find_class(jni::jni_str!("ai/cageforge/CageforgePermissionException"))
+            }
+            Self::PermissionStore => env.find_class(jni::jni_str!(
+                "ai/cageforge/CageforgePermissionStoreException"
+            )),
+            Self::GrantNotFound => env.find_class(jni::jni_str!(
+                "ai/cageforge/CageforgeGrantNotFoundException"
+            )),
+            Self::ListingSnapshotExpired => env.find_class(jni::jni_str!(
+                "ai/cageforge/CageforgeListingSnapshotExpiredException"
+            )),
+            Self::InvalidGrantId => env.find_class(jni::jni_str!(
+                "ai/cageforge/CageforgeInvalidGrantIdException"
+            )),
+            Self::InvalidCursor => env.find_class(jni::jni_str!(
+                "ai/cageforge/CageforgeInvalidCursorException"
+            )),
+            Self::InvalidPageSize => env.find_class(jni::jni_str!(
+                "ai/cageforge/CageforgeInvalidPageSizeException"
+            )),
+            Self::StoreLocked => {
+                env.find_class(jni::jni_str!("ai/cageforge/CageforgeStoreLockedException"))
+            }
+            Self::StoreRead => {
+                env.find_class(jni::jni_str!("ai/cageforge/CageforgeStoreReadException"))
+            }
+            Self::StoreWrite => {
+                env.find_class(jni::jni_str!("ai/cageforge/CageforgeStoreWriteException"))
+            }
+            Self::StoreFormat => {
+                env.find_class(jni::jni_str!("ai/cageforge/CageforgeStoreFormatException"))
             }
             Self::Process => {
                 env.find_class(jni::jni_str!("ai/cageforge/CageforgeProcessException"))

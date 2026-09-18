@@ -413,9 +413,9 @@ fn narrow_filesystem(
                 }
             }
             let mut narrowed = FilesystemPolicy::restricted(entries);
-            if original.glob_scan_max_depth().is_some() {
+            if let Some(max_depth) = original.glob_scan_max_depth() {
                 narrowed = narrowed
-                    .with_glob_scan_max_depth(original.glob_scan_max_depth().expect("checked"))
+                    .with_glob_scan_max_depth(max_depth)
                     .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
             }
             if !original
