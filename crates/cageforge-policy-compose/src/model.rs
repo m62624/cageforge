@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use cageforge_command::EnvironmentSpec;
 use cageforge_path::{NativePathKey, contains_parent_traversal, is_within};
 use cageforge_policy::{
-    DomainAccess, DomainMode, LocalNetworkAccess, NetworkMode, NetworkPolicy,
+    DomainAccess, DomainMode, LocalIpcEndpoint, LocalNetworkAccess, NetworkMode, NetworkPolicy,
     PathResolutionContext, SandboxPolicy, UnixSocketMode,
 };
 
@@ -266,6 +266,13 @@ impl EffectiveNetworkPolicy {
                     .iter()
                     .any(|rule| rule.access() == DomainAccess::Deny)
             });
+        let windows_named_pipe_rules = enabled
+            && policies.iter().any(|policy| {
+                policy
+                    .local_ipc()
+                    .iter()
+                    .any(|rule| matches!(rule.endpoint(), LocalIpcEndpoint::WindowsNamedPipe(_)))
+            });
         EffectiveNetworkRequirements {
             mode,
             domain_rules,
@@ -274,6 +281,7 @@ impl EffectiveNetworkPolicy {
             local_ipc_isolation,
             local_ipc_rules,
             local_ipc_deny_rules,
+            windows_named_pipe_rules,
         }
     }
 
@@ -324,6 +332,11 @@ impl EffectiveNetworkRequirements {
     /// enforced in an otherwise allow-all socket mode.
     pub const fn local_ipc_deny_rules(self) -> bool {
         self.local_ipc_deny_rules
+    }
+
+    /// Returns whether Windows named-pipe endpoint rules are present.
+    pub const fn windows_named_pipe_rules(self) -> bool {
+        self.windows_named_pipe_rules
     }
 }
 

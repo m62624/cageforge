@@ -36,6 +36,12 @@ available through the optional `network-runtime` feature.
 For the complete TOML flow and separate runnable profiles for each operating
 system, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
+Local IPC uses one typed Rust model across platforms. Use absolute Unix-socket
+paths for Linux/macOS and `\\\\.\\pipe\\name` named-pipe names for Windows in
+the matching TOML platform overlay. The selected backend must advertise and
+prove the endpoint capability before launch; unsupported Windows named-pipe
+isolation fails closed and never falls back to TCP or an unsandboxed process.
+
 On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
 not want to build or provide Bubblewrap separately. It includes Cageforge's
 verified, fixed Bubblewrap `v0.12.0` resource; the embedded version is not

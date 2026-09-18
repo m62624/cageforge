@@ -165,6 +165,11 @@ pub(super) fn add_network_capabilities(
             .capabilities
             .insert(BackendCapability::NetworkLocalIpcDenyRules);
     }
+    if requirements.windows_named_pipe_rules() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkWindowsNamedPipeRules);
+    }
 }
 
 pub(super) fn add_environment_capabilities(

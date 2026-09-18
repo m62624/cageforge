@@ -39,6 +39,15 @@ profile.
 | [`permission-inheritance.toml`](permission-inheritance.toml) | Approval merge and platform override | Scalar inheritance, child overrides, and Windows approval overlay |
 | [`platform-targets-unix.toml`](platform-targets-unix.toml) | Linux/macOS path and socket syntax | All portable filesystem and network rule fields |
 | [`platform-targets-windows.toml`](platform-targets-windows.toml) | Windows-native equivalent | Drive-qualified paths and the same portable policy fields |
+| [`local-ipc-platforms.toml`](local-ipc-platforms.toml) | Portable local IPC declaration | Unix sockets on Linux/macOS and named-pipe validation on Windows |
+
+Local IPC endpoint syntax is platform-specific inside one portable document:
+`local_ipc.unix_sockets` contains absolute POSIX paths for Linux/macOS, while
+`local_ipc.named_pipes` contains names from the Windows `\\.\pipe\` namespace.
+Rust callers use `LocalIpcEndpoint`; Python and Java/Kotlin permission requests
+expose the same endpoint kinds as typed values.
+The selected native backend must prove enforcement before launch; unsupported
+endpoint types fail closed.
 
 The environment order applies to a command environment, not to filesystem
 permissions or profile inheritance. `cageforge-config` parses and resolves the

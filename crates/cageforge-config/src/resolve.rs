@@ -95,8 +95,12 @@ impl Config {
         platform: Option<PlatformId>,
     ) -> Result<ResolvedProfile, ConfigError> {
         let merged = self.resolve_raw(name, platform)?;
-        let policy =
-            build::build_policy(merged.filesystem.as_ref(), merged.network.as_ref(), name)?;
+        let policy = build::build_policy(
+            merged.filesystem.as_ref(),
+            merged.network.as_ref(),
+            merged.local_ipc.as_ref(),
+            name,
+        )?;
         let command = build::build_command(merged.command.as_ref(), name)?;
         let network_gateway = build::build_gateway_config(
             merged

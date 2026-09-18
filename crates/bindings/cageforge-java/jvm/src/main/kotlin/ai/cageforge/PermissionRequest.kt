@@ -26,6 +26,16 @@ class PermissionRequest internal constructor(
             values[0] to values[1]
         }
 
+    /** Returns typed local-IPC endpoint declarations. */
+    val localIpc: List<LocalIpcEndpoint> =
+        network.mapNotNull { value ->
+            when {
+                value.startsWith("unix:") -> LocalIpcEndpoint.UnixSocket(value.removePrefix("unix:"))
+                value.startsWith("pipe:") -> LocalIpcEndpoint.WindowsNamedPipe(value.removePrefix("pipe:"))
+                else -> null
+            }
+        }
+
     override fun close() {
         native.close()
     }

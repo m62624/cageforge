@@ -22,8 +22,9 @@ use cageforge_backend_api::{
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
 use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError, MacosFilesystemError};
 use cageforge_policy::{
-    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
-    NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalIpcEndpoint,
+    LocalNetworkAccess, NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy,
+    UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use tempfile::TempDir;
@@ -2118,8 +2119,10 @@ fn restricted_unix_socket_policy_allows_an_explicit_path() {
     let workspace = TempDir::new().expect("workspace");
     let network = NetworkPolicy::enabled()
         .with_local_network_access(LocalNetworkAccess::Allow)
-        .with_unix_socket_mode(UnixSocketMode::Restricted)
-        .with_unix_socket(&allowed, DomainAccess::Allow)
+        .with_local_ipc(
+            LocalIpcEndpoint::unix_socket(allowed.clone()).expect("absolute socket"),
+            DomainAccess::Allow,
+        )
         .expect("allowed Unix socket rule");
     let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
     let (command, effective, context) =

@@ -81,6 +81,12 @@ When `permission_request` is called with custom identity or digest arguments,
 pass that same `PermissionRequest` to `from_toml` or `from_toml_file`; the
 runtime then authorizes the grant against the exact identity that was approved.
 
+`PermissionRequest.local_ipc()` returns frozen typed `LocalIpcEndpoint` values.
+Their `kind` is `unix_socket` or `windows_named_pipe`, and `value` is the
+validated native endpoint. The platform overlay selects which endpoint kind
+is present; a Windows named-pipe request remains fail-closed if the native
+backend cannot prove the required isolation.
+
 ### Persistent grants and store paths
 
 The permission store is host state, not TOML policy. Choose its absolute path

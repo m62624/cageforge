@@ -1,0 +1,20 @@
+# One portable profile with native local-IPC endpoints selected by platform.
+# The Windows endpoint remains fail-closed until the Windows backend advertises
+# proven named-pipe namespace isolation.
+default_profile = "tool"
+
+[profiles.tool.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.tool.platforms.linux.local_ipc]
+unix_sockets = ["/run/tool/service.sock"]
+
+[profiles.tool.platforms.macos.local_ipc]
+unix_sockets = ["/var/run/tool/service.sock"]
+
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ['\\.\pipe\tool-service']

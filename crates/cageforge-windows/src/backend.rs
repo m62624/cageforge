@@ -555,6 +555,7 @@ mod tests {
             BackendCapability::NetworkLocalIpcIsolation,
             BackendCapability::NetworkLocalIpcRules,
             BackendCapability::NetworkLocalIpcDenyRules,
+            BackendCapability::NetworkWindowsNamedPipeRules,
         ] {
             assert!(
                 !actual.supports(unsupported),

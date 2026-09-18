@@ -267,6 +267,7 @@ The protection is layered:
 | Filesystem | The effective policy grants only declared scopes and modes, with native checks for symlinks, mounts, reparse points, and TOCTOU-sensitive operations. |
 | Environment | The command receives the validated environment selected for the instance; it cannot use environment changes to widen native permissions. |
 | Network | Direct, disabled, and routed access are lowered by the selected backend, with authorization tied to the exact resolved destination where applicable. |
+| Local IPC | The portable policy distinguishes absolute Unix sockets from Windows named pipes; each backend must prove endpoint enforcement before advertising the capability. |
 | Lifecycle | Timeouts and termination apply to the complete process tree, and native resources are released only after the boundary reaches a confirmed terminal state. |
 | Descriptors and handles | Only explicitly authorized standard streams and other transport handles cross the launch boundary. |
 | Native enforcement | Linux uses namespaces, mounts, seccomp, and Bubblewrap; Windows uses restricted tokens, ACLs, Job Objects, and firewall/WFP; macOS uses Seatbelt profiles and native process controls. |
@@ -281,10 +282,15 @@ The TOML examples are in
 The [configuration guide](crates/cageforge-config/examples/CONFIGURATION_GUIDE.md)
 shows which profile to run on Linux, macOS, or Windows and how `minimal` maps
 to each native runtime.
+The [`local-ipc-platforms.toml`](crates/cageforge-config/examples/local-ipc-platforms.toml)
+example shows one profile with Linux/macOS Unix-socket overrides and a
+Windows named-pipe override. Windows does not silently fall back to TCP or an
+unsandboxed launch when named-pipe isolation is unsupported.
 The complete public API is available on [docs.rs](https://docs.rs/cageforge/latest/cageforge/)
 and in the package README files linked above.
 The legal and provenance records are maintained in
 [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
+[`specs/0023-local-ipc-capability.md`](specs/0023-local-ipc-capability.md),
 [`NOTICE`](NOTICE), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and
 [`UPSTREAM.md`](UPSTREAM.md).
 

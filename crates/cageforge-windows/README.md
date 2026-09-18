@@ -367,9 +367,18 @@ launch.
 not advertised as Windows-native capabilities. Unrestricted filesystem
 execution and the platform-specific conventional Unix temporary scope are also
 rejected before lowering because this backend has no verified native boundary
-for them. Windows named pipes are handled as Windows objects through token,
-desktop, DACL, and explicit-handle controls; they are not silently treated as
-Unix sockets.
+for them. Windows named pipes are distinct policy endpoints:
+
+```toml
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ['\\.\pipe\tool-service']
+```
+
+They are not silently treated as Unix sockets or TCP. The
+`NetworkWindowsNamedPipeRules` capability remains fail-closed until token,
+desktop, DACL, remote-client, first-instance, exact-handle, neighboring-pipe,
+and cleanup guarantees are proven by the native backend and its Windows CI
+job.
 
 ## Network behavior
 

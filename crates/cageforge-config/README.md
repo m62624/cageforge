@@ -85,6 +85,28 @@ The platform overlay can also override `filesystem`, `network`, `command`,
 that intentionally want the unselected portable declaration; execution layers
 should use `resolve_for_platform` or `resolve_default_for_platform`.
 
+Local IPC uses the same platform-overlay model. Linux and macOS accept
+absolute Unix-socket paths; Windows uses the local named-pipe namespace and
+never treats a Windows pipe as a Unix path:
+
+```toml
+[profiles.tool.platforms.linux.local_ipc]
+unix_sockets = ["/run/tool/service.sock"]
+
+[profiles.tool.platforms.macos.local_ipc]
+unix_sockets = ["/var/run/tool/service.sock"]
+
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ['\\.\pipe\tool-service']
+```
+
+The endpoint is explicit and validated before backend launch. A backend must
+advertise native enforcement for the endpoint type; otherwise preflight
+returns a typed unsupported-capability error and does not start the child.
+Windows named-pipe support is intentionally not advertised until the backend
+can prove both endpoint authorization and denial of unauthorized named-pipe
+access. There is no TCP or unsandboxed fallback.
+
 ## Workspace role
 
 `cageforge-config` is the strict configuration adapter.

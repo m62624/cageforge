@@ -142,6 +142,7 @@ pub(crate) struct RawProfile {
     pub(crate) workspace_roots: BTreeMap<String, bool>,
     pub(crate) filesystem: Option<RawFilesystem>,
     pub(crate) network: Option<RawNetwork>,
+    pub(crate) local_ipc: Option<RawLocalIpc>,
     pub(crate) command: Option<RawCommand>,
     pub(crate) approval: Option<RawApproval>,
     #[serde(default)]
@@ -158,6 +159,7 @@ pub(crate) struct RawPlatformProfile {
     pub(crate) workspace_roots: BTreeMap<String, bool>,
     pub(crate) filesystem: Option<RawFilesystem>,
     pub(crate) network: Option<RawNetwork>,
+    pub(crate) local_ipc: Option<RawLocalIpc>,
     pub(crate) command: Option<RawCommand>,
     pub(crate) approval: Option<RawApproval>,
 }
@@ -228,6 +230,16 @@ pub(crate) struct RawNetwork {
     pub(crate) domains: Vec<RawDomainRule>,
     #[serde(default)]
     pub(crate) unix_sockets: Vec<RawUnixSocketRule>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawLocalIpc {
+    #[serde(default)]
+    pub(crate) unix_sockets: Vec<String>,
+    #[serde(default)]
+    pub(crate) named_pipes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]

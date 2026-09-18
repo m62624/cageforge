@@ -8,8 +8,8 @@
 //! [`crate::AuthorizedSocketAddr`] so the backend can connect only to the
 //! checked address.
 
-use crate::PathSelector;
 use crate::PolicyError;
+use crate::{LocalIpcEndpoint, PathSelector};
 use cageforge_path::{NativePathKey, paths_equal};
 use globset::GlobBuilder;
 use globset::GlobMatcher;
@@ -24,8 +24,8 @@ mod model;
 use model::DomainMatcher;
 pub use model::{
     AuthorizedSocketAddr, ConnectionAuthorization, DomainAccess, DomainMode, DomainRule,
-    LocalNetworkAccess, NetworkDecision, NetworkMode, NetworkPolicy, ResolvedNetworkTarget,
-    UnixSocketMode, UnixSocketRule,
+    LocalIpcRule, LocalNetworkAccess, NetworkDecision, NetworkMode, NetworkPolicy,
+    ResolvedNetworkTarget, UnixSocketMode, UnixSocketRule,
 };
 
 impl NetworkDecision {
@@ -198,6 +198,24 @@ impl UnixSocketRule {
     }
 }
 
+impl LocalIpcRule {
+    /// Creates a validated local-IPC rule.
+    pub fn new(endpoint: LocalIpcEndpoint, access: DomainAccess) -> Result<Self, PolicyError> {
+        endpoint.validate()?;
+        Ok(Self { endpoint, access })
+    }
+
+    /// Returns the typed endpoint.
+    pub fn endpoint(&self) -> &LocalIpcEndpoint {
+        &self.endpoint
+    }
+
+    /// Returns the access decision.
+    pub const fn access(&self) -> DomainAccess {
+        self.access
+    }
+}
+
 impl NetworkPolicy {
     /// Creates a policy with command networking disabled.
     pub const fn disabled() -> Self {
@@ -208,6 +226,7 @@ impl NetworkPolicy {
             local_network_access: LocalNetworkAccess::Deny,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
+            local_ipc: Vec::new(),
         }
     }
 
@@ -224,6 +243,7 @@ impl NetworkPolicy {
             local_network_access: LocalNetworkAccess::Deny,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
+            local_ipc: Vec::new(),
         }
     }
 
@@ -236,6 +256,7 @@ impl NetworkPolicy {
             local_network_access: LocalNetworkAccess::Allow,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
+            local_ipc: Vec::new(),
         }
     }
 
@@ -248,6 +269,7 @@ impl NetworkPolicy {
             local_network_access: LocalNetworkAccess::Deny,
             domains: Vec::new(),
             unix_sockets: Vec::new(),
+            local_ipc: Vec::new(),
         }
     }
 
@@ -299,6 +321,11 @@ impl NetworkPolicy {
         &self.unix_sockets
     }
 
+    /// Returns typed local-IPC rules in declaration order.
+    pub fn local_ipc(&self) -> &[LocalIpcRule] {
+        &self.local_ipc
+    }
+
     /// Adds a domain rule.
     pub fn with_domain(
         mut self,
@@ -333,6 +360,47 @@ impl NetworkPolicy {
         Ok(self)
     }
 
+    /// Adds a typed local-IPC rule.
+    pub fn with_local_ipc(
+        mut self,
+        endpoint: LocalIpcEndpoint,
+        access: DomainAccess,
+    ) -> Result<Self, PolicyError> {
+        if self.mode == NetworkMode::External {
+            return Err(PolicyError::InvalidRule {
+                message: "local-IPC rules cannot be added to an external policy".to_owned(),
+            });
+        }
+        if self.mode == NetworkMode::Disabled {
+            self.mode = NetworkMode::Enabled;
+        }
+        if self
+            .local_ipc
+            .iter()
+            .any(|rule| rule.endpoint() == &endpoint)
+        {
+            let endpoint_value = endpoint
+                .unix_path()
+                .map(|path| format!("unix:{}", path.display()))
+                .or_else(|| endpoint.named_pipe().map(|name| format!("pipe:{name}")))
+                .unwrap_or_else(|| "local-ipc".to_owned());
+            return Err(PolicyError::InvalidLocalIpcEndpoint {
+                endpoint: endpoint_value,
+                reason: "duplicate local-IPC endpoint",
+            });
+        }
+        let rule = LocalIpcRule::new(endpoint.clone(), access)?;
+        if let Some(path) = endpoint.unix_path() {
+            if self.unix_socket_mode == UnixSocketMode::Disabled {
+                self.unix_socket_mode = UnixSocketMode::Restricted;
+            }
+            self.unix_sockets
+                .push(UnixSocketRule::new(path.to_path_buf(), access)?);
+        }
+        self.local_ipc.push(rule);
+        Ok(self)
+    }
+
     /// Validates that an externally enforced mode has no local rules.
     pub fn validate(&self) -> Result<(), PolicyError> {
         if self.mode == NetworkMode::External
@@ -340,7 +408,8 @@ impl NetworkPolicy {
                 || self.unix_socket_mode != UnixSocketMode::Disabled
                 || self.local_network_access != LocalNetworkAccess::Deny
                 || !self.domains.is_empty()
-                || !self.unix_sockets.is_empty())
+                || !self.unix_sockets.is_empty()
+                || !self.local_ipc.is_empty())
         {
             return Err(PolicyError::InvalidRule {
                 message: "external network policies cannot contain local settings".to_string(),
@@ -382,6 +451,20 @@ impl NetworkPolicy {
             }
         }
 
+        let mut local_ipc: Vec<LocalIpcRule> = Vec::with_capacity(self.local_ipc.len());
+        let mut local_ipc_positions: HashMap<LocalIpcEndpoint, usize> =
+            HashMap::with_capacity(self.local_ipc.len());
+        for rule in &self.local_ipc {
+            if let Some(&index) = local_ipc_positions.get(rule.endpoint()) {
+                if rule.access() == DomainAccess::Deny {
+                    local_ipc[index].access = DomainAccess::Deny;
+                }
+            } else {
+                local_ipc_positions.insert(rule.endpoint().clone(), local_ipc.len());
+                local_ipc.push(rule.clone());
+            }
+        }
+
         Ok(Self {
             mode: self.mode,
             domain_mode: self.domain_mode,
@@ -389,6 +472,7 @@ impl NetworkPolicy {
             local_network_access: self.local_network_access,
             domains,
             unix_sockets,
+            local_ipc,
         })
     }
 

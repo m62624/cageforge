@@ -92,6 +92,12 @@ When `permissionRequest` is called with custom identity or digest arguments,
 pass that same `PermissionRequest` to `fromToml` or `fromTomlFile`; the runtime
 then authorizes the grant against the exact identity that was approved.
 
+`PermissionRequest.localIpc` returns typed `LocalIpcEndpoint` values:
+`LocalIpcEndpoint.UnixSocket` for Linux/macOS and
+`LocalIpcEndpoint.WindowsNamedPipe` for Windows. The endpoint value is already
+validated by Rust; Windows never converts a named pipe into a Unix path or TCP
+fallback and fails closed if native isolation is not proven.
+
 ### Persistent grants and store paths
 
 The permission store is host state rather than TOML policy. A Java host chooses

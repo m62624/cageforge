@@ -18,8 +18,8 @@ use cageforge_policy::{DomainAccess, DomainRule, PathPattern, PathSelector};
 
 use crate::model::{
     RawApproval, RawCommand, RawEnvironment, RawFilesystem, RawFilesystemMode, RawFilesystemRule,
-    RawFilesystemTarget, RawGatewayConfig, RawNetwork, RawNetworkMode, RawPlatformProfile,
-    RawProfile, RawStdio, RawTimeout,
+    RawFilesystemTarget, RawGatewayConfig, RawLocalIpc, RawNetwork, RawNetworkMode,
+    RawPlatformProfile, RawProfile, RawStdio, RawTimeout,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -28,6 +28,7 @@ pub(crate) struct MergedProfile {
     pub(crate) workspace_roots: BTreeMap<String, bool>,
     pub(crate) filesystem: Option<RawFilesystem>,
     pub(crate) network: Option<RawNetwork>,
+    pub(crate) local_ipc: Option<RawLocalIpc>,
     pub(crate) command: Option<RawCommand>,
     pub(crate) approval: Option<RawApproval>,
 }
@@ -69,6 +70,8 @@ pub(crate) struct ProfileMerger {
     filesystem_rules: HashMap<FilesystemRuleKey, usize>,
     domain_rules: HashMap<String, usize>,
     unix_sockets: HashMap<NativePathKey, usize>,
+    local_ipc_unix_sockets: HashMap<NativePathKey, usize>,
+    local_ipc_named_pipes: HashMap<String, usize>,
     environment_filters: HashMap<EnvironmentFilterKey, String>,
     environment_overrides: BTreeMap<EnvironmentNameKey, (String, Option<String>)>,
 }
@@ -82,6 +85,9 @@ impl ProfileMerger {
         }
         if let Some(network) = &profile.network {
             self.merge_network(network);
+        }
+        if let Some(local_ipc) = &profile.local_ipc {
+            self.merge_local_ipc(local_ipc);
         }
         if let Some(command) = &profile.command {
             self.merge_command(command);
@@ -107,6 +113,9 @@ impl ProfileMerger {
         if let Some(network) = &overlay.network {
             self.merge_network(network);
         }
+        if let Some(local_ipc) = &overlay.local_ipc {
+            self.merge_local_ipc(local_ipc);
+        }
         if let Some(command) = &overlay.command {
             self.merge_command(command);
         }
@@ -131,6 +140,33 @@ impl ProfileMerger {
         }
         if child.persistence.is_some() {
             merged.persistence = child.persistence;
+        }
+    }
+
+    fn merge_local_ipc(&mut self, child: &RawLocalIpc) {
+        let merged = self
+            .merged
+            .local_ipc
+            .get_or_insert_with(RawLocalIpc::default);
+        for path in &child.unix_sockets {
+            let key = NativePathKey::new(Path::new(path));
+            if let Some(&index) = self.local_ipc_unix_sockets.get(&key) {
+                merged.unix_sockets[index] = path.clone();
+            } else {
+                self.local_ipc_unix_sockets
+                    .insert(key, merged.unix_sockets.len());
+                merged.unix_sockets.push(path.clone());
+            }
+        }
+        for name in &child.named_pipes {
+            let key = name.to_ascii_lowercase();
+            if let Some(&index) = self.local_ipc_named_pipes.get(&key) {
+                merged.named_pipes[index] = name.clone();
+            } else {
+                self.local_ipc_named_pipes
+                    .insert(key, merged.named_pipes.len());
+                merged.named_pipes.push(name.clone());
+            }
         }
     }
 
@@ -217,8 +253,11 @@ impl ProfileMerger {
                 merged.local_network_access = None;
                 merged.domains.clear();
                 merged.unix_sockets.clear();
+                self.merged.local_ipc = None;
                 self.domain_rules.clear();
                 self.unix_sockets.clear();
+                self.local_ipc_unix_sockets.clear();
+                self.local_ipc_named_pipes.clear();
             }
             merged.mode = Some(mode);
         }

@@ -62,4 +62,5 @@ pub struct EffectiveNetworkRequirements {
     pub(super) local_ipc_isolation: bool,
     pub(super) local_ipc_rules: bool,
     pub(super) local_ipc_deny_rules: bool,
+    pub(super) windows_named_pipe_rules: bool,
 }

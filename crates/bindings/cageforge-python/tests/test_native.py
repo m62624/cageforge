@@ -45,6 +45,20 @@ def smoke_toml() -> str:
     return smoke_config().read_bytes().decode("utf-8")
 
 
+def local_ipc_toml() -> str:
+    source = smoke_toml()
+    if sys.platform == "win32":
+        overlay = "windows"
+        value = "named_pipes = ['\\\\.\\pipe\\cageforge-test']"
+    elif sys.platform == "darwin":
+        overlay = "macos"
+        value = 'unix_sockets = ["/tmp/cageforge-test.sock"]'
+    else:
+        overlay = "linux"
+        value = 'unix_sockets = ["/tmp/cageforge-test.sock"]'
+    return f"{source}\n[profiles.smoke.platforms.{overlay}.local_ipc]\n{value}\n"
+
+
 def toml_for_argv(argv: list[str]) -> str:
     source = smoke_toml()
     prefix, separator, _command = source.partition("[profiles.smoke.command]")
@@ -130,6 +144,19 @@ def test_persistent_grant_store_uses_the_explicit_path(tmp_path: Path) -> None:
     request.close()
     with pytest.raises(CageforgePermissionError):
         request.digest()
+
+
+def test_permission_request_exposes_typed_local_ipc_endpoints(tmp_path: Path) -> None:
+    request = Cageforge.permission_request(
+        local_ipc_toml(), context=runtime_context(tmp_path)
+    )
+    try:
+        endpoints = request.local_ipc()
+        assert len(endpoints) == 1
+        assert endpoints[0].kind in {"unix_socket", "windows_named_pipe"}
+        assert endpoints[0].value
+    finally:
+        request.close()
 
 
 def test_persistent_store_handles_concurrent_binding_calls(tmp_path: Path) -> None:

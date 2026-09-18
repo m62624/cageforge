@@ -126,6 +126,9 @@ working directory is the workspace.
 - `filesystem` selects restricted, unrestricted, or externally owned access;
 - `network` selects disabled, direct enabled, or external ownership and can
   restrict domains and Unix sockets;
+- `local_ipc` declares typed platform endpoints: absolute Unix sockets under
+  the Linux/macOS overlays and local `\\.\pipe\name` named pipes under the
+  Windows overlay;
 - `command` contains the executable, argv, working directory, environment,
   stdio, and timeout;
 - `command.environment` applies the documented base/filter/set/remove stages;
@@ -158,6 +161,12 @@ approval policy needs a narrower child profile: scalar approval fields merge
 field-by-field, and a platform overlay is applied after inheritance. In that
 example the Windows overlay disables approval while retaining the inherited
 timeout and persistence values for inspection.
+
+For Local IPC, use [`local-ipc-platforms.toml`](local-ipc-platforms.toml).
+Linux and macOS retain the existing Unix-socket enforcement. Windows validates
+named-pipe names but remains fail-closed until the native backend proves strict
+authorization and denial of neighboring named pipes; it never converts the
+request to TCP or launches without the requested boundary.
 
 Approval is disabled when the `[profiles.<name>.approval]` section is omitted.
 `mode = "preflight"` is fail-closed: an absent or late approval denies the

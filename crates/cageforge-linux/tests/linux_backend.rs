@@ -27,8 +27,9 @@ use cageforge_linux::{
 };
 use cageforge_network_proxy::GatewayConfig;
 use cageforge_policy::{
-    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
-    NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalIpcEndpoint,
+    LocalNetworkAccess, NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy,
+    UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use command_fds::CommandFdExt;
@@ -2758,8 +2759,10 @@ fn restricted_unix_socket_policy_allows_only_the_exact_path() {
         .with_domain_mode(DomainMode::Restricted)
         .with_domain("example.com", DomainAccess::Allow)
         .expect("domain policy")
-        .with_unix_socket_mode(UnixSocketMode::Restricted)
-        .with_unix_socket(&allowed_path, DomainAccess::Allow)
+        .with_local_ipc(
+            LocalIpcEndpoint::unix_socket(allowed_path.clone()).expect("absolute socket"),
+            DomainAccess::Allow,
+        )
         .expect("Unix socket policy");
     let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
     let backend = backend();
