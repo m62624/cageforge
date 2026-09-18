@@ -26,6 +26,7 @@ jobs:
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             python_arch: x64
+            python_build_version: '3.10'
             freethreaded: true
             expected_machine: "Advanced Micro Devices X86-64"
             manylinux: auto
@@ -36,6 +37,7 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             python_arch: arm64
+            python_build_version: '3.10'
             freethreaded: true
             expected_machine: AArch64
             manylinux: auto
@@ -46,6 +48,7 @@ jobs:
             runner: macos-26-intel
             target: x86_64-apple-darwin
             python_arch: x64
+            python_build_version: '3.10'
             freethreaded: true
             manylinux: "off"
             feature: config
@@ -55,6 +58,7 @@ jobs:
             runner: macos-26
             target: aarch64-apple-darwin
             python_arch: arm64
+            python_build_version: '3.10'
             freethreaded: true
             manylinux: "off"
             feature: config
@@ -64,6 +68,7 @@ jobs:
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             python_arch: x64
+            python_build_version: '3.10'
             freethreaded: true
             manylinux: "off"
             feature: config
@@ -73,6 +78,9 @@ jobs:
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             python_arch: arm64
+            # setup-python has no CPython 3.10 ARM64 Windows build. This is
+            # only the build interpreter; PyO3 still emits a cp310-abi3 wheel.
+            python_build_version: '3.11'
             freethreaded: true
             manylinux: "off"
             feature: config
@@ -156,7 +164,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: matrix.manylinux == 'off'
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.python_build_version }}
           architecture: ${{ matrix.python_arch }}
       - uses: PyO3/maturin-action@v1
         with:
