@@ -750,9 +750,8 @@ impl PermissionStore {
     pub fn get(&self, request: &PermissionRequest) -> Result<Option<PermissionGrant>, StoreError> {
         // Refresh an existing file under the kernel lock so another process
         // cannot make this host observe a stale approval. Avoid creating a
-        // lock sidecar for a store that has not been persisted yet. The lock
-        // is acquired before the in-process mutex; no blocking file operation
-        // is performed while that mutex is held.
+        // lock sidecar for a store that has not been persisted yet. The OS
+        // lock is the authority for cross-process coordination.
         let document = if self.path.exists() {
             let _lock = acquire_file_lock(&self.path)?;
             read_document(&self.path)?

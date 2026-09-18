@@ -83,7 +83,6 @@ class PermissionStore private constructor(
             nextCursor = values[0].takeUnless { it.isEmpty() }?.let(GrantPageCursor::fromToken),
         )
     }
-
     /** Revokes one persistent grant for future launches. */
     fun revoke(id: GrantId): RevokeResult {
         return when (
