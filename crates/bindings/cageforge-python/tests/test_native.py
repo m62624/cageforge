@@ -18,6 +18,7 @@ from cageforge import (
     CageforgeInvalidGrantIdError,
     CageforgePermissionError,
     CageforgeProcessError,
+    CageforgeStorePathError,
     GrantPageCursor,
     PermissionApprover,
     PermissionGrant,
@@ -146,6 +147,11 @@ def test_persistent_store_handles_concurrent_binding_calls(tmp_path: Path) -> No
     finally:
         store.close()
         request.close()
+
+
+def test_persistent_grant_store_rejects_relative_paths() -> None:
+    with pytest.raises(CageforgeStorePathError):
+        PermissionStore.open(Path("permissions.json"))
         grant.close()
 
 

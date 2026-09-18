@@ -21,6 +21,7 @@ __all__ = [
     "CageforgeStoreError",
     "CageforgeStoreFormatError",
     "CageforgeStoreLockedError",
+    "CageforgeStorePathError",
     "CageforgeStoreReadError",
     "CageforgeStoreWriteError",
     "CageforgeStreamError",
@@ -170,6 +171,12 @@ class CageforgeStoreFormatError(CageforgeStoreError):
 class CageforgeStoreLockedError(CageforgeStoreError):
     r"""
     The persistent permission store lock could not be acquired.
+    """
+    ...
+
+class CageforgeStorePathError(CageforgeStoreError):
+    r"""
+    The persistent permission store path is invalid.
     """
     ...
 

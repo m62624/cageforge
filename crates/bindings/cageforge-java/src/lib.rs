@@ -442,6 +442,7 @@ fn java_string_array<'local>(
 fn store_binding_error(error: cageforge::StoreError) -> BindingError {
     let message = error.to_string();
     let kind = match &error {
+        cageforge::StoreError::PathNotAbsolute { .. } => BindingErrorKind::StorePath,
         cageforge::StoreError::GrantNotFound => BindingErrorKind::GrantNotFound,
         cageforge::StoreError::ListingSnapshotExpired => BindingErrorKind::ListingSnapshotExpired,
         cageforge::StoreError::InvalidGrantId => BindingErrorKind::InvalidGrantId,

@@ -4,6 +4,7 @@ package ai.cageforge;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -17,6 +18,13 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 class JavaApiTest {
+    @Test
+    void permissionStoreRequiresAnAbsolutePath() {
+        assertThrows(
+                CageforgeStorePathException.class,
+                () -> PermissionStore.open(Path.of("permissions.json")));
+    }
+
     @Test
     void javaCanConstructTheKotlinRuntimeContext() {
         Path runtimeDirectory = Path.of(System.getProperty("java.io.tmpdir"), "cageforge-java");

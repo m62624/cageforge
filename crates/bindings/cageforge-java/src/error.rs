@@ -13,6 +13,7 @@ pub(crate) enum BindingErrorKind {
     Launch,
     Permission,
     PermissionStore,
+    StorePath,
     GrantNotFound,
     ListingSnapshotExpired,
     InvalidGrantId,
@@ -44,6 +45,9 @@ impl BindingErrorKind {
             Self::PermissionStore => env.find_class(jni::jni_str!(
                 "ai/cageforge/CageforgePermissionStoreException"
             )),
+            Self::StorePath => {
+                env.find_class(jni::jni_str!("ai/cageforge/CageforgeStorePathException"))
+            }
             Self::GrantNotFound => env.find_class(jni::jni_str!(
                 "ai/cageforge/CageforgeGrantNotFoundException"
             )),

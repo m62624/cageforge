@@ -735,6 +735,9 @@ impl PermissionStore {
     /// Opens an existing store or creates an empty in-memory store.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
+        if !path.is_absolute() {
+            return Err(StoreError::PathNotAbsolute { path });
+        }
         if path.exists() {
             read_document(&path)?;
         }
@@ -939,6 +942,12 @@ pub enum PermissionError {
 /// Errors returned by the persistent grant store.
 #[derive(Debug, Error)]
 pub enum StoreError {
+    /// The store path must identify an absolute host-owned location.
+    #[error("permission store path must be absolute: {path:?}")]
+    PathNotAbsolute {
+        /// The rejected path.
+        path: PathBuf,
+    },
     /// The store could not be read.
     #[error("cannot read permission store: {message}")]
     Read {
@@ -1482,6 +1491,14 @@ mod tests {
         store.put(&grant, &request).unwrap();
         let reopened = PermissionStore::open(&path).unwrap();
         assert_eq!(reopened.get(&request).unwrap(), Some(grant));
+    }
+
+    #[test]
+    fn store_rejects_relative_paths_at_the_rust_boundary() {
+        assert!(matches!(
+            PermissionStore::open("permissions.json"),
+            Err(StoreError::PathNotAbsolute { .. })
+        ));
     }
 
     #[test]

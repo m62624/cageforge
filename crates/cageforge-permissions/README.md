@@ -85,7 +85,7 @@ per-user default. Without an explicit path, Linux uses
 `%LOCALAPPDATA%\\Cageforge\\permissions.json`. A trusted host may deliberately
 share one path across projects or choose separate stores. Rust callers pass an
 absolute path to `PermissionStore::open`, and the Python and Java bindings
-expose the same explicit store-path operation.
+enforce the same rule with a language-native typed store-path error.
 
 Persistence is revocable host state, not an undeletable system database. The
 owner may remove the file to revoke all saved approvals, and the next launch

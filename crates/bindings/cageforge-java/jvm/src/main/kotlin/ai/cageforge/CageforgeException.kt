@@ -28,6 +28,9 @@ open class CageforgePermissionException(message: String) : CageforgeException(me
 /** Raised when persistent permission-store I/O or format validation fails. */
 open class CageforgePermissionStoreException(message: String) : CageforgePermissionException(message)
 
+/** Raised when the persistent permission store path is not absolute. */
+class CageforgeStorePathException(message: String) : CageforgePermissionStoreException(message)
+
 /** Raised when a persistent grant ID is not present in the store. */
 class CageforgeGrantNotFoundException(message: String) : CageforgePermissionStoreException(message)
 

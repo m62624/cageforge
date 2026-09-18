@@ -114,7 +114,7 @@ class PermissionStore private constructor(
         @JvmStatic
         fun open(path: Path): PermissionStore {
             if (!path.isAbsolute) {
-                throw CageforgeConfigurationException("permission store path must be absolute: $path")
+                throw CageforgeStorePathException("permission store path must be absolute: $path")
             }
             NativeLoader.load()
             val handle = NativeBridge.nativeOpenPermissionStore(path.toString())

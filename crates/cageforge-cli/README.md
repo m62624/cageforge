@@ -179,6 +179,9 @@ $ cageforge-cli run --config permission-preflight.toml --approve \
     --permission-store /var/lib/my-tool/permissions.json -- tool
 ```
 
+`--permission-store PATH` must be absolute. If omitted, the CLI selects the
+current user's native Cageforge state path for the target operating system.
+
 `--permission-store PATH` explicitly selects the host-owned persistent grant
 store and takes priority. If omitted, the CLI uses the current user's native
 Cageforge state directory: `$XDG_STATE_HOME/cageforge` (falling back to

@@ -63,6 +63,12 @@ create_exception!(
 );
 create_exception!(
     cageforge._cageforge,
+    CageforgeStorePathError,
+    CageforgeStoreError,
+    "The persistent permission store path is invalid."
+);
+create_exception!(
+    cageforge._cageforge,
     CageforgeGrantNotFoundError,
     CageforgeStoreError,
     "The requested persistent permission grant was not found."
@@ -333,6 +339,7 @@ fn permission_error(error: impl ToString) -> PyErr {
 fn store_error(error: cageforge::StoreError) -> PyErr {
     let message = error.to_string();
     match error {
+        cageforge::StoreError::PathNotAbsolute { .. } => CageforgeStorePathError::new_err(message),
         cageforge::StoreError::GrantNotFound => {
             CageforgeGrantNotFoundError::new_err("permission grant was not found")
         }
@@ -400,6 +407,15 @@ fn absolute_path(path: PathBuf, name: &str) -> PyResult<PathBuf> {
     if !path.is_absolute() {
         return Err(configuration_error(format!(
             "{name} must be absolute: {path:?}"
+        )));
+    }
+    Ok(path)
+}
+
+fn permission_store_path(path: PathBuf) -> PyResult<PathBuf> {
+    if !path.is_absolute() {
+        return Err(CageforgeStorePathError::new_err(format!(
+            "permission store path must be absolute: {path:?}"
         )));
     }
     Ok(path)
@@ -1216,7 +1232,7 @@ impl PermissionStore {
     /// Opens a host-owned permission store at an absolute path.
     #[new]
     fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
-        let path = absolute_path(path, "permission store path")?;
+        let path = permission_store_path(path)?;
         let open_path = path.clone();
         let inner =
             py.detach(move || cageforge::PermissionStore::open(open_path).map_err(store_error))?;
@@ -1888,6 +1904,10 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "CageforgeStoreError",
         CageforgeStoreError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeStorePathError",
+        CageforgeStorePathError::type_object(module.py()),
     )?;
     module.add(
         "CageforgeGrantNotFoundError",

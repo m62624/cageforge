@@ -24,6 +24,10 @@ material.
 ## Storage
 
 The canonical format remains one versioned, owner-protected JSON document.
+`PermissionStore::open` requires an absolute host-owned path. The CLI and
+language bindings expose the same invariant with platform-native path values
+and typed path errors; they do not silently resolve a store relative to an
+untrusted or changing working directory.
 Opening it validates the schema, canonical grant keys, and repeated request
 digests, then indexes records by their digest in a `BTreeMap`. Lookup and
 pagination operate on that index; no binary search over raw JSON is used.
