@@ -80,18 +80,18 @@ impl MacosNetworkPlan {
         }
         let lowering = prepared.network_lowering(backend)?;
         let unix = lower_unix_socket_plan(backend, prepared, lowering)?;
+        let restricted_network = requirements.domain_rules()
+            || requirements.local_address_restrictions()
+            || requirements.resolved_targets()
+            || requirements.local_ipc_isolation()
+            || requirements.local_ipc_rules()
+            || requirements.local_ipc_deny_rules();
         match requirements.mode() {
             NetworkMode::Disabled => Ok(Self::Disabled { unix }),
-            NetworkMode::Enabled
-                if requirements.domain_rules()
-                    || requirements.local_address_restrictions()
-                    || requirements.resolved_targets() =>
-            {
-                Ok(Self::Proxy {
-                    unix,
-                    ingress_port: None,
-                })
-            }
+            NetworkMode::Enabled if restricted_network => Ok(Self::Proxy {
+                unix,
+                ingress_port: None,
+            }),
             NetworkMode::Enabled => Ok(Self::Direct { unix }),
             NetworkMode::External => Err(MacosNetworkError::ExternalOwnership),
         }

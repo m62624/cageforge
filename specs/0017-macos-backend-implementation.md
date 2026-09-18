@@ -138,7 +138,9 @@ For network enforcement:
 - disabled networking has no outbound or inbound network allowance;
 - unrestricted enabled networking retains direct network behavior only when
   the complete effective policy has no domain, local-address, or Unix-socket
-  narrowing requirements;
+  narrowing requirements. Any local-IPC isolation or pathname allowlist is
+  lowered through the per-instance proxy profile so a blanket outbound rule
+  cannot bypass the Unix-socket restriction;
 - domain rules and local-address restrictions use a per-spawn authenticated
   `cageforge-network-proxy` ingress, and the Seatbelt policy permits only that
   instance's loopback port(s);
