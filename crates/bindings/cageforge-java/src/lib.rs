@@ -1292,17 +1292,23 @@ fn read_stream(child: &ChildState, stdout: bool, size: jint) -> Result<Vec<u8>, 
     if size <= 0 || size > 16 * 1024 * 1024 {
         return Err("read size must be between 1 and 16777216 bytes".to_string());
     }
-    let stream = if stdout { &child.stdout } else { &child.stderr };
-    let mut stream = stream
+    let stream_slot = if stdout { &child.stdout } else { &child.stderr };
+    let mut stream = stream_slot
         .lock()
-        .map_err(|_| "process stream handle is poisoned".to_string())?;
-    let stream = stream
-        .as_mut()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .take()
         .ok_or_else(|| "requested stream is not piped".to_string())?;
-    let mut bytes = vec![0; size as usize];
-    let read = stream.read(&mut bytes).map_err(|error| error.to_string())?;
-    bytes.truncate(read);
-    Ok(bytes)
+    let result = (|| {
+        let mut bytes = vec![0; size as usize];
+        let read = stream.read(&mut bytes).map_err(|error| error.to_string())?;
+        bytes.truncate(read);
+        Ok(bytes)
+    })();
+    stream_slot
+        .lock()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .replace(stream);
+    result
 }
 
 /*
@@ -1313,12 +1319,19 @@ fn write_stdin(child: &ChildState, bytes: &[u8]) -> Result<jint, String> {
     let mut stdin = child
         .stdin
         .lock()
-        .map_err(|_| "process stream handle is poisoned".to_string())?;
-    let stdin = stdin
-        .as_mut()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .take()
         .ok_or_else(|| "stdin is not piped".to_string())?;
-    stdin.write_all(bytes).map_err(|error| error.to_string())?;
-    Ok(bytes.len() as jint)
+    let result = stdin
+        .write_all(bytes)
+        .map(|()| bytes.len() as jint)
+        .map_err(|error| error.to_string());
+    child
+        .stdin
+        .lock()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .replace(stdin);
+    result
 }
 
 fn close_stdin(child: &ChildState) -> Result<(), String> {

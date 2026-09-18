@@ -1475,14 +1475,19 @@ impl SandboxProcess {
         let state = Arc::clone(&self.state);
         py.detach(move || {
             let _operation = begin_operation(&state)?;
-            let mut stream_guard = state
+            let mut stream = state
                 .stdin
                 .lock()
-                .map_err(|_| stream_error("stdin is poisoned"))?;
-            let stream = stream_guard
-                .as_mut()
+                .map_err(|_| stream_error("stdin is poisoned"))?
+                .take()
                 .ok_or_else(|| stream_error("stdin is not piped or is closed"))?;
-            stream.write(&data).map_err(stream_error)
+            let result = stream.write(&data).map_err(stream_error);
+            state
+                .stdin
+                .lock()
+                .map_err(|_| stream_error("stdin is poisoned"))?
+                .replace(stream);
+            result
         })
     }
 
@@ -1707,16 +1712,22 @@ fn read_stream(
             StreamKind::Stderr => &state.stderr,
             StreamKind::Stdin => return Err(stream_error("stdin is not readable")),
         };
-        let mut stream_guard = target
+        let mut stream = target
             .lock()
-            .map_err(|_| stream_error("stream is poisoned"))?;
-        let stream = stream_guard
-            .as_mut()
+            .map_err(|_| stream_error("stream is poisoned"))?
+            .take()
             .ok_or_else(|| stream_error("stream is not piped or is closed"))?;
-        let mut bytes = vec![0_u8; size];
-        let count = stream.read(&mut bytes).map_err(stream_error)?;
-        bytes.truncate(count);
-        Ok::<_, PyErr>(bytes)
+        let result = (|| {
+            let mut bytes = vec![0_u8; size];
+            let count = stream.read(&mut bytes).map_err(stream_error)?;
+            bytes.truncate(count);
+            Ok::<_, PyErr>(bytes)
+        })();
+        target
+            .lock()
+            .map_err(|_| stream_error("stream is poisoned"))?
+            .replace(stream);
+        result
     })?;
     Ok(PyBytes::new(py, &bytes).unbind())
 }
