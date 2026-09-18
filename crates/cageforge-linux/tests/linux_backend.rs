@@ -2810,6 +2810,39 @@ fn restricted_unix_socket_policy_allows_only_the_exact_path() {
 }
 
 #[test]
+fn restricted_unix_socket_policy_survives_direct_network_access() {
+    let temp = TempDir::new().expect("temporary workspace");
+    let allowed_path = temp.path().join("allowed.sock");
+    let denied_path = temp.path().join("denied.sock");
+    let denied_listener = UnixListener::bind(&denied_path).expect("denied listener");
+    let network = NetworkPolicy::enabled()
+        .with_local_network_access(LocalNetworkAccess::Allow)
+        .with_unix_socket_mode(UnixSocketMode::Restricted)
+        .with_unix_socket(&allowed_path, DomainAccess::Allow)
+        .expect("Unix socket policy");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
+    let backend = backend();
+    let (command, effective, runtime) = request_with_environment(
+        temp.path(),
+        policy,
+        network_client_command(),
+        unix_network_environment("unix-path-denied", &denied_path),
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime)
+        .expect("denied local IPC preflight");
+    let mut child = backend.spawn(prepared).expect("denied local IPC spawn");
+    assert_eq!(child.wait().expect("denied wait").code(), Some(0));
+    denied_listener
+        .set_nonblocking(true)
+        .expect("nonblocking denied listener");
+    assert!(
+        denied_listener.accept().is_err(),
+        "direct network access bypassed the Unix-socket allowlist"
+    );
+}
+
+#[test]
 fn enabled_unix_socket_policy_rejects_only_the_explicit_deny_path() {
     let temp = TempDir::new().expect("temporary workspace");
     let allowed_path = temp.path().join("allowed.sock");

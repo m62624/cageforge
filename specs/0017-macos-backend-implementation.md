@@ -138,7 +138,9 @@ For network enforcement:
 - disabled networking has no outbound or inbound network allowance;
 - unrestricted enabled networking retains direct network behavior only when
   the complete effective policy has no domain, local-address, or Unix-socket
-  narrowing requirements;
+  narrowing requirements. Any local-IPC isolation or pathname allowlist is
+  lowered through the per-instance proxy profile so a blanket outbound rule
+  cannot bypass the Unix-socket restriction;
 - domain rules and local-address restrictions use a per-spawn authenticated
   `cageforge-network-proxy` ingress, and the Seatbelt policy permits only that
   instance's loopback port(s);
@@ -365,6 +367,7 @@ Native macOS black-box tests cover at least:
 - disabled networking blocks direct connections;
 - enabled unrestricted networking preserves direct connections;
 - restricted networking reaches only exact authorized gateway targets;
+- restricted Unix-socket networking rejects an unlisted pathname endpoint;
 - an existing Unix-socket symlink alias is lowered to its canonical target;
 - a gateway ingress port remains unavailable until confirmed runtime cleanup;
 - separate simultaneous instances retain separate policies and gateway keys;

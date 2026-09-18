@@ -37,6 +37,8 @@ class JavaApiTest {
         Supplier<String> nativeTarget = Cageforge::nativeTarget;
         Function<Cageforge, SandboxProcess> launch = Cageforge::launch;
         BiFunction<Cageforge, List<String>, SandboxProcess> launchArgv = Cageforge::launch;
+        Function<Cageforge, Process> launchProcess = Cageforge::launchProcess;
+        Function<SandboxProcess, Process> asJavaProcess = SandboxProcess::asJavaProcess;
         Consumer<Cageforge> closeRuntime = Cageforge::close;
         Function<PermissionRequest, PermissionGrant> approve = new PermissionApprover()::approve;
         Function<Path, PermissionStore> openStore = PermissionStore::open;
@@ -69,6 +71,8 @@ class JavaApiTest {
         assertNotNull(nativeTarget);
         assertNotNull(launch);
         assertNotNull(launchArgv);
+        assertNotNull(launchProcess);
+        assertNotNull(asJavaProcess);
         assertNotNull(closeRuntime);
         assertNotNull(approve);
         assertNotNull(openStore);

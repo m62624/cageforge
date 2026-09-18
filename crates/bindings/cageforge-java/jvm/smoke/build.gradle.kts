@@ -9,7 +9,18 @@ java {
     toolchain { languageVersion.set(JavaLanguageVersion.of(17)) }
 }
 
-val bindingVersion = providers.gradleProperty("bindingVersion").orElse("0.2.0")
+fun workspaceVersion(manifest: File): String {
+    val version =
+        Regex("""(?ms)^\[workspace\.package\].*?^version\s*=\s*\"([^\"]+)\"""")
+            .find(manifest.readText())
+            ?.groupValues
+            ?.get(1)
+    return version ?: error("workspace package version is missing from ${manifest.path}")
+}
+
+val bindingVersion =
+    providers.gradleProperty("bindingVersion")
+        .orElse(workspaceVersion(file("../../../../../Cargo.toml")))
 
 dependencies {
     implementation(files("../build/libs/cageforge-java-${bindingVersion.get()}.jar"))

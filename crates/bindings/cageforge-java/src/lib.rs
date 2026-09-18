@@ -231,6 +231,7 @@ fn runtime_from_toml(
     native_directory: String,
     minimal_directory: Option<String>,
     grant_handle: jlong,
+    request_handle: jlong,
 ) -> Result<jlong, BindingError> {
     let current_directory = path(current_directory, "current directory")?;
     let native_directory = path(native_directory, "native resource directory")?;
@@ -255,18 +256,9 @@ fn runtime_from_toml(
             preflight_required: false,
             approved_program: None,
         };
-        return Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong);
+        return Ok(Box::into_raw(Box::new(state)) as jlong);
     }
-    let identity = cageforge::PreflightIdentity::new(
-        "cageforge-java",
-        env!("CARGO_PKG_VERSION"),
-        cageforge::sha256_digest(b"cageforge-java"),
-        cageforge::sha256_digest(toml.as_bytes()),
-        cageforge::PlatformId::current().map_err(|error| {
-            BindingError::new(BindingErrorKind::Configuration, error.to_string())
-        })?,
-        std::env::consts::ARCH,
-    );
+    let identity = preflight_identity(request_handle, &toml)?;
     let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
         profile.policy(),
         &context,
@@ -301,7 +293,34 @@ fn runtime_from_toml(
         preflight_required: true,
         approved_program,
     };
-    Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong)
+    Ok(Box::into_raw(Box::new(state)) as jlong)
+}
+
+fn preflight_identity(
+    request_handle: jlong,
+    toml: &str,
+) -> Result<cageforge::PreflightIdentity, BindingError> {
+    if request_handle != 0 {
+        let request = request_ref(request_handle)?.clone();
+        return Ok(cageforge::PreflightIdentity::new(
+            request.tool_id(),
+            request.tool_version(),
+            request.manifest_digest(),
+            request.config_digest(),
+            request.platform(),
+            request.architecture(),
+        ));
+    }
+    Ok(cageforge::PreflightIdentity::new(
+        "cageforge-java",
+        env!("CARGO_PKG_VERSION"),
+        cageforge::sha256_digest(b"cageforge-java"),
+        cageforge::sha256_digest(toml.as_bytes()),
+        cageforge::PlatformId::current().map_err(|error| {
+            BindingError::new(BindingErrorKind::Configuration, error.to_string())
+        })?,
+        std::env::consts::ARCH,
+    ))
 }
 
 fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
@@ -843,13 +862,13 @@ fn command_request(
     Ok(request)
 }
 
-fn runtime_ref(handle: jlong) -> Result<&'static Mutex<RuntimeState>, String> {
+fn runtime_ref(handle: jlong) -> Result<&'static RuntimeState, String> {
     if handle == 0 {
         return Err("runtime handle is closed".to_string());
     }
     // SAFETY: handles are created from Box::into_raw and reclaimed exactly
     // once by `native_close_runtime`; Java treats the value as opaque.
-    Ok(unsafe { &*(handle as *const Mutex<RuntimeState>) })
+    Ok(unsafe { &*(handle as *const RuntimeState) })
 }
 
 fn child_ref(handle: jlong) -> Result<&'static ChildState, String> {
@@ -896,6 +915,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
     native_directory: JString<'caller>,
     minimal_directory: JString<'caller>,
     grant: jlong,
+    request: jlong,
 ) -> jlong {
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Initialization, |env| {
         runtime_from_toml(
@@ -909,6 +929,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
                 Some(java_string(env, minimal_directory, "minimal directory")?)
             },
             grant,
+            request,
         )
     })
 }
@@ -923,20 +944,17 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
 ) -> jlong {
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Launch, |env| {
         let runtime = runtime_ref(runtime)?;
-        let state = runtime
-            .lock()
-            .map_err(|_| "runtime handle is poisoned".to_string())?;
-        let request = command_request(&state, command_from_array(env, argv)?)?;
-        if state.preflight_required {
+        let request = command_request(runtime, command_from_array(env, argv)?)?;
+        if runtime.preflight_required {
             let program = request.command().program().to_string_lossy();
-            if state.approved_program.as_deref() != Some(program.as_ref()) {
+            if runtime.approved_program.as_deref() != Some(program.as_ref()) {
                 return Err("preflight grant is bound to the profile command; prepare and authorize the requested argv first".to_owned().into());
             }
         }
-        let backend_request = cageforge::BackendRequest::new(&request, &state.effective);
-        let mut child = state
+        let backend_request = cageforge::BackendRequest::new(&request, &runtime.effective);
+        let mut child = runtime
             .backend
-            .launch(backend_request, &state.context)
+            .launch(backend_request, &runtime.context)
             .map_err(|error| error.to_string())?;
         let stdin = child.take_stdin();
         let stdout = child.take_stdout();
@@ -1274,7 +1292,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCloseRuntime<'caller
         }
         // SAFETY: Java owns each handle exactly once; close is idempotent at
         // the facade, which zeroes its field before calling this function.
-        unsafe { drop(Box::from_raw(runtime as *mut Mutex<RuntimeState>)) };
+        unsafe { drop(Box::from_raw(runtime as *mut RuntimeState)) };
         Ok(())
     });
 }

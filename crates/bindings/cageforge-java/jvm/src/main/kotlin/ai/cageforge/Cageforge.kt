@@ -8,34 +8,31 @@ import java.nio.file.Path
 
 /** JVM facade over one reusable native Cageforge backend and resolved profile. */
 class Cageforge private constructor(
-    private var handle: Long,
+    handle: Long,
     private val nativeDirectory: Path,
 ) : Closeable {
-    private val lifecycleLock = Any()
+    private val native =
+        NativeHandle(
+            handle,
+            NativeBridge::nativeCloseRuntime,
+            { CageforgeException("Cageforge runtime is closed") },
+        )
 
     /** Launches the profile command, or an explicit argv when supplied. */
     @JvmOverloads
     fun launch(argv: List<String> = emptyList()): SandboxProcess =
-        synchronized(lifecycleLock) {
-            checkOpen()
+        native.use { handle ->
             val process = NativeBridge.nativeLaunch(handle, argv.toTypedArray())
             if (process == 0L) throw CageforgeException("Cageforge returned an invalid process handle")
             SandboxProcess.fromHandle(process)
         }
 
-    /** Releases the native backend. Active processes must be closed first. */
-    override fun close() =
-        synchronized(lifecycleLock) {
-            if (handle != 0L) {
-                val value = handle
-                handle = 0L
-                NativeBridge.nativeCloseRuntime(value)
-            }
-        }
+    /** Launches a native sandbox child through the standard Java `Process` API. */
+    @JvmOverloads
+    fun launchProcess(argv: List<String> = emptyList()): CageforgeProcess = launch(argv).asJavaProcess()
 
-    private fun checkOpen() {
-        if (handle == 0L) throw CageforgeException("Cageforge runtime is closed")
-    }
+    /** Releases the native backend. Active processes must be closed first. */
+    override fun close() = native.close()
 
     companion object {
         /** Returns validated profile names in deterministic lexical order. */
@@ -114,18 +111,32 @@ class Cageforge private constructor(
             profileName: String? = null,
             context: RuntimeContext = RuntimeContext(),
             grant: PermissionGrant? = null,
+            request: PermissionRequest? = null,
         ): Cageforge {
             require(toml.isNotEmpty()) { "TOML must not be empty" }
             val directory = NativeLoader.load()
-            val handle =
+
+            fun create(
+                grantHandle: Long,
+                requestHandle: Long,
+            ): Long =
                 NativeBridge.nativeCreate(
                     toml,
                     profileName,
                     context.currentDirectory.toString(),
                     directory.toString(),
                     context.minimalPath?.toString(),
-                    grant?.handle ?: 0L,
+                    grantHandle,
+                    requestHandle,
                 )
+            val handle =
+                grant?.useNative { grantHandle ->
+                    request?.useNative { requestHandle ->
+                        create(grantHandle, requestHandle)
+                    } ?: create(grantHandle, 0L)
+                } ?: request?.useNative { requestHandle ->
+                    create(0L, requestHandle)
+                } ?: create(0L, 0L)
             if (handle == 0L) throw CageforgeException("Cageforge runtime creation failed")
             return Cageforge(handle, directory)
         }
@@ -142,6 +153,7 @@ class Cageforge private constructor(
             profileName: String? = null,
             context: RuntimeContext = RuntimeContext(file.toAbsolutePath().parent ?: Path.of(".")),
             grant: PermissionGrant? = null,
-        ): Cageforge = fromToml(Files.readString(file), profileName, context, grant)
+            request: PermissionRequest? = null,
+        ): Cageforge = fromToml(Files.readString(file), profileName, context, grant, request)
     }
 }

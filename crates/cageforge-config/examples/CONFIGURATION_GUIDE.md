@@ -149,6 +149,16 @@ that applies the same policy to all three operating systems while adding a
 different native config path for each platform. The platform overlay is chosen
 by the typed `PlatformId`; Linux paths are never compared with Windows paths.
 
+Use [`permission-session.toml`](permission-session.toml) when approval should
+last only for the current host session. It still requires a trusted approval
+before launch, but its `session` persistence must remain in memory and must not
+create or update `permissions.json`. Use
+[`permission-inheritance.toml`](permission-inheritance.toml) when a shared
+approval policy needs a narrower child profile: scalar approval fields merge
+field-by-field, and a platform overlay is applied after inheritance. In that
+example the Windows overlay disables approval while retaining the inherited
+timeout and persistence values for inspection.
+
 Approval is disabled when the `[profiles.<name>.approval]` section is omitted.
 `mode = "preflight"` is fail-closed: an absent or late approval denies the
 launch. `persistence = "session"` keeps the grant in memory, while

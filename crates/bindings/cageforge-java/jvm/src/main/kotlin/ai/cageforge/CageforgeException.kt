@@ -26,7 +26,12 @@ class CageforgeLaunchException(message: String) : CageforgeException(message)
 class CageforgePermissionException(message: String) : CageforgeException(message)
 
 /** Raised when a native process lifecycle operation fails. */
-class CageforgeProcessException(message: String) : CageforgeException(message)
+class CageforgeProcessException
+    @JvmOverloads
+    constructor(
+        message: String,
+        cause: Throwable? = null,
+    ) : CageforgeException(message, cause)
 
 /** Raised when a native standard-stream operation fails. */
 class CageforgeStreamException(message: String) : CageforgeException(message)

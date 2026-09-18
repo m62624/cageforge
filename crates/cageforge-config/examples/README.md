@@ -35,6 +35,8 @@ profile.
 | [`trusted-metadata-write.toml`](trusted-metadata-write.toml) | Deliberate repository metadata opt-out | Additional protection and `dangerously_allow_git_write` |
 | [`network-gateway.toml`](network-gateway.toml) | Restricted outbound gateway runtime | Timeouts, resource bounds, inheritance, explicit unlimited relay mode |
 | [`permission-preflight.toml`](permission-preflight.toml) | One cross-platform approval profile | Persistent preflight, shared policy, and Linux/macOS/Windows native paths |
+| [`permission-session.toml`](permission-session.toml) | Session-only approval | Preflight without a persistent store record |
+| [`permission-inheritance.toml`](permission-inheritance.toml) | Approval merge and platform override | Scalar inheritance, child overrides, and Windows approval overlay |
 | [`platform-targets-unix.toml`](platform-targets-unix.toml) | Linux/macOS path and socket syntax | All portable filesystem and network rule fields |
 | [`platform-targets-windows.toml`](platform-targets-windows.toml) | Windows-native equivalent | Drive-qualified paths and the same portable policy fields |
 
@@ -53,7 +55,10 @@ Suggested reading order:
 4. `profile-inheritance.toml` for parent/child overrides.
 5. `environment-order.toml` for environment filtering stages.
 6. `network-gateway.toml` for proxy runtime limits and inheritance.
-7. The matching platform fixture for native path spelling.
+7. `permission-preflight.toml` for persistent approval and host-selected store paths.
+8. `permission-session.toml` for in-memory session approval.
+9. `permission-inheritance.toml` for approval-field merge and platform overlay.
+10. The matching platform fixture for native path spelling.
 
 Domain entries accept host-like inputs such as `Example.com:443` and
 `[2001:db8::1]:443`; the resolved policy stores their normalized host form.

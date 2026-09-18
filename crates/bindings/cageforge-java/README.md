@@ -66,7 +66,7 @@ Cageforge.checkToml(config, context = context)
 val request = Cageforge.permissionRequest(config, context = context)
 request.use { preflight ->
     preflight.approve().use { grant ->
-        Cageforge.fromTomlFile(profile, context = context, grant = grant).use { sandbox ->
+        Cageforge.fromTomlFile(profile, context = context, grant = grant, request = preflight).use { sandbox ->
             sandbox.launch().use { process ->
                 process.stdout?.bufferedReader()?.use { reader ->
                     print(reader.readText())
@@ -88,6 +88,9 @@ network. The Windows profile uses `cmd.exe`; the POSIX profiles use `/bin/echo`.
 Profiles with `approval.mode = "preflight"` require a trusted
 `PermissionGrant` before launch. The request is descriptive and the grant is
 opaque; approval never changes permissions of an already-running process.
+When `permissionRequest` is called with custom identity or digest arguments,
+pass that same `PermissionRequest` to `fromToml` or `fromTomlFile`; the runtime
+then authorizes the grant against the exact identity that was approved.
 
 ### Persistent grants and store paths
 
@@ -104,13 +107,13 @@ val grant = PermissionApprover().approve(request, scope = "persistent")
 store.put(grant, request)
 
 val cached = store.get(request) ?: error("preflight approval is missing")
-Cageforge.fromToml(config, context = context, grant = cached).use { runtime ->
+Cageforge.fromToml(config, context = context, grant = cached, request = request).use { runtime ->
     // launch only after the exact persisted grant has been authorized
 }
 store.close()
 ```
 
-The store uses a versioned JSON document, an advisory writer lock, atomic
+The store uses a versioned JSON document, a kernel file lock, atomic
 replacement, Unix owner-only permissions, and a Windows owner-only DACL. A
 missing record is not an approval. The CLI has the same behavior through
 `--permission-store PATH`, which takes priority over its OS-native per-user
@@ -135,6 +138,33 @@ grant access unless the selected profile contains the matching filesystem rule.
 streams are captured by default. `waitForAsync()` uses the JVM common pool when
 no executor is supplied; applications can pass a bounded executor of their own.
 Cancelling the returned future terminates the process boundary.
+
+For integrations that accept the standard Java process abstraction, use
+`Cageforge.launchProcess` or adapt an existing launch with
+`SandboxProcess.asJavaProcess()`. Both return `CageforgeProcess`, a
+`java.lang.Process` subclass that is also `AutoCloseable`:
+
+```java
+Process process = runtime.launchProcess(argv);
+try (InputStream stdout = process.getInputStream()) {
+    String output = new String(stdout.readAllBytes(), StandardCharsets.UTF_8);
+    if (!process.waitFor(30, TimeUnit.SECONDS)) {
+        process.destroyForcibly();
+        process.waitFor();
+    }
+    int exitCode = process.exitValue();
+}
+```
+
+This `Process` is a Java facade over the same Rust-owned native sandbox child;
+it never starts a second process. `waitFor(timeout, unit)` delegates to the
+native wait future without Java polling, `isAlive`, `exitValue`, and `pid` read
+the native handle, and `destroy`/`destroyForcibly` terminate the complete
+native boundary. `onExit()` completes from that native wait future. A profile
+that does not pipe a standard stream returns Java's null stream for that
+direction. Java `Process` has no representation for a signal-only exit, so
+`exitValue()` uses `-1` for a completed native result without an integer exit
+code.
 
 Configuration, initialization, launch, process, stream, and Windows setup
 failures use typed subclasses of `CageforgeException`, including

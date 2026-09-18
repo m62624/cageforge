@@ -16,8 +16,6 @@ import kotlin.concurrent.withLock
 class SandboxProcess private constructor(private var handle: Long) : Closeable {
     private val lifecycleLock = ReentrantLock()
     private val noActiveOperations: Condition = lifecycleLock.newCondition()
-    private val waitLock = Any()
-    private val closeLock = Any()
     private var activeOperations = 0
     private var closing = false
 
@@ -78,14 +76,12 @@ class SandboxProcess private constructor(private var handle: Long) : Closeable {
 
     /** Waits until the process exits or Cageforge's configured timeout fires. */
     fun waitFor(): ProcessResult =
-        synchronized(waitLock) {
-            withHandle {
-                val status = NativeBridge.nativeWait(it)
-                if (status == -1) {
-                    throw CageforgeException("Cageforge returned a running status from wait")
-                }
-                decode(status) ?: throw CageforgeException("Cageforge returned no process result from wait")
+        withHandle {
+            val status = NativeBridge.nativeWait(it)
+            if (status == -1) {
+                throw CageforgeException("Cageforge returned a running status from wait")
             }
+            decode(status) ?: throw CageforgeException("Cageforge returned no process result from wait")
         }
 
     /**
@@ -123,41 +119,52 @@ class SandboxProcess private constructor(private var handle: Long) : Closeable {
         return future
     }
 
+    /**
+     * Adapts this native child to the standard Java `Process` contract.
+     *
+     * The returned facade owns this sandbox process; callers should use the
+     * returned `Process` instead of continuing to operate on this object.
+     */
+    fun asJavaProcess(): CageforgeProcess = CageforgeProcess(this)
+
     /** Terminates and confirms the complete sandbox boundary. */
     fun kill() = withHandle { NativeBridge.nativeKill(it) }
 
-    override fun close() =
-        synchronized(closeLock) {
-            val value =
-                lifecycleLock.withLock {
-                    if (handle == 0L) return@withLock 0L
-                    closing = true
-                    handle
-                }
-            if (value == 0L) return@synchronized
-
-            var terminationError: Throwable? = null
-            try {
-                // Stop the boundary before waiting for blocking operations.
-                // The native child and stream locks are independent, so this
-                // also releases a wait/read/write blocked on the same process.
-                NativeBridge.nativeKill(value)
-            } catch (error: Throwable) {
-                terminationError = error
-            }
-
+    override fun close() {
+        val value =
             lifecycleLock.withLock {
-                while (activeOperations != 0) {
+                while (closing && handle != 0L) {
                     noActiveOperations.awaitUninterruptibly()
                 }
-                handle = 0L
+                if (handle == 0L) return
+                closing = true
+                handle
             }
-            try {
-                NativeBridge.nativeCloseProcess(value)
-            } finally {
-                terminationError?.let { throw it }
-            }
+
+        var terminationError: Throwable? = null
+        try {
+            // Stop the boundary before waiting for blocking operations.
+            // The native child and stream locks are independent, so this
+            // also releases a wait/read/write blocked on the same process.
+            NativeBridge.nativeKill(value)
+        } catch (error: Throwable) {
+            terminationError = error
         }
+
+        lifecycleLock.withLock {
+            while (activeOperations != 0) {
+                noActiveOperations.awaitUninterruptibly()
+            }
+            handle = 0L
+            closing = false
+            noActiveOperations.signalAll()
+        }
+        try {
+            NativeBridge.nativeCloseProcess(value)
+        } finally {
+            terminationError?.let { throw it }
+        }
+    }
 
     private fun stream(stdout: Boolean): InputStream =
         object : InputStream() {

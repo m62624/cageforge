@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use cageforge_config::Config;
-use cageforge_permissions::PermissionMode;
 use cageforge_permissions::PlatformId;
+use cageforge_permissions::{ApprovalPersistence, PermissionMode};
 
 #[test]
 fn one_document_selects_the_named_platform_overlay() {
@@ -113,6 +113,29 @@ mode = "disabled"
             .mode(),
         PermissionMode::Disabled
     );
+}
+
+#[test]
+fn permission_inheritance_example_merges_approval_fields_before_platform_overlay() {
+    let source = include_str!("../examples/permission-inheritance.toml");
+    let config = Config::from_toml(source).expect("permission inheritance example");
+    let linux = config
+        .resolve_default_for_platform(PlatformId::Linux)
+        .expect("Linux approval profile");
+    assert_eq!(linux.approval().mode(), PermissionMode::Preflight);
+    assert_eq!(linux.approval().timeout_ms(), 3000);
+    assert_eq!(linux.approval().persistence(), ApprovalPersistence::Session);
+
+    let windows = config
+        .resolve_default_for_platform(PlatformId::Windows)
+        .expect("Windows approval overlay");
+    assert_eq!(windows.approval().mode(), PermissionMode::Disabled);
+    assert_eq!(windows.approval().timeout_ms(), 3000);
+    assert_eq!(
+        windows.approval().persistence(),
+        ApprovalPersistence::Session
+    );
+    assert_eq!(windows.workspace_roots().len(), 1);
 }
 
 #[test]

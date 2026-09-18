@@ -1,0 +1,23 @@
+# A preflight approval that lives only for the host session.
+# No permissions.json record is created by this profile. The trusted host
+# keeps the approved grant in memory and asks again in a later session.
+default_profile = "session-tool"
+
+[profiles.session-tool]
+workspace_roots = { "." = true }
+
+[profiles.session-tool.approval]
+mode = "preflight"
+timeout_ms = 5000
+on_timeout = "deny"
+persistence = "session"
+
+[profiles.session-tool.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.session-tool.network]
+mode = "disabled"

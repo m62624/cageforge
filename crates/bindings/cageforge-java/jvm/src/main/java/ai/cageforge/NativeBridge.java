@@ -11,7 +11,8 @@ final class NativeBridge {
             String currentDirectory,
             String nativeDirectory,
             String minimalDirectory,
-            long grant);
+            long grant,
+            long request);
 
     static native String[] nativeProfileNames(String toml);
 

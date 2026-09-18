@@ -2155,6 +2155,37 @@ fn restricted_unix_socket_policy_allows_an_explicit_path() {
 }
 
 #[test]
+fn restricted_unix_socket_policy_denies_an_unlisted_path() {
+    let socket_directory = TempDir::new().expect("Unix socket directory");
+    let allowed = socket_directory.path().join("allowed.sock");
+    let denied = socket_directory.path().join("denied.sock");
+    let denied_server = UnixListener::bind(&denied).expect("denied Unix socket");
+    let workspace = TempDir::new().expect("workspace");
+    let network = NetworkPolicy::enabled()
+        .with_local_network_access(LocalNetworkAccess::Allow)
+        .with_unix_socket_mode(UnixSocketMode::Restricted)
+        .with_unix_socket(&allowed, DomainAccess::Allow)
+        .expect("allowed Unix socket rule");
+    let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
+    let (command, effective, context) =
+        unix_network_request(workspace.path(), &policy, "unix-denied", &denied);
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("denied local IPC preflight");
+    let mut child = backend.spawn(prepared).expect("denied local IPC spawn");
+    let status = child.wait().expect("denied local IPC wait");
+    assert_eq!(status.code(), Some(0));
+    denied_server
+        .set_nonblocking(true)
+        .expect("nonblocking denied Unix socket");
+    assert!(
+        denied_server.accept().is_err(),
+        "unlisted Unix socket accepted a client"
+    );
+}
+
+#[test]
 fn restricted_unix_socket_policy_allows_an_existing_symlink_alias() {
     use std::os::unix::fs::symlink;
 
