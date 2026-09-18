@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use cageforge_path::contains_parent_traversal;
 
-use crate::{PathSelector, PolicyError};
+use crate::PolicyError;
 
 /// A validated absolute filesystem path used as a local-IPC endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -29,7 +29,19 @@ impl AbsolutePath {
     /// Creates a validated absolute path.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
         let path = path.into();
-        PathSelector::absolute(path.clone())?;
+        let value = path.to_string_lossy();
+        if value.is_empty() {
+            return Err(PolicyError::EmptyPath);
+        }
+        if value.contains('\0') {
+            return Err(PolicyError::PathContainsNul { path });
+        }
+        if !value.starts_with('/') {
+            return Err(PolicyError::ExpectedAbsolute { path });
+        }
+        if contains_parent_traversal(Path::new(value.as_ref())) {
+            return Err(PolicyError::ParentTraversal { path });
+        }
         Ok(Self(path))
     }
 
