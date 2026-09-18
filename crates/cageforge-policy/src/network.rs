@@ -394,8 +394,15 @@ impl NetworkPolicy {
             if self.unix_socket_mode == UnixSocketMode::Disabled {
                 self.unix_socket_mode = UnixSocketMode::Restricted;
             }
-            self.unix_sockets
-                .push(UnixSocketRule::new(path.to_path_buf(), access)?);
+            // `LocalIpcEndpoint::UnixSocket` has already validated the path
+            // using the POSIX endpoint grammar. Do not run it through the
+            // host-native `PathSelector` again: a Windows host must be able
+            // to resolve a Linux/macOS platform overlay without interpreting
+            // `/run/service.sock` as a Windows path.
+            self.unix_sockets.push(UnixSocketRule {
+                path: path.to_path_buf(),
+                access,
+            });
         }
         self.local_ipc.push(rule);
         Ok(self)
