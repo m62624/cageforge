@@ -35,9 +35,11 @@ use crate::filesystem::FilesystemPlan;
 use crate::filesystem::protected_create::ProtectedCreateMonitor;
 use crate::helper_protocol::{
     AUTH_FD_ENV, AUTH_TOKEN, GATEWAY_CONNECTION_LIMIT_ENV, GATEWAY_SOCKET_ENV,
-    HARDENING_REQUIRED_ENV, NETWORK_MODE_DIRECT_WITHOUT_UNIX, NETWORK_MODE_DISABLED,
-    NETWORK_MODE_ENV, NETWORK_MODE_PROXY, RELEASE,
+    HARDENING_REQUIRED_ENV, NETWORK_MODE_DIRECT_WITH_UNIX, NETWORK_MODE_DIRECT_WITHOUT_UNIX,
+    NETWORK_MODE_DISABLED, NETWORK_MODE_ENV, NETWORK_MODE_PROXY, NETWORK_MODE_PROXY_WITH_UNIX,
+    RELEASE,
 };
+use crate::local_ipc::{LocalIpcPolicy, write_frame};
 use crate::network::{GatewayRuntime, IN_SANDBOX_GATEWAY_SOCKET};
 use crate::process::LinuxChild;
 use crate::process::timeout::TimeoutWatchdog;
@@ -52,8 +54,10 @@ const FIRST_CONTROLLED_FD: RawFd = 64;
 enum LinuxNetworkMode {
     Direct,
     DirectWithoutUnixSockets,
+    DirectWithUnixSockets,
     Disabled,
     ProxyRouted,
+    ProxyRoutedWithUnixSockets,
 }
 
 struct ControlledDescriptors {
@@ -206,21 +210,29 @@ impl LinuxBackend {
         let sandbox = prepared.sandbox(self)?;
         let network_mode = network_mode(sandbox)?;
         match (network_mode, gateway_mount) {
-            (LinuxNetworkMode::ProxyRouted, None) => {
+            (
+                LinuxNetworkMode::ProxyRouted | LinuxNetworkMode::ProxyRoutedWithUnixSockets,
+                None,
+            ) => {
                 return Err(NetworkLoweringError::MissingGatewayMount.into());
             }
             (
                 LinuxNetworkMode::Direct
                 | LinuxNetworkMode::DirectWithoutUnixSockets
+                | LinuxNetworkMode::DirectWithUnixSockets
                 | LinuxNetworkMode::Disabled,
                 Some(_),
             ) => {
                 return Err(NetworkLoweringError::UnexpectedGatewayMount.into());
             }
-            (LinuxNetworkMode::ProxyRouted, Some(_))
+            (
+                LinuxNetworkMode::ProxyRouted | LinuxNetworkMode::ProxyRoutedWithUnixSockets,
+                Some(_),
+            )
             | (
                 LinuxNetworkMode::Direct
                 | LinuxNetworkMode::DirectWithoutUnixSockets
+                | LinuxNetworkMode::DirectWithUnixSockets
                 | LinuxNetworkMode::Disabled,
                 None,
             ) => {}
@@ -229,7 +241,9 @@ impl LinuxBackend {
             self.config.proc_mount(),
             matches!(
                 network_mode,
-                LinuxNetworkMode::Disabled | LinuxNetworkMode::ProxyRouted
+                LinuxNetworkMode::Disabled
+                    | LinuxNetworkMode::ProxyRouted
+                    | LinuxNetworkMode::ProxyRoutedWithUnixSockets
             ),
         );
         validate_network_lowering(self, prepared, sandbox)?;
@@ -267,7 +281,10 @@ impl LinuxBackend {
     ) -> Result<LinuxChild, LinuxBackendError> {
         let sandbox = prepared.sandbox(self)?;
         let network_mode = network_mode(sandbox)?;
-        let mut gateway_runtime = if network_mode == LinuxNetworkMode::ProxyRouted {
+        let mut gateway_runtime = if matches!(
+            network_mode,
+            LinuxNetworkMode::ProxyRouted | LinuxNetworkMode::ProxyRoutedWithUnixSockets
+        ) {
             Some(GatewayRuntime::start(
                 sandbox.network().clone(),
                 self.config.network_gateway_config().clone(),
@@ -289,6 +306,7 @@ impl LinuxBackend {
         }
         let environment = self.environment_input(sandbox.environment().base())?;
         let environment = prepared.apply_environment(self, environment)?;
+        let local_ipc = LocalIpcPolicy::from_sandbox(sandbox)?;
         let bubblewrap_file = self
             .bubblewrap_file
             .try_clone()
@@ -329,11 +347,25 @@ impl LinuxBackend {
             LinuxNetworkMode::DirectWithoutUnixSockets => {
                 process.env(NETWORK_MODE_ENV, NETWORK_MODE_DIRECT_WITHOUT_UNIX);
             }
+            LinuxNetworkMode::DirectWithUnixSockets => {
+                process.env(NETWORK_MODE_ENV, NETWORK_MODE_DIRECT_WITH_UNIX);
+            }
             LinuxNetworkMode::Disabled => {
                 process.env(NETWORK_MODE_ENV, NETWORK_MODE_DISABLED);
             }
             LinuxNetworkMode::ProxyRouted => {
                 process.env(NETWORK_MODE_ENV, NETWORK_MODE_PROXY);
+                process.env(GATEWAY_SOCKET_ENV, IN_SANDBOX_GATEWAY_SOCKET);
+                process.env(
+                    GATEWAY_CONNECTION_LIMIT_ENV,
+                    self.config
+                        .network_gateway_config()
+                        .max_concurrent_connections()
+                        .to_string(),
+                );
+            }
+            LinuxNetworkMode::ProxyRoutedWithUnixSockets => {
+                process.env(NETWORK_MODE_ENV, NETWORK_MODE_PROXY_WITH_UNIX);
                 process.env(GATEWAY_SOCKET_ENV, IN_SANDBOX_GATEWAY_SOCKET);
                 process.env(
                     GATEWAY_CONNECTION_LIMIT_ENV,
@@ -364,6 +396,11 @@ impl LinuxBackend {
         }
         if let Some(runtime) = &gateway_runtime
             && let Err(source) = runtime.write_bridge_token(&mut auth_writer)
+        {
+            return Err(setup_handshake_error(&mut child, source));
+        }
+        if let Some(policy) = &local_ipc
+            && let Err(source) = write_frame(&mut auth_writer, policy)
         {
             return Err(setup_handshake_error(&mut child, source));
         }
@@ -497,6 +534,8 @@ impl SandboxBackend for LinuxBackend {
             BackendCapability::NetworkLocalAddressRestrictions,
             BackendCapability::NetworkResolvedTargets,
             BackendCapability::NetworkLocalIpcIsolation,
+            BackendCapability::NetworkLocalIpcRules,
+            BackendCapability::NetworkLocalIpcDenyRules,
             BackendCapability::EnvironmentAll,
             BackendCapability::EnvironmentCore,
             BackendCapability::EnvironmentNone,
@@ -560,11 +599,6 @@ fn validate_network_lowering<'a>(
             capability: BackendCapability::NetworkExternal,
         });
     }
-    if requirements.local_ipc_rules() {
-        return Err(LinuxBackendError::UnsupportedCapability {
-            capability: BackendCapability::NetworkLocalIpcRules,
-        });
-    }
     if network_mode(sandbox)? == LinuxNetworkMode::ProxyRouted
         && !requirements.local_ipc_isolation()
     {
@@ -585,7 +619,18 @@ fn network_mode(sandbox: &EffectiveSandbox) -> Result<LinuxNetworkMode, LinuxBac
                 || requirements.local_address_restrictions()
                 || requirements.resolved_targets() =>
         {
-            Ok(LinuxNetworkMode::ProxyRouted)
+            Ok(
+                if requirements.local_ipc_rules() || requirements.local_ipc_deny_rules() {
+                    LinuxNetworkMode::ProxyRoutedWithUnixSockets
+                } else {
+                    LinuxNetworkMode::ProxyRouted
+                },
+            )
+        }
+        NetworkMode::Enabled
+            if requirements.local_ipc_rules() || requirements.local_ipc_deny_rules() =>
+        {
+            Ok(LinuxNetworkMode::DirectWithUnixSockets)
         }
         NetworkMode::Enabled if requirements.local_ipc_isolation() => {
             Ok(LinuxNetworkMode::DirectWithoutUnixSockets)

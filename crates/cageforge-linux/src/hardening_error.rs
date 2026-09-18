@@ -26,6 +26,8 @@ pub enum LinuxHardeningOperation {
     SetupReady,
     /// Reading the authenticated bridge token.
     BridgeTokenRead,
+    /// Reading the local IPC policy frame.
+    LocalIpcFrameRead,
     /// Reading the authentication token.
     AuthenticationTokenRead,
     /// Reading the setup-release marker.
@@ -38,6 +40,10 @@ pub enum LinuxHardeningOperation {
     TraceSetOptions,
     /// Continuing a traced command while preserving signal delivery.
     TraceContinue,
+    /// Reading or updating a traced command's register set.
+    TraceRegisters,
+    /// Reading a traced command's socket address.
+    TraceMemory,
     /// Waiting for an untraced command.
     CommandWait,
 }
@@ -230,6 +236,8 @@ pub enum LinuxHelperSetupFailureKind {
     NoNewPrivileges = 7,
     /// The command seccomp filter could not be built.
     SeccompBuild = 8,
+    /// The local IPC policy frame was malformed or could not be read.
+    LocalIpcFrame = 13,
     /// Process hardening failed in an unclassified setup operation.
     ProcessHardening = 9,
     /// The final command could not be started while still behind the barrier.
@@ -336,6 +344,13 @@ pub enum LinuxHardeningError {
     /// The proxy gateway connection limit was zero.
     #[error("gateway connection limit must be non-zero")]
     ZeroGatewayConnectionLimit,
+    /// The authenticated local IPC policy frame was malformed.
+    #[error("invalid local IPC policy frame: {source}")]
+    LocalIpcFrame {
+        /// Typed frame failure.
+        #[source]
+        source: crate::local_ipc::LocalIpcFrameError,
+    },
     /// A bridge could not be created.
     #[error("gateway bridge failed: {source}")]
     GatewayBridge {
@@ -396,12 +411,15 @@ impl fmt::Display for LinuxHardeningOperation {
             Self::KeyringIsolation => "session-keyring isolation",
             Self::SetupReady => "setup-ready marker",
             Self::BridgeTokenRead => "bridge token",
+            Self::LocalIpcFrameRead => "local IPC frame",
             Self::AuthenticationTokenRead => "authentication token",
             Self::SetupRelease => "setup-release marker",
             Self::CloseOnExec => "close-on-exec",
             Self::TraceWait => "trace wait",
             Self::TraceSetOptions => "trace options",
             Self::TraceContinue => "trace continue",
+            Self::TraceRegisters => "trace registers",
+            Self::TraceMemory => "trace memory",
             Self::CommandWait => "command wait",
         };
         formatter.write_str(operation)
@@ -508,6 +526,7 @@ impl TryFrom<u16> for LinuxHelperSetupFailureKind {
             10 => Ok(Self::CommandStart),
             11 => Ok(Self::TraceSupervision),
             12 => Ok(Self::KeyringIsolation),
+            13 => Ok(Self::LocalIpcFrame),
             _ => Err(()),
         }
     }
@@ -528,6 +547,7 @@ impl fmt::Display for LinuxHelperSetupFailureKind {
             Self::CommandStart => "command start",
             Self::TraceSupervision => "trace supervision",
             Self::KeyringIsolation => "session-keyring isolation",
+            Self::LocalIpcFrame => "local IPC frame",
         };
         formatter.write_str(description)
     }

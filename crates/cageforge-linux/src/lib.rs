@@ -25,6 +25,7 @@ mod filesystem;
 mod hardening;
 mod hardening_error;
 mod helper_protocol;
+mod local_ipc;
 mod network;
 mod process;
 mod resource_names;
@@ -46,6 +47,7 @@ pub use error::{
     NetworkGatewayTransportError, NetworkLoweringError, PolicyLoweringExpectation,
     SeccompBuildError, SetupHandshakeError, StatusFrameError,
 };
+pub use local_ipc::LocalIpcFrameError;
 pub use process::LinuxChild;
 
 /// Entry point used by the packaged CLI helper binary.

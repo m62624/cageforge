@@ -20,7 +20,7 @@ store.
 
 ```toml
 [dependencies]
-cageforge-permissions = "0.1.0"
+cageforge-permissions = "x.y.z"
 ```
 
 The crate is intentionally independent from the native Linux, macOS, and
