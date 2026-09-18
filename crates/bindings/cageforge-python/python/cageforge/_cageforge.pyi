@@ -9,17 +9,33 @@ __all__ = [
     "Cageforge",
     "CageforgeConfigurationError",
     "CageforgeError",
+    "CageforgeGrantNotFoundError",
     "CageforgeInitializationError",
+    "CageforgeInvalidCursorError",
+    "CageforgeInvalidGrantIdError",
+    "CageforgeInvalidPageSizeError",
     "CageforgeLaunchError",
+    "CageforgeListingSnapshotExpiredError",
     "CageforgePermissionError",
     "CageforgeProcessError",
+    "CageforgeStoreError",
+    "CageforgeStoreFormatError",
+    "CageforgeStoreLockedError",
+    "CageforgeStorePathError",
+    "CageforgeStoreReadError",
+    "CageforgeStoreWriteError",
     "CageforgeStreamError",
     "CageforgeWindowsSetupError",
+    "GrantId",
+    "GrantPage",
+    "GrantPageCursor",
+    "GrantSummary",
     "PermissionApprover",
     "PermissionGrant",
     "PermissionRequest",
     "PermissionStore",
     "ProcessResult",
+    "RevokeResult",
     "RuntimeContext",
     "SandboxProcess",
     "UnsupportedPlatformError",
@@ -86,15 +102,45 @@ class CageforgeError(builtins.Exception):
     """
     ...
 
+class CageforgeGrantNotFoundError(CageforgeStoreError):
+    r"""
+    The requested persistent permission grant was not found.
+    """
+    ...
+
 class CageforgeInitializationError(CageforgeError):
     r"""
     The native Cageforge backend could not be initialized.
     """
     ...
 
+class CageforgeInvalidCursorError(CageforgeStoreError):
+    r"""
+    The persistent permission listing cursor is invalid.
+    """
+    ...
+
+class CageforgeInvalidGrantIdError(CageforgeStoreError):
+    r"""
+    The persistent permission grant ID is invalid.
+    """
+    ...
+
+class CageforgeInvalidPageSizeError(CageforgeStoreError):
+    r"""
+    The persistent permission page size is invalid.
+    """
+    ...
+
 class CageforgeLaunchError(CageforgeError):
     r"""
     The native sandbox process could not be launched.
+    """
+    ...
+
+class CageforgeListingSnapshotExpiredError(CageforgeStoreError):
+    r"""
+    The permission listing changed before the next page was requested.
     """
     ...
 
@@ -110,6 +156,42 @@ class CageforgeProcessError(CageforgeError):
     """
     ...
 
+class CageforgeStoreError(CageforgePermissionError):
+    r"""
+    The host-owned permission store could not complete the requested operation.
+    """
+    ...
+
+class CageforgeStoreFormatError(CageforgeStoreError):
+    r"""
+    The persistent permission store has an invalid format.
+    """
+    ...
+
+class CageforgeStoreLockedError(CageforgeStoreError):
+    r"""
+    The persistent permission store lock could not be acquired.
+    """
+    ...
+
+class CageforgeStorePathError(CageforgeStoreError):
+    r"""
+    The persistent permission store path is invalid.
+    """
+    ...
+
+class CageforgeStoreReadError(CageforgeStoreError):
+    r"""
+    The persistent permission store could not be read.
+    """
+    ...
+
+class CageforgeStoreWriteError(CageforgeStoreError):
+    r"""
+    The persistent permission store could not be written.
+    """
+    ...
+
 class CageforgeStreamError(CageforgeError):
     r"""
     A sandbox standard stream operation failed.
@@ -121,6 +203,99 @@ class CageforgeWindowsSetupError(CageforgeError):
     Windows setup provisioning or verification failed.
     """
     ...
+
+@typing.final
+class GrantId:
+    r"""
+    Stable identity of one exact permission request.
+    """
+    @staticmethod
+    def from_hex(value: builtins.str) -> GrantId:
+        r"""
+        Parses a stable hexadecimal grant ID.
+        """
+    def hex(self) -> builtins.str:
+        r"""
+        Returns the canonical lowercase hexadecimal ID.
+        """
+    def __str__(self) -> builtins.str: ...
+
+@typing.final
+class GrantPage:
+    r"""
+    One bounded page of persistent-grant metadata.
+    """
+    @property
+    def entries(self) -> builtins.list[GrantSummary]:
+        r"""
+        Page entries.
+        """
+    @property
+    def next_cursor(self) -> typing.Optional[GrantPageCursor]:
+        r"""
+        Cursor for the next page, if any.
+        """
+
+@typing.final
+class GrantPageCursor:
+    r"""
+    Opaque cursor for one permission-store snapshot.
+    """
+    def token(self) -> builtins.str:
+        r"""
+        Returns the opaque cursor token.
+        """
+    @staticmethod
+    def from_token(value: builtins.str) -> GrantPageCursor:
+        r"""
+        Parses a cursor token returned by a previous page.
+        """
+
+@typing.final
+class GrantSummary:
+    r"""
+    Safe metadata for one persistent permission grant.
+    """
+    @property
+    def id(self) -> GrantId:
+        r"""
+        Stable grant ID.
+        """
+    @property
+    def tool_id(self) -> builtins.str:
+        r"""
+        Tool identifier.
+        """
+    @property
+    def tool_version(self) -> builtins.str:
+        r"""
+        Tool version.
+        """
+    @property
+    def platform(self) -> builtins.str:
+        r"""
+        Target platform.
+        """
+    @property
+    def architecture(self) -> builtins.str:
+        r"""
+        Target architecture.
+        """
+    @property
+    def scope(self) -> builtins.str:
+        r"""
+        Grant scope.
+        """
+    @property
+    def issued_at(self) -> builtins.int:
+        r"""
+        Issuance timestamp.
+        """
+    @property
+    def expires_at(self) -> typing.Optional[builtins.int]:
+        r"""
+        Optional expiration timestamp.
+        """
 
 @typing.final
 class PermissionApprover:
@@ -185,6 +360,10 @@ class PermissionRequest:
         r"""
         Returns the request digest.
         """
+    def grant_id(self) -> GrantId:
+        r"""
+        Returns the stable ID used by the persistent grant store.
+        """
     def filesystem(self) -> builtins.list[tuple[builtins.str, builtins.str]]:
         r"""
         Returns filesystem capabilities as `(operation, path)` pairs.
@@ -226,6 +405,18 @@ class PermissionStore:
         r"""
         Persists a persistent grant after validating it against the request.
         """
+    def list_page(self, page_size: builtins.int = ..., cursor: typing.Optional[GrantPageCursor] = None) -> GrantPage:
+        r"""
+        Lists one bounded page of safe persistent-grant summaries.
+        """
+    def revoke(self, id: GrantId) -> RevokeResult:
+        r"""
+        Revokes one persistent grant for future launches.
+        """
+    def revoke_all(self) -> None:
+        r"""
+        Revokes all persistent grants while retaining the store file.
+        """
     def close(self) -> None:
         r"""
         Releases the store and makes later operations fail closed.
@@ -243,6 +434,17 @@ class ProcessResult:
         r"""
         The exit code, or `None` when the OS reports signal-style termination.
         """
+
+@typing.final
+class RevokeResult:
+    r"""
+    Result of removing one persistent grant.
+    """
+    def value(self) -> builtins.str:
+        r"""
+        Returns `revoked` or `not-found`.
+        """
+    def __str__(self) -> builtins.str: ...
 
 @typing.final
 class RuntimeContext:

@@ -23,7 +23,40 @@ class CageforgeInitializationException(message: String) : CageforgeException(mes
 class CageforgeLaunchException(message: String) : CageforgeException(message)
 
 /** Raised when a trusted preflight grant is missing, invalid, or insufficient. */
-class CageforgePermissionException(message: String) : CageforgeException(message)
+open class CageforgePermissionException(message: String) : CageforgeException(message)
+
+/** Raised when persistent permission-store I/O or format validation fails. */
+open class CageforgePermissionStoreException(message: String) : CageforgePermissionException(message)
+
+/** Raised when the persistent permission store path is not absolute. */
+class CageforgeStorePathException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when a persistent grant ID is not present in the store. */
+class CageforgeGrantNotFoundException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when a page cursor refers to an old store snapshot. */
+class CageforgeListingSnapshotExpiredException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when a grant ID is malformed. */
+class CageforgeInvalidGrantIdException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when a persistent grant page cursor is malformed. */
+class CageforgeInvalidCursorException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when a persistent grant page size is invalid. */
+class CageforgeInvalidPageSizeException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when the persistent permission store lock fails. */
+class CageforgeStoreLockedException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when the persistent permission store cannot be read. */
+class CageforgeStoreReadException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when the persistent permission store cannot be written. */
+class CageforgeStoreWriteException(message: String) : CageforgePermissionStoreException(message)
+
+/** Raised when the persistent permission store format is invalid. */
+class CageforgeStoreFormatException(message: String) : CageforgePermissionStoreException(message)
 
 /** Raised when a native process lifecycle operation fails. */
 class CageforgeProcessException

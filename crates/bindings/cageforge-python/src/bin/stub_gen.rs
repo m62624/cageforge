@@ -15,6 +15,11 @@ fn main() -> pyo3_stub_gen::Result<()> {
     let stub = std::fs::read_to_string(target)?;
     let stub = stub
         .replace("builtins.CageforgeError", "CageforgeError")
+        .replace(
+            "builtins.CageforgePermissionError",
+            "CageforgePermissionError",
+        )
+        .replace("builtins.CageforgeStoreError", "CageforgeStoreError")
         .replace("os.PathLike", "os.PathLike[str]");
     let stub = format!("{}\n", stub.trim_end());
     std::fs::write(target, stub)?;

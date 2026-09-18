@@ -119,6 +119,20 @@ missing record is not an approval. The CLI has the same behavior through
 `--permission-store PATH`, which takes priority over its OS-native per-user
 default.
 
+Persistent grants can be inspected and revoked by stable ID:
+
+```kotlin
+val page = store.listPage(50, null)
+for (summary in page.entries) println(summary.id)
+val next = page.nextCursor?.let { store.listPage(50, it) }
+val result = store.revoke(request.grantId)
+```
+
+`GrantPageCursor` is opaque and expires when the JSON store changes. The JVM
+binding maps invalid IDs, invalid cursors, invalid page sizes, stale cursors,
+lock, read, write, and format failures to stable `Cageforge*Exception` categories. The
+native Rust store remains authoritative for all validation and persistence.
+
 `Cageforge.fromToml` uses the named `default_profile` when no profile name is
 provided. Pass `profileName` when an application needs another profile.
 `Cageforge.fromTomlFile` reads a TOML file and, by default, uses that file's

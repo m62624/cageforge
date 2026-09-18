@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::process::Command as ProcessCommand;
 
+use cageforge::{GrantAuthority, PermissionRequest, PermissionScope, PermissionSet, PlatformId};
 #[cfg(target_os = "windows")]
 use cageforge_cli::SetupCommand;
 use cageforge_cli::{Cli, Command, RunArgs};
@@ -55,9 +56,15 @@ fn help_and_version_succeed() {
         .expect("run cageforge-cli --help");
     assert!(help.status.success(), "--help should exit successfully");
     let help_text = String::from_utf8_lossy(&help.stdout);
-    for expected in ["approval.mode = \"preflight\"", "persistent approval"] {
+    for expected in [
+        "approval.mode = \"preflight\"",
+        "persistent approval",
+        "permissions revoke-all --yes",
+    ] {
         assert!(help_text.contains(expected), "help is missing {expected:?}");
     }
+    #[cfg(target_os = "windows")]
+    assert!(help_text.contains("cageforge-cli setup status"));
 
     let run_help = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
         .args(["run", "--help"])
@@ -83,6 +90,101 @@ fn help_and_version_succeed() {
         version.status.success(),
         "--version should exit successfully"
     );
+}
+
+#[test]
+fn help_output_is_snapshotted() {
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .arg("--help")
+        .output()
+        .expect("run cageforge-cli --help");
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout)
+        .replace("\r\n", "\n")
+        .replace("cageforge-cli.exe", "cageforge-cli")
+        .replace(
+            "  setup        Provision, inspect, or remove the Windows-native Cageforge setup\n",
+            "",
+        )
+        .replace("  cageforge-cli setup status\n", "")
+        .replace(
+            "On Windows, run `cageforge-cli setup install` once before the first `run`. It may request UAC and keeps the setup for later launches.\n\n",
+            "",
+        );
+    insta::assert_snapshot!(help);
+}
+
+#[test]
+fn usage_error_is_snapshotted() {
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .args(["permissions", "revoke-all"])
+        .output()
+        .expect("run cageforge-cli permissions revoke-all");
+    assert_eq!(output.status.code(), Some(2));
+    insta::assert_snapshot!(String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn permission_list_output_is_snapshotted() {
+    let workspace = tempfile::tempdir().expect("temporary permission store");
+    let store_path = workspace.path().join("permissions.json");
+    let request = PermissionRequest::new(
+        "snapshot-tool",
+        "1.0.0",
+        "a".repeat(64),
+        "b".repeat(64),
+        PlatformId::Linux,
+        "x86_64",
+        PermissionSet::new(),
+    )
+    .expect("valid snapshot request");
+    let grant = GrantAuthority::new()
+        .approve_with(
+            &request,
+            request.capabilities().clone(),
+            PermissionScope::Persistent,
+            None,
+        )
+        .expect("valid persistent grant");
+    cageforge::PermissionStore::open(&store_path)
+        .expect("open store")
+        .put(&grant, &request)
+        .expect("persist grant");
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .args([
+            "permissions",
+            "list",
+            "--permission-store",
+            store_path.to_str().expect("UTF-8 store path"),
+        ])
+        .output()
+        .expect("run permission list");
+    assert!(output.status.success());
+    let normalized = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            if line.starts_with("next-cursor\t") {
+                "next-cursor\t<opaque-cursor>".to_owned()
+            } else {
+                let mut fields = line.splitn(2, '\t');
+                let _id = fields.next().unwrap_or_default();
+                format!("<grant-id>\t{}", fields.next().unwrap_or_default())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(normalized);
+}
+
+#[test]
+fn permission_revoke_validation_error_is_snapshotted() {
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .args(["permissions", "revoke", "--id", "not-a-grant-id"])
+        .output()
+        .expect("run permission revoke");
+    assert_eq!(output.status.code(), Some(2));
+    insta::assert_snapshot!(String::from_utf8_lossy(&output.stderr));
 }
 
 #[test]

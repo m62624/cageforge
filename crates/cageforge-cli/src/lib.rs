@@ -21,7 +21,10 @@ use clap::Parser;
 
 #[cfg(target_os = "windows")]
 pub use cli::SetupCommand;
-pub use cli::{Cli, Command, RunArgs};
+pub use cli::{
+    Cli, Command, PermissionsCommand, PermissionsListArgs, PermissionsRevokeAllArgs,
+    PermissionsRevokeArgs, RunArgs,
+};
 pub use error::CliError;
 pub use execution::execute;
 

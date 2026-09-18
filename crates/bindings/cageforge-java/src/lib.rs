@@ -439,6 +439,24 @@ fn java_string_array<'local>(
     Ok(array.into_raw())
 }
 
+fn store_binding_error(error: cageforge::StoreError) -> BindingError {
+    let message = error.to_string();
+    let kind = match &error {
+        cageforge::StoreError::PathNotAbsolute { .. } => BindingErrorKind::StorePath,
+        cageforge::StoreError::GrantNotFound => BindingErrorKind::GrantNotFound,
+        cageforge::StoreError::ListingSnapshotExpired => BindingErrorKind::ListingSnapshotExpired,
+        cageforge::StoreError::InvalidGrantId => BindingErrorKind::InvalidGrantId,
+        cageforge::StoreError::InvalidCursor => BindingErrorKind::InvalidCursor,
+        cageforge::StoreError::InvalidPageSize { .. } => BindingErrorKind::InvalidPageSize,
+        cageforge::StoreError::StoreLocked { .. } => BindingErrorKind::StoreLocked,
+        cageforge::StoreError::Read { .. } => BindingErrorKind::StoreRead,
+        cageforge::StoreError::Write { .. } => BindingErrorKind::StoreWrite,
+        cageforge::StoreError::Format { .. } => BindingErrorKind::StoreFormat,
+        _ => BindingErrorKind::PermissionStore,
+    };
+    BindingError::new(kind, message)
+}
+
 /// Returns validated profile names from an in-memory TOML document.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeProfileNames<'caller>(
@@ -613,6 +631,20 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestDig
     })
 }
 
+/// Returns the stable grant ID bound to an opaque JVM permission request.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestGrantId<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
+        Ok(env
+            .new_string(request_ref(request)?.grant_id().to_hex())?
+            .into_raw())
+    })
+}
+
 /// Returns filesystem capabilities from an opaque permission request.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestFilesystem<'caller>(
@@ -754,8 +786,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeOpenPermissionStore<
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |env| {
         let value = java_string(env, path_value, "permission store path")?;
         let path = path(value, "permission store path")?;
-        let store = cageforge::PermissionStore::open(path)
-            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        let store = cageforge::PermissionStore::open(path).map_err(store_binding_error)?;
         Ok(Box::into_raw(Box::new(store)) as jlong)
     })
 }
@@ -771,10 +802,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionStoreGet<'
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |_env| {
         let store = store_ref(store)?;
         let request = request_ref(request)?;
-        let Some(grant) = store
-            .get(request)
-            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?
-        else {
+        let Some(grant) = store.get(request).map_err(store_binding_error)? else {
             return Ok(0);
         };
         Ok(Box::into_raw(Box::new(grant)) as jlong)
@@ -793,9 +821,99 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionStorePut<'
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Permission, |_env| {
         store_ref(store)?
             .put(grant_ref(grant)?, request_ref(request)?)
-            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+            .map_err(store_binding_error)?;
         Ok(())
     });
+}
+
+/// Returns one flattened, typed page of safe grant summaries.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionStoreListPage<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    store: jlong,
+    page_size: jint,
+    cursor: JString<'caller>,
+) -> jobjectArray {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::PermissionStore, |env| {
+        let cursor = if cursor.is_null() {
+            None
+        } else {
+            Some(
+                cageforge::GrantPageCursor::from_token(&java_string(
+                    env,
+                    cursor,
+                    "permission listing cursor",
+                )?)
+                .map_err(store_binding_error)?,
+            )
+        };
+        let page_size = if page_size < 0 { 0 } else { page_size as usize };
+        let request =
+            cageforge::GrantPageRequest::new(page_size, cursor).map_err(store_binding_error)?;
+        let page = store_ref(store)?
+            .list_page(request)
+            .map_err(store_binding_error)?;
+        let next = page
+            .next_cursor()
+            .map_or_else(String::new, cageforge::GrantPageCursor::to_token);
+        let mut values = vec![next];
+        for entry in page.entries() {
+            values.extend([
+                entry.id.to_hex(),
+                entry.tool_id.clone(),
+                entry.tool_version.clone(),
+                entry.platform.as_str().to_owned(),
+                entry.architecture.clone(),
+                format!("{:?}", entry.scope).to_lowercase(),
+                entry.issued_at.to_string(),
+                entry
+                    .expires_at
+                    .map_or_else(|| "-1".to_owned(), |value| value.to_string()),
+            ]);
+        }
+        java_string_array(env, values)
+    })
+}
+
+/// Revokes one persistent grant for future launches.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionStoreRevoke<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    store: jlong,
+    id: JString<'caller>,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::PermissionStore, |env| {
+        let id = cageforge::GrantId::from_hex(&java_string(env, id, "grant id")?)
+            .map_err(|_| BindingError::new(BindingErrorKind::InvalidGrantId, "invalid grant id"))?;
+        let result = store_ref(store)?.revoke(id).map_err(store_binding_error)?;
+        Ok(env
+            .new_string(match result {
+                cageforge::RevokeResult::Revoked => "revoked",
+                cageforge::RevokeResult::NotFound => "not-found",
+            })?
+            .into_raw())
+    })
+}
+
+/// Revokes all persistent grants while retaining the store file.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionStoreRevokeAll(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    store: jlong,
+) {
+    ffi_call_kind(
+        &mut unowned_env,
+        BindingErrorKind::PermissionStore,
+        |_env| {
+            store_ref(store)?
+                .revoke_all()
+                .map_err(store_binding_error)?;
+            Ok(())
+        },
+    );
 }
 
 /// Releases an opaque JVM permission store handle.
@@ -1175,17 +1293,23 @@ fn read_stream(child: &ChildState, stdout: bool, size: jint) -> Result<Vec<u8>, 
     if size <= 0 || size > 16 * 1024 * 1024 {
         return Err("read size must be between 1 and 16777216 bytes".to_string());
     }
-    let stream = if stdout { &child.stdout } else { &child.stderr };
-    let mut stream = stream
+    let stream_slot = if stdout { &child.stdout } else { &child.stderr };
+    let mut stream = stream_slot
         .lock()
-        .map_err(|_| "process stream handle is poisoned".to_string())?;
-    let stream = stream
-        .as_mut()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .take()
         .ok_or_else(|| "requested stream is not piped".to_string())?;
-    let mut bytes = vec![0; size as usize];
-    let read = stream.read(&mut bytes).map_err(|error| error.to_string())?;
-    bytes.truncate(read);
-    Ok(bytes)
+    let result = (|| {
+        let mut bytes = vec![0; size as usize];
+        let read = stream.read(&mut bytes).map_err(|error| error.to_string())?;
+        bytes.truncate(read);
+        Ok(bytes)
+    })();
+    stream_slot
+        .lock()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .replace(stream);
+    result
 }
 
 /*
@@ -1196,12 +1320,19 @@ fn write_stdin(child: &ChildState, bytes: &[u8]) -> Result<jint, String> {
     let mut stdin = child
         .stdin
         .lock()
-        .map_err(|_| "process stream handle is poisoned".to_string())?;
-    let stdin = stdin
-        .as_mut()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .take()
         .ok_or_else(|| "stdin is not piped".to_string())?;
-    stdin.write_all(bytes).map_err(|error| error.to_string())?;
-    Ok(bytes.len() as jint)
+    let result = stdin
+        .write_all(bytes)
+        .map(|()| bytes.len() as jint)
+        .map_err(|error| error.to_string());
+    child
+        .stdin
+        .lock()
+        .map_err(|_| "process stream handle is poisoned".to_string())?
+        .replace(stdin);
+    result
 }
 
 fn close_stdin(child: &ChildState) -> Result<(), String> {

@@ -42,6 +42,8 @@ final class NativeBridge {
 
     static native String nativePermissionRequestDigest(long request);
 
+    static native String nativePermissionRequestGrantId(long request);
+
     static native String[] nativePermissionRequestFilesystem(long request);
 
     static native String[] nativePermissionRequestNetwork(long request);
@@ -63,6 +65,12 @@ final class NativeBridge {
     static native long nativePermissionStoreGet(long store, long request);
 
     static native void nativePermissionStorePut(long store, long grant, long request);
+
+    static native String[] nativePermissionStoreListPage(long store, int pageSize, String cursor);
+
+    static native String nativePermissionStoreRevoke(long store, String grantId);
+
+    static native void nativePermissionStoreRevokeAll(long store);
 
     static native void nativeClosePermissionStore(long store);
 

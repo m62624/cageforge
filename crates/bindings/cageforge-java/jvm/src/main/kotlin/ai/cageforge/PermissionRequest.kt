@@ -8,6 +8,7 @@ class PermissionRequest internal constructor(
     val toolVersion: String,
     val platform: String,
     val digest: String,
+    val grantId: GrantId,
     filesystemValues: Array<String>,
     val network: List<String>,
 ) : AutoCloseable {

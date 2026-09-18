@@ -179,6 +179,9 @@ $ cageforge-cli run --config permission-preflight.toml --approve \
     --permission-store /var/lib/my-tool/permissions.json -- tool
 ```
 
+`--permission-store PATH` must be absolute. If omitted, the CLI selects the
+current user's native Cageforge state path for the target operating system.
+
 `--permission-store PATH` explicitly selects the host-owned persistent grant
 store and takes priority. If omitted, the CLI uses the current user's native
 Cageforge state directory: `$XDG_STATE_HOME/cageforge` (falling back to
@@ -188,6 +191,27 @@ after a persistent approval, is protected by the host OS, and can be deleted
 by its owner to revoke saved approvals. A sandboxed command does not receive
 new permissions while it is running; a missing approval in a non-interactive
 invocation is denied rather than retried or auto-approved.
+
+To inspect saved approvals, list one bounded page. The command prints safe
+metadata and a `next-cursor` line when another page exists:
+
+```console
+$ cageforge-cli permissions list --permission-store /path/permissions.json --page-size 50
+$ cageforge-cli permissions list --permission-store /path/permissions.json --page-size 50 --cursor '<opaque-cursor>'
+```
+
+Revoke one future approval by its stable 64-character grant ID; no command,
+argv, or TOML needs to be entered again:
+
+```console
+$ cageforge-cli permissions revoke --permission-store /path/permissions.json --id <grant-id>
+$ cageforge-cli permissions revoke-all --permission-store /path/permissions.json --yes
+```
+
+`revoke-all` requires explicit `--yes` and retains the store file. A cursor is
+valid only while the store document remains unchanged. Listing and revocation
+fail with typed diagnostics rather than silently widening or restarting a
+sandbox.
 
 ## Run one program
 

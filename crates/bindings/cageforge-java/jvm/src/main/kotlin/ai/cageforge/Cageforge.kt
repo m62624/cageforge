@@ -94,6 +94,7 @@ class Cageforge private constructor(
                     toolVersion = NativeBridge.nativePermissionRequestToolVersion(handle),
                     platform = NativeBridge.nativePermissionRequestPlatform(handle),
                     digest = NativeBridge.nativePermissionRequestDigest(handle),
+                    grantId = GrantId.fromHex(NativeBridge.nativePermissionRequestGrantId(handle)),
                     filesystemValues = NativeBridge.nativePermissionRequestFilesystem(handle),
                     network = NativeBridge.nativePermissionRequestNetwork(handle).toList(),
                 )

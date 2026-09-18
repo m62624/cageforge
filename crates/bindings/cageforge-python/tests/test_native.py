@@ -14,11 +14,16 @@ from pathlib import Path
 import pytest
 from cageforge import (
     Cageforge,
+    CageforgeInvalidCursorError,
+    CageforgeInvalidGrantIdError,
     CageforgePermissionError,
     CageforgeProcessError,
+    CageforgeStorePathError,
+    GrantPageCursor,
     PermissionApprover,
     PermissionGrant,
     PermissionStore,
+    RevokeResult,
     RuntimeContext,
     WindowsSetup,
     wait_for_async,
@@ -139,6 +144,37 @@ def test_persistent_store_handles_concurrent_binding_calls(tmp_path: Path) -> No
                 future.result()
             reads = [executor.submit(store.get, request) for _ in range(8)]
             assert all(future.result() is not None for future in reads)
+    finally:
+        store.close()
+        request.close()
+
+
+def test_persistent_grant_store_rejects_relative_paths() -> None:
+    with pytest.raises(CageforgeStorePathError):
+        PermissionStore.open(Path("permissions.json"))
+
+
+def test_permission_store_pages_and_revokes_by_stable_id(tmp_path: Path) -> None:
+    context = runtime_context(tmp_path)
+    request = Cageforge.permission_request(smoke_toml(), context=context)
+    grant = PermissionApprover().approve(request, scope="persistent")
+    store = PermissionStore.open(tmp_path / "host-state" / "permissions.json")
+    try:
+        store.put(grant, request)
+        assert request.grant_id().hex() == request.digest()
+        page = store.list_page(page_size=1)
+        assert len(page.entries) == 1
+        assert page.entries[0].id.hex() == request.grant_id().hex()
+        assert page.next_cursor is None
+        result = store.revoke(request.grant_id())
+        assert isinstance(result, RevokeResult)
+        assert result.value() == "revoked"
+        assert store.get(request) is None
+        assert str(store.revoke(request.grant_id())) == "not-found"
+        with pytest.raises(CageforgeInvalidGrantIdError):
+            type(request.grant_id()).from_hex("invalid")
+        with pytest.raises(CageforgeInvalidCursorError):
+            GrantPageCursor.from_token("invalid")
     finally:
         store.close()
         request.close()

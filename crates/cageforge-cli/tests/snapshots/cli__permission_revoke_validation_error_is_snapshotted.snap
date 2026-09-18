@@ -1,0 +1,5 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: "String::from_utf8_lossy(&output.stderr)"
+---
+cageforge-cli: permission store: invalid grant id
