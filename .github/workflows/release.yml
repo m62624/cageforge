@@ -118,10 +118,10 @@ jobs:
 
   publish-jvm:
     name: Publish JVM package to Maven Central
-    # TODO(release-hardening): after the first successful Cageforge PyPI
-    # release confirms the pending publisher, consider removing this gate and
-    # returning registry publications to parallel execution.
-    needs: [prepare, jvm, python, publish-python]
+    # Registry publication jobs share the complete tested-artifact gate and
+    # then run independently. Publication across registries is not atomic, so
+    # final release publication remains gated on all registry jobs succeeding.
+    needs: [prepare, tests, dist, jvm, python]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -186,10 +186,7 @@ jobs:
 
   publish-python:
     name: Publish Python package to PyPI (trusted publishing)
-    # PyPI's pending trusted publisher may be configured before cageforge
-    # exists. The first publish then creates the project and subsequent
-    # releases use the same keyless OIDC path.
-    needs: [prepare, tag, python]
+    needs: [prepare, tests, dist, jvm, python]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -267,13 +264,7 @@ jobs:
 
   publish-crates:
     name: Publish workspace crates
-    # Python publication is an upstream registry gate for the remaining
-    # immutable package indexes. This keeps a failed first PyPI publisher
-    # configuration from publishing the Rust workspace alone.
-    # TODO(release-hardening): after the first successful Cageforge PyPI
-    # release confirms the pending publisher, consider removing this gate and
-    # returning registry publications to parallel execution.
-    needs: [prepare, dist, jvm, publish-jvm, python, publish-python]
+    needs: [prepare, tests, dist, jvm, python]
     runs-on: ubuntu-latest
     permissions:
       contents: read
