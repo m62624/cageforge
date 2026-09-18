@@ -137,12 +137,17 @@ authority: the next lookup revalidates its digest, subset, expiry, schema, and
 owner-only file protection. A changed TOML profile or executable therefore
 requires a new approval.
 
-Normal `get` calls do not reread the file or take the OS lock. `put` takes the
-kernel lock and performs one durable atomic replacement; there is no userspace
-polling delay or fixed retry loop. The durable JSON path is intentionally
-appropriate for relatively infrequent persistent approvals. High-frequency
-hosts should keep session grants in memory or replace this host-owned storage
-behind the same API with a transactional backend such as SQLite.
+Every `get` for an existing store and every `put` takes the kernel lock and
+refreshes the latest document before evaluating or replacing it. A not-yet-
+persisted store is served from its empty in-process document without creating a
+sidecar file. `put` then performs one durable atomic replacement; there is no
+userspace polling delay or fixed retry loop. The lock, file I/O, and JSON
+serialization are never performed while the store's short-lived in-process
+cache mutex is held. The durable JSON path is intentionally appropriate for
+relatively infrequent persistent approvals.
+High-frequency hosts should keep session grants in memory or replace this
+host-owned storage behind the same API with a transactional backend such as
+SQLite.
 
 The store is host state, not application policy. Keep it in a host-controlled
 location and pass its path explicitly when the launch environment requires a

@@ -193,7 +193,7 @@ jobs:
             printf '  %s\n' "${wheels[@]}" >&2
             exit 1
           fi
-          python "${wheels[@]}" "${{ matrix.resource }}" <<'PY'
+          python - "${wheels[@]}" "${{ matrix.resource }}" <<'PY'
           from pathlib import Path
           import sys
           import zipfile

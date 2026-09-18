@@ -9,7 +9,10 @@ class PermissionApprover {
         scope: String = "session",
         expiresAt: Long? = null,
     ): PermissionGrant {
-        val grant = NativeBridge.nativeApprovePermissionRequest(request.handle, scope, expiresAt ?: -1L)
+        val grant =
+            request.useNative { handle ->
+                NativeBridge.nativeApprovePermissionRequest(handle, scope, expiresAt ?: -1L)
+            }
         if (grant == 0L) throw CageforgePermissionException("Cageforge permission approval failed")
         return try {
             PermissionGrant(

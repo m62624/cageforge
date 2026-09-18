@@ -48,12 +48,12 @@ class Cageforge:
         Checks TOML parsing, profile resolution, and policy composition.
         """
     @staticmethod
-    def from_toml(toml: builtins.str, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None, grant: typing.Optional[PermissionGrant] = None) -> Cageforge:
+    def from_toml(toml: builtins.str, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None, grant: typing.Optional[PermissionGrant] = None, request: typing.Optional[PermissionRequest] = None) -> Cageforge:
         r"""
         Creates a native runtime from TOML and the selected profile.
         """
     @staticmethod
-    def from_toml_file(file: builtins.str | os.PathLike[str] | pathlib.Path, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None, grant: typing.Optional[PermissionGrant] = None) -> Cageforge:
+    def from_toml_file(file: builtins.str | os.PathLike[str] | pathlib.Path, profile_name: typing.Optional[builtins.str] = None, context: typing.Optional[RuntimeContext] = None, grant: typing.Optional[PermissionGrant] = None, request: typing.Optional[PermissionRequest] = None) -> Cageforge:
         r"""
         Reads a TOML file and creates a runtime using its parent directory.
         """
@@ -153,6 +153,12 @@ class PermissionGrant:
         r"""
         Returns the optional Unix expiration timestamp.
         """
+    def close(self) -> None:
+        r"""
+        Releases the grant and makes later operations fail closed.
+        """
+    def __enter__(self) -> PermissionGrant: ...
+    def __exit__(self, _ty: typing.Optional[typing.Any], _value: typing.Optional[typing.Any], _traceback: typing.Optional[typing.Any]) -> builtins.bool: ...
 
 @typing.final
 class PermissionRequest:
@@ -187,12 +193,23 @@ class PermissionRequest:
         r"""
         Returns requested network endpoints.
         """
+    def close(self) -> None:
+        r"""
+        Releases the request and makes later operations fail closed.
+        """
+    def __enter__(self) -> PermissionRequest: ...
+    def __exit__(self, _ty: typing.Optional[typing.Any], _value: typing.Optional[typing.Any], _traceback: typing.Optional[typing.Any]) -> builtins.bool: ...
 
 @typing.final
 class PermissionStore:
     r"""
     Host-owned persistent permission grant store.
     """
+    @staticmethod
+    def open(path: builtins.str | os.PathLike[str] | pathlib.Path) -> PermissionStore:
+        r"""
+        Opens a host-owned permission store at an absolute path.
+        """
     def __new__(cls, path: builtins.str | os.PathLike[str] | pathlib.Path) -> PermissionStore:
         r"""
         Opens a host-owned permission store at an absolute path.
@@ -209,6 +226,12 @@ class PermissionStore:
         r"""
         Persists a persistent grant after validating it against the request.
         """
+    def close(self) -> None:
+        r"""
+        Releases the store and makes later operations fail closed.
+        """
+    def __enter__(self) -> PermissionStore: ...
+    def __exit__(self, _ty: typing.Optional[typing.Any], _value: typing.Optional[typing.Any], _traceback: typing.Optional[typing.Any]) -> builtins.bool: ...
 
 @typing.final
 class ProcessResult:

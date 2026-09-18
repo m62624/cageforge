@@ -404,6 +404,9 @@ jobs:
       - name: Check workspace publication metadata
         if: matrix.target == 'Linux'
         run: ci/check-workspace-metadata.sh
+      - name: Check release workflow contracts
+        if: matrix.target == 'Linux'
+        run: ci/check-release-workflows.sh
       - name: Install Bubblewrap package verification dependencies
         if: matrix.target == 'Linux'
         run: |

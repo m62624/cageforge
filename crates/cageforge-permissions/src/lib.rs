@@ -550,7 +550,7 @@ struct StoredGrant {
     issued_at: u64,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct StoreDocument {
     schema_version: u32,
     #[serde(default)]
@@ -582,14 +582,7 @@ impl PermissionStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
         let document = if path.exists() {
-            ensure_owner_only_permissions(&path).map_err(StoreError::write)?;
-            let bytes = fs::read(&path).map_err(StoreError::read)?;
-            let document: StoreDocument =
-                serde_json::from_slice(&bytes).map_err(StoreError::format)?;
-            if document.schema_version != Self::SCHEMA_VERSION {
-                return Err(StoreError::UnsupportedSchema(document.schema_version));
-            }
-            document
+            read_document(&path)?
         } else {
             StoreDocument {
                 schema_version: Self::SCHEMA_VERSION,
@@ -609,7 +602,24 @@ impl PermissionStore {
 
     /// Looks up a grant for an exact request digest.
     pub fn get(&self, request: &PermissionRequest) -> Result<Option<PermissionGrant>, StoreError> {
-        let document = self.document.lock().map_err(|_| StoreError::Poisoned)?;
+        // Refresh an existing file under the kernel lock so another process
+        // cannot make this host observe a stale approval. Avoid creating a
+        // lock sidecar for a store that has not been persisted yet. The lock
+        // is acquired before the in-process mutex; no blocking file operation
+        // is performed while that mutex is held.
+        let document = if self.path.exists() {
+            let _lock = acquire_file_lock(&self.path)?;
+            read_document(&self.path)?
+        } else {
+            self.document
+                .lock()
+                .map_err(|_| StoreError::Poisoned)?
+                .clone()
+        };
+        {
+            let mut cached = self.document.lock().map_err(|_| StoreError::Poisoned)?;
+            *cached = document.clone();
+        }
         Ok(document.grants.get(&request.digest()).and_then(|stored| {
             let metadata_matches = stored.request_digest == request.digest()
                 && stored.tool_id == request.tool_id
@@ -645,17 +655,15 @@ impl PermissionStore {
         if grant.scope != PermissionScope::Persistent {
             return Err(StoreError::NonPersistentGrant);
         }
-        let mut document = self.document.lock().map_err(|_| StoreError::Poisoned)?;
         let _lock = acquire_file_lock(&self.path)?;
-        if self.path.exists() {
-            let bytes = fs::read(&self.path).map_err(StoreError::read)?;
-            let latest: StoreDocument =
-                serde_json::from_slice(&bytes).map_err(StoreError::format)?;
-            if latest.schema_version != Self::SCHEMA_VERSION {
-                return Err(StoreError::UnsupportedSchema(latest.schema_version));
-            }
-            *document = latest;
-        }
+        let mut document = if self.path.exists() {
+            read_document(&self.path)?
+        } else {
+            self.document
+                .lock()
+                .map_err(|_| StoreError::Poisoned)?
+                .clone()
+        };
         document.grants.insert(
             request.digest(),
             StoredGrant {
@@ -672,7 +680,10 @@ impl PermissionStore {
                 issued_at: grant.issued_at,
             },
         );
-        write_document(&self.path, &document)
+        write_document(&self.path, &document)?;
+        let mut cached = self.document.lock().map_err(|_| StoreError::Poisoned)?;
+        *cached = document;
+        Ok(())
     }
 }
 
@@ -804,6 +815,16 @@ fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs())
+}
+
+fn read_document(path: &Path) -> Result<StoreDocument, StoreError> {
+    ensure_owner_only_permissions(path).map_err(StoreError::write)?;
+    let bytes = fs::read(path).map_err(StoreError::read)?;
+    let document: StoreDocument = serde_json::from_slice(&bytes).map_err(StoreError::format)?;
+    if document.schema_version != PermissionStore::SCHEMA_VERSION {
+        return Err(StoreError::UnsupportedSchema(document.schema_version));
+    }
+    Ok(document)
 }
 
 fn write_document(path: &Path, document: &StoreDocument) -> Result<(), StoreError> {
@@ -1155,6 +1176,28 @@ mod tests {
             Err(StoreError::NonPersistentGrant)
         ));
         assert!(!path.exists());
+        assert!(!path.with_extension("json.lock").exists());
+    }
+
+    #[test]
+    fn get_refreshes_a_store_opened_by_another_host_instance() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("permissions.json");
+        let writer = PermissionStore::open(&path).unwrap();
+        let reader = PermissionStore::open(&path).unwrap();
+        let request = request();
+        let grant = GrantAuthority::new()
+            .approve_with(
+                &request,
+                request.capabilities().clone(),
+                PermissionScope::Persistent,
+                None,
+            )
+            .unwrap();
+
+        writer.put(&grant, &request).unwrap();
+
+        assert_eq!(reader.get(&request).unwrap(), Some(grant));
     }
 
     #[test]

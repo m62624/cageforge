@@ -6,13 +6,24 @@ import java.nio.file.Path
 
 /** Host-owned persistent store for exact preflight grants. */
 class PermissionStore private constructor(
-    private var handle: Long,
+    handle: Long,
     val path: Path,
 ) : AutoCloseable {
+    private val native =
+        NativeHandle(
+            handle,
+            NativeBridge::nativeClosePermissionStore,
+            { CageforgePermissionException("Cageforge permission store is closed") },
+        )
+
     /** Returns a persisted grant for the exact request, or null when absent. */
     fun get(request: PermissionRequest): PermissionGrant? {
-        checkOpen()
-        val grant = NativeBridge.nativePermissionStoreGet(handle, request.handle)
+        val grant =
+            native.use { storeHandle ->
+                request.useNative { requestHandle ->
+                    NativeBridge.nativePermissionStoreGet(storeHandle, requestHandle)
+                }
+            }
         if (grant == 0L) return null
         return try {
             PermissionGrant(
@@ -32,21 +43,16 @@ class PermissionStore private constructor(
         grant: PermissionGrant,
         request: PermissionRequest,
     ) {
-        checkOpen()
-        NativeBridge.nativePermissionStorePut(handle, grant.handle, request.handle)
-    }
-
-    override fun close() {
-        if (handle != 0L) {
-            val value = handle
-            handle = 0L
-            NativeBridge.nativeClosePermissionStore(value)
+        native.use { storeHandle ->
+            grant.useNative { grantHandle ->
+                request.useNative { requestHandle ->
+                    NativeBridge.nativePermissionStorePut(storeHandle, grantHandle, requestHandle)
+                }
+            }
         }
     }
 
-    private fun checkOpen() {
-        if (handle == 0L) throw CageforgePermissionException("Cageforge permission store is closed")
-    }
+    override fun close() = native.close()
 
     companion object {
         /** Opens or creates a host-owned store at an absolute path. */

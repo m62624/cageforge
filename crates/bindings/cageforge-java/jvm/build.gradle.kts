@@ -13,7 +13,18 @@ plugins {
 }
 
 group = providers.gradleProperty("mavenGroup").orElse("io.github.m62624").get()
-version = providers.gradleProperty("releaseVersion").orElse("0.2.0").get()
+
+fun workspaceVersion(manifest: File): String {
+    val version =
+        Regex("""(?ms)^\[workspace\.package\].*?^version\s*=\s*\"([^\"]+)\"""")
+            .find(manifest.readText())
+            ?.groupValues
+            ?.get(1)
+    return version ?: error("workspace package version is missing from ${manifest.path}")
+}
+
+val workspaceVersion = workspaceVersion(layout.projectDirectory.file("../../../../Cargo.toml").asFile)
+version = providers.gradleProperty("releaseVersion").orElse(workspaceVersion).get()
 
 java {
     toolchain { languageVersion.set(JavaLanguageVersion.of(17)) }
@@ -84,6 +95,7 @@ tasks.jar {
     from(layout.projectDirectory.file("../../../../LICENSE")) { into("META-INF") }
     from(layout.projectDirectory.file("../../../../NOTICE")) { into("META-INF") }
     from(layout.projectDirectory.file("../../../../THIRD_PARTY_NOTICES.md")) { into("META-INF") }
+    from(layout.projectDirectory.file("../README.md")) { into("META-INF") }
     from(layout.projectDirectory.file("../../../../crates/cageforge-bwrap/licenses/bubblewrap-COPYING")) {
         into("META-INF/licenses")
     }
@@ -146,6 +158,7 @@ tasks.register("verifyMavenPublication") {
                 "META-INF/LICENSE",
                 "META-INF/NOTICE",
                 "META-INF/THIRD_PARTY_NOTICES.md",
+                "META-INF/README.md",
                 "META-INF/licenses/bubblewrap-COPYING",
             ).forEach { entry ->
                 check(archive.getEntry(entry) != null) {

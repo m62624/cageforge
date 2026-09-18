@@ -231,6 +231,7 @@ fn runtime_from_toml(
     native_directory: String,
     minimal_directory: Option<String>,
     grant_handle: jlong,
+    request_handle: jlong,
 ) -> Result<jlong, BindingError> {
     let current_directory = path(current_directory, "current directory")?;
     let native_directory = path(native_directory, "native resource directory")?;
@@ -257,16 +258,7 @@ fn runtime_from_toml(
         };
         return Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong);
     }
-    let identity = cageforge::PreflightIdentity::new(
-        "cageforge-java",
-        env!("CARGO_PKG_VERSION"),
-        cageforge::sha256_digest(b"cageforge-java"),
-        cageforge::sha256_digest(toml.as_bytes()),
-        cageforge::PlatformId::current().map_err(|error| {
-            BindingError::new(BindingErrorKind::Configuration, error.to_string())
-        })?,
-        std::env::consts::ARCH,
-    );
+    let identity = preflight_identity(request_handle, &toml)?;
     let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
         profile.policy(),
         &context,
@@ -302,6 +294,33 @@ fn runtime_from_toml(
         approved_program,
     };
     Ok(Box::into_raw(Box::new(Mutex::new(state))) as jlong)
+}
+
+fn preflight_identity(
+    request_handle: jlong,
+    toml: &str,
+) -> Result<cageforge::PreflightIdentity, BindingError> {
+    if request_handle != 0 {
+        let request = request_ref(request_handle)?.clone();
+        return Ok(cageforge::PreflightIdentity::new(
+            request.tool_id(),
+            request.tool_version(),
+            request.manifest_digest(),
+            request.config_digest(),
+            request.platform(),
+            request.architecture(),
+        ));
+    }
+    Ok(cageforge::PreflightIdentity::new(
+        "cageforge-java",
+        env!("CARGO_PKG_VERSION"),
+        cageforge::sha256_digest(b"cageforge-java"),
+        cageforge::sha256_digest(toml.as_bytes()),
+        cageforge::PlatformId::current().map_err(|error| {
+            BindingError::new(BindingErrorKind::Configuration, error.to_string())
+        })?,
+        std::env::consts::ARCH,
+    ))
 }
 
 fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
@@ -896,6 +915,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
     native_directory: JString<'caller>,
     minimal_directory: JString<'caller>,
     grant: jlong,
+    request: jlong,
 ) -> jlong {
     ffi_call_kind(&mut unowned_env, BindingErrorKind::Initialization, |env| {
         runtime_from_toml(
@@ -909,6 +929,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeCreate<'caller>(
                 Some(java_string(env, minimal_directory, "minimal directory")?)
             },
             grant,
+            request,
         )
     })
 }

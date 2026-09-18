@@ -293,7 +293,7 @@ public final class Main {
                 "program = \"" + tomlString(Path.of(program)) + "\"");
         try (PermissionRequest request = Cageforge.permissionRequest(configuredToml, null, context);
                 PermissionGrant grant = new PermissionApprover().approve(request)) {
-            return Cageforge.fromToml(configuredToml, null, context, grant);
+            return Cageforge.fromToml(configuredToml, null, context, grant, request);
         }
     }
 

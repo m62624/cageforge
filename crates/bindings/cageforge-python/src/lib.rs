@@ -150,16 +150,16 @@ pub struct Cageforge {
 
 /// A structured, non-authoritative permission request for one launch plan.
 #[gen_stub_pyclass]
-#[pyclass(frozen, module = "cageforge._cageforge")]
+#[pyclass(module = "cageforge._cageforge")]
 pub struct PermissionRequest {
-    inner: cageforge::PermissionRequest,
+    inner: Option<cageforge::PermissionRequest>,
 }
 
 /// An opaque trusted-host approval for a permission request.
 #[gen_stub_pyclass]
-#[pyclass(frozen, module = "cageforge._cageforge")]
+#[pyclass(module = "cageforge._cageforge")]
 pub struct PermissionGrant {
-    inner: cageforge::PermissionGrant,
+    inner: Option<cageforge::PermissionGrant>,
 }
 
 /// Trusted host capability that can issue an opaque grant.
@@ -171,7 +171,8 @@ pub struct PermissionApprover;
 #[gen_stub_pyclass]
 #[pyclass(module = "cageforge._cageforge")]
 pub struct PermissionStore {
-    inner: cageforge::PermissionStore,
+    inner: Option<Arc<cageforge::PermissionStore>>,
+    path: PathBuf,
 }
 
 /// A launched sandbox process and its detached standard streams.
@@ -217,6 +218,31 @@ fn setup_error(error: impl ToString) -> PyErr {
 
 fn permission_scope(value: &str) -> Result<cageforge::PermissionScope, cageforge::PermissionError> {
     cageforge::PermissionScope::parse(value)
+}
+
+fn closed_permission_error(kind: &str) -> PyErr {
+    permission_error(format!("Cageforge {kind} is closed"))
+}
+
+fn request_inner(value: &PermissionRequest) -> PyResult<&cageforge::PermissionRequest> {
+    value
+        .inner
+        .as_ref()
+        .ok_or_else(|| closed_permission_error("permission request"))
+}
+
+fn grant_inner(value: &PermissionGrant) -> PyResult<&cageforge::PermissionGrant> {
+    value
+        .inner
+        .as_ref()
+        .ok_or_else(|| closed_permission_error("permission grant"))
+}
+
+fn store_inner(value: &PermissionStore) -> PyResult<&Arc<cageforge::PermissionStore>> {
+    value
+        .inner
+        .as_ref()
+        .ok_or_else(|| closed_permission_error("permission store"))
 }
 
 fn absolute_path(path: PathBuf, name: &str) -> PyResult<PathBuf> {
@@ -545,6 +571,30 @@ fn build_preflight_request(
     Ok(plan.request().clone())
 }
 
+fn preflight_identity(
+    request: Option<&cageforge::PermissionRequest>,
+    toml: &str,
+) -> Result<cageforge::PreflightIdentity, String> {
+    if let Some(request) = request {
+        return Ok(cageforge::PreflightIdentity::new(
+            request.tool_id(),
+            request.tool_version(),
+            request.manifest_digest(),
+            request.config_digest(),
+            request.platform(),
+            request.architecture(),
+        ));
+    }
+    Ok(cageforge::PreflightIdentity::new(
+        "cageforge-python",
+        env!("CARGO_PKG_VERSION"),
+        cageforge::sha256_digest(b"cageforge-python"),
+        cageforge::sha256_digest(toml.as_bytes()),
+        cageforge::PlatformId::current().map_err(|error| error.to_string())?,
+        std::env::consts::ARCH,
+    ))
+}
+
 fn resolve_profile(
     config: &cageforge::Config,
     profile_name: Option<&str>,
@@ -656,7 +706,9 @@ impl Cageforge {
             config_digest.unwrap_or_else(|| cageforge::sha256_digest(toml.as_bytes())),
         )
         .map_err(configuration_error)?;
-        Ok(PermissionRequest { inner: request })
+        Ok(PermissionRequest {
+            inner: Some(request),
+        })
     }
 
     /// Checks TOML parsing, profile resolution, and policy composition.
@@ -689,13 +741,14 @@ impl Cageforge {
 
     /// Creates a native runtime from TOML and the selected profile.
     #[staticmethod]
-    #[pyo3(signature = (toml, profile_name=None, context=None, grant=None))]
+    #[pyo3(signature = (toml, profile_name=None, context=None, grant=None, request=None))]
     fn from_toml(
         py: Python<'_>,
         toml: String,
         profile_name: Option<String>,
         context: Option<&RuntimeContext>,
         grant: Option<&PermissionGrant>,
+        request: Option<&PermissionRequest>,
     ) -> PyResult<Self> {
         let toml = normalize_toml_source(toml);
         if toml.is_empty() {
@@ -710,7 +763,22 @@ impl Cageforge {
                 )
             });
         let module_directory = module_native_directory(py)?;
-        let grant = grant.map(|grant| grant.inner.clone());
+        let grant = grant
+            .map(|grant| {
+                grant
+                    .inner
+                    .clone()
+                    .ok_or_else(|| closed_permission_error("permission grant"))
+            })
+            .transpose()?;
+        let request = request
+            .map(|request| {
+                request
+                    .inner
+                    .clone()
+                    .ok_or_else(|| closed_permission_error("permission request"))
+            })
+            .transpose()?;
         let state = py.detach(move || {
             let config = config_from_toml(&toml).map_err(configuration_error)?;
             let profile =
@@ -730,14 +798,8 @@ impl Cageforge {
                     approved_program: None,
                 });
             }
-            let identity = cageforge::PreflightIdentity::new(
-                "cageforge-python",
-                env!("CARGO_PKG_VERSION"),
-                cageforge::sha256_digest(b"cageforge-python"),
-                cageforge::sha256_digest(toml.as_bytes()),
-                cageforge::PlatformId::current().map_err(configuration_error)?,
-                std::env::consts::ARCH,
-            );
+            let identity = preflight_identity(request.as_ref(), &toml)
+                .map_err(configuration_error)?;
             let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
                 profile.policy(),
                 &resolution,
@@ -784,13 +846,14 @@ impl Cageforge {
 
     /// Reads a TOML file and creates a runtime using its parent directory.
     #[staticmethod]
-    #[pyo3(signature = (file, profile_name=None, context=None, grant=None))]
+    #[pyo3(signature = (file, profile_name=None, context=None, grant=None, request=None))]
     fn from_toml_file(
         py: Python<'_>,
         file: PathBuf,
         profile_name: Option<String>,
         context: Option<&RuntimeContext>,
         grant: Option<&PermissionGrant>,
+        request: Option<&PermissionRequest>,
     ) -> PyResult<Self> {
         let file = absolute_path(file, "file")?;
         let source_file = file.clone();
@@ -804,7 +867,7 @@ impl Cageforge {
                 current_directory,
                 minimal_path,
             });
-        Self::from_toml(py, source, profile_name, context.as_ref(), grant)
+        Self::from_toml(py, source, profile_name, context.as_ref(), grant, request)
     }
 
     /// Returns the native resource target selected by this interpreter.
@@ -889,28 +952,28 @@ impl Cageforge {
 impl PermissionRequest {
     /// Returns the stable JSON representation used by host adapters.
     fn json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.inner).map_err(permission_error)
+        serde_json::to_string(request_inner(self)?).map_err(permission_error)
     }
 
     /// Returns the requesting tool identifier.
-    fn tool_id(&self) -> &str {
-        self.inner.tool_id()
+    fn tool_id(&self) -> PyResult<&str> {
+        Ok(request_inner(self)?.tool_id())
     }
     /// Returns the tool version.
-    fn tool_version(&self) -> &str {
-        self.inner.tool_version()
+    fn tool_version(&self) -> PyResult<&str> {
+        Ok(request_inner(self)?.tool_version())
     }
     /// Returns the selected platform.
-    fn platform(&self) -> &str {
-        self.inner.platform().as_str()
+    fn platform(&self) -> PyResult<&str> {
+        Ok(request_inner(self)?.platform().as_str())
     }
     /// Returns the request digest.
-    fn digest(&self) -> String {
-        self.inner.digest()
+    fn digest(&self) -> PyResult<String> {
+        Ok(request_inner(self)?.digest())
     }
     /// Returns filesystem capabilities as `(operation, path)` pairs.
-    fn filesystem(&self) -> Vec<(String, String)> {
-        self.inner
+    fn filesystem(&self) -> PyResult<Vec<(String, String)>> {
+        Ok(request_inner(self)?
             .capabilities()
             .filesystem()
             .iter()
@@ -920,16 +983,35 @@ impl PermissionRequest {
                     capability.path().to_owned(),
                 )
             })
-            .collect()
+            .collect())
     }
     /// Returns requested network endpoints.
-    fn network(&self) -> Vec<String> {
-        self.inner
+    fn network(&self) -> PyResult<Vec<String>> {
+        Ok(request_inner(self)?
             .capabilities()
             .network()
             .iter()
             .map(|capability| capability.endpoint().to_owned())
-            .collect()
+            .collect())
+    }
+
+    /// Releases the request and makes later operations fail closed.
+    fn close(&mut self) {
+        self.inner = None;
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        _ty: Option<Py<PyAny>>,
+        _value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
+    ) -> PyResult<bool> {
+        self.close();
+        Ok(false)
     }
 }
 
@@ -951,15 +1033,11 @@ impl PermissionApprover {
         expires_at: Option<u64>,
     ) -> PyResult<PermissionGrant> {
         let scope = permission_scope(scope).map_err(permission_error)?;
+        let request = request_inner(request)?;
         let inner = cageforge::GrantAuthority::new()
-            .approve_with(
-                &request.inner,
-                request.inner.capabilities().clone(),
-                scope,
-                expires_at,
-            )
+            .approve_with(request, request.capabilities().clone(), scope, expires_at)
             .map_err(permission_error)?;
-        Ok(PermissionGrant { inner })
+        Ok(PermissionGrant { inner: Some(inner) })
     }
 }
 
@@ -967,31 +1045,78 @@ impl PermissionApprover {
 #[pymethods]
 impl PermissionStore {
     /// Opens a host-owned permission store at an absolute path.
+    #[staticmethod]
+    fn open(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
+        Self::new(py, path)
+    }
+
+    /// Opens a host-owned permission store at an absolute path.
     #[new]
-    fn new(path: PathBuf) -> PyResult<Self> {
+    fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         let path = absolute_path(path, "permission store path")?;
-        let inner = cageforge::PermissionStore::open(path).map_err(permission_error)?;
-        Ok(Self { inner })
+        let open_path = path.clone();
+        let inner = py
+            .detach(move || {
+                cageforge::PermissionStore::open(open_path).map_err(|error| error.to_string())
+            })
+            .map_err(permission_error)?;
+        Ok(Self {
+            inner: Some(Arc::new(inner)),
+            path,
+        })
     }
 
     /// Returns the configured store path.
     fn path(&self) -> String {
-        self.inner.path().to_string_lossy().into_owned()
+        self.path.to_string_lossy().into_owned()
     }
 
     /// Returns a valid persisted grant for the exact request, if present.
-    fn get(&self, request: &PermissionRequest) -> PyResult<Option<PermissionGrant>> {
-        self.inner
-            .get(&request.inner)
-            .map(|grant| grant.map(|inner| PermissionGrant { inner }))
-            .map_err(permission_error)
+    fn get(
+        &self,
+        py: Python<'_>,
+        request: &PermissionRequest,
+    ) -> PyResult<Option<PermissionGrant>> {
+        let store = store_inner(self)?.clone();
+        let request = request_inner(request)?.clone();
+        py.detach(move || {
+            store
+                .get(&request)
+                .map(|grant| grant.map(|inner| PermissionGrant { inner: Some(inner) }))
+                .map_err(permission_error)
+        })
     }
 
     /// Persists a persistent grant after validating it against the request.
-    fn put(&self, grant: &PermissionGrant, request: &PermissionRequest) -> PyResult<()> {
-        self.inner
-            .put(&grant.inner, &request.inner)
-            .map_err(permission_error)
+    fn put(
+        &self,
+        py: Python<'_>,
+        grant: &PermissionGrant,
+        request: &PermissionRequest,
+    ) -> PyResult<()> {
+        let store = store_inner(self)?.clone();
+        let grant = grant_inner(grant)?.clone();
+        let request = request_inner(request)?.clone();
+        py.detach(move || store.put(&grant, &request).map_err(permission_error))
+    }
+
+    /// Releases the store and makes later operations fail closed.
+    fn close(&mut self) {
+        self.inner = None;
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        _ty: Option<Py<PyAny>>,
+        _value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
+    ) -> PyResult<bool> {
+        self.close();
+        Ok(false)
     }
 }
 
@@ -999,18 +1124,37 @@ impl PermissionStore {
 #[pymethods]
 impl PermissionGrant {
     /// Returns the digest of the request this grant authorizes.
-    fn request_digest(&self) -> &str {
-        self.inner.request_digest()
+    fn request_digest(&self) -> PyResult<&str> {
+        Ok(grant_inner(self)?.request_digest())
     }
 
     /// Returns the grant lifetime as `launch`, `session`, or `persistent`.
-    fn scope(&self) -> String {
-        format!("{:?}", self.inner.scope()).to_lowercase()
+    fn scope(&self) -> PyResult<String> {
+        Ok(format!("{:?}", grant_inner(self)?.scope()).to_lowercase())
     }
 
     /// Returns the optional Unix expiration timestamp.
-    fn expires_at(&self) -> Option<u64> {
-        self.inner.expires_at()
+    fn expires_at(&self) -> PyResult<Option<u64>> {
+        Ok(grant_inner(self)?.expires_at())
+    }
+
+    /// Releases the grant and makes later operations fail closed.
+    fn close(&mut self) {
+        self.inner = None;
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        _ty: Option<Py<PyAny>>,
+        _value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
+    ) -> PyResult<bool> {
+        self.close();
+        Ok(false)
     }
 }
 

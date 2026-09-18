@@ -8,11 +8,13 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from cageforge import (
     Cageforge,
+    CageforgePermissionError,
     CageforgeProcessError,
     PermissionApprover,
     PermissionGrant,
@@ -108,12 +110,62 @@ def test_persistent_grant_store_uses_the_explicit_path(tmp_path: Path) -> None:
     request = Cageforge.permission_request(smoke_toml(), context=context)
     grant = PermissionApprover().approve(request, scope="persistent")
     path = tmp_path / "host-state" / "permissions.json"
-    store = PermissionStore(path)
+    store = PermissionStore.open(path)
     assert store.path() == str(path)
     store.put(grant, request)
     cached = store.get(request)
     assert cached is not None
     assert cached.request_digest() == request.digest()
+    store.close()
+    with pytest.raises(CageforgePermissionError):
+        store.get(request)
+    cached.close()
+    with pytest.raises(CageforgePermissionError):
+        cached.request_digest()
+    request.close()
+    with pytest.raises(CageforgePermissionError):
+        request.digest()
+
+
+def test_persistent_store_handles_concurrent_binding_calls(tmp_path: Path) -> None:
+    context = runtime_context(tmp_path)
+    request = Cageforge.permission_request(smoke_toml(), context=context)
+    grant = PermissionApprover().approve(request, scope="persistent")
+    store = PermissionStore.open(tmp_path / "host-state" / "permissions.json")
+    try:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            writes = [executor.submit(store.put, grant, request) for _ in range(8)]
+            for future in writes:
+                future.result()
+            reads = [executor.submit(store.get, request) for _ in range(8)]
+            assert all(future.result() is not None for future in reads)
+    finally:
+        store.close()
+        request.close()
+        grant.close()
+
+
+def test_custom_permission_identity_is_reused_by_runtime(tmp_path: Path) -> None:
+    require_linux_guest()
+    ensure_windows_setup()
+    context = runtime_context(tmp_path)
+    toml = smoke_toml()
+    request = Cageforge.permission_request(
+        toml,
+        context=context,
+        tool_id="custom-host-tool",
+        tool_version="9.4.1",
+    )
+    grant = PermissionApprover().approve(request)
+    runtime = Cageforge.from_toml(
+        toml,
+        context=context,
+        grant=grant,
+        request=request,
+    )
+    runtime.close()
+    request.close()
+    grant.close()
 
 
 def test_native_profile_launch_and_streams(tmp_path: Path) -> None:

@@ -21,6 +21,10 @@ JAVA_TO_PYTHON = {
         "hasStdin": "has_stdin",
         "hasStdout": "has_stdout",
         "hasStderr": "has_stderr",
+        "readStdout": "read_stdout",
+        "readStderr": "read_stderr",
+        "writeStdin": "write_stdin",
+        "closeStdin": "close_stdin",
         "tryWait": "try_wait",
         "waitFor": "wait_for",
         "kill": "kill",
@@ -44,16 +48,27 @@ JAVA_TO_PYTHON = {
         "getDigest": "digest",
         "getFilesystem": "filesystem",
         "getNetwork": "network",
+        "close": "close",
     },
     "PermissionGrant": {
         "getRequestDigest": "request_digest",
         "getScope": "scope",
         "getExpiresAt": "expires_at",
+        "close": "close",
     },
     "PermissionStore": {
+        "open": "open",
         "get": "get",
         "put": "put",
         "path": "path",
+        "close": "close",
+    },
+    "ProcessResult": {
+        "getExitCode": "exit_code",
+    },
+    "RuntimeContext": {
+        "getCurrentDirectory": "current_directory",
+        "getMinimalPath": "minimal_path",
     },
 }
 
@@ -73,6 +88,7 @@ def test_structured_errors_are_a_single_exported_hierarchy() -> None:
         cageforge.CageforgeConfigurationError,
         cageforge.CageforgeInitializationError,
         cageforge.CageforgeLaunchError,
+        cageforge.CageforgePermissionError,
         cageforge.CageforgeProcessError,
         cageforge.CageforgeStreamError,
         cageforge.CageforgeWindowsSetupError,

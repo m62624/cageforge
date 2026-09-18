@@ -66,7 +66,7 @@ Cageforge.checkToml(config, context = context)
 val request = Cageforge.permissionRequest(config, context = context)
 request.use { preflight ->
     preflight.approve().use { grant ->
-        Cageforge.fromTomlFile(profile, context = context, grant = grant).use { sandbox ->
+        Cageforge.fromTomlFile(profile, context = context, grant = grant, request = preflight).use { sandbox ->
             sandbox.launch().use { process ->
                 process.stdout?.bufferedReader()?.use { reader ->
                     print(reader.readText())
@@ -88,6 +88,9 @@ network. The Windows profile uses `cmd.exe`; the POSIX profiles use `/bin/echo`.
 Profiles with `approval.mode = "preflight"` require a trusted
 `PermissionGrant` before launch. The request is descriptive and the grant is
 opaque; approval never changes permissions of an already-running process.
+When `permissionRequest` is called with custom identity or digest arguments,
+pass that same `PermissionRequest` to `fromToml` or `fromTomlFile`; the runtime
+then authorizes the grant against the exact identity that was approved.
 
 ### Persistent grants and store paths
 
@@ -104,13 +107,13 @@ val grant = PermissionApprover().approve(request, scope = "persistent")
 store.put(grant, request)
 
 val cached = store.get(request) ?: error("preflight approval is missing")
-Cageforge.fromToml(config, context = context, grant = cached).use { runtime ->
+Cageforge.fromToml(config, context = context, grant = cached, request = request).use { runtime ->
     // launch only after the exact persisted grant has been authorized
 }
 store.close()
 ```
 
-The store uses a versioned JSON document, an advisory writer lock, atomic
+The store uses a versioned JSON document, a kernel file lock, atomic
 replacement, Unix owner-only permissions, and a Windows owner-only DACL. A
 missing record is not an approval. The CLI has the same behavior through
 `--permission-store PATH`, which takes priority over its OS-native per-user
