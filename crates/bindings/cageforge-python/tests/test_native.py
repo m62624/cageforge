@@ -152,7 +152,6 @@ def test_persistent_store_handles_concurrent_binding_calls(tmp_path: Path) -> No
 def test_persistent_grant_store_rejects_relative_paths() -> None:
     with pytest.raises(CageforgeStorePathError):
         PermissionStore.open(Path("permissions.json"))
-        grant.close()
 
 
 def test_permission_store_pages_and_revokes_by_stable_id(tmp_path: Path) -> None:
