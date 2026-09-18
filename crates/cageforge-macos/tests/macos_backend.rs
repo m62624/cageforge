@@ -2168,7 +2168,7 @@ fn restricted_unix_socket_policy_denies_an_unlisted_path() {
         .expect("allowed Unix socket rule");
     let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
     let (command, effective, context) =
-        unix_network_request(workspace.path(), &policy, "unix-path-denied", &denied);
+        unix_network_request(workspace.path(), &policy, "unix-denied", &denied);
     let backend = backend();
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
