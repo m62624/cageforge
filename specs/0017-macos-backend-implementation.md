@@ -365,6 +365,7 @@ Native macOS black-box tests cover at least:
 - disabled networking blocks direct connections;
 - enabled unrestricted networking preserves direct connections;
 - restricted networking reaches only exact authorized gateway targets;
+- restricted Unix-socket networking rejects an unlisted pathname endpoint;
 - an existing Unix-socket symlink alias is lowered to its canonical target;
 - a gateway ingress port remains unavailable until confirmed runtime cleanup;
 - separate simultaneous instances retain separate policies and gateway keys;

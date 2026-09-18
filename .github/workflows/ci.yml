@@ -71,7 +71,8 @@ concurrency:
 #    the requested lane. Labels are never applied automatically by the labeler.
 # 5. Sandbox crates never enter the common-component jobs. The Windows sandbox
 #    lane runs every cageforge-windows feature combination and its native tests;
-#    macOS still reports its missing native backend in its own sandbox job.
+#    macOS runs its native Seatbelt backend and integration tests in its own
+#    sandbox job.
 # 6. JVM and Python bindings are scheduled independently. A core API/backend
 #    dependency selects both bindings, a binding crate selects only its own
 #    consumer, and CLI-only changes select neither final consumer.
