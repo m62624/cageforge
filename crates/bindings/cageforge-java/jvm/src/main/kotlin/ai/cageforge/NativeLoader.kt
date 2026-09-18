@@ -10,32 +10,69 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.atomic.AtomicReference
 
 internal object NativeLoader {
-    private val lock = Any()
-    private var loadedDirectory: Path? = null
+    private val loaded = AtomicReference<CompletableFuture<Loaded>?>(null)
 
-    fun load(): Path =
-        synchronized(lock) {
-            val target = target()
-            loadedDirectory?.let { directory ->
-                // Helpers are executed by later runtime launches, so verify
-                // the cached bytes on every access, not only on first load.
-                extract(directory, target.library)
-                target.resources.forEach { extract(directory, it) }
-                return directory
+    fun load(): Path {
+        val target = target()
+        while (true) {
+            val existing = loaded.get()
+            if (existing != null) {
+                val value = await(existing)
+                check(value.target == target) {
+                    "Cageforge native target changed after the JVM library was loaded"
+                }
+                verify(value.directory, target)
+                return value.directory
             }
-            val directory = cacheDirectory(target)
-            Files.createDirectories(directory)
-            val library = extract(directory, target.library)
-            target.resources.forEach { extract(directory, it) }
-            System.load(library.toAbsolutePath().toString())
-            loadedDirectory = directory
-            directory
+
+            val candidate = CompletableFuture<Loaded>()
+            if (!loaded.compareAndSet(null, candidate)) continue
+            try {
+                val directory = loadInitial(target)
+                val value = Loaded(target, directory)
+                candidate.complete(value)
+                return directory
+            } catch (error: Throwable) {
+                candidate.completeExceptionally(error)
+                loaded.compareAndSet(candidate, null)
+                throw error
+            }
         }
+    }
 
     /** Returns the resource target selected from the current JVM platform. */
     fun targetId(): String = "${target().os}-${target().arch}"
+
+    private fun loadInitial(target: Target): Path {
+        val directory = cacheDirectory(target)
+        Files.createDirectories(directory)
+        val library = extract(directory, target.library)
+        target.resources.forEach { extract(directory, it) }
+        System.load(library.toAbsolutePath().toString())
+        return directory
+    }
+
+    private fun verify(
+        directory: Path,
+        target: Target,
+    ) {
+        // Helpers are executed by later runtime launches, so verify the
+        // cached bytes on every access, not only on first load.
+        extract(directory, target.library)
+        target.resources.forEach { extract(directory, it) }
+    }
+
+    private fun await(future: CompletableFuture<Loaded>): Loaded =
+        try {
+            future.get()
+        } catch (error: ExecutionException) {
+            throw error.cause ?: error
+        }
 
     private fun target(): Target {
         val os = System.getProperty("os.name").lowercase(Locale.ROOT)
@@ -160,5 +197,10 @@ internal object NativeLoader {
         val arch: String,
         val library: String,
         val resources: List<String>,
+    )
+
+    private data class Loaded(
+        val target: Target,
+        val directory: Path,
     )
 }

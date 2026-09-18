@@ -103,7 +103,6 @@ struct ChildState {
     completed_status: Mutex<Option<Option<i32>>>,
     lifecycle: Mutex<LifecycleState>,
     no_active_operations: Condvar,
-    close_lock: Mutex<()>,
 }
 
 struct OperationGuard {
@@ -145,7 +144,7 @@ pub struct ProcessResult {
 #[gen_stub_pyclass]
 #[pyclass(module = "cageforge._cageforge")]
 pub struct Cageforge {
-    state: Arc<Mutex<Option<RuntimeState>>>,
+    state: Arc<Mutex<Option<Arc<RuntimeState>>>>,
 }
 
 /// A structured, non-authoritative permission request for one launch plan.
@@ -840,7 +839,7 @@ impl Cageforge {
             })
         })?;
         Ok(Self {
-            state: Arc::new(Mutex::new(Some(state))),
+            state: Arc::new(Mutex::new(Some(Arc::new(state)))),
         })
     }
 
@@ -881,14 +880,18 @@ impl Cageforge {
     fn launch(&self, py: Python<'_>, argv: Option<Vec<String>>) -> PyResult<SandboxProcess> {
         let argv = argv.unwrap_or_default();
         let state = Arc::clone(&self.state);
-        let child = py.detach(move || {
+        let runtime = {
             let guard = state
                 .lock()
                 .map_err(|_| launch_error("runtime is poisoned"))?;
-            let runtime = guard
-                .as_ref()
-                .ok_or_else(|| launch_error("runtime is closed"))?;
-            let request = command_request(runtime, argv).map_err(launch_error)?;
+            Arc::clone(
+                guard
+                    .as_ref()
+                    .ok_or_else(|| launch_error("runtime is closed"))?,
+            )
+        };
+        let child = py.detach(move || {
+            let request = command_request(&runtime, argv).map_err(launch_error)?;
             if runtime.preflight_required {
                 let program = request.command().program().to_string_lossy();
                 if runtime.approved_program.as_deref() != Some(program.as_ref()) {
@@ -914,7 +917,6 @@ impl Cageforge {
                     active_operations: 0,
                 }),
                 no_active_operations: Condvar::new(),
-                close_lock: Mutex::new(()),
             })
         })?;
         Ok(SandboxProcess {
@@ -925,10 +927,12 @@ impl Cageforge {
     /// Releases the runtime handle. Existing process objects remain owned by
     /// their own native child boundary.
     fn close(&self) -> PyResult<()> {
-        self.state
+        let runtime = self
+            .state
             .lock()
             .map_err(|_| process_error("runtime is poisoned"))?
             .take();
+        drop(runtime);
         Ok(())
     }
 
@@ -1067,8 +1071,8 @@ impl PermissionStore {
     }
 
     /// Returns the configured store path.
-    fn path(&self) -> String {
-        self.path.to_string_lossy().into_owned()
+    fn path(&self) -> PathBuf {
+        self.path.clone()
     }
 
     /// Returns a valid persisted grant for the exact request, if present.
@@ -1302,15 +1306,17 @@ impl SandboxProcess {
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         let state = Arc::clone(&self.state);
         py.detach(move || {
-            let _close = state
-                .close_lock
-                .lock()
-                .map_err(|_| process_error("process close lock is poisoned"))?;
             {
                 let mut lifecycle = state
                     .lifecycle
                     .lock()
                     .map_err(|_| process_error("process lifecycle is poisoned"))?;
+                while lifecycle.closing && !lifecycle.closed {
+                    lifecycle = state
+                        .no_active_operations
+                        .wait(lifecycle)
+                        .map_err(|_| process_error("process lifecycle is poisoned"))?;
+                }
                 if lifecycle.closed {
                     return Ok(());
                 }
@@ -1328,6 +1334,8 @@ impl SandboxProcess {
                     .map_err(|_| process_error("process lifecycle is poisoned"))?;
             }
             lifecycle.closed = true;
+            lifecycle.closing = false;
+            state.no_active_operations.notify_all();
             termination
         })
     }

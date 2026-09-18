@@ -214,7 +214,7 @@ class PermissionStore:
         r"""
         Opens a host-owned permission store at an absolute path.
         """
-    def path(self) -> builtins.str:
+    def path(self) -> pathlib.Path:
         r"""
         Returns the configured store path.
         """

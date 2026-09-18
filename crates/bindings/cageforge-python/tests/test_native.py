@@ -111,7 +111,7 @@ def test_persistent_grant_store_uses_the_explicit_path(tmp_path: Path) -> None:
     grant = PermissionApprover().approve(request, scope="persistent")
     path = tmp_path / "host-state" / "permissions.json"
     store = PermissionStore.open(path)
-    assert store.path() == str(path)
+    assert store.path() == path
     store.put(grant, request)
     cached = store.get(request)
     assert cached is not None
