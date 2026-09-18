@@ -856,7 +856,7 @@ job is an enforcement gate.
   while preserving process-local stream and sequenced-packet socketpair IPC;
 - restricted pathname Unix-socket policy permits the exact configured stream
   endpoint and rejects a sibling endpoint, including when the TCP policy is
-  proxy-routed;
+  proxy-routed or direct network access is otherwise enabled;
 - malformed, abstract, and oversized pathname endpoints fail closed; and
 - unrestricted networking is not accidentally treated as disabled;
 - hostname-only decisions cannot authorize a connection;

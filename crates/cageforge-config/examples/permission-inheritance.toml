@@ -1,0 +1,39 @@
+# Approval fields are scalar values: a child profile overrides only the
+# fields it declares, while platform overlays apply after inheritance.
+default_profile = "tool"
+
+[profiles.approval-base]
+workspace_roots = { "." = true }
+
+[profiles.approval-base.approval]
+mode = "preflight"
+timeout_ms = 10000
+on_timeout = "deny"
+persistence = "persistent"
+
+[profiles.approval-base.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.approval-base.network]
+mode = "enabled"
+domain_mode = "restricted"
+local_network_access = "deny"
+domains = [
+  { pattern = "api.example.com:443", access = "allow" },
+]
+
+[profiles.tool]
+inherits = ["approval-base"]
+
+[profiles.tool.approval]
+timeout_ms = 3000
+persistence = "session"
+
+[profiles.tool.platforms.windows.approval]
+# This overlay changes only the approval mode. The inherited timeout,
+# timeout action, persistence, filesystem, and network policy remain present.
+mode = "disabled"
