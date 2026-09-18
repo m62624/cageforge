@@ -197,9 +197,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: cageforge-python-*
+          pattern: cageforge-python-wheel-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: cageforge-python-sdist
+          path: dist
       - name: Publish tested wheels and source distribution
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
