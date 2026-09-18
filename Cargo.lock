@@ -194,7 +194,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cageforge"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-backend-api",
  "cageforge-command",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-backend-api"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-command",
  "cageforge-path",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-bwrap"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cc",
  "pkg-config",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge",
  "clap",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-command"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-path",
  "pretty_assertions",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-config"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-command",
  "cageforge-network-proxy",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-java"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge",
  "jni",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-linux"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-backend-api",
  "cageforge-bwrap",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-macos"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "block2",
  "cageforge-backend-api",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-network-proxy"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytes",
  "cageforge-command",
@@ -347,14 +347,14 @@ dependencies = [
 
 [[package]]
 name = "cageforge-path"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "cageforge-permissions"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libc",
  "schemars",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-policy"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-path",
  "globset",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-policy-compose"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-command",
  "cageforge-path",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-python"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge",
  "pyo3",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-upstream-review"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-path",
  "clap",
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "cageforge-windows"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cageforge-backend-api",
  "cageforge-command",
