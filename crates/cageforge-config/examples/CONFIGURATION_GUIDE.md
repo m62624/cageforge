@@ -256,19 +256,22 @@ Cageforge.fromTomlFile(configPath, "smoke", context).use { sandbox ->
 
 ## Validation
 
-The configuration test suite parses every checked-in `.toml` fixture and
-resolves the fixtures for the current host. macOS CI runs the matching native
-smoke profile; Linux native CI runs the backend enforcement suite in its
-QEMU/KVM guest, while the Linux config and CLI smoke profile can be run locally
-with the command above. Windows CI resolves the Windows profile on a Windows
-runner and the backend suite covers native preparation. Run the portable
-fixture check locally with:
+The configuration test suite parses and resolves every checked-in `.toml`
+fixture on every host. Only the three files under `runnable/` are native launch
+fixtures: macOS CI runs the macOS profile, Linux native CI runs the Linux
+profile in its QEMU/KVM guest, and Windows CI runs the Windows profile on a
+Windows runner. The remaining fixtures are deliberately parse-and-resolve
+examples because they describe policy, inheritance, platform syntax, or an
+external service rather than one universally runnable command. Run the
+portable fixture check locally with:
 
 ```console
 cargo test --locked -p cageforge-config --all-targets
 ```
 
-For backend requirements and lifecycle behavior, continue to the [facade
-README](../../cageforge/README.md), [Linux README](../../cageforge-linux/README.md),
-[macOS README](../../cageforge-macos/README.md), [Windows README](../../cageforge-windows/README.md),
-or [JVM binding README](../../bindings/cageforge-java/README.md).
+For backend requirements and lifecycle behavior, continue to the [`cageforge`
+README](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
+[Linux README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-linux/README.md),
+[macOS README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-macos/README.md),
+[Windows README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-windows/README.md),
+or [JVM binding README](https://github.com/m62624/cageforge/blob/main/crates/bindings/cageforge-java/README.md).

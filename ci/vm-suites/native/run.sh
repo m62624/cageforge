@@ -40,3 +40,10 @@ echo 'Running the CLI checks with the bundled Bubblewrap feature.'
 cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets --locked -- -D warnings
 cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --locked
 cargo doc -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --no-deps --locked
+
+echo 'Running the Linux runnable configuration example through the CLI.'
+smoke_output=$(cargo run --locked --release -p cageforge-cli \
+  --no-default-features --features linux-bundled-bubblewrap -- \
+  run --approve \
+  --config crates/cageforge-config/examples/runnable/linux/smoke.toml)
+grep -Fx 'cageforge-linux-smoke' <<<"$smoke_output"

@@ -51,6 +51,13 @@ expose the same endpoint kinds as typed values.
 The selected native backend must prove enforcement before launch; unsupported
 endpoint types fail closed.
 
+The configuration test suite parses and resolves every checked-in TOML file on
+every host. Only the three files under `runnable/` are native launch fixtures:
+the Linux QEMU job, the macOS native job, and the Windows native job execute
+the matching profile through `cageforge-cli`. The other files intentionally
+describe policy, inheritance, platform syntax, or external services; their
+contract is parse-and-resolve validation, not an implicit host launch.
+
 ### What a first launch must declare
 
 An endpoint declaration is not a general permission grant. A command still
@@ -84,7 +91,7 @@ concrete platform paths through its validated runtime context.
 
 Suggested reading order:
 
-1. The [configuration guide](CONFIGURATION_GUIDE.md) for the platform model.
+1. The [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md) for the platform model.
 2. `minimal-policy.toml` for the smallest policy-only profile.
 3. `workspace-development.toml` for a command plus filesystem declarations.
 4. `profile-inheritance.toml` for parent/child overrides.
