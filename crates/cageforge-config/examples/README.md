@@ -54,9 +54,11 @@ endpoint types fail closed.
 The configuration test suite parses every checked-in TOML file. Each
 target-specific native crate also loads the examples through the Rust API and
 resolves the profiles that are valid for its host OS on the corresponding
-Linux, macOS, or Windows runner. The files under `runnable/` are copyable
-platform-specific launch examples; CI does not invoke them through a separate
-CLI smoke step. The other files intentionally describe policy, inheritance,
+Linux, macOS, or Windows runner. Its native backend test launches the matching
+`runnable/*/smoke.toml` profile through that API and checks its output. The
+files under `runnable/` remain copyable platform-specific launch examples; CI
+does not invoke them through a separate CLI smoke step. The other files
+intentionally describe policy, inheritance,
 platform syntax, or external services, so their contract is parse-and-resolve
 validation rather than an implicit host launch.
 

@@ -119,9 +119,12 @@ native prerequisites are failures, not skips.
 Every checked-in TOML example is loaded through the Rust configuration API.
 The configuration crate checks parsing, and each target-specific native crate
 repeats parsing and host-compatible profile resolution in its own integration
-tests on the matching Linux, macOS, or Windows runner. Native backend tests
-then exercise enforcement through the backend API; CI does not add a separate
-CLI runnable-smoke step. The profiles under `runnable/` remain copyable,
-platform-specific launch examples, while the other files intentionally
+tests on the matching Linux, macOS, or Windows runner. The same native test
+targets launch the matching `runnable/*/smoke.toml` profile through
+`Config` -> `ResolvedProfile` -> policy composition -> the native backend API
+and assert the command's output. Native backend tests then exercise the
+security enforcement itself; CI does not add a separate CLI runnable-smoke
+step. The profiles under `runnable/` remain copyable, platform-specific launch
+examples, while the other files intentionally
 describe a policy without a command, a placeholder executable, an external
 service, or host paths that must not be created by CI.

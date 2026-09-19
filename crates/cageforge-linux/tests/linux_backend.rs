@@ -26,6 +26,7 @@ use cageforge_linux::{
     LinuxHelperSetupFailureKind, NetworkCombinationError, SetupHandshakeError,
 };
 use cageforge_network_proxy::GatewayConfig;
+use cageforge_permissions::PlatformId;
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalIpcEndpoint,
     LocalNetworkAccess, NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy,
@@ -224,6 +225,53 @@ fn context(workspace: &Path) -> PathResolutionContext {
         .expect("slash tmp")
         .with_current_directory(workspace.to_path_buf())
         .expect("cwd")
+}
+
+#[test]
+fn runnable_linux_profile_launches_through_the_native_backend_api() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cageforge-config/examples/runnable/linux/smoke.toml");
+    let profile = Config::from_file(&config_path)
+        .expect("Linux runnable configuration")
+        .resolve_default_for_platform(PlatformId::Linux)
+        .expect("Linux runnable profile");
+    let workspace = TempDir::new().expect("runnable workspace");
+    let command = profile
+        .command()
+        .cloned()
+        .expect("runnable profile command")
+        .with_working_directory(workspace.path().to_path_buf())
+        .expect("runnable working directory");
+    let environment = command.environment().clone();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective = compose(CompositionRequest::new(
+        profile.policy(),
+        &environment,
+        &ceiling,
+    ))
+    .expect("compose Linux runnable policy");
+    let backend = backend();
+    let prepared = backend
+        .prepare(
+            BackendRequest::new(&command, &effective),
+            &context(workspace.path()),
+        )
+        .expect("prepare Linux runnable profile");
+    let mut child = backend
+        .spawn(prepared)
+        .expect("spawn Linux runnable profile");
+    let status = child.wait().expect("wait for Linux runnable profile");
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .expect("Linux runnable stdout")
+        .read_to_string(&mut stdout)
+        .expect("read Linux runnable stdout");
+    assert!(
+        status.success(),
+        "Linux runnable profile failed: {status:?}"
+    );
+    assert_eq!(stdout.trim(), "cageforge-linux-smoke");
 }
 
 fn request(

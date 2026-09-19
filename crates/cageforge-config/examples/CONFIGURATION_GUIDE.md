@@ -259,9 +259,11 @@ Cageforge.fromTomlFile(configPath, "smoke", context).use { sandbox ->
 The configuration test suite parses every checked-in `.toml` fixture. Each
 target-specific native crate also loads the fixtures through the Rust API and
 resolves host-compatible profiles on its matching Linux, macOS, or Windows
-runner. The files under `runnable/` remain copyable platform-specific launch
-examples, but CI does not invoke them through a separate CLI smoke step. The
-remaining fixtures are deliberately parse-and-resolve examples because they
+runner. Its native backend test launches the matching `runnable/*/smoke.toml`
+profile through `Config`, policy composition, and the backend API, then checks
+the command output. The files under `runnable/` remain copyable platform-
+specific launch examples, but CI does not invoke them through a separate CLI
+smoke step. The remaining fixtures are deliberately parse-and-resolve examples because they
 describe policy, inheritance, platform syntax, or an external service rather
 than one universally runnable command. Run the portable fixture check locally:
 

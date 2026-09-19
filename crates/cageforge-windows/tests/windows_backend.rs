@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 use cageforge_backend_api::BackendRequest;
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
+use cageforge_config::Config;
+use cageforge_permissions::PlatformId;
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalIpcEndpoint,
     NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
@@ -1505,6 +1507,82 @@ fn restricted_command_can_start_a_native_runtime_program() {
     });
     drop(backend);
     drop(cleanup);
+}
+
+#[test]
+fn runnable_windows_profile_launches_through_the_native_backend_api() {
+    let _setup_test_guard = setup_test_lock();
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cageforge-config/examples/runnable/windows/smoke.toml");
+    let profile = Config::from_file(&config_path)
+        .expect("Windows runnable configuration")
+        .resolve_default_for_platform(PlatformId::Windows)
+        .expect("Windows runnable profile");
+    let temporary = tempfile::tempdir().expect("Windows runnable state");
+    let state_base_directory = temporary.path().join("state");
+    let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
+    let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
+    let setup_config = WindowsSetupConfig::new()
+        .with_state_directory(&state_base_directory)
+        .expect("absolute state directory")
+        .with_setup_helper_path(helper)
+        .expect("absolute setup helper")
+        .with_command_runner_path(runner)
+        .expect("absolute command runner");
+    let setup = WindowsSetup::new(setup_config);
+    let _cleanup = SetupCleanup {
+        setup: &setup,
+        armed: true,
+    };
+    setup.install().expect("install native Windows setup");
+    let backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(Duration::from_secs(15))
+            .expect("bounded timeout"),
+    )
+    .expect("native Windows backend");
+    let workspace = tempfile::tempdir().expect("runnable workspace");
+    let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+    let context = PathResolutionContext::new()
+        .with_workspace_root(workspace.path().to_path_buf())
+        .expect("workspace root")
+        .with_minimal_path(system_root.join("System32"))
+        .expect("Windows minimal runtime")
+        .with_current_directory(workspace.path().to_path_buf())
+        .expect("current directory");
+    let command = profile
+        .command()
+        .cloned()
+        .expect("runnable profile command")
+        .with_working_directory(workspace.path().to_path_buf())
+        .expect("runnable working directory");
+    let environment = command.environment().clone();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective = compose(CompositionRequest::new(
+        profile.policy(),
+        &environment,
+        &ceiling,
+    ))
+    .expect("compose Windows runnable policy");
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare Windows runnable profile");
+    let mut child = backend
+        .spawn(prepared)
+        .expect("spawn Windows runnable profile");
+    let status = child.wait().expect("wait for Windows runnable profile");
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .expect("Windows runnable stdout")
+        .read_to_string(&mut stdout)
+        .expect("read Windows runnable stdout");
+    assert!(
+        status.success(),
+        "Windows runnable profile failed: {status:?}"
+    );
+    assert!(stdout.contains("cageforge-windows-smoke"));
 }
 
 #[test]
