@@ -985,9 +985,9 @@ combination exposed by the platform-independent crates on each target.
 
 The separate Windows sandbox lane performs formatting and Clippy, all
 `cageforge-windows` feature combinations, native tests, setup-helper tests,
-command-runner tests, the runnable Windows TOML profile through the shared
-`ci/run-runnable-example.sh` script, and a machine-readable test report. It runs on an
-explicit Windows Server 2025 runner. `main` always runs this lane. Pull requests
+command-runner tests, the target-specific TOML API checks, and a
+machine-readable test report. It runs on an explicit Windows Server 2025
+runner. `main` always runs this lane. Pull requests
 run it for shared dependencies, Windows crate changes, workflow changes, a
 manual `sandbox-windows` label, or manual workflow dispatch.
 

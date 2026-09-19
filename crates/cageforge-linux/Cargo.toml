@@ -42,6 +42,7 @@ tokio = { workspace = true, features = ["io-util", "net", "rt", "sync"] }
 
 [dev-dependencies]
 cageforge-config.workspace = true
+cageforge-permissions.workspace = true
 pretty_assertions.workspace = true
 
 [lints]

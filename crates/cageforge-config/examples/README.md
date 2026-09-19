@@ -51,12 +51,14 @@ expose the same endpoint kinds as typed values.
 The selected native backend must prove enforcement before launch; unsupported
 endpoint types fail closed.
 
-The configuration test suite parses and resolves every checked-in TOML file on
-every host. Only the three files under `runnable/` are native launch fixtures:
-the Linux QEMU job, the macOS native job, and the Windows native job execute
-the matching profile through `cageforge-cli`. The other files intentionally
-describe policy, inheritance, platform syntax, or external services; their
-contract is parse-and-resolve validation, not an implicit host launch.
+The configuration test suite parses every checked-in TOML file. Each
+target-specific native crate also loads the examples through the Rust API and
+resolves the profiles that are valid for its host OS on the corresponding
+Linux, macOS, or Windows runner. The files under `runnable/` are copyable
+platform-specific launch examples; CI does not invoke them through a separate
+CLI smoke step. The other files intentionally describe policy, inheritance,
+platform syntax, or external services, so their contract is parse-and-resolve
+validation rather than an implicit host launch.
 
 ### What a first launch must declare
 

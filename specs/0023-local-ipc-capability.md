@@ -116,8 +116,12 @@ the effective policy, and ACL drift or setup failure returns a typed error
 before spawn. Native tests run only in their matching CI environments; missing
 native prerequisites are failures, not skips.
 
-The three checked-in runnable configuration profiles are executed through the
-shared CLI smoke runner after the platform backend checks. All other TOML
-examples are parse-and-resolve fixtures because some intentionally describe a
-policy without a command, a placeholder executable, an external service, or
-host paths that must not be created by CI.
+Every checked-in TOML example is loaded through the Rust configuration API.
+The configuration crate checks parsing, and each target-specific native crate
+repeats parsing and host-compatible profile resolution in its own integration
+tests on the matching Linux, macOS, or Windows runner. Native backend tests
+then exercise enforcement through the backend API; CI does not add a separate
+CLI runnable-smoke step. The profiles under `runnable/` remain copyable,
+platform-specific launch examples, while the other files intentionally
+describe a policy without a command, a placeholder executable, an external
+service, or host paths that must not be created by CI.

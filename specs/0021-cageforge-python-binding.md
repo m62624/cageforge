@@ -98,11 +98,10 @@ Ruff, and Python tests. macOS and Windows rows execute native smoke tests
 with the resources staged for that exact runner. Linux additionally passes
 the tested wheel through the disposable QEMU/KVM consumer suite. Release
 validation audits wheel members, target isolation, ABI tags, license files,
-and the sdist member set before trusted PyPI publication.
-The native smoke rows execute the matching checked-in runnable TOML profile;
-the configuration crate separately parses and resolves every other example
-without treating illustrative or host-specific profiles as universal launch
-commands.
+and the sdist member set before trusted PyPI publication. The configuration
+crate and each target-specific native crate check the checked-in TOML examples
+through the Rust API; binding consumer tests validate the packaged foreign-
+language surface without adding a separate CLI runnable-smoke step.
 
 The generated `_cageforge.pyi` file is a checked-in release artifact. Any
 public binding change must regenerate it and fail CI if the committed stub is

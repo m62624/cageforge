@@ -154,10 +154,9 @@ an OS feature:
 Portable checks also run the facade with `config` and its supported portable
 feature combinations, including `network-runtime`. The Linux Bubblewrap source
 build remains in its existing dedicated job and is not duplicated by the
-facade check. After each native backend check, the corresponding job executes
-the checked-in runnable TOML profile through `ci/run-runnable-example.sh`; the
-other TOML examples remain parse-and-resolve fixtures as defined by
-Specification 0023.
+facade check. TOML examples are checked through the Rust configuration API by
+`cageforge-config` and by the target-specific native crate integration tests;
+native backend jobs do not add a separate CLI runnable-smoke step.
 
 ## Security and compatibility invariants
 
