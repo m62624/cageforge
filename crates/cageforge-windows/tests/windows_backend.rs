@@ -155,6 +155,41 @@ fn request_with_environment(
     ])
     .with_additional_protected_relative_path(".cageforge-test-protected")
     .expect("protected test path");
+    request_with_filesystem_environment(workspace, filesystem, network, command, environment)
+}
+
+fn request_with_full_filesystem_environment(
+    workspace: &Path,
+    network: NetworkPolicy,
+    command: CommandSpec,
+    environment: EnvironmentSpec,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
+    request_with_filesystem_environment(
+        workspace,
+        FilesystemPolicy::unrestricted(),
+        network,
+        command,
+        environment,
+    )
+}
+
+fn request_with_filesystem_environment(
+    workspace: &Path,
+    filesystem: FilesystemPolicy,
+    network: NetworkPolicy,
+    command: CommandSpec,
+    environment: EnvironmentSpec,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
+    let minimal = workspace.join(".cageforge-test-runtime");
+    fs::create_dir_all(&minimal).expect("minimal runtime fixture directory");
     let policy = SandboxPolicy::new(filesystem, network);
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
@@ -331,7 +366,7 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
             DomainAccess::Allow,
         )
         .expect("named-pipe policy");
-    let (command, effective, context) = request_with_environment(
+    let (command, effective, context) = request_with_full_filesystem_environment(
         &workspace,
         network,
         access_fixture_command(&fixture),
