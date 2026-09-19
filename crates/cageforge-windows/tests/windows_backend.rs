@@ -199,7 +199,7 @@ fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
         .collect::<Vec<_>>();
     let name = name.to_owned();
     let connected = thread::spawn(move || {
-        let deadline = Instant::now() + FIXTURE_START_DEADLINE;
+        let deadline = Instant::now() + FIXTURE_IO_TIMEOUT;
         let mut first_instance = true;
         let mut connection_count = 0;
         let mut handle = None;
