@@ -13,7 +13,7 @@ operating system. Use only the file for the host where the command will run:
 |---|---|---|
 | Linux | [`runnable/linux/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/linux/smoke.toml) | `/bin/echo` |
 | macOS | [`runnable/macos/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/macos/smoke.toml) | `/bin/echo` |
-| Windows | [`runnable/windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml) | `C:/Windows/System32/cmd.exe` |
+| Windows | [`runnable/windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml) | `C:\Windows\System32\cmd.exe` |
 
 Each smoke profile includes `minimal` read access, a writable workspace root,
 and disabled networking. The three files are deliberately separate: Windows

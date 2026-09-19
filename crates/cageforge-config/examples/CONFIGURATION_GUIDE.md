@@ -21,7 +21,7 @@ and filesystem path syntax is not portable:
 |---|---|---|
 | Linux | [`runnable/linux/smoke.toml`](runnable/linux/smoke.toml) | `/bin/echo` |
 | macOS | [`runnable/macos/smoke.toml`](runnable/macos/smoke.toml) | `/bin/echo` |
-| Windows | [`runnable/windows/smoke.toml`](runnable/windows/smoke.toml) | `C:/Windows/System32/cmd.exe` |
+| Windows | [`runnable/windows/smoke.toml`](runnable/windows/smoke.toml) | `C:\Windows\System32\cmd.exe` |
 
 Run the profile for the host operating system only. Windows paths and
 `cmd.exe` are not valid Linux or macOS commands; `/bin/echo` is not a Windows
