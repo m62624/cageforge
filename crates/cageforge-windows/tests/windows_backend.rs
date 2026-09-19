@@ -83,6 +83,7 @@ const POWERSHELL_COMMAND: &str = "powershell";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 const NAMED_PIPE_FIXTURE_INSTANCE_RESERVE: usize = 16;
+const NAMED_PIPE_FIXTURE_DEFAULT_TIMEOUT_MS: u32 = 60_000;
 // Keep the host-side target alive longer than the backend's 15-second probe
 // timeout; the backend must own timeout classification for a stalled launch.
 const FIXTURE_IO_TIMEOUT: Duration = Duration::from_secs(30);
@@ -280,7 +281,7 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
                     PIPE_UNLIMITED_INSTANCES,
                     4096,
                     4096,
-                    5000,
+                    NAMED_PIPE_FIXTURE_DEFAULT_TIMEOUT_MS,
                     std::ptr::null(),
                 )
             };
