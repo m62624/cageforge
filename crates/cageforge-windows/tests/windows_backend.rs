@@ -192,17 +192,20 @@ struct TestNamedPipeServer {
 }
 
 #[allow(unsafe_code)]
-fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
+fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
     let wide_name = name
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
     let name = name.to_owned();
+    let thread_name = name.clone();
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let connected = thread::spawn(move || {
         let deadline = Instant::now() + FIXTURE_IO_TIMEOUT;
         let mut first_instance = true;
         let mut connection_count = 0;
         let mut handle = None;
+        let mut ready_sender = Some(ready_sender);
         loop {
             if handle.is_none() {
                 let flags = PIPE_ACCESS_DUPLEX
@@ -227,13 +230,20 @@ fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
                     )
                 };
                 if raw_handle.is_null() || raw_handle == INVALID_HANDLE_VALUE {
-                    return Err(format!(
-                        "create named-pipe test server {name:?}: Windows error {}",
+                    let error = format!(
+                        "create named-pipe test server {thread_name:?}: Windows error {}",
                         unsafe { GetLastError() }
-                    ));
+                    );
+                    if let Some(sender) = ready_sender.take() {
+                        let _ = sender.send(Err(error.clone()));
+                    }
+                    return Err(error);
                 }
                 first_instance = false;
                 handle = Some(unsafe { OwnedHandle::from_raw_handle(raw_handle as RawHandle) });
+                if let Some(sender) = ready_sender.take() {
+                    let _ = sender.send(Ok(()));
+                }
             }
             let current_handle = handle
                 .as_ref()
@@ -260,7 +270,13 @@ fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
             thread::sleep(Duration::from_millis(10));
         }
     });
-    TestNamedPipeServer { connected }
+    match ready_receiver.recv_timeout(FIXTURE_START_DEADLINE) {
+        Ok(Ok(())) => Ok(TestNamedPipeServer { connected }),
+        Ok(Err(error)) => Err(error),
+        Err(error) => Err(format!(
+            "named-pipe test server {name:?} did not become ready: {error}"
+        )),
+    }
 }
 
 #[test]
@@ -296,8 +312,8 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let suffix = &suffix[..16];
     let allowed_name = format!(r"\\.\pipe\cageforge-{suffix}-allowed");
     let denied_name = format!(r"\\.\pipe\cageforge-{suffix}-denied");
-    let allowed_server = start_test_named_pipe(&allowed_name);
-    let denied_server = start_test_named_pipe(&denied_name);
+    let allowed_server = start_test_named_pipe(&allowed_name).expect("start allowed named pipe");
+    let denied_server = start_test_named_pipe(&denied_name).expect("start denied named pipe");
     let workspace = temporary.path().join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"));
