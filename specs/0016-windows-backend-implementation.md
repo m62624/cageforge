@@ -309,6 +309,9 @@ sandbox account. The token:
   complete default object DACL, excluding the route SID; for strict named-pipe
   local-IPC launches it instead contains only the request capability SIDs and
   any required route SID; and
+- authorizes every request capability SID on the private desktop object as
+  well as on the pipe and token default DACL, so a strict launch can complete
+  Windows session initialization without restoring broad user or logon access;
 - cannot inherit an administrator token or the real user's identity.
 
 The runner reads the completed token back before process creation. Token user,
