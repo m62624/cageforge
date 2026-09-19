@@ -261,6 +261,33 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let (stop_sender, stop_receiver) = mpsc::channel();
     let connected = thread::spawn(move || {
+        let create_instance = |first_instance: bool| -> Result<OwnedHandle, String> {
+            let flags = PIPE_ACCESS_DUPLEX
+                | if first_instance {
+                    FILE_FLAG_FIRST_PIPE_INSTANCE
+                } else {
+                    0
+                };
+            let raw_handle = unsafe {
+                CreateNamedPipeW(
+                    wide_name.as_ptr(),
+                    flags,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                    PIPE_UNLIMITED_INSTANCES,
+                    4096,
+                    4096,
+                    5000,
+                    std::ptr::null(),
+                )
+            };
+            if raw_handle.is_null() || raw_handle == INVALID_HANDLE_VALUE {
+                return Err(format!(
+                    "create named-pipe test server {thread_name:?}: Windows error {}",
+                    unsafe { GetLastError() }
+                ));
+            }
+            Ok(unsafe { OwnedHandle::from_raw_handle(raw_handle as RawHandle) })
+        };
         let mut first_instance = true;
         let mut connection_count = 0;
         let mut handle = None;
@@ -270,39 +297,16 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
                 return Ok(connection_count > 0);
             }
             if handle.is_none() {
-                let flags = PIPE_ACCESS_DUPLEX
-                    | if first_instance {
-                        FILE_FLAG_FIRST_PIPE_INSTANCE
-                    } else {
-                        0
-                    };
-                let raw_handle = unsafe {
-                    CreateNamedPipeW(
-                        wide_name.as_ptr(),
-                        flags,
-                        PIPE_TYPE_BYTE
-                            | PIPE_READMODE_BYTE
-                            | PIPE_NOWAIT
-                            | PIPE_REJECT_REMOTE_CLIENTS,
-                        PIPE_UNLIMITED_INSTANCES,
-                        4096,
-                        4096,
-                        5000,
-                        std::ptr::null(),
-                    )
-                };
-                if raw_handle.is_null() || raw_handle == INVALID_HANDLE_VALUE {
-                    let error = format!(
-                        "create named-pipe test server {thread_name:?}: Windows error {}",
-                        unsafe { GetLastError() }
-                    );
-                    if let Some(sender) = ready_sender.take() {
-                        let _ = sender.send(Err(error.clone()));
+                match create_instance(first_instance) {
+                    Ok(instance) => handle = Some(instance),
+                    Err(error) => {
+                        if let Some(sender) = ready_sender.take() {
+                            let _ = sender.send(Err(error.clone()));
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
                 }
                 first_instance = false;
-                handle = Some(unsafe { OwnedHandle::from_raw_handle(raw_handle as RawHandle) });
                 if let Some(sender) = ready_sender.take() {
                     let _ = sender.send(Ok(()));
                 }
@@ -312,19 +316,29 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
                 .ok_or_else(|| "named-pipe server handle was not initialized".to_string())?;
             let current_handle = current_handle.as_raw_handle();
             let result = unsafe { ConnectNamedPipe(current_handle as _, std::ptr::null_mut()) };
-            if result != 0 {
+            let connected = if result != 0 {
+                true
+            } else {
+                let code = unsafe { GetLastError() };
+                if code == ERROR_PIPE_CONNECTED {
+                    true
+                } else if code == ERROR_PIPE_LISTENING {
+                    false
+                } else {
+                    return Err(format!("ConnectNamedPipe failed: Windows error {code}"));
+                }
+            };
+            if connected {
                 connection_count += 1;
-                handle = None;
-                continue;
-            }
-            let code = unsafe { GetLastError() };
-            if code == ERROR_PIPE_CONNECTED {
-                connection_count += 1;
-                handle = None;
-                continue;
-            }
-            if code != ERROR_PIPE_LISTENING {
-                return Err(format!("ConnectNamedPipe failed: Windows error {code}"));
+                // Keep the named object continuously available while the
+                // parent performs the next ACL read/write. Creating the next
+                // instance before dropping the connected one avoids a brief
+                // ERROR_FILE_NOT_FOUND window between ACL operations.
+                let next = create_instance(false).map_err(|error| {
+                    format!("replace connected named-pipe instance {thread_name:?}: {error}")
+                })?;
+                let previous = handle.replace(next);
+                drop(previous);
             }
             thread::sleep(Duration::from_millis(10));
         }
