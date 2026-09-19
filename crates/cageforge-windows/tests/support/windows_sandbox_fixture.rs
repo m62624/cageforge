@@ -5,6 +5,9 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::process::ExitCode;
+
+#[cfg(target_os = "windows")]
+use std::process::Command;
 use std::time::Duration;
 
 #[cfg(target_os = "windows")]
@@ -122,6 +125,7 @@ fn run() -> Result<(), String> {
         "unrelated-handle" => signal_unrelated_handle(),
         "unrelated-named-object" => signal_unrelated_named_object(),
         "named-pipe" => named_pipe_probe(),
+        "named-pipe-descendant" => named_pipe_descendant_probe(),
         _ => Err(format!("unsupported fixture mode {mode:?}")),
     }
 }
@@ -488,9 +492,34 @@ fn open_named_pipe(name: &OsString) -> Result<OwnedHandle, u32> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn named_pipe_descendant_probe() -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("resolve named-pipe descendant fixture: {error}"))?;
+    let status = Command::new(executable)
+        .env(MODE, "named-pipe")
+        .status()
+        .map_err(|error| format!("spawn named-pipe descendant fixture: {error}"))?;
+    if !status.success() {
+        return Err(format!("named-pipe descendant exited with status {status}"));
+    }
+
+    if TcpStream::connect_timeout(&network_target()?, Duration::from_secs(2)).is_ok() {
+        return Err("named-pipe descendant reached the disabled loopback network".to_string());
+    }
+    std::io::stdout()
+        .write_all(b"named-pipe-descendant-ok")
+        .map_err(|error| format!("write named-pipe descendant result: {error}"))
+}
+
 #[cfg(not(target_os = "windows"))]
 fn named_pipe_probe() -> Result<(), String> {
     Err("named-pipe probe requires Windows".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn named_pipe_descendant_probe() -> Result<(), String> {
+    Err("named-pipe descendant probe requires Windows".to_string())
 }
 
 fn denied_read() -> Result<(), String> {

@@ -405,6 +405,10 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let denied_name = format!(r"\\.\pipe\cageforge-{suffix}-denied");
     let allowed_server = start_test_named_pipe(&allowed_name).expect("start allowed named pipe");
     let denied_server = start_test_named_pipe(&denied_name).expect("start denied named pipe");
+    let loopback_target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("loopback target");
+    let loopback_address = loopback_target
+        .local_addr()
+        .expect("loopback target address");
     let workspace = temporary.path().join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
     let fixture = workspace.join("cageforge-windows-named-pipe-fixture.exe");
@@ -414,12 +418,14 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     )
     .expect("copy named-pipe fixture into the writable workspace");
     let environment = EnvironmentSpec::inherit_core()
-        .with_var(SANDBOX_FIXTURE_MODE, "named-pipe")
-        .expect("named-pipe fixture mode")
+        .with_var(SANDBOX_FIXTURE_MODE, "named-pipe-descendant")
+        .expect("named-pipe descendant fixture mode")
         .with_var(SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED, &allowed_name)
         .expect("approved pipe environment")
         .with_var(SANDBOX_FIXTURE_NAMED_PIPE_DENIED, &denied_name)
-        .expect("denied pipe environment");
+        .expect("denied pipe environment")
+        .with_var(SANDBOX_FIXTURE_NETWORK_TARGET, loopback_address.to_string())
+        .expect("loopback target environment");
     let network = NetworkPolicy::disabled()
         .with_local_ipc(
             LocalIpcEndpoint::windows_named_pipe(allowed_name.clone())
@@ -468,12 +474,13 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         "named-pipe probe failed: {status}; stdout={stdout:?}; stderr={stderr:?}"
     );
     assert!(
-        stdout.contains("named-pipe-ok"),
-        "named-pipe probe did not report its result: {stdout}"
+        stdout.contains("named-pipe-descendant-ok"),
+        "named-pipe descendant probe did not report its result: {stdout}"
     );
     drop(child);
     assert!(allowed_server.finish().expect("approved named-pipe server"));
     assert!(!denied_server.finish().expect("denied named-pipe server"));
+    assert_no_connection(&loopback_target, "named-pipe descendant loopback bypass");
 
     drop(backend);
     setup.uninstall().expect("cleanup Windows setup");
