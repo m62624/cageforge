@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use globset::GlobMatcher;
 
+use crate::LocalIpcEndpoint;
+
 /// Network restrictions passed to a platform backend or network proxy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkPolicy {
@@ -14,6 +16,7 @@ pub struct NetworkPolicy {
     pub(super) local_network_access: LocalNetworkAccess,
     pub(super) domains: Vec<DomainRule>,
     pub(super) unix_sockets: Vec<UnixSocketRule>,
+    pub(super) local_ipc: Vec<LocalIpcRule>,
 }
 
 /// A normalized hostname or literal together with the exact addresses a
@@ -36,6 +39,13 @@ pub struct DomainRule {
 #[derive(Debug, Clone)]
 pub struct UnixSocketRule {
     pub(super) path: PathBuf,
+    pub(super) access: DomainAccess,
+}
+
+/// A typed local-IPC endpoint and its access decision.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LocalIpcRule {
+    pub(super) endpoint: LocalIpcEndpoint,
     pub(super) access: DomainAccess,
 }
 

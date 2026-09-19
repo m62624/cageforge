@@ -84,8 +84,9 @@ change backend safety:
 - deny-glob support, including explicit and unbounded scan-depth semantics,
   and missing-path behavior;
 - network domain rules, resolved-address authorization, local-address
-  restrictions, pathname Unix-socket isolation, and separate per-path
-  allow/explicit-deny rules;
+  restrictions, typed local-IPC endpoints (`UnixSocket(AbsolutePath)` and
+  `WindowsNamedPipe(NamedPipeName)`), pathname Unix-socket isolation, and
+  separate per-path allow/explicit-deny rules;
 - external enforcement declarations;
 - environment bases, filters, and overrides; and
 - supported command stdio and timeout modes.
@@ -167,6 +168,12 @@ reason to choose one source implicitly.
 must render a human-readable description of the missing enforcement category;
 diagnostics must not require callers to decode an opaque boolean or numeric
 code.
+
+`NetworkWindowsNamedPipeRules` is the Windows capability for the portable
+`WindowsNamedPipe` endpoint. A backend may advertise it only when it can
+enforce the exact named-pipe object through its native boundary. A POSIX
+Unix-socket endpoint on Windows is a typed unsupported capability, not a
+request to widen networking or to launch without a sandbox.
 
 Preparation must not perform filesystem, DNS, or socket I/O. Native backends
 perform those operations only after successful preparation and must follow

@@ -85,6 +85,8 @@ windows = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+cageforge-config.workspace = true
+cageforge-permissions.workspace = true
 pretty_assertions.workspace = true
 
 [lints]

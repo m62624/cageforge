@@ -50,6 +50,7 @@ pub(crate) struct PendingRunnerSpawnRequest {
     pub(crate) working_directory: Vec<u16>,
     pub(crate) environment_block: Vec<u16>,
     pub(crate) capability_sids: Vec<String>,
+    pub(crate) strict_local_ipc: bool,
     pub(crate) route_sid: Option<String>,
     pub(crate) account: RunnerAccount,
 }
@@ -428,6 +429,7 @@ impl PendingRunnerSpawnRequest {
             working_directory: self.working_directory,
             environment_block: self.environment_block,
             capability_sids: self.capability_sids,
+            strict_local_ipc: self.strict_local_ipc,
             route_sid: self.route_sid,
             account: self.account,
             standard_handles,

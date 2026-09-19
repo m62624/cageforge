@@ -30,6 +30,7 @@ __all__ = [
     "GrantPage",
     "GrantPageCursor",
     "GrantSummary",
+    "LocalIpcEndpoint",
     "PermissionApprover",
     "PermissionGrant",
     "PermissionRequest",
@@ -298,6 +299,22 @@ class GrantSummary:
         """
 
 @typing.final
+class LocalIpcEndpoint:
+    r"""
+    One typed local-IPC endpoint requested by a preflight plan.
+    """
+    @property
+    def kind(self) -> builtins.str:
+        r"""
+        Stable endpoint kind: `unix_socket` or `windows_named_pipe`.
+        """
+    @property
+    def value(self) -> builtins.str:
+        r"""
+        Validated native endpoint value without the transport prefix.
+        """
+
+@typing.final
 class PermissionApprover:
     r"""
     Trusted host capability that can issue an opaque grant.
@@ -371,6 +388,10 @@ class PermissionRequest:
     def network(self) -> builtins.list[builtins.str]:
         r"""
         Returns requested network endpoints.
+        """
+    def local_ipc(self) -> builtins.list[LocalIpcEndpoint]:
+        r"""
+        Returns typed local-IPC endpoint declarations.
         """
     def close(self) -> None:
         r"""

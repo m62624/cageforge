@@ -11,8 +11,8 @@
 use std::num::NonZeroUsize;
 
 use cageforge_policy::{
-    DomainMode, DomainRule, FilesystemMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
-    NetworkMode, NetworkPolicy, UnixSocketMode, UnixSocketRule,
+    DomainMode, DomainRule, FilesystemMode, FilesystemPolicy, FilesystemRule, LocalIpcRule,
+    LocalNetworkAccess, NetworkMode, NetworkPolicy, UnixSocketMode, UnixSocketRule,
 };
 
 /// The complete filesystem constraint set required by one effective result.
@@ -149,5 +149,10 @@ impl<'a> EffectiveNetworkLayer<'a> {
     /// Returns all validated Unix socket rules in this constraint layer.
     pub fn unix_sockets(&self) -> &[UnixSocketRule] {
         self.policy.unix_sockets()
+    }
+
+    /// Returns all typed local-IPC rules in this constraint layer.
+    pub fn local_ipc(&self) -> &[LocalIpcRule] {
+        self.policy.local_ipc()
     }
 }

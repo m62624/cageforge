@@ -497,7 +497,7 @@ fn runtime_context(
 ) -> Result<cageforge::PathResolutionContext, CliError> {
     let mut context = cageforge::PathResolutionContext::new()
         .with_root(platform_root(current_directory))?
-        .with_minimal_path(platform_minimal_root(current_directory))?
+        .with_minimal_path(platform_minimal_root(current_directory)?)?
         .with_current_directory(current_directory.to_path_buf())?;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -543,19 +543,26 @@ fn platform_root(current_directory: &Path) -> PathBuf {
 }
 
 #[cfg(feature = "config")]
-fn platform_minimal_root(current_directory: &Path) -> PathBuf {
+fn platform_minimal_root(current_directory: &Path) -> Result<PathBuf, CliError> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let _ = current_directory;
-        PathBuf::from("/usr")
+        Ok(PathBuf::from("/usr"))
     }
     #[cfg(target_os = "windows")]
     {
-        platform_root(current_directory).join("Windows\\System32")
+        let _ = current_directory;
+        let system_root = std::env::var_os("SystemRoot")
+            .ok_or(CliError::WindowsSystemRootUnavailable)
+            .map(PathBuf::from)?;
+        if !system_root.is_absolute() {
+            return Err(CliError::WindowsSystemRootNotAbsolute { path: system_root });
+        }
+        Ok(system_root.join("System32"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        current_directory.to_path_buf()
+        Ok(current_directory.to_path_buf())
     }
 }
 

@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::capability::store::CapabilityActiveLease;
 use crate::error::WindowsBackendError;
 use crate::filesystem::acl::FilesystemAclEnforcement;
+use crate::local_ipc::WindowsLocalIpcEnforcement;
 use crate::network::WindowsProxyRoute;
 use crate::runner::parent::BoundaryTerminator;
 use crate::runner::session::{RunnerSession, RunnerSessionError};
@@ -23,6 +24,7 @@ pub struct WindowsChild {
     session: Option<RunnerSession>,
     network_route: Option<WindowsProxyRoute>,
     filesystem_enforcement: Option<FilesystemAclEnforcement>,
+    local_ipc: Option<WindowsLocalIpcEnforcement>,
     active_lease: Option<CapabilityActiveLease>,
 }
 
@@ -31,6 +33,7 @@ struct WindowsBoundaryRecovery {
     boundary: Option<Arc<BoundaryTerminator>>,
     network_route: Option<WindowsProxyRoute>,
     filesystem_enforcement: Option<FilesystemAclEnforcement>,
+    local_ipc: Option<WindowsLocalIpcEnforcement>,
     active_lease: Option<CapabilityActiveLease>,
     released: bool,
 }
@@ -88,11 +91,13 @@ impl WindowsChild {
         active_lease: CapabilityActiveLease,
         filesystem_enforcement: FilesystemAclEnforcement,
         network_route: Option<WindowsProxyRoute>,
+        local_ipc: Option<WindowsLocalIpcEnforcement>,
     ) -> Self {
         Self {
             session: Some(session),
             network_route,
             filesystem_enforcement: Some(filesystem_enforcement),
+            local_ipc,
             active_lease: Some(active_lease),
         }
     }
@@ -161,13 +166,13 @@ impl WindowsChild {
                 // A successful kill proves that the complete Job Object and
                 // runner boundary terminated. A failed kill leaves every
                 // enforcement resource owned until Drop can retry it.
-                self.release_completed_boundaries();
+                self.release_completed_boundaries()?;
             }
             return Err(error);
         }
         match self.session_mut()?.try_wait() {
             Ok(Some(status)) => {
-                self.release_completed_boundaries();
+                self.release_completed_boundaries()?;
                 Ok(Some(status))
             }
             Ok(None) => Ok(None),
@@ -176,7 +181,7 @@ impl WindowsChild {
                     // A timeout is reported as an error to preserve the
                     // command result, but a successful watchdog termination
                     // already proved that the complete boundary is gone.
-                    self.release_completed_boundaries();
+                    self.release_completed_boundaries()?
                 } else if self
                     .session
                     .as_mut()
@@ -185,7 +190,7 @@ impl WindowsChild {
                     // The recovery kill is also a proof when it succeeds.
                     // If it fails, keep the lease and enforcement handles
                     // until Drop can make another bounded attempt.
-                    self.release_completed_boundaries();
+                    self.release_completed_boundaries()?
                 }
                 Err(WindowsBackendError::runner_session(error))
             }
@@ -203,15 +208,12 @@ impl WindowsChild {
             }
         }
         let result = match self.session_mut()?.wait() {
-            Ok(status) => {
-                self.release_completed_boundaries();
-                Ok(status)
-            }
+            Ok(status) => self.release_completed_boundaries().map(|()| status),
             Err(error) => {
                 if self.session.as_ref().is_some_and(RunnerSession::finished) {
                     // Preserve the typed timeout error while releasing the
                     // resources whose boundary termination was confirmed.
-                    self.release_completed_boundaries();
+                    self.release_completed_boundaries()?
                 }
                 Err(WindowsBackendError::runner_session(error))
             }
@@ -233,7 +235,7 @@ impl WindowsChild {
             // runner boundary have terminated successfully. Release all
             // enforcement resources at that point; an error path leaves them
             // owned until Drop can retry the boundary.
-            self.release_completed_boundaries();
+            self.release_completed_boundaries()?;
         }
         result
     }
@@ -245,12 +247,19 @@ impl WindowsChild {
         }
     }
 
-    fn release_completed_boundaries(&mut self) {
+    fn release_completed_boundaries(&mut self) -> Result<(), WindowsBackendError> {
+        if let Some(local_ipc) = self.local_ipc.as_mut() {
+            local_ipc
+                .release()
+                .map_err(WindowsBackendError::local_ipc_enforcement)?;
+        }
+        self.local_ipc.take();
         self.network_route.take();
         if let Some(enforcement) = self.filesystem_enforcement.take() {
             enforcement.release();
         }
         self.active_lease.take();
+        Ok(())
     }
 
     fn session_mut(&mut self) -> Result<&mut RunnerSession, WindowsBackendError> {
@@ -262,8 +271,7 @@ impl WindowsChild {
 
 impl WindowsBoundaryRecovery {
     fn start_or_retain(mut self) {
-        if self.try_terminate() {
-            self.release_after_confirmed_boundary();
+        if self.try_terminate() && self.release_after_confirmed_boundary() {
             return;
         }
         let _ = thread::Builder::new()
@@ -273,8 +281,7 @@ impl WindowsBoundaryRecovery {
 
     fn recover_until_terminated(mut self) {
         loop {
-            if self.try_terminate() {
-                self.release_after_confirmed_boundary();
+            if self.try_terminate() && self.release_after_confirmed_boundary() {
                 return;
             }
             thread::sleep(BOUNDARY_RECOVERY_INTERVAL);
@@ -287,7 +294,7 @@ impl WindowsBoundaryRecovery {
             .is_some_and(|boundary| boundary.terminate(125).is_ok())
     }
 
-    fn release_after_confirmed_boundary(&mut self) {
+    fn release_after_confirmed_boundary(&mut self) -> bool {
         if let Some(mut session) = self.session.take() {
             session.mark_termination_confirmed();
             drop(session);
@@ -295,8 +302,15 @@ impl WindowsBoundaryRecovery {
         self.boundary.take();
         self.network_route.take();
         self.filesystem_enforcement.take();
+        if let Some(local_ipc) = self.local_ipc.as_mut()
+            && local_ipc.release().is_err()
+        {
+            return false;
+        }
+        self.local_ipc.take();
         self.active_lease.take();
         self.released = true;
+        true
     }
 }
 
@@ -312,6 +326,7 @@ impl Drop for WindowsBoundaryRecovery {
         std::mem::forget(self.boundary.take());
         std::mem::forget(self.network_route.take());
         std::mem::forget(self.filesystem_enforcement.take());
+        std::mem::forget(self.local_ipc.take());
         std::mem::forget(self.active_lease.take());
     }
 }
@@ -326,6 +341,7 @@ impl Drop for WindowsChild {
             session: Some(session),
             network_route: self.network_route.take(),
             filesystem_enforcement: self.filesystem_enforcement.take(),
+            local_ipc: self.local_ipc.take(),
             active_lease: self.active_lease.take(),
             released: false,
         };
@@ -337,6 +353,7 @@ pub(crate) fn recover_failed_session_start(
     boundary: Arc<BoundaryTerminator>,
     network_route: Option<WindowsProxyRoute>,
     filesystem_enforcement: FilesystemAclEnforcement,
+    local_ipc: Option<WindowsLocalIpcEnforcement>,
     active_lease: CapabilityActiveLease,
 ) {
     WindowsBoundaryRecovery {
@@ -344,6 +361,7 @@ pub(crate) fn recover_failed_session_start(
         boundary: Some(boundary),
         network_route,
         filesystem_enforcement: Some(filesystem_enforcement),
+        local_ipc,
         active_lease: Some(active_lease),
         released: false,
     }

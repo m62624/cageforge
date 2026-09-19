@@ -317,6 +317,19 @@ fn permission_set(
             ))?);
         }
     }
+    for rule in policy.network().local_ipc() {
+        if rule.access() == DomainAccess::Allow {
+            let endpoint = match rule.endpoint() {
+                cageforge_policy::LocalIpcEndpoint::UnixSocket(path) => {
+                    format!("unix:{}", path.as_path().display())
+                }
+                cageforge_policy::LocalIpcEndpoint::WindowsNamedPipe(name) => {
+                    format!("pipe:{}", name.as_str())
+                }
+            };
+            capabilities = capabilities.with_network(NetworkCapability::new(endpoint)?);
+        }
+    }
     if policy.network().mode() == NetworkMode::Enabled
         && policy.network().domain_mode() == cageforge_policy::DomainMode::Enabled
     {
@@ -483,6 +496,21 @@ fn narrow_network(
                 if rule.access() == DomainAccess::Deny || full_unix || approved_rule {
                     narrowed = narrowed
                         .with_unix_socket(rule.path().to_path_buf(), rule.access())
+                        .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+                }
+            }
+            for rule in original.local_ipc() {
+                let endpoint = match rule.endpoint() {
+                    cageforge_policy::LocalIpcEndpoint::UnixSocket(path) => {
+                        format!("unix:{}", path.as_path().display())
+                    }
+                    cageforge_policy::LocalIpcEndpoint::WindowsNamedPipe(name) => {
+                        format!("pipe:{}", name.as_str())
+                    }
+                };
+                if rule.access() == DomainAccess::Deny || network_approved(approved, &endpoint)? {
+                    narrowed = narrowed
+                        .with_local_ipc(rule.endpoint().clone(), rule.access())
                         .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
                 }
             }

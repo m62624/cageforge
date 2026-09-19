@@ -1,12 +1,10 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
 # cageforge-command
+
+Read the shared [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md) for TOML profiles, symbolic paths, local IPC, and first-launch resource rules.
 
 `cageforge-command` is a small, platform-independent command request model for
 Cageforge. It describes argv, the working directory, environment construction,
@@ -191,7 +189,7 @@ For a TOML-driven application, resolve the command through
 same adapter. This keeps the process boundary independent from the choice of
 configuration format.
 
-The `cageforge` facade re-exports this model, so an application can use the
+The `cageforge` crate re-exports this model, so an application can use the
 same validated command values with its target-native sandbox backend without
 depending on this crate name directly.
 

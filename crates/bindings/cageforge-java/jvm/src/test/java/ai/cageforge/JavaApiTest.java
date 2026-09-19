@@ -50,6 +50,7 @@ class JavaApiTest {
         Consumer<Cageforge> closeRuntime = Cageforge::close;
         Function<PermissionRequest, PermissionGrant> approve = new PermissionApprover()::approve;
         Function<PermissionRequest, GrantId> grantId = PermissionRequest::getGrantId;
+        Function<PermissionRequest, List<LocalIpcEndpoint>> localIpc = PermissionRequest::getLocalIpc;
         Function<Path, PermissionStore> openStore = PermissionStore::open;
         BiFunction<PermissionStore, PermissionRequest, PermissionGrant> getGrant =
                 PermissionStore::get;
@@ -89,6 +90,7 @@ class JavaApiTest {
         assertNotNull(closeRuntime);
         assertNotNull(approve);
         assertNotNull(grantId);
+        assertNotNull(localIpc);
         assertNotNull(openStore);
         assertNotNull(getGrant);
         assertNotNull(putGrant);

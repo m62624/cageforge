@@ -11,6 +11,7 @@ use cageforge_policy::{FilesystemMode, NetworkMode};
 use thiserror::Error;
 
 use crate::filesystem::plan::FilesystemPlanError;
+use crate::local_ipc::WindowsLocalIpcError;
 use crate::network::{WindowsNetworkGatewayError, WindowsNetworkRuntimeError};
 use crate::runner::launch::RunnerLaunchError;
 use crate::runner::protocol::{
@@ -805,6 +806,13 @@ pub enum WindowsBackendError {
     /// The process-wide proxy ingress failed while a child still depended on it.
     #[error(transparent)]
     NetworkRuntime(#[from] WindowsNetworkRuntimeError),
+    /// Applying or restoring a launch-scoped Windows named-pipe boundary failed.
+    #[error("failed to apply Windows local-IPC enforcement: {source}")]
+    LocalIpcEnforcement {
+        /// Exact named-pipe ACL or coordination failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// A native capability was deliberately not advertised.
     #[error("Windows backend cannot safely enforce required capability: {capability}")]
     UnsupportedCapability {
@@ -922,6 +930,12 @@ impl WindowsBackendError {
         E: std::error::Error + Send + Sync + 'static,
     {
         Self::FilesystemEnforcement {
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn local_ipc_enforcement(source: WindowsLocalIpcError) -> Self {
+        Self::LocalIpcEnforcement {
             source: Box::new(source),
         }
     }

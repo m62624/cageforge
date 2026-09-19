@@ -310,6 +310,11 @@ outcomes: enforce it, delegate it through an explicitly trusted integration, or
 return a typed unsupported/error result. There is no implicit fallback from a
 restricted request to an unrestricted process.
 
+The Unix-socket rows below are the Linux realization of the portable endpoint
+contract in [Specification 0023](0023-local-ipc-capability.md). The backend
+advertises the typed local-IPC capability only after its authenticated native
+lowering and black-box enforcement path are available.
+
 | Effective request family | First Linux backend behavior |
 |---|---|
 | command execution | Enforce through the prepared command and Linux process boundary |

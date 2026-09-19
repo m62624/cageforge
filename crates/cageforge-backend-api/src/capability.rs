@@ -47,6 +47,7 @@ impl fmt::Display for BackendCapability {
             Self::NetworkLocalIpcIsolation => "pathname local-IPC isolation",
             Self::NetworkLocalIpcRules => "per-path local-IPC allow rules",
             Self::NetworkLocalIpcDenyRules => "explicit local-IPC deny rules",
+            Self::NetworkWindowsNamedPipeRules => "Windows named-pipe local-IPC rules",
             Self::EnvironmentAll => "all inherited environment variables",
             Self::EnvironmentCore => "backend-selected core environment variables",
             Self::EnvironmentNone => "an empty inherited environment",

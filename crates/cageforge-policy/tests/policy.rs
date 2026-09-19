@@ -2,16 +2,83 @@
 
 use cageforge_policy::{
     AccessMode, ConnectionAuthorization, DomainAccess, DomainMode, FilesystemDecision,
-    FilesystemMode, FilesystemPolicy, FilesystemRule, FilesystemTarget, LocalNetworkAccess,
-    MissingPathBehavior, NetworkDecision, NetworkMode, NetworkPolicy, PathPattern,
-    PathResolutionContext, PathSelector, PolicyError, ResolvedNetworkTarget, SandboxPolicy,
-    UnixSocketMode, UnixSocketRule,
+    FilesystemMode, FilesystemPolicy, FilesystemRule, FilesystemTarget, LocalIpcEndpoint,
+    LocalNetworkAccess, MissingPathBehavior, NetworkDecision, NetworkMode, NetworkPolicy,
+    PathPattern, PathResolutionContext, PathSelector, PolicyError, ResolvedNetworkTarget,
+    SandboxPolicy, UnixSocketMode, UnixSocketRule,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeSet, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::path::Path;
+
+#[test]
+fn local_ipc_endpoints_validate_and_preserve_their_platform_kind() {
+    let unix = LocalIpcEndpoint::unix_socket("/run/service.sock").expect("absolute socket");
+    assert_eq!(unix.unix_path(), Some(Path::new("/run/service.sock")));
+    assert!(unix.named_pipe().is_none());
+
+    let pipe = LocalIpcEndpoint::windows_named_pipe(r"\\.\pipe\service").expect("local named pipe");
+    assert_eq!(pipe.named_pipe(), Some(r"\\.\pipe\service"));
+    assert!(pipe.unix_path().is_none());
+
+    let upper = LocalIpcEndpoint::windows_named_pipe(r"\\.\PIPE\SERVICE").expect("pipe case");
+    assert_eq!(upper, pipe);
+}
+
+#[test]
+fn local_ipc_rejects_remote_and_ambiguous_named_pipe_names() {
+    for name in [
+        r"\\server\pipe\service",
+        r"service",
+        r"\\.\pipe\service\child",
+        r"\\.\pipe\",
+    ] {
+        assert!(matches!(
+            LocalIpcEndpoint::windows_named_pipe(name),
+            Err(PolicyError::InvalidLocalIpcEndpoint { .. })
+        ));
+    }
+}
+
+#[test]
+fn typed_local_ipc_rules_are_exposed_and_normalized() {
+    let policy = NetworkPolicy::enabled()
+        .with_local_ipc(
+            LocalIpcEndpoint::unix_socket("/run/service.sock").expect("socket"),
+            DomainAccess::Allow,
+        )
+        .expect("local IPC rule");
+    let normalized = policy.normalized().expect("normalized policy");
+    assert_eq!(normalized.local_ipc().len(), 1);
+    assert_eq!(normalized.unix_sockets().len(), 1);
+}
+
+#[test]
+fn windows_named_pipes_do_not_implicitly_enable_networking() {
+    let policy = NetworkPolicy::disabled()
+        .with_local_ipc(
+            LocalIpcEndpoint::windows_named_pipe(r"\\.\pipe\service").expect("pipe"),
+            DomainAccess::Allow,
+        )
+        .expect("named-pipe rule");
+    assert_eq!(policy.mode(), NetworkMode::Disabled);
+    assert_eq!(policy.unix_socket_mode(), UnixSocketMode::Disabled);
+}
+
+#[test]
+fn typed_local_ipc_rules_reject_duplicate_endpoints() {
+    let endpoint = LocalIpcEndpoint::windows_named_pipe(r"\\.\pipe\service").expect("pipe");
+    let policy = NetworkPolicy::enabled()
+        .with_local_ipc(endpoint.clone(), DomainAccess::Allow)
+        .expect("first rule");
+    assert!(matches!(
+        policy.with_local_ipc(endpoint, DomainAccess::Deny),
+        Err(PolicyError::InvalidLocalIpcEndpoint { reason, .. })
+            if reason == "duplicate local-IPC endpoint"
+    ));
+}
 
 #[test]
 fn native_absolute_paths_are_accepted_and_relative_paths_are_rejected() {

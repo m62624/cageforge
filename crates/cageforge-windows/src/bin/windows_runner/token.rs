@@ -36,6 +36,7 @@ const WRITE_RESTRICTED: u32 = 0x0000_0008;
 const EVERYONE_SID: &str = "S-1-1-0";
 pub(super) struct RestrictedPrimaryToken {
     handle: OwnedHandle,
+    capability_sids: Vec<String>,
     user_sid: String,
     logon_sid: String,
 }
@@ -117,6 +118,7 @@ impl Drop for LocalAcl {
 impl RestrictedPrimaryToken {
     pub(super) fn create(
         capability_sids: &[String],
+        strict_local_ipc: bool,
         route_sid: Option<&str>,
         expected_user_sid: &str,
     ) -> Result<Self, TokenHardeningError> {
@@ -147,24 +149,39 @@ impl RestrictedPrimaryToken {
                 Attributes: 0,
             })
             .collect::<Vec<_>>();
-        restricting.push(SID_AND_ATTRIBUTES {
-            Sid: user.0,
-            Attributes: 0,
-        });
+        if !strict_local_ipc {
+            restricting.push(SID_AND_ATTRIBUTES {
+                Sid: user.0,
+                Attributes: 0,
+            });
+        }
+        // Windows session objects such as CSRSS's ApiPort require the
+        // authenticated logon SID for write-restricted startup. Keep that
+        // session identity in the restricted set, while leaving the
+        // launch-unique capability SID as the additional requirement for
+        // approved named pipes.
+        if strict_local_ipc {
+            restricting.push(SID_AND_ATTRIBUTES {
+                Sid: logon.0,
+                Attributes: 0,
+            });
+        }
         if let Some(route) = &route {
             restricting.push(SID_AND_ATTRIBUTES {
                 Sid: route.0,
                 Attributes: 0,
             });
         }
-        restricting.push(SID_AND_ATTRIBUTES {
-            Sid: logon.0,
-            Attributes: 0,
-        });
-        restricting.push(SID_AND_ATTRIBUTES {
-            Sid: everyone.0,
-            Attributes: 0,
-        });
+        if !strict_local_ipc {
+            restricting.push(SID_AND_ATTRIBUTES {
+                Sid: logon.0,
+                Attributes: 0,
+            });
+            restricting.push(SID_AND_ATTRIBUTES {
+                Sid: everyone.0,
+                Attributes: 0,
+            });
+        }
         let expected_restricting = canonical_sid_set(
             restricting
                 .iter()
@@ -175,12 +192,20 @@ impl RestrictedPrimaryToken {
         }
 
         let handle = create_restricted_token(base.as_raw_handle() as _, &restricting)?;
-        let default_dacl_sids = capabilities
-            .iter()
-            .map(|sid| sid.0)
-            .chain(std::iter::once(logon.0))
-            .chain(std::iter::once(everyone.0))
-            .collect::<Vec<_>>();
+        let default_dacl_sids = if strict_local_ipc {
+            capabilities
+                .iter()
+                .map(|sid| sid.0)
+                .chain(std::iter::once(logon.0))
+                .collect::<Vec<_>>()
+        } else {
+            capabilities
+                .iter()
+                .map(|sid| sid.0)
+                .chain(std::iter::once(logon.0))
+                .chain(std::iter::once(everyone.0))
+                .collect::<Vec<_>>()
+        };
         set_default_dacl(handle.as_raw_handle() as _, &default_dacl_sids)?;
         enable_change_notify(handle.as_raw_handle() as _)?;
         verify_token(
@@ -196,6 +221,7 @@ impl RestrictedPrimaryToken {
         )?;
         Ok(Self {
             handle,
+            capability_sids: capability_sids.to_vec(),
             user_sid: actual_user_sid,
             logon_sid,
         })
@@ -203,6 +229,10 @@ impl RestrictedPrimaryToken {
 
     pub(super) fn raw(&self) -> *mut c_void {
         self.handle.as_raw_handle() as _
+    }
+
+    pub(super) fn capability_sids(&self) -> &[String] {
+        &self.capability_sids
     }
 
     pub(super) fn user_sid(&self) -> &str {

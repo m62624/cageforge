@@ -185,6 +185,8 @@ pub enum BackendCapability {
     /// Enforce explicit pathname local-IPC deny rules when the default is
     /// otherwise allow-all.
     NetworkLocalIpcDenyRules,
+    /// Enforce typed Windows named-pipe local-IPC endpoints.
+    NetworkWindowsNamedPipeRules,
     /// Start from all inherited environment variables.
     EnvironmentAll,
     /// Start from a backend-selected core environment.

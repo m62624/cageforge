@@ -21,6 +21,7 @@ mod config;
 mod error;
 mod filesystem;
 mod firewall_contract;
+mod local_ipc;
 mod native_strings;
 mod net_api_strings;
 mod network;

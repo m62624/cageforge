@@ -131,14 +131,14 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   repeated profile on the current resolution chain is rejected with the full
   cycle. A child overrides scalar values and an exact canonical rule target,
   while distinct rules remain available for specificity-based evaluation.
-- Filesystem, domain, and Unix-socket rules use deterministic canonical target
+- Filesystem, domain, and local-IPC rules use deterministic canonical target
   keys. Domain keys use the policy crate's host normalization, including
   ports, trailing dots, bracketed IP literals, and supported globs. An exact
   child target replaces an inherited target; overlapping but distinct targets
   are evaluated by specificity, and equal-specificity capability conflicts are
   resolved conservatively.
 - Semantically duplicate filesystem targets, domains, protected paths, and
-  Unix-socket paths are rejected inside one profile. Parent-to-child canonical
+  local-IPC endpoints are rejected inside one profile. Parent-to-child canonical
   replacement remains the explicit inheritance override mechanism.
 - Command argv replaces as a complete list when specified by the child.
 - Environment assignments/removals and stdio fields merge by key; a child

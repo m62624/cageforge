@@ -135,6 +135,12 @@ An external filesystem owner is never treated as unrestricted local access.
 
 For network enforcement:
 
+The pathname Unix-socket rules in this section are the macOS realization of
+the portable endpoint contract in [Specification 0023](0023-local-ipc-capability.md).
+Seatbelt must receive the exact validated endpoint rules; a blanket outbound
+allowance is not an acceptable lowering when the effective policy narrows local
+IPC.
+
 - disabled networking has no outbound or inbound network allowance;
 - unrestricted enabled networking retains direct network behavior only when
   the complete effective policy has no domain, local-address, or Unix-socket

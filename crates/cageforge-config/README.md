@@ -1,8 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
@@ -85,6 +81,45 @@ The platform overlay can also override `filesystem`, `network`, `command`,
 that intentionally want the unselected portable declaration; execution layers
 should use `resolve_for_platform` or `resolve_default_for_platform`.
 
+Local IPC uses the same platform-overlay model. Linux and macOS accept
+absolute Unix-socket paths; Windows uses the local named-pipe namespace and
+never treats a Windows pipe as a Unix path:
+
+```toml
+[profiles.tool.platforms.linux.local_ipc]
+unix_sockets = ["/run/tool/service.sock"]
+
+[profiles.tool.platforms.macos.local_ipc]
+unix_sockets = ["/var/run/tool/service.sock"]
+
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ['\\.\pipe\tool-service']
+```
+
+The endpoint is explicit and validated before backend launch. A backend must
+advertise native enforcement for the endpoint type; otherwise preflight
+returns a typed unsupported-capability error and does not start the child.
+Windows named-pipe support is advertised only for the native
+`NetworkWindowsNamedPipeRules` capability, which authorizes the exact local
+pipe through a launch-scoped ACL transaction and a restricted token. A Unix
+socket requested on Windows remains a typed unsupported-capability error.
+There is no TCP or unsandboxed fallback.
+
+The transaction retains one host-side handle per approved pipe for
+original-state capture, DACL activation, read-back, restoration, and final
+verification. It does not reopen a fresh named-pipe instance between those
+steps.
+
+The endpoint declaration is separate from the resources needed to start the
+command. A runnable restricted profile normally also declares `minimal` read
+access for the platform runtime, `workspace-root` write access when the
+working directory is the workspace, and `network.mode = "disabled"` unless
+the application needs another mode. An IPC rule does not grant those
+resources, arbitrary files, TCP loopback, or unrelated local IPC. The
+[configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md) and
+[`local-ipc-platforms.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/local-ipc-platforms.toml) show the
+complete Linux/macOS/Windows shape.
+
 ## Workspace role
 
 `cageforge-config` is the strict configuration adapter.
@@ -144,15 +179,15 @@ milliseconds = 60000
 ```
 
 More complete, copyable scenarios are in the
-[configuration examples](examples/README.md). They explain the TOML syntax,
+[configuration examples](https://github.com/m62624/cageforge/tree/main/crates/cageforge-config/examples). They explain the TOML syntax,
 profile inheritance, environment stage order, protected metadata, and the
 native Unix/macOS versus Windows path forms. The
-[`network-gateway.toml`](examples/network-gateway.toml) fixture demonstrates
+[`network-gateway.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/network-gateway.toml) fixture demonstrates
 every gateway field and field-wise inheritance.
 
 For the end-to-end TOML-to-native-launch flow, including the separate runnable
 profiles and the platform-specific meaning of `minimal`, see the
-[configuration guide](examples/CONFIGURATION_GUIDE.md).
+[configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minimal`,
 `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`. Network modes are

@@ -225,6 +225,7 @@ pub(super) fn run() -> ExitCode {
     }
     let token = match token::RestrictedPrimaryToken::create(
         &request.capability_sids,
+        request.strict_local_ipc,
         request.route_sid.as_deref(),
         transport.account.sid(),
     ) {
