@@ -4,7 +4,7 @@
 
 use std::ffi::c_void;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::mem::offset_of;
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -402,6 +402,8 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     fs::create_dir_all(&workspace).expect("workspace");
     let fixture = workspace.join("cageforge-windows-named-pipe-fixture.exe");
     let progress = workspace.join("named-pipe-progress.txt");
+    fs::write(&progress, b"host-created\n").expect("create named-pipe progress fixture");
+    let mut progress_reader = fs::File::open(&progress).expect("open named-pipe progress handle");
     fs::copy(
         env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"),
         &fixture,
@@ -444,7 +446,7 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
             if let Some(mut stream) = child.take_stderr() {
                 let _ = stream.read_to_string(&mut stderr);
             }
-            let progress = fs::read_to_string(&progress).ok();
+            let progress = read_open_progress(&mut progress_reader);
             panic!(
                 "wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}; progress={progress:?}"
             );
@@ -469,6 +471,13 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
 
     setup.uninstall().expect("cleanup Windows setup");
     cleanup.armed = false;
+}
+
+fn read_open_progress(file: &mut fs::File) -> Option<String> {
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut progress = String::new();
+    file.read_to_string(&mut progress).ok()?;
+    Some(progress)
 }
 
 fn access_fixture_command(path: &Path) -> CommandSpec {
