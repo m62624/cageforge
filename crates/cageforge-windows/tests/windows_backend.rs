@@ -38,7 +38,10 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenRestrictedSids,
 };
-use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_READ_ATTRIBUTES,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL, WRITE_DAC,
+};
 use windows_sys::Win32::System::Diagnostics::Debug::{
     CloseThreadWaitChainSession, GetThreadWaitChain, OpenThreadWaitChainSession,
     WAITCHAIN_NODE_INFO, WCT_MAX_NODE_COUNT, WCT_OUT_OF_PROC_COM_FLAG, WCT_OUT_OF_PROC_CS_FLAG,
@@ -360,6 +363,39 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
     }
 }
 
+#[allow(unsafe_code)]
+fn open_named_pipe_descriptor_handle(name: &str) -> Result<OwnedHandle, String> {
+    let name = name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+            windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(format!("Windows error {}", unsafe { GetLastError() }));
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
+}
+
+fn assert_named_pipe_descriptor_reopen(name: &str) {
+    let first = open_named_pipe_descriptor_handle(name)
+        .unwrap_or_else(|error| panic!("open first descriptor handle: {error}"));
+    drop(first);
+    let second = open_named_pipe_descriptor_handle(name)
+        .unwrap_or_else(|error| panic!("reopen descriptor handle: {error}"));
+    drop(second);
+}
+
 #[test]
 fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let _setup_test_guard = setup_test_lock();
@@ -395,6 +431,7 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let denied_name = format!(r"\\.\pipe\cageforge-{suffix}-denied");
     let allowed_server = start_test_named_pipe(&allowed_name).expect("start allowed named pipe");
     let denied_server = start_test_named_pipe(&denied_name).expect("start denied named pipe");
+    assert_named_pipe_descriptor_reopen(&allowed_name);
     let workspace = temporary.path().join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"));
