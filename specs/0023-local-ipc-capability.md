@@ -63,13 +63,19 @@ remain authoritative; the new typed model is an additional common entry point
 to those paths.
 
 Windows named-pipe enforcement combines strict host/sandbox DACLs, local-only
-pipe policy, a launch-unique capability SID, a restricted token without broad
-restricting SIDs, denial of neighboring unauthorized endpoints, descendant
-inheritance, and durable deterministic cleanup. The original and intended
-DACLs are journaled before mutation and restored only after exact read-back;
-unexpected drift fails closed. A Windows Unix-socket endpoint is unsupported
-and receives the typed capability error before spawn. There is no unrestricted,
-TCP, or unsandboxed fallback.
+pipe policy, a launch-unique capability SID, and a write-restricted token that
+does not restore broad user or Everyone access. The authenticated logon SID is
+retained where Windows session initialization requires it, including the
+session `ApiPort`; it is not an approval for any named pipe. The capability
+SID remains the narrow authorization for the explicitly approved pipe, and is
+also authorized on the private desktop and token default DACL so the child can
+complete startup without widening pipe access. Neighboring unauthorized
+endpoints remain denied, descendants inherit the restriction, and cleanup is
+durable and deterministic. The original and intended DACLs are journaled
+before mutation and restored only after exact read-back; unexpected drift
+fails closed. A Windows Unix-socket endpoint is unsupported and receives the
+typed capability error before spawn. There is no unrestricted, TCP, or
+unsandboxed fallback.
 
 The Windows ACL transaction holds one host-side handle for each approved pipe
 from original-state capture through DACL activation, read-back verification,

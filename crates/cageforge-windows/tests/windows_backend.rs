@@ -460,9 +460,15 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         .expect("named-pipe probe stdout")
         .read_to_string(&mut stdout)
         .expect("read named-pipe probe stdout");
+    let mut stderr = String::new();
+    child
+        .stderr()
+        .expect("named-pipe probe stderr")
+        .read_to_string(&mut stderr)
+        .expect("read named-pipe probe stderr");
     assert!(
         status.success(),
-        "named-pipe probe failed: {status}; {stdout}"
+        "named-pipe probe failed: {status}; stdout={stdout:?}; stderr={stderr:?}"
     );
     assert!(
         stdout.contains("named-pipe-ok"),
