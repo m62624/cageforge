@@ -1,12 +1,10 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate provides independently authored native path semantics shared by
-> Cageforge libraries.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
 # cageforge-path
+
+Read the shared [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md) for TOML profiles, symbolic paths, local IPC, and first-launch resource rules.
 
 `cageforge-path` centralizes the small set of path comparisons that must agree
 across Cageforge crates. It treats path components case-sensitively on POSIX

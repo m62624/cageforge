@@ -1,12 +1,10 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox boundary ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
 # cageforge-backend-api
+
+Read the shared [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md) for TOML profiles, symbolic paths, local IPC, and first-launch resource rules.
 
 `cageforge-backend-api` is the contract layer between Cageforge's portable
 execution values and a native Linux, macOS, or Windows backend. It defines the

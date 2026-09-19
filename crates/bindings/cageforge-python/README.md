@@ -1,18 +1,17 @@
-> **Independent project:** Cageforge is not affiliated with, sponsored by, or
-> endorsed by OpenAI. Its implementation and public API are independently
-> authored; repository notices document upstream behavioral references.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 # Cageforge Python binding
 
 `cageforge` provides a typed Python facade over the Cageforge sandbox on Linux,
-macOS, and Windows. It resolves the same TOML profiles as the Rust and JVM
-integrations and uses the native backend selected by the installed wheel.
+macOS, and Windows. It loads the selected profile and uses the native backend
+provided by the installed wheel.
 
 The package is built with PyO3 and maturin. The published package name is
 `cageforge`.
 
-The binding uses the same TOML schema and platform overlays as Rust and Java.
-See the shared [`cageforge-config` configuration guide](../../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+Use the published [cageforge crate](https://crates.io/crates/cageforge) as the
+project-level reference for the sandbox API.
+See the shared [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md)
 for the complete Linux/macOS/Windows profile shape, including the resources a
 first restricted launch must declare separately from local IPC.
 
@@ -71,9 +70,9 @@ with Cageforge.from_toml_file(
         assert process.wait().exit_code == 0
 ```
 
-The three profiles are [`linux/smoke.toml`](../../cageforge-config/examples/runnable/linux/smoke.toml),
-[`macos/smoke.toml`](../../cageforge-config/examples/runnable/macos/smoke.toml),
-and [`windows/smoke.toml`](../../cageforge-config/examples/runnable/windows/smoke.toml).
+The three profiles are [`linux/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/linux/smoke.toml),
+[`macos/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/macos/smoke.toml),
+and [`windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml).
 They use the current Cageforge TOML schema, include `minimal` read access,
 declare a workspace root, allow writes to `workspace-root`, and disable the
 network. The Windows profile uses `cmd.exe`; the POSIX profiles use `/bin/echo`.
@@ -152,7 +151,7 @@ The `minimal` selector is symbolic. Linux adapters supply the executable and
 loader paths needed by the selected backend, macOS supplies its system runtime
 paths, and Windows supplies the system root and `System32` paths. Use the
 separate files under
-[`cageforge-config/examples/runnable/`](../../cageforge-config/examples/runnable/)
+[`cageforge-config/examples/runnable/`](https://github.com/m62624/cageforge/tree/main/crates/cageforge-config/examples/runnable/)
 when the command or path syntax is OS-specific.
 
 ## Processes, asyncio, and errors

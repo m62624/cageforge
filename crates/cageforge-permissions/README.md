@@ -1,8 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the
 [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust
@@ -184,6 +180,6 @@ backend. The Python and Java bindings expose the same request identity,
 approval scope, expiry, and structured permission-error semantics. The CLI
 uses the same flow when a profile selects preflight approval.
 
-See the [`cageforge` facade](../cageforge/README.md) and the
-[`cageforge-config` guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+See the [cageforge facade](https://crates.io/crates/cageforge) and the
+[configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md)
 for the complete profile-to-launch flow.

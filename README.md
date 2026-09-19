@@ -1,7 +1,6 @@
 # Cageforge
 
-> **Independent project:** Cageforge is not affiliated with, sponsored by, or
-> endorsed by OpenAI.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 **[What Cageforge is](#what-cageforge-is) · [Use it as a library](#start-with-the-facade) ·
 [Install the CLI](#install-the-command-line-adapter) · [Workspace packages](#workspace-packages) ·
@@ -27,7 +26,7 @@ native enforcement, and a correct Cageforge implementation.
 
 ## Start with the facade
 
-Most applications should begin with [`cageforge`](https://docs.rs/cageforge/latest/cageforge/).
+Most applications should begin with [`cageforge`](https://crates.io/crates/cageforge).
 ```toml
 [dependencies]
 cageforge = "x.y.z"
@@ -286,7 +285,7 @@ The [`local-ipc-platforms.toml`](crates/cageforge-config/examples/local-ipc-plat
 example shows one profile with Linux/macOS Unix-socket overrides and a
 Windows named-pipe override. Windows does not silently fall back to TCP or an
 unsandboxed launch when named-pipe isolation is unsupported.
-The complete public API is available on [docs.rs](https://docs.rs/cageforge/latest/cageforge/)
+The main package is published on [crates.io](https://crates.io/crates/cageforge).
 and in the package README files linked above.
 The legal and provenance records are maintained in
 [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),

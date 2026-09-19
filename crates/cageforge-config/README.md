@@ -1,8 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
@@ -115,8 +111,8 @@ access for the platform runtime, `workspace-root` write access when the
 working directory is the workspace, and `network.mode = "disabled"` unless
 the application needs another mode. An IPC rule does not grant those
 resources, arbitrary files, TCP loopback, or unrelated local IPC. The
-[configuration guide](examples/CONFIGURATION_GUIDE.md) and
-[`local-ipc-platforms.toml`](examples/local-ipc-platforms.toml) show the
+[configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md) and
+[`local-ipc-platforms.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/local-ipc-platforms.toml) show the
 complete Linux/macOS/Windows shape.
 
 ## Workspace role
@@ -178,15 +174,15 @@ milliseconds = 60000
 ```
 
 More complete, copyable scenarios are in the
-[configuration examples](examples/README.md). They explain the TOML syntax,
+[configuration examples](https://github.com/m62624/cageforge/tree/main/crates/cageforge-config/examples). They explain the TOML syntax,
 profile inheritance, environment stage order, protected metadata, and the
 native Unix/macOS versus Windows path forms. The
-[`network-gateway.toml`](examples/network-gateway.toml) fixture demonstrates
+[`network-gateway.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/network-gateway.toml) fixture demonstrates
 every gateway field and field-wise inheritance.
 
 For the end-to-end TOML-to-native-launch flow, including the separate runnable
 profiles and the platform-specific meaning of `minimal`, see the
-[configuration guide](examples/CONFIGURATION_GUIDE.md).
+[configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 Filesystem targets are `absolute`, `workspace`, `workspace-root`, `root`, `minimal`,
 `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`. Network modes are

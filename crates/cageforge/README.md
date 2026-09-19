@@ -1,7 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate is an independent facade over Cageforge's public sandbox API.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 # cageforge
 
@@ -34,7 +31,7 @@ model and native backend are therefore available without an OS feature. Add
 available through the optional `network-runtime` feature.
 
 For the complete TOML flow and separate runnable profiles for each operating
-system, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+system, see the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 Local IPC uses one typed Rust model across platforms. Use absolute Unix-socket
 paths for Linux/macOS and `\\\\.\\pipe\\name` named-pipe names for Windows in
@@ -67,7 +64,7 @@ can launch commands through one API without naming a Linux, Windows, or macOS
 backend type. The static `Sandbox` API is available when the application needs
 direct access to a concrete backend and its native configuration.
 
-```rust,no_run
+```rust,ignore
 use std::{path::PathBuf, process::ExitStatus, time::Duration};
 
 use cageforge::{
@@ -139,9 +136,10 @@ uses the native backend's termination and recovery lifecycle.
 The static flow is also available when an application needs concrete backend
 configuration: create the matching backend, compose the policy, call
 `prepare`, then call `spawn`. Windows setup is documented in the
-[Windows backend README](../cageforge-windows/README.md); the [Linux backend
-README](../cageforge-linux/README.md) and [macOS backend
-README](../cageforge-macos/README.md) describe their native requirements and
+[cageforge-windows](https://crates.io/crates/cageforge-windows),
+[cageforge-linux](https://crates.io/crates/cageforge-linux), and
+[cageforge-macos](https://crates.io/crates/cageforge-macos) crates describe
+their native requirements and
 configuration.
 
 Create the backend once when running several commands. Each thread can supply
@@ -167,7 +165,7 @@ capabilities; only a trusted `GrantAuthority` can produce the opaque grant
 that authorizes it. The grant is checked before native launch and is combined
 with the existing policy ceiling:
 
-```rust,no_run
+```rust,ignore
 use cageforge::{
     native_sandbox, sha256_digest, BackendRequest, CommandRequest, EffectiveSandbox,
     GrantAuthority, PathResolutionContext, PreflightPlan, SandboxPolicy,

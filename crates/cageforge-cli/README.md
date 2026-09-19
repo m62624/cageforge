@@ -1,7 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate is an independent command-line adapter over Cageforge's public API.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
@@ -17,7 +14,7 @@ variables, an exact network policy, and a timeout. The CLI does not guess which
 files or hosts a program needs. The command after `--` is passed as native argv;
 it is never interpreted as shell text.
 
-The [configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+The [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md)
 contains one runnable profile for Linux, macOS, and Windows and explains the
 platform-specific `minimal` runtime scope.
 
@@ -255,7 +252,7 @@ milliseconds = 600000
 
 This profile is portable because it uses symbolic `minimal` and
 `workspace-root` selectors. The CLI supplies the platform-specific runtime
-paths; use the matching runnable profile in the [configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+paths; use the matching runnable profile in the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md)
 when the executable itself must also be selected per OS. A profile without a
 command can be paired with argv after `--`; a profile without either is
 rejected.
@@ -272,4 +269,4 @@ passes its configured gateway and platform resources through the facade.
 For native behavior and host requirements, see the [Linux backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-linux/README.md),
 [Windows backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-windows/README.md),
 and [macOS backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-macos/README.md).
-The underlying facade API is documented in the [`cageforge` crate](https://docs.rs/cageforge/latest/cageforge/).
+The underlying facade is published as the [`cageforge` crate](https://crates.io/crates/cageforge).

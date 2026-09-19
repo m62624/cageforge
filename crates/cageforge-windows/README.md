@@ -1,8 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
@@ -22,14 +18,14 @@ backend turns one backend-bound `PreparedBackendRequest` into a restricted Windo
 process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
 firewall/WFP, and per-process network-route enforcement.
 
-For most applications, start with [`cageforge`](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
+For most applications, start with [`cageforge`](https://crates.io/crates/cageforge),
 the unified library API for Linux, macOS, and Windows. The facade selects this
 backend automatically when compiled for Windows while retaining the native
 configuration options. You can also use `cageforge-windows` directly, as shown
 below.
 
 For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
-`minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+`minimal` target, see the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 ## Sandbox model
 
@@ -163,7 +159,7 @@ system root separately. Windows has a `tmpdir` scope; it does not have the
 POSIX `slash-tmp` scope.
 
 The runnable example is
-[`runnable/windows/smoke.toml`](../cageforge-config/examples/runnable/windows/smoke.toml).
+[`runnable/windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml).
 
 Provision the setup explicitly, compose the portable values, then prepare and
 spawn through the same backend instance:
