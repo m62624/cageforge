@@ -89,6 +89,7 @@ pub(crate) struct WindowsLocalIpcEnforcement {
 
 struct NamedPipeAclLease {
     name: String,
+    handle: OwnedHandle,
     original: AclSnapshot,
     after: AclSnapshot,
     released: bool,
@@ -154,13 +155,13 @@ impl WindowsLocalIpcEnforcement {
                     current: pipe.after.persisted(),
                 })?;
                 if let Err(error) = pipe.activate(&capability_sid) {
-                    let _ = restore_snapshot(&pipe.name, &pipe.original);
+                    let _ = restore_snapshot_on_handle(&pipe.name, &pipe.handle, &pipe.original);
                     return Err(error);
                 }
                 if let Err(error) =
                     state_session.update_named_pipe_acl_current(&pipe.name, pipe.after.persisted())
                 {
-                    let _ = restore_snapshot(&pipe.name, &pipe.original);
+                    let _ = restore_snapshot_on_handle(&pipe.name, &pipe.handle, &pipe.original);
                     return Err(error.into());
                 }
                 Ok(pipe)
@@ -190,9 +191,7 @@ impl WindowsLocalIpcEnforcement {
     pub(crate) fn release(&mut self) -> Result<(), WindowsLocalIpcError> {
         let mut state_session = self.state.begin()?;
         for pipe in self.pipes.iter_mut().rev() {
-            pipe.release()?;
-            let actual = read_snapshot(&pipe.name, "release verification")?;
-            let actual = actual.persisted();
+            let actual = pipe.release()?.persisted();
             state_session.resolve_named_pipe_acl(&pipe.name, &actual)?;
         }
         state_session.finish()?;
@@ -234,7 +233,8 @@ impl WindowsLocalIpcEnforcement {
 
 impl NamedPipeAclLease {
     fn prepare(name: String, capability_sid: &str) -> Result<Self, WindowsLocalIpcError> {
-        let original = read_snapshot(&name, "prepare original-state read")?;
+        let handle = open_pipe(&name, "prepare original-state read")?;
+        let original = read_snapshot_from_handle(&name, &handle, "prepare original-state read")?;
         let sid = LocalSid::parse(capability_sid).map_err(|code| {
             WindowsLocalIpcError::DescriptorBuild {
                 name: name.clone(),
@@ -245,6 +245,7 @@ impl NamedPipeAclLease {
         let updated = snapshot_from_acl(&name, updated_acl.0, original.protected)?;
         Ok(Self {
             name,
+            handle,
             original,
             after: updated,
             released: false,
@@ -258,37 +259,60 @@ impl NamedPipeAclLease {
                 code,
             }
         })?;
-        write_snapshot(&self.name, &self.after, self.original.protected)?;
-        let after = match read_snapshot(&self.name, "activation read-back") {
-            Ok(snapshot) if snapshot_contains_sid(&snapshot, sid.0) => snapshot,
-            Ok(_) => {
-                let _ = write_snapshot(&self.name, &self.original, self.original.protected);
-                return Err(WindowsLocalIpcError::DescriptorReadBack {
-                    name: self.name.clone(),
-                });
-            }
-            Err(error) => {
-                let _ = write_snapshot(&self.name, &self.original, self.original.protected);
-                return Err(error);
-            }
-        };
+        write_snapshot_on_handle(
+            &self.name,
+            &self.handle,
+            &self.after,
+            self.original.protected,
+        )?;
+        let after =
+            match read_snapshot_from_handle(&self.name, &self.handle, "activation read-back") {
+                Ok(snapshot) if snapshot_contains_sid(&snapshot, sid.0) => snapshot,
+                Ok(_) => {
+                    let _ = write_snapshot_on_handle(
+                        &self.name,
+                        &self.handle,
+                        &self.original,
+                        self.original.protected,
+                    );
+                    return Err(WindowsLocalIpcError::DescriptorReadBack {
+                        name: self.name.clone(),
+                    });
+                }
+                Err(error) => {
+                    let _ = write_snapshot_on_handle(
+                        &self.name,
+                        &self.handle,
+                        &self.original,
+                        self.original.protected,
+                    );
+                    return Err(error);
+                }
+            };
         self.after = after;
         Ok(())
     }
 
-    fn release(&mut self) -> Result<(), WindowsLocalIpcError> {
+    fn release(&mut self) -> Result<AclSnapshot, WindowsLocalIpcError> {
         if self.released {
-            return Ok(());
+            return Ok(self.original.clone());
         }
-        let current = read_snapshot(&self.name, "release current-state read")?;
+        let current =
+            read_snapshot_from_handle(&self.name, &self.handle, "release current-state read")?;
         if current != self.after {
             return Err(WindowsLocalIpcError::DescriptorDrift {
                 name: self.name.clone(),
             });
         }
-        restore_snapshot(&self.name, &self.original)?;
+        restore_snapshot_on_handle(&self.name, &self.handle, &self.original)?;
+        let restored = read_snapshot_from_handle(&self.name, &self.handle, "release verification")?;
+        if restored != self.original {
+            return Err(WindowsLocalIpcError::DescriptorDrift {
+                name: self.name.clone(),
+            });
+        }
         self.released = true;
-        Ok(())
+        Ok(restored)
     }
 }
 
@@ -297,10 +321,16 @@ impl Drop for NamedPipeAclLease {
         if self.released {
             return;
         }
-        if let Ok(current) = read_snapshot(&self.name, "drop cleanup read")
+        if let Ok(current) =
+            read_snapshot_from_handle(&self.name, &self.handle, "drop cleanup read")
             && current == self.after
         {
-            let _ = write_snapshot(&self.name, &self.original, self.original.protected);
+            let _ = write_snapshot_on_handle(
+                &self.name,
+                &self.handle,
+                &self.original,
+                self.original.protected,
+            );
         }
         self.released = true;
     }
@@ -408,6 +438,15 @@ impl Drop for LocalAcl {
 #[allow(unsafe_code)]
 fn read_snapshot(name: &str, operation: &'static str) -> Result<AclSnapshot, WindowsLocalIpcError> {
     let pipe = open_pipe(name, operation)?;
+    read_snapshot_from_handle(name, &pipe, operation)
+}
+
+#[allow(unsafe_code)]
+fn read_snapshot_from_handle(
+    name: &str,
+    pipe: &OwnedHandle,
+    operation: &'static str,
+) -> Result<AclSnapshot, WindowsLocalIpcError> {
     let mut dacl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     let status = unsafe {
@@ -539,12 +578,12 @@ fn snapshot_from_acl(
 }
 
 #[allow(unsafe_code)]
-fn write_snapshot(
+fn write_snapshot_on_handle(
     name: &str,
+    pipe: &OwnedHandle,
     snapshot: &AclSnapshot,
     protected: bool,
 ) -> Result<(), WindowsLocalIpcError> {
-    let pipe = open_pipe(name, "DACL write")?;
     let security = DACL_SECURITY_INFORMATION
         | if protected {
             PROTECTED_DACL_SECURITY_INFORMATION
@@ -597,15 +636,26 @@ fn open_pipe(name: &str, operation: &'static str) -> Result<OwnedHandle, Windows
 }
 
 fn restore_snapshot(name: &str, snapshot: &AclSnapshot) -> Result<(), WindowsLocalIpcError> {
-    write_snapshot(name, snapshot, snapshot.protected).map_err(|error| match error {
-        WindowsLocalIpcError::DescriptorWrite { code, .. } => {
-            WindowsLocalIpcError::DescriptorRestore {
-                name: name.to_owned(),
-                code,
+    let pipe = open_pipe(name, "DACL restore")?;
+    restore_snapshot_on_handle(name, &pipe, snapshot)
+}
+
+fn restore_snapshot_on_handle(
+    name: &str,
+    pipe: &OwnedHandle,
+    snapshot: &AclSnapshot,
+) -> Result<(), WindowsLocalIpcError> {
+    write_snapshot_on_handle(name, pipe, snapshot, snapshot.protected).map_err(
+        |error| match error {
+            WindowsLocalIpcError::DescriptorWrite { code, .. } => {
+                WindowsLocalIpcError::DescriptorRestore {
+                    name: name.to_owned(),
+                    code,
+                }
             }
-        }
-        other => other,
-    })
+            other => other,
+        },
+    )
 }
 
 #[allow(unsafe_code)]
