@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::OsString;
-use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, UdpSocket};
 use std::path::PathBuf;
@@ -68,7 +67,9 @@ const DENIED_READ_DEVICE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_
 const DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
+#[cfg(target_os = "windows")]
 const NAMED_PIPE_ALLOWED: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED";
+#[cfg(target_os = "windows")]
 const NAMED_PIPE_DENIED: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_DENIED";
 // The backend's launch timeout is 15 seconds. Keep the fixture's socket
 // timeout above it so a slow Windows/WFP handshake is reported by the
