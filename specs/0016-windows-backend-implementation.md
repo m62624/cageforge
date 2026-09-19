@@ -641,7 +641,10 @@ the current profile-guard SID and the superseded ancestor write capabilities,
 converts retained inherited ACEs to explicit ACEs without changing their masks,
 and installs the root's required group and capability ACEs. Cageforge applies
 the initially enumerated descendants deepest-first and only then their parent
-roots. This ordering prevents a root's inheritable ACE from being propagated
+roots. Byte-identical ACEs are retained only once after inherited-flag
+normalization, matching Windows protected-DACL canonicalization; ACEs with
+different trustees, masks, or deny semantics remain distinct. This ordering
+prevents a root's inheritable ACE from being propagated
 into an existing child after that child already received its explicitly
 journaled grant; it does not assume a particular Windows
 retroactive-propagation behavior. A later-created ordinary descendant need not

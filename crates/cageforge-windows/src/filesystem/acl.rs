@@ -1157,12 +1157,6 @@ impl PreparedAclOperation {
             verify_sid_absent(&self.path, descriptor.dacl, sid)?;
         }
         if &actual != expected {
-            eprintln!(
-                "cageforge temporary ACL diagnostic: path={:?}; expected={}; actual={}",
-                self.path.final_path(),
-                dacl_entry_summary(&self.path, expected)?,
-                dacl_entry_summary(&self.path, &actual)?,
-            );
             return Err(FilesystemAclError::DescriptorSnapshotMismatch {
                 path: self.path.final_path().to_path_buf(),
             });
@@ -2746,6 +2740,7 @@ fn filter_acl(
 ) -> Result<OwnedAclBuffer, FilesystemAclError> {
     let information = acl_information(path, source)?;
     let mut retained = Vec::new();
+    let mut retained_keys = BTreeSet::new();
     let mut bytes = size_of::<ACL>();
     for index in 0..information.AceCount {
         let raw = ace(path, source, index)?;
@@ -2799,6 +2794,14 @@ fn filter_acl(
         }
         let mut copy = raw_bytes.to_vec();
         copy[1] &= !(INHERITED_ACE as u8);
+        // Windows canonicalizes a protected DACL and removes byte-identical
+        // duplicate ACEs. Mirror that harmless normalization before the
+        // native write so the journaled after-state is the state Windows will
+        // actually read back. Different trustees, masks, or deny entries are
+        // never merged.
+        if !retained_keys.insert(copy.clone()) {
+            continue;
+        }
         bytes =
             bytes
                 .checked_add(copy.len())
