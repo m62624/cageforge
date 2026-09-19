@@ -283,6 +283,7 @@ fn windows_capabilities() -> BackendCapabilities {
         BackendCapability::NetworkDomainRules,
         BackendCapability::NetworkLocalAddressRestrictions,
         BackendCapability::NetworkResolvedTargets,
+        BackendCapability::NetworkWindowsNamedPipeRules,
         BackendCapability::EnvironmentAll,
         BackendCapability::EnvironmentCore,
         BackendCapability::EnvironmentNone,
