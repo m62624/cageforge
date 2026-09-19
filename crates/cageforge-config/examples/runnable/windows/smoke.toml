@@ -25,4 +25,4 @@ mode = "disabled"
 
 [profiles.smoke.command]
 program = "C:/Windows/System32/cmd.exe"
-args = ["/d", "/c", "echo", "cageforge-windows-smoke"]
+args = ["/d", "/c", "echo cageforge-windows-smoke"]
