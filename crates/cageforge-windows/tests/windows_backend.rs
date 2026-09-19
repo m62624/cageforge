@@ -49,7 +49,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, PIPE_NOWAIT, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken,
@@ -197,41 +197,60 @@ fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    let handle = unsafe {
-        CreateNamedPipeW(
-            wide_name.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            1,
-            4096,
-            4096,
-            5000,
-            std::ptr::null(),
-        )
-    };
-    assert!(
-        !handle.is_null() && handle != INVALID_HANDLE_VALUE,
-        "create named-pipe test server {name:?}: Windows error {}",
-        unsafe { GetLastError() }
-    );
-    let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
+    let name = name.to_owned();
     let connected = thread::spawn(move || {
         let deadline = Instant::now() + FIXTURE_START_DEADLINE;
+        let mut first_instance = true;
+        let mut connection_count = 0;
         loop {
+            let flags = PIPE_ACCESS_DUPLEX
+                | if first_instance {
+                    FILE_FLAG_FIRST_PIPE_INSTANCE
+                } else {
+                    0
+                };
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    wide_name.as_ptr(),
+                    flags,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                    PIPE_UNLIMITED_INSTANCES,
+                    4096,
+                    4096,
+                    5000,
+                    std::ptr::null(),
+                )
+            };
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return Err(format!(
+                    "create named-pipe test server {name:?}: Windows error {}",
+                    unsafe { GetLastError() }
+                ));
+            }
+            first_instance = false;
+            let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
             let result =
                 unsafe { ConnectNamedPipe(handle.as_raw_handle() as _, std::ptr::null_mut()) };
             if result != 0 {
-                return Ok(true);
+                connection_count += 1;
+                if connection_count >= 2 {
+                    return Ok(true);
+                }
+                continue;
             }
             let code = unsafe { GetLastError() };
             if code == ERROR_PIPE_CONNECTED {
-                return Ok(true);
+                connection_count += 1;
+                if connection_count >= 2 {
+                    return Ok(true);
+                }
+                continue;
             }
             if code != ERROR_PIPE_LISTENING {
                 return Err(format!("ConnectNamedPipe failed: Windows error {code}"));
             }
             if Instant::now() >= deadline {
-                return Ok(false);
+                return Ok(connection_count > 0);
             }
             thread::sleep(Duration::from_millis(10));
         }

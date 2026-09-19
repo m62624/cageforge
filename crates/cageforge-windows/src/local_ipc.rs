@@ -11,23 +11,30 @@
 
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
 
 use cageforge_policy::{DomainAccess, LocalIpcEndpoint};
 use cageforge_policy_compose::EffectiveNetworkLowering;
 use getrandom::Error as RandomError;
 use thiserror::Error;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GetLastError, HLOCAL, LocalFree};
+use windows_sys::Win32::Foundation::{
+    ERROR_SUCCESS, GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+};
 use windows_sys::Win32::Security::Authorization::{
-    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, SE_FILE_OBJECT, SetEntriesInAclW,
-    SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, SE_KERNEL_OBJECT, SetEntriesInAclW,
+    SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
     DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, GetSecurityDescriptorControl, IsValidSid,
     PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
-use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+    WRITE_DAC,
+};
 
 use crate::capability::state::{NamedPipeAclObject, PersistedDacl};
 use crate::capability::store::{
@@ -394,13 +401,13 @@ impl Drop for LocalAcl {
 
 #[allow(unsafe_code)]
 fn read_snapshot(name: &str) -> Result<AclSnapshot, WindowsLocalIpcError> {
-    let name_wide = wide(name);
+    let pipe = open_pipe(name)?;
     let mut dacl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     let status = unsafe {
-        GetNamedSecurityInfoW(
-            name_wide.as_ptr(),
-            SE_FILE_OBJECT,
+        GetSecurityInfo(
+            pipe.as_raw_handle() as _,
+            SE_KERNEL_OBJECT,
             DACL_SECURITY_INFORMATION,
             ptr::null_mut(),
             ptr::null_mut(),
@@ -530,7 +537,7 @@ fn write_snapshot(
     snapshot: &AclSnapshot,
     protected: bool,
 ) -> Result<(), WindowsLocalIpcError> {
-    let name_wide = wide(name);
+    let pipe = open_pipe(name)?;
     let security = DACL_SECURITY_INFORMATION
         | if protected {
             PROTECTED_DACL_SECURITY_INFORMATION
@@ -538,9 +545,9 @@ fn write_snapshot(
             UNPROTECTED_DACL_SECURITY_INFORMATION
         };
     let status = unsafe {
-        SetNamedSecurityInfoW(
-            name_wide.as_ptr(),
-            SE_FILE_OBJECT,
+        SetSecurityInfo(
+            pipe.as_raw_handle() as _,
+            SE_KERNEL_OBJECT,
             security,
             ptr::null_mut(),
             ptr::null_mut(),
@@ -556,6 +563,29 @@ fn write_snapshot(
     } else {
         Ok(())
     }
+}
+
+#[allow(unsafe_code)]
+fn open_pipe(name: &str) -> Result<OwnedHandle, WindowsLocalIpcError> {
+    let name_wide = wide(name);
+    let handle = unsafe {
+        CreateFileW(
+            name_wide.as_ptr(),
+            READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(WindowsLocalIpcError::DescriptorRead {
+            name: name.to_owned(),
+            code: unsafe { GetLastError() },
+        });
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle as _) })
 }
 
 fn restore_snapshot(name: &str, snapshot: &AclSnapshot) -> Result<(), WindowsLocalIpcError> {
