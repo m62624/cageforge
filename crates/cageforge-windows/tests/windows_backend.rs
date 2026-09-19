@@ -226,7 +226,28 @@ fn setup_test_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 struct TestNamedPipeServer {
-    connected: thread::JoinHandle<Result<bool, String>>,
+    stop_sender: mpsc::Sender<()>,
+    connected: Option<thread::JoinHandle<Result<bool, String>>>,
+}
+
+impl TestNamedPipeServer {
+    fn finish(mut self) -> Result<bool, String> {
+        let _ = self.stop_sender.send(());
+        self.connected
+            .take()
+            .ok_or_else(|| "named-pipe server thread was already joined".to_string())?
+            .join()
+            .map_err(|_| "named-pipe server thread panicked".to_string())?
+    }
+}
+
+impl Drop for TestNamedPipeServer {
+    fn drop(&mut self) {
+        let _ = self.stop_sender.send(());
+        if let Some(thread) = self.connected.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 #[allow(unsafe_code)]
@@ -238,13 +259,16 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
     let name = name.to_owned();
     let thread_name = name.clone();
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let (stop_sender, stop_receiver) = mpsc::channel();
     let connected = thread::spawn(move || {
-        let deadline = Instant::now() + FIXTURE_IO_TIMEOUT;
         let mut first_instance = true;
         let mut connection_count = 0;
         let mut handle = None;
         let mut ready_sender = Some(ready_sender);
         loop {
+            if stop_receiver.try_recv().is_ok() {
+                return Ok(connection_count > 0);
+            }
             if handle.is_none() {
                 let flags = PIPE_ACCESS_DUPLEX
                     | if first_instance {
@@ -302,18 +326,26 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
             if code != ERROR_PIPE_LISTENING {
                 return Err(format!("ConnectNamedPipe failed: Windows error {code}"));
             }
-            if Instant::now() >= deadline {
-                return Ok(connection_count > 0);
-            }
             thread::sleep(Duration::from_millis(10));
         }
     });
     match ready_receiver.recv_timeout(FIXTURE_START_DEADLINE) {
-        Ok(Ok(())) => Ok(TestNamedPipeServer { connected }),
-        Ok(Err(error)) => Err(error),
-        Err(error) => Err(format!(
-            "named-pipe test server {name:?} did not become ready: {error}"
-        )),
+        Ok(Ok(())) => Ok(TestNamedPipeServer {
+            stop_sender,
+            connected: Some(connected),
+        }),
+        Ok(Err(error)) => {
+            let _ = stop_sender.send(());
+            let _ = connected.join();
+            Err(error)
+        }
+        Err(error) => {
+            let _ = stop_sender.send(());
+            let _ = connected.join();
+            Err(format!(
+                "named-pipe test server {name:?} did not become ready: {error}"
+            ))
+        }
     }
 }
 
@@ -394,20 +426,8 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         stdout.contains("named-pipe-ok"),
         "named-pipe probe did not report its result: {stdout}"
     );
-    assert!(
-        allowed_server
-            .connected
-            .join()
-            .expect("approved named-pipe server thread")
-            .expect("approved named-pipe server")
-    );
-    assert!(
-        !denied_server
-            .connected
-            .join()
-            .expect("denied named-pipe server thread")
-            .expect("denied named-pipe server")
-    );
+    assert!(allowed_server.finish().expect("approved named-pipe server"));
+    assert!(!denied_server.finish().expect("denied named-pipe server"));
 
     setup.uninstall().expect("cleanup Windows setup");
     cleanup.armed = false;
