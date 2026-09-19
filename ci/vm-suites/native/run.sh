@@ -41,9 +41,5 @@ cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bub
 cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --locked
 cargo doc -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --no-deps --locked
 
-echo 'Running the Linux runnable configuration example through the CLI.'
-smoke_output=$(cargo run --locked --release -p cageforge-cli \
-  --no-default-features --features linux-bundled-bubblewrap -- \
-  run --approve \
-  --config crates/cageforge-config/examples/runnable/linux/smoke.toml)
-grep -Fx 'cageforge-linux-smoke' <<<"$smoke_output"
+echo 'Running the runnable configuration example after native checks.'
+CAGEFORGE_RUNNABLE_OS=linux ci/run-runnable-example.sh

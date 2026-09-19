@@ -181,8 +181,8 @@ working directory is the workspace.
 
 The TOML controls the policy and approval behavior; it does not contain a
 grant. When a resolved profile uses `approval.mode = "preflight"`, the Rust
-facade, CLI, Python binding, or Java binding builds a `PermissionRequest` from
-the resolved policy and runtime identity. That request includes the selected
+the `cageforge` crate, CLI, Python binding, or Java binding builds a
+`PermissionRequest` from the resolved policy and runtime identity. That request includes the selected
 `PlatformId`, architecture, executable/tool identity, config and manifest
 digests, resolved native paths, network capabilities, and child-process
 capabilities. A trusted host then returns an opaque `PermissionGrant` before
@@ -224,8 +224,8 @@ argv is provided after `--`.
 
 ## Rust, CLI, and JVM integration
 
-For Rust, enable `cageforge`'s `config` feature. The facade selects the native
-backend from the compilation target; resolve the profile, build the runtime
+For Rust, enable `cageforge`'s `config` feature. The `cageforge` crate selects
+the native backend from the compilation target; resolve the profile, build the runtime
 context, compose an effective policy, and call `native_sandbox().launch` or
 the concrete backend's `prepare`/`spawn`.
 
