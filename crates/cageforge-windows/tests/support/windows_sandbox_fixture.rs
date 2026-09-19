@@ -441,6 +441,10 @@ fn signal_unrelated_named_object() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn named_pipe_probe() -> Result<(), String> {
+    std::io::stdout()
+        .write_all(b"named-pipe-start\n")
+        .and_then(|_| std::io::stdout().flush())
+        .map_err(|error| format!("write named-pipe probe start: {error}"))?;
     let progress = environment(PROGRESS)?;
     std::fs::write(&progress, b"start\n")
         .map_err(|error| format!("write named-pipe probe progress: {error}"))?;
