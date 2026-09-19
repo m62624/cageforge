@@ -170,7 +170,7 @@ fn request_with_full_filesystem_environment(
 ) {
     request_with_filesystem_environment(
         workspace,
-        FilesystemPolicy::unrestricted(),
+        FilesystemPolicy::restricted([]),
         network,
         command,
         environment,
