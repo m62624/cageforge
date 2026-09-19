@@ -1911,6 +1911,7 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ProcessResult>()?;
     module.add_class::<WindowsSetup>()?;
     module.add_class::<PermissionRequest>()?;
+    module.add_class::<LocalIpcEndpoint>()?;
     module.add_class::<GrantId>()?;
     module.add_class::<GrantPageCursor>()?;
     module.add_class::<GrantSummary>()?;
