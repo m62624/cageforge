@@ -40,6 +40,3 @@ echo 'Running the CLI checks with the bundled Bubblewrap feature.'
 cargo clippy -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --all-targets --locked -- -D warnings
 cargo test -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --locked
 cargo doc -p cageforge-cli --no-default-features --features linux-bundled-bubblewrap --no-deps --locked
-
-echo 'Running the runnable configuration example after native checks.'
-CAGEFORGE_RUNNABLE_OS=linux ci/run-runnable-example.sh

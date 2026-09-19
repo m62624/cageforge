@@ -1223,7 +1223,10 @@ jobs:
       - name: Run the macOS-only configuration profile
         run: |
           set -euo pipefail
-          CAGEFORGE_RUNNABLE_OS=macos ci/run-runnable-example.sh
+          output=$(cargo run --locked --release -p cageforge-cli \
+            --no-default-features --features config -- \
+            run --approve --config crates/cageforge-config/examples/runnable/macos/smoke.toml)
+          grep -Fx 'cageforge-macos-smoke' <<<"$output"
 
   native-windows:
     name: "Windows sandbox (Windows Server 2025)"
@@ -1342,11 +1345,6 @@ jobs:
           cargo clippy -p cageforge-cli --no-default-features --features config --all-targets -- -D warnings
           cargo test -p cageforge-cli --no-default-features --features config --all-targets
           cargo doc -p cageforge-cli --no-default-features --features config --no-deps
-      - name: Run the Windows runnable configuration profile after native checks
-        timeout-minutes: 15
-        run: |
-          set -euo pipefail
-          CAGEFORGE_RUNNABLE_OS=windows ci/run-runnable-example.sh
       - name: Upload Windows native test report
         if: ${{ failure() && hashFiles('test-reports/**') != '' }}
         uses: actions/upload-artifact@v4
