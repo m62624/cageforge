@@ -306,7 +306,9 @@ sandbox account. The token:
 - includes one random network-route restricting SID when proxy routing is
   active;
 - keeps the user, `Everyone`, logon, and request capability SIDs as the
-  complete default object DACL, excluding the route SID; and
+  complete default object DACL, excluding the route SID; for strict named-pipe
+  local-IPC launches it instead contains only the request capability SIDs and
+  any required route SID; and
 - cannot inherit an administrator token or the real user's identity.
 
 The runner reads the completed token back before process creation. Token user,
@@ -839,10 +841,16 @@ The gateway still performs one DNS snapshot and exact `SocketAddr`
 authorization immediately before connect. Firewall and route attribution are
 native ingress boundaries, not replacements for portable policy checks.
 
-Windows pathname local-IPC capabilities are not advertised in the first
-backend. Named pipes are separate Windows objects and must be isolated by token,
-desktop, object DACL, and handle inheritance. A local-IPC request receives the
-typed unsupported capability error from common preflight.
+Windows named-pipe local IPC is implemented as a launch-scoped capability.
+Each approved pipe receives a fresh capability SID in its DACL, the strict
+local-IPC token retains no broad user/logon/Everyone restricting SIDs, and the
+parent verifies the resulting DACL before the child starts. Original and
+post-mutation descriptors are journaled in the protected capability state;
+cleanup restores the exact original descriptor and removes the journal entry.
+Startup recovery performs the same comparison and restoration after an
+interrupted parent. Unexpected descriptor drift is a typed fail-closed error.
+POSIX Unix-socket endpoints remain unsupported on Windows and are never
+converted to TCP or an unrestricted named pipe.
 
 ## 8. Environment and standard streams
 
@@ -882,15 +890,15 @@ attributes.
 The backend advertises command execution, checked working directories, all
 three standard-stream modes, all timeout modes, the supported elevated
 filesystem scope/glob/protection families, disabled and enabled networking,
-domain/local-address/exact-target enforcement, and all portable environment
-modes and transformations.
+domain/local-address/exact-target enforcement, Windows named-pipe local IPC,
+and all portable environment modes and transformations.
 
 It does not advertise:
 
 - unrestricted filesystem execution;
 - external filesystem or network ownership;
 - the platform-specific conventional Unix temporary scope;
-- pathname local-IPC isolation or per-path local-IPC rules; or
+- POSIX pathname local-IPC isolation or per-path Unix-socket rules; or
 - a capability whose setup read-back or runtime mechanism is unavailable.
 
 Capability preflight is followed by native combination validation. In

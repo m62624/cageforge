@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::OsString;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, UdpSocket};
 use std::path::PathBuf;
@@ -60,6 +61,8 @@ const DENIED_READ_DEVICE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_READ_
 const DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
+const NAMED_PIPE_ALLOWED: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED";
+const NAMED_PIPE_DENIED: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_DENIED";
 // The backend's launch timeout is 15 seconds. Keep the fixture's socket
 // timeout above it so a slow Windows/WFP handshake is reported by the
 // sandbox boundary instead of being converted into a misleading empty EOF.
@@ -108,6 +111,7 @@ fn run() -> Result<(), String> {
         "shell-activation" => shell_activation(),
         "unrelated-handle" => signal_unrelated_handle(),
         "unrelated-named-object" => signal_unrelated_named_object(),
+        "named-pipe" => named_pipe_probe(),
         _ => Err(format!("unsupported fixture mode {mode:?}")),
     }
 }
@@ -423,6 +427,38 @@ fn signal_unrelated_named_object() -> Result<(), String> {
 #[cfg(not(target_os = "windows"))]
 fn signal_unrelated_named_object() -> Result<(), String> {
     Err("unrelated-named-object probe requires Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn named_pipe_probe() -> Result<(), String> {
+    let allowed = environment(NAMED_PIPE_ALLOWED)?;
+    let denied = environment(NAMED_PIPE_DENIED)?;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&allowed)
+        .map_err(|error| format!("approved named pipe {allowed:?} was denied: {error}"))?;
+    match OpenOptions::new().read(true).write(true).open(&denied) {
+        Ok(_) => Err(format!("unapproved named pipe {denied:?} was accessible")),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            std::io::stdout()
+                .write_all(b"named-pipe-ok")
+                .map_err(|error| format!("write named-pipe probe result: {error}"))
+        }
+        Err(error) => Err(format!(
+            "unapproved named pipe {denied:?} returned unexpected error: {error}"
+        )),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn named_pipe_probe() -> Result<(), String> {
+    Err("named-pipe probe requires Windows".to_string())
 }
 
 fn denied_read() -> Result<(), String> {

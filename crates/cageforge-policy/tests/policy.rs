@@ -56,6 +56,18 @@ fn typed_local_ipc_rules_are_exposed_and_normalized() {
 }
 
 #[test]
+fn windows_named_pipes_do_not_implicitly_enable_networking() {
+    let policy = NetworkPolicy::disabled()
+        .with_local_ipc(
+            LocalIpcEndpoint::windows_named_pipe(r"\\.\pipe\service").expect("pipe"),
+            DomainAccess::Allow,
+        )
+        .expect("named-pipe rule");
+    assert_eq!(policy.mode(), NetworkMode::Disabled);
+    assert_eq!(policy.unix_socket_mode(), UnixSocketMode::Disabled);
+}
+
+#[test]
 fn typed_local_ipc_rules_reject_duplicate_endpoints() {
     let endpoint = LocalIpcEndpoint::windows_named_pipe(r"\\.\pipe\service").expect("pipe");
     let policy = NetworkPolicy::enabled()

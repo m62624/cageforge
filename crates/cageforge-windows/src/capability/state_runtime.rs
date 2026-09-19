@@ -10,11 +10,12 @@ use thiserror::Error;
 
 use crate::capability::state::{
     CapabilityRole, CapabilityState, CapabilityStateError, FilesystemCapability, ManagedAclObject,
-    ManagedAclParent, MaterializationRemovalPhase, MaterializedObject, PendingAclMutation,
-    PendingInheritedAclRelease, PendingMaterialization, PendingMaterializationRemoval,
-    PersistedDacl, PersistedFileIdentity, authority_key, canonical_sid, entry_key, managed_acl_key,
-    materialized_object_key, validate_materialization_paths, validate_materialized_objects,
-    validate_profile_identity, validate_root,
+    ManagedAclParent, MaterializationRemovalPhase, MaterializedObject, NamedPipeAclObject,
+    PendingAclMutation, PendingInheritedAclRelease, PendingMaterialization,
+    PendingMaterializationRemoval, PersistedDacl, PersistedFileIdentity, authority_key,
+    canonical_sid, entry_key, managed_acl_key, materialized_object_key,
+    validate_materialization_paths, validate_materialized_objects, validate_profile_identity,
+    validate_root,
 };
 
 const READ_BASE_SUBAUTHORITY: &str = "1";
@@ -322,6 +323,63 @@ impl CapabilityState {
         &self.acl_objects
     }
 
+    pub(crate) fn named_pipe_acl_objects(&self) -> &[NamedPipeAclObject] {
+        &self.named_pipe_acls
+    }
+
+    pub(crate) fn begin_named_pipe_acl(
+        &mut self,
+        object: NamedPipeAclObject,
+    ) -> Result<(), CapabilityStateError> {
+        if self
+            .named_pipe_acls
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(&object.name))
+        {
+            return Err(CapabilityStateError::DuplicateNamedPipe);
+        }
+        self.named_pipe_acls.push(object);
+        self.named_pipe_acls
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        self.validate()
+    }
+
+    pub(crate) fn resolve_named_pipe_acl(
+        &mut self,
+        name: &str,
+        actual: &PersistedDacl,
+    ) -> Result<(), CapabilityStateError> {
+        let Some(object) = self
+            .named_pipe_acls
+            .iter()
+            .find(|object| object.name.eq_ignore_ascii_case(name))
+        else {
+            return Err(CapabilityStateError::InvalidNamedPipeAcl);
+        };
+        if &object.original != actual {
+            return Err(CapabilityStateError::InvalidNamedPipeAcl);
+        }
+        self.named_pipe_acls
+            .retain(|object| !object.name.eq_ignore_ascii_case(name));
+        self.validate()
+    }
+
+    pub(crate) fn update_named_pipe_acl_current(
+        &mut self,
+        name: &str,
+        current: PersistedDacl,
+    ) -> Result<(), CapabilityStateError> {
+        let Some(object) = self
+            .named_pipe_acls
+            .iter_mut()
+            .find(|object| object.name.eq_ignore_ascii_case(name))
+        else {
+            return Err(CapabilityStateError::InvalidNamedPipeAcl);
+        };
+        object.current = current;
+        self.validate()
+    }
+
     pub(crate) fn materialized_object(&self, path: &Path) -> Option<&MaterializedObject> {
         let key = NativePathKey::new(path);
         self.materialized_objects
@@ -335,6 +393,7 @@ impl CapabilityState {
 
     pub(crate) fn filesystem_cleanup_complete(&self) -> bool {
         self.acl_objects.is_empty()
+            && self.named_pipe_acls.is_empty()
             && self.pending_acl_mutation.is_none()
             && self.materialized_objects.is_empty()
             && self.pending_materialization.is_none()
@@ -832,6 +891,7 @@ mod tests {
             namespace_sid: "S-1-5-21-1-2-3-4".to_string(),
             entries: Vec::new(),
             acl_objects: Vec::new(),
+            named_pipe_acls: Vec::new(),
             pending_acl_mutation: None,
             pending_inherited_acl_release: None,
             materialized_objects: Vec::new(),

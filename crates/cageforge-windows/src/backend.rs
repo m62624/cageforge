@@ -25,6 +25,7 @@ use crate::error::{
 };
 use crate::filesystem::acl::FilesystemAclEnforcement;
 use crate::filesystem::plan::{FilesystemPlan, FilesystemPlanError};
+use crate::local_ipc::WindowsLocalIpcEnforcement;
 use crate::network::{ProxyAddresses, WindowsProxyIngress, WindowsProxyRoute};
 use crate::process::{WindowsChild, recover_failed_session_start};
 use crate::runner::launch::RunnerLaunch;
@@ -85,6 +86,8 @@ impl WindowsBackend {
         capability_state
             .verify()
             .map_err(WindowsBackendError::filesystem_enforcement)?;
+        WindowsLocalIpcEnforcement::recover(&capability_state)
+            .map_err(WindowsBackendError::local_ipc_enforcement)?;
         let runner_resources =
             PinnedRunnerResources::open(&setup).map_err(crate::error::WindowsSetupError::from)?;
         Ok(Self {
@@ -140,6 +143,11 @@ impl WindowsBackend {
             self.setup.accounts().group_sid(),
         )
         .map_err(WindowsBackendError::filesystem_enforcement)?;
+        let local_ipc = WindowsLocalIpcEnforcement::apply(
+            prepared.network_lowering(self)?,
+            &self.capability_state,
+        )
+        .map_err(WindowsBackendError::local_ipc_enforcement)?;
         let command = prepared.command_spec(self)?;
         let environment = self.environment_input(sandbox.environment().base())?;
         let mut environment = prepared.apply_environment(self, environment)?;
@@ -149,6 +157,11 @@ impl WindowsBackend {
         let timeout = timeout(&prepared, self)?;
         let stdio = prepared.stdio(self)?;
         let route_sid = network_route.as_ref().map(|route| route.sid().to_string());
+        let mut capability_sids = enforcement.token_sids().to_vec();
+        let strict_local_ipc = local_ipc.is_some();
+        if let Some(local_ipc) = &local_ipc {
+            capability_sids.push(local_ipc.capability_sid().to_owned());
+        }
         let request = PendingRunnerSpawnRequest {
             command: encode_command(command.program(), command.args())?,
             working_directory: encode_field(
@@ -156,7 +169,8 @@ impl WindowsBackend {
                 prepared.working_directory(self)?.as_os_str(),
             )?,
             environment_block: encode_environment(environment)?,
-            capability_sids: enforcement.token_sids().to_vec(),
+            capability_sids,
+            strict_local_ipc,
             route_sid,
             account: plan.account,
         };
@@ -175,6 +189,7 @@ impl WindowsBackend {
                     failure.boundary,
                     network_route,
                     enforcement,
+                    local_ipc,
                     active_lease,
                 );
                 return Err(WindowsBackendError::runner_session(error));
@@ -185,6 +200,7 @@ impl WindowsBackend {
             active_lease,
             enforcement,
             network_route,
+            local_ipc,
         ))
     }
 
@@ -537,6 +553,7 @@ mod tests {
             BackendCapability::NetworkDomainRules,
             BackendCapability::NetworkLocalAddressRestrictions,
             BackendCapability::NetworkResolvedTargets,
+            BackendCapability::NetworkWindowsNamedPipeRules,
             BackendCapability::EnvironmentAll,
             BackendCapability::EnvironmentCore,
             BackendCapability::EnvironmentNone,
@@ -555,7 +572,6 @@ mod tests {
             BackendCapability::NetworkLocalIpcIsolation,
             BackendCapability::NetworkLocalIpcRules,
             BackendCapability::NetworkLocalIpcDenyRules,
-            BackendCapability::NetworkWindowsNamedPipeRules,
         ] {
             assert!(
                 !actual.supports(unsupported),

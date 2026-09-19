@@ -132,6 +132,11 @@ pub(super) fn add_network_capabilities(
         NetworkMode::Enabled => BackendCapability::NetworkEnabled,
         NetworkMode::External => BackendCapability::NetworkExternal,
     });
+    if requirements.windows_named_pipe_rules() {
+        required
+            .capabilities
+            .insert(BackendCapability::NetworkWindowsNamedPipeRules);
+    }
     if mode != NetworkMode::Enabled {
         return;
     }
@@ -164,11 +169,6 @@ pub(super) fn add_network_capabilities(
         required
             .capabilities
             .insert(BackendCapability::NetworkLocalIpcDenyRules);
-    }
-    if requirements.windows_named_pipe_rules() {
-        required
-            .capabilities
-            .insert(BackendCapability::NetworkWindowsNamedPipeRules);
     }
 }
 

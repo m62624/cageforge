@@ -274,8 +274,11 @@ fn build_network(
 ) -> Result<NetworkPolicy, ConfigError> {
     let raw = raw.cloned().unwrap_or_default();
     let mode = network_mode(raw.mode.or_else(|| {
+        // POSIX pathname IPC is lowered through the network namespace. A
+        // Windows named pipe is a kernel IPC object and must not implicitly
+        // enable external networking.
         local_ipc
-            .filter(|value| !value.unix_sockets.is_empty() || !value.named_pipes.is_empty())
+            .filter(|value| !value.unix_sockets.is_empty())
             .map(|_| RawNetworkMode::Enabled)
     }));
     let mut policy = match mode {

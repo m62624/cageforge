@@ -353,6 +353,7 @@ launch.
 | Linear HANDLE ownership | Every launch | Closes runner duplicates after process creation and Job assignment while `WindowsChild` retains its parent pipe endpoints until their documented lifecycle boundary. |
 | Authenticated runner transport | Every launch | Uses bounded, versioned typed frames for readiness, spawn, failure, and exit; expected failures become typed library errors. |
 | Private named-pipe authentication | Runner bootstrap and lifecycle | Uses launch-unique protected pipes, verifies server PID and owner identity, and rejects forged or direct helper protocols. |
+| Restricted named-pipe local IPC | Launches with `local_ipc.named_pipes` | Grants a fresh launch capability SID only to the explicitly named local pipes, uses a strict restricted token so unrelated permissive pipes remain inaccessible, verifies ACL read-back, and journals/restores each host ACL. |
 | Offline firewall and WFP deny boundary | Disabled and proxy-routed networking | Blocks direct outbound and loopback access for the offline account; failure to verify WFP is fatal. |
 | Direct networking account separation | Unrestricted direct networking | Uses the separately verified online account for direct sockets without weakening restricted filesystem enforcement. |
 | Four-tuple PID attribution | Proxy-routed networking | Maps an accepted IPv4 connection to its owning PID, pins process identity against PID reuse, and reads the exact token restriction set. |
@@ -363,7 +364,7 @@ launch.
 | Concurrent-instance isolation | Multiple backend instances or children | Keeps account state, profile authorities, lifecycle leases, routes, gateway policies, and process trees separate. |
 | Typed fail-closed errors | Setup, prepare, spawn, wait, and cleanup | Identifies the failing native stage and code. |
 
-`External` filesystem or network ownership and pathname local-IPC policy are
+`External` filesystem or network ownership and pathname Unix-socket policy are
 not advertised as Windows-native capabilities. Unrestricted filesystem
 execution and the platform-specific conventional Unix temporary scope are also
 rejected before lowering because this backend has no verified native boundary
@@ -375,10 +376,10 @@ named_pipes = ['\\.\pipe\tool-service']
 ```
 
 They are not silently treated as Unix sockets or TCP. The
-`NetworkWindowsNamedPipeRules` capability remains fail-closed until token,
-desktop, DACL, remote-client, first-instance, exact-handle, neighboring-pipe,
-and cleanup guarantees are proven by the native backend and its Windows CI
-job.
+`NetworkWindowsNamedPipeRules` capability is enforced through a launch-unique
+restricted token, explicit host-pipe ACL transactions, local-only pipe
+creation requirements, and durable ACL recovery. A requested Unix socket on
+Windows remains a typed unsupported capability rather than a fallback.
 
 ## Network behavior
 

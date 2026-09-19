@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const RUNNER_PROTOCOL_VERSION: u32 = 2;
 pub(crate) const MAX_RUNNER_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -50,6 +50,7 @@ pub(crate) struct RunnerSpawnRequest {
     pub(crate) working_directory: Vec<u16>,
     pub(crate) environment_block: Vec<u16>,
     pub(crate) capability_sids: Vec<String>,
+    pub(crate) strict_local_ipc: bool,
     pub(crate) route_sid: Option<String>,
     pub(crate) account: RunnerAccount,
     pub(crate) standard_handles: RunnerStandardHandles,
@@ -391,6 +392,7 @@ mod tests {
             working_directory: r"C:\workspace".encode_utf16().collect(),
             environment_block: "Path=value\0\0".encode_utf16().collect(),
             capability_sids: vec!["S-1-5-21-1-2-3-4".to_string()],
+            strict_local_ipc: false,
             route_sid: Some("S-1-5-21-5-6-7-8".to_string()),
             account: RunnerAccount::Offline,
             standard_handles: RunnerStandardHandles {

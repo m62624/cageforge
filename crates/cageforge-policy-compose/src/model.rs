@@ -266,13 +266,12 @@ impl EffectiveNetworkPolicy {
                     .iter()
                     .any(|rule| rule.access() == DomainAccess::Deny)
             });
-        let windows_named_pipe_rules = enabled
-            && policies.iter().any(|policy| {
-                policy
-                    .local_ipc()
-                    .iter()
-                    .any(|rule| matches!(rule.endpoint(), LocalIpcEndpoint::WindowsNamedPipe(_)))
-            });
+        let windows_named_pipe_rules = policies.iter().any(|policy| {
+            policy
+                .local_ipc()
+                .iter()
+                .any(|rule| matches!(rule.endpoint(), LocalIpcEndpoint::WindowsNamedPipe(_)))
+        });
         EffectiveNetworkRequirements {
             mode,
             domain_rules,

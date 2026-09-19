@@ -465,6 +465,10 @@ fn capability_state_model_failure(
         | crate::capability_state::CapabilityStateError::DuplicateAuthority
         | crate::capability_state::CapabilityStateError::NonCanonicalOrder
         | crate::capability_state::CapabilityStateError::InvalidDacl
+        | crate::capability_state::CapabilityStateError::InvalidNamedPipe { .. }
+        | crate::capability_state::CapabilityStateError::DuplicateNamedPipe
+        | crate::capability_state::CapabilityStateError::NonCanonicalNamedPipeOrder
+        | crate::capability_state::CapabilityStateError::InvalidNamedPipeAcl
         | crate::capability_state::CapabilityStateError::DuplicateAclObject
         | crate::capability_state::CapabilityStateError::NonCanonicalAclOrder
         | crate::capability_state::CapabilityStateError::RedundantAclObject

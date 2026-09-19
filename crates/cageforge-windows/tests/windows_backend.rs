@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use cageforge_backend_api::BackendRequest;
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec};
 use cageforge_policy::{
-    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, NetworkPolicy,
-    PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalIpcEndpoint,
+    NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use cageforge_windows::{
@@ -29,8 +29,8 @@ use cageforge_windows::{
 use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, GetLastError, HLOCAL, INVALID_HANDLE_VALUE,
-    LocalFree, STILL_ACTIVE, WAIT_TIMEOUT,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING,
+    GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, STILL_ACTIVE, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -38,6 +38,7 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenRestrictedSids,
 };
+use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows_sys::Win32::System::Diagnostics::Debug::{
     CloseThreadWaitChainSession, GetThreadWaitChain, OpenThreadWaitChainSession,
     WAITCHAIN_NODE_INFO, WCT_MAX_NODE_COUNT, WCT_OUT_OF_PROC_COM_FLAG, WCT_OUT_OF_PROC_CS_FLAG,
@@ -45,6 +46,10 @@ use windows_sys::Win32::System::Diagnostics::Debug::{
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+};
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_NOWAIT, PIPE_READMODE_BYTE,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken,
@@ -61,6 +66,10 @@ const SANDBOX_FIXTURE_DENIED_READ_DEVICE: &str =
 const SANDBOX_FIXTURE_DENIED_WRITE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_DENIED_WRITE";
 const SANDBOX_FIXTURE_PROGRESS: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_PROGRESS";
 const SANDBOX_FIXTURE_NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
+const SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED: &str =
+    "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED";
+const SANDBOX_FIXTURE_NAMED_PIPE_DENIED: &str =
+    "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_DENIED";
 const SANDBOX_FIXTURE_UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HANDLE";
 const SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT: &str =
     "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_NAMED_OBJECT";
@@ -176,6 +185,154 @@ fn setup_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+struct TestNamedPipeServer {
+    connected: thread::JoinHandle<Result<bool, String>>,
+}
+
+#[allow(unsafe_code)]
+fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
+    let wide_name = name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let handle = unsafe {
+        CreateNamedPipeW(
+            wide_name.as_ptr(),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1,
+            4096,
+            4096,
+            5000,
+            std::ptr::null(),
+        )
+    };
+    assert!(
+        !handle.is_null() && handle != INVALID_HANDLE_VALUE,
+        "create named-pipe test server {name:?}: Windows error {}",
+        unsafe { GetLastError() }
+    );
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
+    let connected = thread::spawn(move || {
+        let deadline = Instant::now() + FIXTURE_START_DEADLINE;
+        loop {
+            let result =
+                unsafe { ConnectNamedPipe(handle.as_raw_handle() as _, std::ptr::null_mut()) };
+            if result != 0 {
+                return Ok(true);
+            }
+            let code = unsafe { GetLastError() };
+            if code == ERROR_PIPE_CONNECTED {
+                return Ok(true);
+            }
+            if code != ERROR_PIPE_LISTENING {
+                return Err(format!("ConnectNamedPipe failed: Windows error {code}"));
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+    TestNamedPipeServer { connected }
+}
+
+#[test]
+fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
+    let _setup_test_guard = setup_test_lock();
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let state_base_directory = temporary.path().join("state");
+    let helper = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup"));
+    let runner = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-command-runner"));
+    let config = WindowsSetupConfig::new()
+        .with_state_directory(&state_base_directory)
+        .expect("absolute state directory")
+        .with_setup_helper_path(helper)
+        .expect("absolute setup helper")
+        .with_command_runner_path(runner)
+        .expect("absolute command runner");
+    let setup = WindowsSetup::new(config);
+    let mut cleanup = SetupCleanup {
+        setup: &setup,
+        armed: true,
+    };
+    setup.install().expect("install native Windows setup");
+    let backend =
+        WindowsBackend::new(WindowsBackendConfig::new().with_setup(setup.config().clone()))
+            .expect("construct verified backend");
+
+    let suffix = format!("{}-{}", std::process::id(), temporary.path().display());
+    let suffix = Sha256::digest(suffix.as_bytes());
+    let suffix = suffix
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let suffix = &suffix[..16];
+    let allowed_name = format!(r"\\.\pipe\cageforge-{suffix}-allowed");
+    let denied_name = format!(r"\\.\pipe\cageforge-{suffix}-denied");
+    let allowed_server = start_test_named_pipe(&allowed_name);
+    let denied_server = start_test_named_pipe(&denied_name);
+    let workspace = temporary.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"));
+    let environment = EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, "named-pipe")
+        .expect("named-pipe fixture mode")
+        .with_var(SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED, &allowed_name)
+        .expect("approved pipe environment")
+        .with_var(SANDBOX_FIXTURE_NAMED_PIPE_DENIED, &denied_name)
+        .expect("denied pipe environment");
+    let network = NetworkPolicy::disabled()
+        .with_local_ipc(
+            LocalIpcEndpoint::windows_named_pipe(allowed_name.clone())
+                .expect("valid approved named pipe"),
+            DomainAccess::Allow,
+        )
+        .expect("named-pipe policy");
+    let (command, effective, context) = request_with_environment(
+        &workspace,
+        network,
+        access_fixture_command(&fixture),
+        environment,
+    );
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare named-pipe policy");
+    let mut child = backend.spawn(prepared).expect("spawn named-pipe probe");
+    let status = child.wait().expect("wait named-pipe probe");
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .expect("named-pipe probe stdout")
+        .read_to_string(&mut stdout)
+        .expect("read named-pipe probe stdout");
+    assert!(
+        status.success(),
+        "named-pipe probe failed: {status}; {stdout}"
+    );
+    assert!(
+        stdout.contains("named-pipe-ok"),
+        "named-pipe probe did not report its result: {stdout}"
+    );
+    assert!(
+        allowed_server
+            .connected
+            .join()
+            .expect("approved named-pipe server thread")
+            .expect("approved named-pipe server")
+    );
+    assert!(
+        !denied_server
+            .connected
+            .join()
+            .expect("denied named-pipe server thread")
+            .expect("denied named-pipe server")
+    );
+
+    setup.uninstall().expect("cleanup Windows setup");
+    cleanup.armed = false;
 }
 
 fn access_fixture_command(path: &Path) -> CommandSpec {

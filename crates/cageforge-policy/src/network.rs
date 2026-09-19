@@ -371,9 +371,6 @@ impl NetworkPolicy {
                 message: "local-IPC rules cannot be added to an external policy".to_owned(),
             });
         }
-        if self.mode == NetworkMode::Disabled {
-            self.mode = NetworkMode::Enabled;
-        }
         if self
             .local_ipc
             .iter()
@@ -391,6 +388,14 @@ impl NetworkPolicy {
         }
         let rule = LocalIpcRule::new(endpoint.clone(), access)?;
         if let Some(path) = endpoint.unix_path() {
+            // Unix sockets are lowered through the network namespace on
+            // POSIX backends, so a typed Unix endpoint opts into the network
+            // boundary when no explicit mode was supplied. Windows named
+            // pipes are kernel objects rather than network sockets and must
+            // remain compatible with NetworkMode::Disabled.
+            if self.mode == NetworkMode::Disabled {
+                self.mode = NetworkMode::Enabled;
+            }
             if self.unix_socket_mode == UnixSocketMode::Disabled {
                 self.unix_socket_mode = UnixSocketMode::Restricted;
             }

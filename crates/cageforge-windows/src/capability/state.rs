@@ -24,6 +24,8 @@ pub(crate) struct CapabilityState {
     pub(crate) namespace_sid: String,
     pub(crate) entries: Vec<FilesystemCapability>,
     pub(crate) acl_objects: Vec<ManagedAclObject>,
+    #[serde(default)]
+    pub(crate) named_pipe_acls: Vec<NamedPipeAclObject>,
     pub(crate) pending_acl_mutation: Option<PendingAclMutation>,
     #[serde(default)]
     pub(crate) pending_inherited_acl_release: Option<PendingInheritedAclRelease>,
@@ -55,6 +57,19 @@ pub(crate) struct ManagedAclParent {
     pub(crate) path: PathBuf,
     pub(crate) identity: PersistedFileIdentity,
     pub(crate) release_descriptor: PersistedDacl,
+}
+
+/// Durable journal for a launch-scoped named-pipe ACL transaction.
+///
+/// The record is written before the native ACL mutation.  A future backend
+/// instance can therefore distinguish an untouched pipe, Cageforge's exact
+/// post-mutation descriptor, and an unexpected third-party mutation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct NamedPipeAclObject {
+    pub(crate) name: String,
+    pub(crate) capability_sid: String,
+    pub(crate) original: PersistedDacl,
+    pub(crate) current: PersistedDacl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -167,6 +182,14 @@ pub(crate) enum CapabilityStateError {
     NonCanonicalOrder,
     #[error("capability-SID state contains an invalid persisted DACL")]
     InvalidDacl,
+    #[error("capability-SID state contains an invalid local named-pipe name: {name:?}")]
+    InvalidNamedPipe { name: String },
+    #[error("capability-SID state repeats one named-pipe ACL object")]
+    DuplicateNamedPipe,
+    #[error("capability-SID state named-pipe ACL objects are not in canonical order")]
+    NonCanonicalNamedPipeOrder,
+    #[error("capability-SID state contains an incomplete named-pipe ACL journal")]
+    InvalidNamedPipeAcl,
     #[error("capability-SID state repeats one managed ACL object identity")]
     DuplicateAclObject,
     #[error("capability-SID state managed ACL objects are not in canonical path order")]
@@ -258,6 +281,22 @@ impl CapabilityState {
                 return Err(CapabilityStateError::DuplicateAclObject);
             }
         }
+        let mut named_pipes = BTreeSet::new();
+        let mut previous_named_pipe = None;
+        for object in &self.named_pipe_acls {
+            object.validate()?;
+            let key = object.name.to_ascii_lowercase();
+            if previous_named_pipe
+                .as_ref()
+                .is_some_and(|previous| previous >= &key)
+            {
+                return Err(CapabilityStateError::NonCanonicalNamedPipeOrder);
+            }
+            previous_named_pipe = Some(key.clone());
+            if !named_pipes.insert(key) {
+                return Err(CapabilityStateError::DuplicateNamedPipe);
+            }
+        }
         if let Some(pending) = &self.pending_acl_mutation {
             pending.validate(&self.acl_objects)?;
         }
@@ -292,6 +331,35 @@ impl ManagedAclObject {
         }
         if let Some(parent) = &self.restore_parent {
             parent.validate(&self.path, &self.identity)?;
+        }
+        Ok(())
+    }
+}
+
+impl NamedPipeAclObject {
+    fn validate(&self) -> Result<(), CapabilityStateError> {
+        let prefix = "\\\\.\\pipe\\";
+        let valid_name = self.name.len() > prefix.len()
+            && self.name.is_ascii()
+            && self.name[..prefix.len()].eq_ignore_ascii_case(prefix)
+            && !self.name[prefix.len()..]
+                .chars()
+                .any(|character| matches!(character, '\\' | '/' | ':' | '\0'))
+            && &self.name[prefix.len()..] != "."
+            && &self.name[prefix.len()..] != ".."
+            && self.name.encode_utf16().count() <= 256;
+        if !valid_name || self.name != self.name.to_ascii_lowercase() {
+            return Err(CapabilityStateError::InvalidNamedPipe {
+                name: self.name.clone(),
+            });
+        }
+        if canonical_sid(&self.capability_sid)? != self.capability_sid {
+            return Err(CapabilityStateError::NonCanonicalSid);
+        }
+        self.original.validate()?;
+        self.current.validate()?;
+        if self.original == self.current {
+            return Err(CapabilityStateError::InvalidNamedPipeAcl);
         }
         Ok(())
     }

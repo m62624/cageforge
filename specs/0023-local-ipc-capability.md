@@ -34,9 +34,11 @@ named_pipes = ['\\.\pipe\tool-service']
 ```
 
 Endpoint declarations are explicit, validated, deduplicated during profile
-merge, and immutable after native launch preparation. A local-IPC declaration
-implies an enabled local network boundary with external access still governed
-by the ordinary network policy.
+merge, and immutable after native launch preparation. Unix-socket declarations
+enable the local network boundary needed by pathname socket enforcement;
+Windows named pipes remain compatible with `network = "disabled"` because they
+are enforced as kernel object capabilities, while external access remains
+governed by the ordinary network policy.
 
 ## Validation
 
@@ -52,15 +54,14 @@ enforcement paths. Their existing closed-by-default and exact pathname rules
 remain authoritative; the new typed model is an additional common entry point
 to those paths.
 
-Windows must not advertise named-pipe enforcement unless it can prove all of
-the following for a supported endpoint: strict host/sandbox DACLs, local-only
-clients, first-instance protection, exact permitted-handle ownership where
-applicable, denial of neighboring unauthorized endpoints, descendant
-inheritance, and deterministic cleanup. A named-pipe ACL on one endpoint alone
-is not proof of global namespace isolation. Until the complete guarantee is
-implemented and covered by the Windows native job, preflight returns the
-typed `NetworkWindowsNamedPipeRules` unsupported-capability error before spawn.
-There is no unrestricted, TCP, or unsandboxed fallback.
+Windows named-pipe enforcement combines strict host/sandbox DACLs, local-only
+pipe policy, a launch-unique capability SID, a restricted token without broad
+restricting SIDs, denial of neighboring unauthorized endpoints, descendant
+inheritance, and durable deterministic cleanup. The original and intended
+DACLs are journaled before mutation and restored only after exact read-back;
+unexpected drift fails closed. A Windows Unix-socket endpoint is unsupported
+and receives the typed capability error before spawn. There is no unrestricted,
+TCP, or unsandboxed fallback.
 
 ## Foreign-language contract
 
@@ -77,7 +78,7 @@ generated/updated with the corresponding binding changes.
 ## Verification
 
 The implementation requires policy/config parsing tests, platform-overlay
-tests, Linux and macOS native allow/deny tests, Windows validation and
-fail-closed tests, descendant/network/cleanup tests, and binding success/error
-parity tests. Native tests run only in their matching CI environments; missing
-native prerequisites are failures, not skips.
+tests, Linux and macOS native allow/deny tests, Windows named-pipe allow/deny,
+descendant and ACL-recovery tests, typed unsupported Unix-socket tests, and
+binding success/error parity tests. Native tests run only in their matching CI
+environments; missing native prerequisites are failures, not skips.
