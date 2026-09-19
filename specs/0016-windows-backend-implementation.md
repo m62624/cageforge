@@ -306,7 +306,13 @@ sandbox account. The token:
 - includes one random network-route restricting SID when proxy routing is
   active;
 - keeps the user, `Everyone`, logon, and request capability SIDs as the
-  complete default object DACL, excluding the route SID; and
+  complete default object DACL, excluding the route SID; for strict named-pipe
+  local-IPC launches it instead contains the request capability SIDs and the
+  authenticated logon SID required for session startup, excluding broad user
+  and `Everyone` restricting SIDs and any route SID; and
+- authorizes every request capability SID on the private desktop object as
+  well as on the pipe and token default DACL, so a strict launch can complete
+  Windows session initialization without restoring broad user or logon access;
 - cannot inherit an administrator token or the real user's identity.
 
 The runner reads the completed token back before process creation. Token user,
@@ -314,7 +320,11 @@ canonical restricting-SID set, default-DACL ACE set and masks, and enabled
 privileges must exactly match the requested boundary. `WRITE_RESTRICTED` keeps
 Windows session, loader, and IPC reads such as CSRSS `ApiPort` usable through
 the dedicated account's normal token while the capability restricting set still
-authorizes writes. Explicit deny ACEs for a capability SID remain mandatory and
+authorizes writes. For an approved named pipe, the pipe DACL grants both the
+selected dedicated runner-account SID (the normal-token side of the access
+check) and the launch-unique capability SID (the launch-specific restricted
+side); it never grants `Everyone` as a substitute. Explicit deny ACEs for a
+capability SID remain mandatory and
 native tests prove their read and write effect; a policy requiring a global
 default-deny read namespace remains unsupported. The launch-unique logon SID
 remains only for objects explicitly created for that logon, including the
@@ -595,6 +605,18 @@ Windows filesystem enforcement combines:
 - reparse-point and final-handle validation before a path can participate in
   an ACL plan.
 
+The built-in Windows `minimal` context resolves to `%SystemRoot%\\System32`.
+When that exact platform-default path is readable under a restricted policy,
+the planner validates it with a read/execute handle and classifies it as a
+`PlatformReadRoot`; it does not include the protected OS directory in the
+request's ACL mutation plan. The sandbox identities are ordinary members of
+the built-in Users group, so the existing Windows platform DACL supplies this
+runtime read access. Application-owned workspace, temporary, and explicit
+absolute roots remain ordinary ACL targets and retain the full handle-pinned
+mutation, journaling, and rollback rules above. A `root` rule or an arbitrary
+absolute path is never treated as a platform default merely because it is
+under the Windows installation directory.
+
 Handle validation expands only filesystem-provided short-name aliases through
 `GetLongPathNameW` before comparing them with `GetFinalPathNameByHandleW`.
 Consequently a legitimate 8.3 spelling such as `RUNNER~1` resolves to the same
@@ -631,7 +653,10 @@ the current profile-guard SID and the superseded ancestor write capabilities,
 converts retained inherited ACEs to explicit ACEs without changing their masks,
 and installs the root's required group and capability ACEs. Cageforge applies
 the initially enumerated descendants deepest-first and only then their parent
-roots. This ordering prevents a root's inheritable ACE from being propagated
+roots. Byte-identical ACEs are retained only once after inherited-flag
+normalization, matching Windows protected-DACL canonicalization; ACEs with
+different trustees, masks, or deny semantics remain distinct. This ordering
+prevents a root's inheritable ACE from being propagated
 into an existing child after that child already received its explicitly
 journaled grant; it does not assume a particular Windows
 retroactive-propagation behavior. A later-created ordinary descendant need not
@@ -839,10 +864,37 @@ The gateway still performs one DNS snapshot and exact `SocketAddr`
 authorization immediately before connect. Firewall and route attribution are
 native ingress boundaries, not replacements for portable policy checks.
 
-Windows pathname local-IPC capabilities are not advertised in the first
-backend. Named pipes are separate Windows objects and must be isolated by token,
-desktop, object DACL, and handle inheritance. A local-IPC request receives the
-typed unsupported capability error from common preflight.
+Windows named-pipe local IPC is implemented as a launch-scoped capability.
+Each approved pipe receives a fresh capability SID and the selected dedicated
+runner-account SID in its DACL. The strict local-IPC token retains the logon
+SID only where Windows session initialization requires it; broad user and
+`Everyone` restricting SIDs are not used for pipe authorization. The private
+desktop and token default DACL also authorize the launch capability so the
+child can complete startup without widening the pipe boundary. The parent
+verifies the resulting DACL before the child starts. Original and
+post-mutation descriptors are journaled in the protected capability state;
+cleanup restores the exact original descriptor and removes the journal entry.
+Startup recovery performs the same comparison and restoration after an
+interrupted parent. Unexpected descriptor drift is a typed fail-closed error.
+POSIX Unix-socket endpoints remain unsupported on Windows and are never
+converted to TCP or an unrestricted named pipe.
+
+Each approved pipe has one retained host-side ACL handle for the complete
+launch transaction. The handle is used for original-state capture, DACL
+activation, read-back verification, restoration, and final restoration
+verification, and is released only after the journal is resolved. The
+transaction never relies on reopening the named-pipe path to obtain a fresh
+instance between these security steps. Interrupted-transaction recovery uses
+a separately opened and revalidated handle because the original live handle is
+not available.
+
+This section is the Windows-native realization of the portable endpoint and
+fail-closed contract in [Specification 0023](0023-local-ipc-capability.md).
+`NetworkWindowsNamedPipeRules` is advertised only after the backend has
+validated the complete setup, ACL, token, runner, and cleanup machinery. The
+portable `LocalIpcEndpoint::WindowsNamedPipe` value is lowered to the exact
+named-pipe object; it is never converted into a Unix path or a TCP loopback
+permission.
 
 ## 8. Environment and standard streams
 
@@ -882,15 +934,15 @@ attributes.
 The backend advertises command execution, checked working directories, all
 three standard-stream modes, all timeout modes, the supported elevated
 filesystem scope/glob/protection families, disabled and enabled networking,
-domain/local-address/exact-target enforcement, and all portable environment
-modes and transformations.
+domain/local-address/exact-target enforcement, Windows named-pipe local IPC,
+and all portable environment modes and transformations.
 
 It does not advertise:
 
 - unrestricted filesystem execution;
 - external filesystem or network ownership;
 - the platform-specific conventional Unix temporary scope;
-- pathname local-IPC isolation or per-path local-IPC rules; or
+- POSIX pathname local-IPC isolation or per-path Unix-socket rules; or
 - a capability whose setup read-back or runtime mechanism is unavailable.
 
 Capability preflight is followed by native combination validation. In
@@ -920,6 +972,12 @@ Windows-native black-box tests must cover at least:
 - private-desktop GUI and shell-activation escapes fail;
 - unrelated handles and named objects do not cross the boundary;
 - timeout, kill, drop, and parent death terminate the complete process tree;
+- `windows_named_pipe_allowlist_is_enforced_by_the_native_boundary` creates
+  separate approved and neighboring pipe servers, launches a real restricted
+  child, proves the approved connection succeeds and the neighboring one is
+  denied, and verifies exact setup cleanup;
+- a requested Windows named-pipe capability cannot be replaced by a POSIX
+  socket or unrestricted loopback fallback; and
 - simultaneous backends keep identities, ACL state, routes, and jobs separate;
   and
 - typed setup failures identify UAC cancellation, ineffective firewall policy,
@@ -939,8 +997,9 @@ combination exposed by the platform-independent crates on each target.
 
 The separate Windows sandbox lane performs formatting and Clippy, all
 `cageforge-windows` feature combinations, native tests, setup-helper tests,
-command-runner tests, and a machine-readable test report. It runs on an
-explicit Windows Server 2025 runner. `main` always runs this lane. Pull requests
+command-runner tests, the target-specific TOML API checks, and a
+machine-readable test report. It runs on an explicit Windows Server 2025
+runner. `main` always runs this lane. Pull requests
 run it for shared dependencies, Windows crate changes, workflow changes, a
 manual `sandbox-windows` label, or manual workflow dispatch.
 

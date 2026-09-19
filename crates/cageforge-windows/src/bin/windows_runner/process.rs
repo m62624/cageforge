@@ -555,13 +555,35 @@ fn validate_request(request: &RunnerSpawnRequest) -> Result<(), ProcessStartErro
 
 fn command_line(arguments: &[Vec<u16>]) -> Vec<u16> {
     let mut result = Vec::new();
-    for (index, argument) in arguments.iter().enumerate() {
-        if index != 0 {
+    // CreateProcessAsUserW receives cmd.exe as lpApplicationName.  Unlike a
+    // normal C runtime executable, the command interpreter treats the raw
+    // command line as its own syntax and expects /c (and the command) there,
+    // not a duplicated executable token.  Microsoft documents this form for
+    // launching the command interpreter with an explicit application name.
+    let first_argument = usize::from(
+        arguments
+            .first()
+            .is_some_and(|argument| is_command_interpreter(argument)),
+    );
+    for (index, argument) in arguments.iter().enumerate().skip(first_argument) {
+        if index != first_argument {
             result.push(b' ' as u16);
         }
         quote_argument(argument, &mut result);
     }
     result
+}
+
+fn is_command_interpreter(program: &[u16]) -> bool {
+    let name_start = program
+        .iter()
+        .rposition(|unit| *unit == b'\\' as u16 || *unit == b'/' as u16)
+        .map_or(0, |index| index + 1);
+    let name = &program[name_start..];
+    name.len() == 7
+        && name.iter().zip(b"cmd.exe").all(|(unit, expected)| {
+            (*unit <= u8::MAX as u16) && (*unit as u8).eq_ignore_ascii_case(expected)
+        })
 }
 
 fn quote_argument(argument: &[u16], output: &mut Vec<u16>) {
@@ -644,6 +666,20 @@ mod tests {
             actual,
             r#""C:\Program Files\tool.exe" "plain\\\"quoted" "ends with\\\\" """#
         );
+    }
+
+    #[test]
+    fn command_interpreter_line_omits_the_explicit_application_token() {
+        let arguments = [
+            r"C:\Windows\System32\cmd.exe".encode_utf16().collect(),
+            "/d".encode_utf16().collect(),
+            "/c".encode_utf16().collect(),
+            "echo".encode_utf16().collect(),
+            "cageforge-windows-smoke".encode_utf16().collect(),
+        ];
+        let actual = String::from_utf16(&command_line(&arguments)).expect("valid UTF-16");
+
+        assert_eq!(actual, "/d /c echo cageforge-windows-smoke");
     }
 
     #[test]

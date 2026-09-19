@@ -105,11 +105,17 @@ impl PrivateDesktop {
             .collect::<String>();
         let name = format!("Cageforge-{nonce}");
         let name_wide = to_wide(&name);
+        let capability_aces = token
+            .capability_sids()
+            .iter()
+            .map(|sid| format!("(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{sid})"))
+            .collect::<String>();
         let sddl = format!(
-            "O:{}D:P(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;SY)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;BA)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{})(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{})",
+            "O:{}D:P(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;SY)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;BA)(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{})(A;;0x{PRIVATE_DESKTOP_ACCESS:08x};;;{}){}",
             token.user_sid(),
             token.user_sid(),
             token.logon_sid(),
+            capability_aces,
         );
         let descriptor = parse_descriptor(&sddl)?;
         let security = SECURITY_ATTRIBUTES {

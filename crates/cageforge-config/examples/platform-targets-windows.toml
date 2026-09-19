@@ -28,7 +28,7 @@ rules = [
 mode = "enabled"
 domain_mode = "restricted"
 # POSIX pathname Unix sockets are not Windows named pipes. Keep this disabled
-# until a separate native named-pipe policy is available.
+# Native named-pipe local IPC is declared in local-ipc-platforms.toml.
 unix_socket_mode = "disabled"
 local_network_access = "deny"
 domains = [

@@ -88,6 +88,17 @@ pub enum CliError {
     #[cfg(target_os = "windows")]
     #[error("Windows setup: {0}")]
     WindowsSetup(#[from] cageforge::WindowsSetupError),
+    /// The Windows system-root environment value is unavailable.
+    #[cfg(target_os = "windows")]
+    #[error("Windows system root is unavailable: SystemRoot is not set")]
+    WindowsSystemRootUnavailable,
+    /// The Windows system-root environment value is not an absolute path.
+    #[cfg(target_os = "windows")]
+    #[error("Windows system root must be absolute: {path:?}")]
+    WindowsSystemRootNotAbsolute {
+        /// Invalid system-root path supplied by the process environment.
+        path: PathBuf,
+    },
     /// macOS native setup or execution failed.
     #[cfg(target_os = "macos")]
     #[error("macOS backend: {0}")]

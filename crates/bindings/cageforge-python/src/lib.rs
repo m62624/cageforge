@@ -220,6 +220,16 @@ pub struct PermissionRequest {
     inner: Option<cageforge::PermissionRequest>,
 }
 
+/// One typed local-IPC endpoint requested by a preflight plan.
+#[gen_stub_pyclass]
+#[pyclass(frozen, get_all, module = "cageforge._cageforge")]
+pub struct LocalIpcEndpoint {
+    /// Stable endpoint kind: `unix_socket` or `windows_named_pipe`.
+    pub kind: String,
+    /// Validated native endpoint value without the transport prefix.
+    pub value: String,
+}
+
 /// Stable identity of one exact permission request.
 #[gen_stub_pyclass]
 #[pyclass(frozen, from_py_object, module = "cageforge._cageforge")]
@@ -1174,6 +1184,32 @@ impl PermissionRequest {
             .collect())
     }
 
+    /// Returns typed local-IPC endpoint declarations.
+    fn local_ipc(&self) -> PyResult<Vec<LocalIpcEndpoint>> {
+        Ok(request_inner(self)?
+            .capabilities()
+            .network()
+            .iter()
+            .map(|capability| capability.endpoint())
+            .filter_map(|endpoint| {
+                endpoint
+                    .strip_prefix("unix:")
+                    .map(|value| LocalIpcEndpoint {
+                        kind: "unix_socket".to_owned(),
+                        value: value.to_owned(),
+                    })
+                    .or_else(|| {
+                        endpoint
+                            .strip_prefix("pipe:")
+                            .map(|value| LocalIpcEndpoint {
+                                kind: "windows_named_pipe".to_owned(),
+                                value: value.to_owned(),
+                            })
+                    })
+            })
+            .collect())
+    }
+
     /// Releases the request and makes later operations fail closed.
     fn close(&mut self) {
         self.inner = None;
@@ -1875,6 +1911,7 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ProcessResult>()?;
     module.add_class::<WindowsSetup>()?;
     module.add_class::<PermissionRequest>()?;
+    module.add_class::<LocalIpcEndpoint>()?;
     module.add_class::<GrantId>()?;
     module.add_class::<GrantPageCursor>()?;
     module.add_class::<GrantSummary>()?;

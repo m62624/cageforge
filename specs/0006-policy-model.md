@@ -53,6 +53,9 @@ The first crate exposes:
   `MissingPathBehavior`, and `FilesystemPolicy`;
 - `DomainRule`, `DomainAccess`, `DomainMode`, `UnixSocketRule`,
   `UnixSocketMode`, `NetworkMode`, `LocalNetworkAccess`, and `NetworkPolicy`;
+- `LocalIpcEndpoint`, whose variants distinguish a validated absolute
+  `UnixSocket` from a validated Windows `NamedPipe` without converting one
+  transport into another;
 - `SandboxPolicy`, which combines filesystem and network policy.
 
 The crate provides built-in constructors named `read_only`, `workspace`, and
@@ -131,6 +134,11 @@ dangerous request.
 - Deny wins when multiple matching domain rules apply.
 - Domain and Unix-socket defaults are explicit: disabled, enabled, or
   restricted allowlist; backends never infer a default from rule presence.
+- Local IPC endpoint declarations are explicit and platform-specific after
+  overlay selection: Linux/macOS use absolute Unix-socket paths and Windows
+  uses the local `\\.\pipe\` named-pipe namespace. Endpoint validation rejects
+  NUL, parent traversal, remote namespaces, malformed names, and duplicates;
+  the effective endpoint set is immutable after preparation.
 - Resolved domain targets use `LocalNetworkAccess::Deny` by default. Backends
   pass all DNS results to the typed resolved-target query; empty resolution and
   any non-public result are denied for ordinary hostnames even when the

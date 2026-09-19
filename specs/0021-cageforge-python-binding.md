@@ -84,6 +84,13 @@ wait, status, termination, and stream operations; blocking methods release
 the GIL. Async waiting delegates to a worker without polling from the Python
 event loop, and cancellation terminates the native boundary.
 
+Local IPC follows the shared contract in Specification 0023. Python receives
+validated endpoint objects and the same platform-overlay behavior as Rust:
+absolute Unix-socket paths on Linux/macOS and named-pipe names on Windows.
+Unsupported endpoint kinds and native setup failures use stable exception
+categories before child creation; Python does not encode transports as an
+unvalidated string or widen a denied network policy.
+
 ## 6. Validation contract
 
 Every target row runs Rust formatting, Clippy, stub generation, strict mypy,
@@ -91,7 +98,10 @@ Ruff, and Python tests. macOS and Windows rows execute native smoke tests
 with the resources staged for that exact runner. Linux additionally passes
 the tested wheel through the disposable QEMU/KVM consumer suite. Release
 validation audits wheel members, target isolation, ABI tags, license files,
-and the sdist member set before trusted PyPI publication.
+and the sdist member set before trusted PyPI publication. The configuration
+crate and each target-specific native crate check the checked-in TOML examples
+through the Rust API; binding consumer tests validate the packaged foreign-
+language surface without adding a separate CLI runnable-smoke step.
 
 The generated `_cageforge.pyi` file is a checked-in release artifact. Any
 public binding change must regenerate it and fail CI if the committed stub is
@@ -100,6 +110,7 @@ out of date.
 ## 7. Relationship to other specifications
 
 This specification depends on the portable command, configuration, facade,
-backend, and native safety contracts in Specifications 0008-0019. It defines
-the Python ABI and distribution boundary only; native security behavior stays
-in the selected Linux, macOS, or Windows backend specification.
+backend, native safety, and local IPC contracts in Specifications 0008-0019
+and 0023. It defines the Python ABI and distribution boundary only; native
+security behavior stays in the selected Linux, macOS, or Windows backend
+specification.

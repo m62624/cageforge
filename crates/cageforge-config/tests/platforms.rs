@@ -145,3 +145,44 @@ fn unknown_platform_names_are_rejected() {
             .expect_err("unknown platform must not become an arbitrary string");
     assert!(error.to_string().contains("invalid TOML"));
 }
+
+#[test]
+fn local_ipc_platform_overrides_select_native_endpoint_types() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "tool"
+
+[profiles.tool.platforms.linux.local_ipc]
+unix_sockets = ["/run/linux-service.sock"]
+
+[profiles.tool.platforms.macos.local_ipc]
+unix_sockets = ["/var/run/macos-service.sock"]
+
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ["\\\\.\\pipe\\windows-service"]
+"#,
+    )
+    .expect("local IPC configuration");
+
+    let linux = config
+        .resolve_default_for_platform(PlatformId::Linux)
+        .expect("Linux profile");
+    assert_eq!(linux.policy().network().local_ipc().len(), 1);
+    assert!(
+        linux.policy().network().local_ipc()[0]
+            .endpoint()
+            .unix_path()
+            .is_some()
+    );
+
+    let windows = config
+        .resolve_default_for_platform(PlatformId::Windows)
+        .expect("Windows profile");
+    assert_eq!(windows.policy().network().local_ipc().len(), 1);
+    assert!(
+        windows.policy().network().local_ipc()[0]
+            .endpoint()
+            .named_pipe()
+            .is_some()
+    );
+}

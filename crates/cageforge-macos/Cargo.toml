@@ -39,6 +39,8 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+cageforge-config.workspace = true
+cageforge-permissions.workspace = true
 tempfile.workspace = true
 
 [lints]

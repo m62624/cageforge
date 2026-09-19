@@ -11,8 +11,9 @@ use cageforge_backend_api::{
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
 use cageforge_policy::{
     AccessMode, ConnectionAuthorization, DomainAccess, DomainMode, FilesystemDecision,
-    FilesystemMode, FilesystemPolicy, FilesystemRule, NetworkDecision, NetworkMode, NetworkPolicy,
-    PathResolutionContext, PathSelector, ResolvedNetworkTarget, UnixSocketMode,
+    FilesystemMode, FilesystemPolicy, FilesystemRule, LocalIpcEndpoint, NetworkDecision,
+    NetworkMode, NetworkPolicy, PathResolutionContext, PathSelector, ResolvedNetworkTarget,
+    UnixSocketMode,
 };
 use cageforge_policy_compose::{
     CompositionError, CompositionRequest, CoreEnvironment, EnvironmentInput, PolicyCeiling, compose,
@@ -559,6 +560,30 @@ fn enabled_explicit_socket_allows_do_not_change_the_default_capability() {
 
     assert!(!required.supports(BackendCapability::NetworkLocalIpcRules));
     assert!(!required.supports(BackendCapability::NetworkLocalIpcDenyRules));
+}
+
+#[test]
+fn named_pipe_rules_require_a_dedicated_native_capability() {
+    let requested = cageforge_policy::SandboxPolicy::new(
+        FilesystemPolicy::unrestricted(),
+        NetworkPolicy::disabled()
+            .with_local_ipc(
+                LocalIpcEndpoint::windows_named_pipe(r"\\.\pipe\service").expect("named pipe"),
+                DomainAccess::Allow,
+            )
+            .expect("local IPC rule"),
+    );
+    let environment = EnvironmentSpec::inherit_all();
+    let ceiling = PolicyCeiling::new(
+        cageforge_policy::SandboxPolicy::full_access(),
+        environment.clone(),
+    );
+    let sandbox = compose(CompositionRequest::new(&requested, &environment, &ceiling)).unwrap();
+    let command =
+        CommandRequest::new(CommandSpec::new("tool").unwrap()).with_environment(environment);
+    let required = BackendRequest::new(&command, &sandbox).required_capabilities();
+
+    assert!(required.supports(BackendCapability::NetworkWindowsNamedPipeRules));
 }
 
 #[test]

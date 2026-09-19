@@ -561,6 +561,7 @@ impl<'plan> AclPlanBuilder<'plan> {
         for target in self.filesystem.targets() {
             let path = target.path().final_path();
             match target.access() {
+                FilesystemPlanAccess::PlatformReadRoot => {}
                 FilesystemPlanAccess::ReadRoot => {
                     let entries = vec![
                         AclEntry::allow(self.group_sid, READ_ALLOW_MASK),
@@ -2740,6 +2741,7 @@ fn filter_acl(
 ) -> Result<OwnedAclBuffer, FilesystemAclError> {
     let information = acl_information(path, source)?;
     let mut retained = Vec::new();
+    let mut retained_keys = BTreeSet::new();
     let mut bytes = size_of::<ACL>();
     for index in 0..information.AceCount {
         let raw = ace(path, source, index)?;
@@ -2793,6 +2795,14 @@ fn filter_acl(
         }
         let mut copy = raw_bytes.to_vec();
         copy[1] &= !(INHERITED_ACE as u8);
+        // Windows canonicalizes a protected DACL and removes byte-identical
+        // duplicate ACEs. Mirror that harmless normalization before the
+        // native write so the journaled after-state is the state Windows will
+        // actually read back. Different trustees, masks, or deny entries are
+        // never merged.
+        if !retained_keys.insert(copy.clone()) {
+            continue;
+        }
         bytes =
             bytes
                 .checked_add(copy.len())

@@ -91,4 +91,12 @@ pub enum PolicyError {
         /// A human-readable explanation of the inconsistent rule.
         message: String,
     },
+    /// A local-IPC endpoint is malformed or cannot be represented safely.
+    #[error("invalid local-IPC endpoint {endpoint:?}: {reason}")]
+    InvalidLocalIpcEndpoint {
+        /// The rejected endpoint spelling.
+        endpoint: String,
+        /// The validation rule that rejected it.
+        reason: &'static str,
+    },
 }

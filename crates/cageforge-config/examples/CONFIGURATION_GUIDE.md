@@ -21,12 +21,53 @@ and filesystem path syntax is not portable:
 |---|---|---|
 | Linux | [`runnable/linux/smoke.toml`](runnable/linux/smoke.toml) | `/bin/echo` |
 | macOS | [`runnable/macos/smoke.toml`](runnable/macos/smoke.toml) | `/bin/echo` |
-| Windows | [`runnable/windows/smoke.toml`](runnable/windows/smoke.toml) | `C:/Windows/System32/cmd.exe` |
+| Windows | [`runnable/windows/smoke.toml`](runnable/windows/smoke.toml) | `C:\Windows\System32\cmd.exe` |
 
 Run the profile for the host operating system only. Windows paths and
 `cmd.exe` are not valid Linux or macOS commands; `/bin/echo` is not a Windows
 command. Each restricted smoke profile includes `minimal` read access and a
 writable workspace root.
+
+### First launch and local IPC
+
+The first launch must declare the ordinary command resources and the IPC
+resource independently. A local-IPC entry only authorizes the named endpoint;
+it does not authorize the executable's runtime files, the working directory,
+or network access. A minimal restricted profile therefore normally looks like
+this:
+
+```toml
+[profiles.tool.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.tool.network]
+mode = "disabled"
+
+[profiles.tool.platforms.linux.local_ipc]
+unix_sockets = ["/run/tool/service.sock"]
+
+[profiles.tool.platforms.macos.local_ipc]
+unix_sockets = ["/var/run/tool/service.sock"]
+
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ['\\.\pipe\tool-service']
+```
+
+Use `workspace-root` only when the command actually starts in or writes to the
+workspace. Add other filesystem rules explicitly for other inputs or outputs.
+The platform overlay changes only the native endpoint spelling: Linux and
+macOS use absolute Unix-socket paths, while Windows uses the local named-pipe
+namespace. An IPC rule never enables TCP loopback or unrelated local IPC.
+
+The Windows named-pipe backend applies a launch-scoped ACL grant to the exact
+pipe and restores the host ACL after the child exits. The child still needs
+the regular filesystem and environment declarations above. Python, Java, and
+Rust callers use the same endpoint kinds and receive the same fail-closed
+unsupported-capability behavior for a wrong platform endpoint.
 
 Linux also needs a compatible Bubblewrap and unprivileged namespaces. The
 bundled feature supplies the pinned Bubblewrap resource:
@@ -77,7 +118,7 @@ The meaning on each platform is:
 |---|---|---|
 | Linux | `/usr`, `/bin`, `/lib`, and `/lib64` | Bubblewrap starts from a fresh root. Without `minimal` or readable `root`, the executable or its ELF loader is absent. |
 | macOS | `/usr` by default; Seatbelt also has an explicit standard-runtime baseline | A simple system command can use the fixed baseline, but `minimal` keeps the platform-runtime dependency explicit and portable. It does not grant the workspace or arbitrary host paths. |
-| Windows | `Windows\\System32` plus the system root context | Restricted ACL planning requires a readable `root` or `minimal` platform base. `minimal` is the narrow choice for system executables. |
+| Windows | The absolute `SystemRoot` value plus `SystemRoot\\System32` | `minimal` is the narrow platform-runtime read base for system executables. The native backend validates this protected OS directory for read/execute access but does not try to rewrite its DACL; ACL mutation remains limited to application-owned policy roots. |
 
 The CLI and JVM binding populate these paths automatically. A direct Rust
 backend caller must provide the paths for the target OS explicitly. This is a
@@ -99,9 +140,13 @@ broader than `minimal`; neither selector is inferred from the TOML text.
 This follows the same platform-default principle reviewed in the local Codex
 baseline: Linux adds standard executable and loader roots when minimal
 defaults are requested, macOS adds its standard runtime/framework rules, and
-Windows carries platform defaults as an explicit native input. Cageforge keeps
-the public TOML schema independent and requires the corresponding symbolic
-policy rule before a backend can use any of these paths.
+Windows carries platform defaults as an explicit native input. On Windows,
+`%SystemRoot%\\System32` is an existing OS-readable platform root, not a
+user-owned ACL target. Cageforge therefore validates it with read access and
+leaves its protected system DACL unchanged; workspace and other application
+roots still use the handle-pinned ACL transaction. Cageforge keeps the public
+TOML schema independent and requires the corresponding symbolic policy rule
+before a backend can use any of these paths.
 
 ## Paths and selectors
 
@@ -126,6 +171,9 @@ working directory is the workspace.
 - `filesystem` selects restricted, unrestricted, or externally owned access;
 - `network` selects disabled, direct enabled, or external ownership and can
   restrict domains and Unix sockets;
+- `local_ipc` declares typed platform endpoints: absolute Unix sockets under
+  the Linux/macOS overlays and local `\\.\pipe\name` named pipes under the
+  Windows overlay;
 - `command` contains the executable, argv, working directory, environment,
   stdio, and timeout;
 - `command.environment` applies the documented base/filter/set/remove stages;
@@ -137,8 +185,8 @@ working directory is the workspace.
 
 The TOML controls the policy and approval behavior; it does not contain a
 grant. When a resolved profile uses `approval.mode = "preflight"`, the Rust
-facade, CLI, Python binding, or Java binding builds a `PermissionRequest` from
-the resolved policy and runtime identity. That request includes the selected
+the `cageforge` crate, CLI, Python binding, or Java binding builds a
+`PermissionRequest` from the resolved policy and runtime identity. That request includes the selected
 `PlatformId`, architecture, executable/tool identity, config and manifest
 digests, resolved native paths, network capabilities, and child-process
 capabilities. A trusted host then returns an opaque `PermissionGrant` before
@@ -159,6 +207,13 @@ field-by-field, and a platform overlay is applied after inheritance. In that
 example the Windows overlay disables approval while retaining the inherited
 timeout and persistence values for inspection.
 
+For Local IPC, use [`local-ipc-platforms.toml`](local-ipc-platforms.toml).
+Linux and macOS retain the existing Unix-socket enforcement. Windows validates
+named-pipe names and enforces the exact local endpoint through the Windows
+native boundary. A Unix socket requested on Windows remains a typed
+unsupported-capability error; the request is never converted to TCP or
+launched without the requested boundary.
+
 Approval is disabled when the `[profiles.<name>.approval]` section is omitted.
 `mode = "preflight"` is fail-closed: an absent or late approval denies the
 launch. `persistence = "session"` keeps the grant in memory, while
@@ -173,8 +228,8 @@ argv is provided after `--`.
 
 ## Rust, CLI, and JVM integration
 
-For Rust, enable `cageforge`'s `config` feature. The facade selects the native
-backend from the compilation target; resolve the profile, build the runtime
+For Rust, enable `cageforge`'s `config` feature. The `cageforge` crate selects
+the native backend from the compilation target; resolve the profile, build the runtime
 context, compose an effective policy, and call `native_sandbox().launch` or
 the concrete backend's `prepare`/`spawn`.
 
@@ -205,19 +260,24 @@ Cageforge.fromTomlFile(configPath, "smoke", context).use { sandbox ->
 
 ## Validation
 
-The configuration test suite parses every checked-in `.toml` fixture and
-resolves the fixtures for the current host. macOS CI runs the matching native
-smoke profile; Linux native CI runs the backend enforcement suite in its
-QEMU/KVM guest, while the Linux config and CLI smoke profile can be run locally
-with the command above. Windows CI resolves the Windows profile on a Windows
-runner and the backend suite covers native preparation. Run the portable
-fixture check locally with:
+The configuration test suite parses every checked-in `.toml` fixture. Each
+target-specific native crate also loads the fixtures through the Rust API and
+resolves host-compatible profiles on its matching Linux, macOS, or Windows
+runner. Its native backend test launches the matching `runnable/*/smoke.toml`
+profile through `Config`, policy composition, and the backend API, then checks
+the command output. The files under `runnable/` remain copyable platform-
+specific launch examples, but CI does not invoke them through a separate CLI
+smoke step. The remaining fixtures are deliberately parse-and-resolve examples because they
+describe policy, inheritance, platform syntax, or an external service rather
+than one universally runnable command. Run the portable fixture check locally:
 
 ```console
 cargo test --locked -p cageforge-config --all-targets
 ```
 
-For backend requirements and lifecycle behavior, continue to the [facade
-README](../../cageforge/README.md), [Linux README](../../cageforge-linux/README.md),
-[macOS README](../../cageforge-macos/README.md), [Windows README](../../cageforge-windows/README.md),
-or [JVM binding README](../../bindings/cageforge-java/README.md).
+For backend requirements and lifecycle behavior, continue to the [`cageforge`
+README](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
+[Linux README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-linux/README.md),
+[macOS README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-macos/README.md),
+[Windows README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-windows/README.md),
+or [JVM binding README](https://github.com/m62624/cageforge/blob/main/crates/bindings/cageforge-java/README.md).

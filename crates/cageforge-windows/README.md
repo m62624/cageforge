@@ -1,8 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
@@ -22,14 +18,14 @@ backend turns one backend-bound `PreparedBackendRequest` into a restricted Windo
 process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
 firewall/WFP, and per-process network-route enforcement.
 
-For most applications, start with [`cageforge`](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
-the unified library API for Linux, macOS, and Windows. The facade selects this
+For most applications, start with [`cageforge`](https://crates.io/crates/cageforge),
+the unified library API for Linux, macOS, and Windows. The `cageforge` crate selects this
 backend automatically when compiled for Windows while retaining the native
 configuration options. You can also use `cageforge-windows` directly, as shown
 below.
 
 For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
-`minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+`minimal` target, see the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 ## Sandbox model
 
@@ -60,7 +56,7 @@ capability authority.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces exact resolved-target HTTP and SOCKS5 gateway policy. |
 | `cageforge-windows` | Applies the Windows-native setup, ACL, token, process, Job Object, desktop, firewall/WFP, and route boundary. |
-| `cageforge` | Provides the final target-selecting facade over native backends. |
+| `cageforge` | Provides the target-selecting library API over native backends. |
 
 The integration sequence is:
 
@@ -158,12 +154,16 @@ checks its target surface; native enforcement requires Windows.
 For a restricted Windows launch, include `minimal` read access (or the broader
 `root` read access) before preparation. The ACL planner requires one of those
 readable platform bases so a system executable and its dependencies can be
-opened. The CLI resolves `minimal` to `Windows\\System32` and supplies the
-system root separately. Windows has a `tmpdir` scope; it does not have the
-POSIX `slash-tmp` scope.
+opened. The CLI resolves `minimal` from the absolute `SystemRoot` environment
+value to `SystemRoot\\System32`; it does not assume that the workspace and
+Windows installation use the same drive. The backend validates this protected
+platform directory for read/execute access without attempting to rewrite its
+DACL. ACL mutation is reserved for application-owned workspace and other
+policy roots. Windows has a `tmpdir` scope; it does not have the POSIX
+`slash-tmp` scope.
 
 The runnable example is
-[`runnable/windows/smoke.toml`](../cageforge-config/examples/runnable/windows/smoke.toml).
+[`runnable/windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml).
 
 Provision the setup explicitly, compose the portable values, then prepare and
 spawn through the same backend instance:
@@ -353,6 +353,7 @@ launch.
 | Linear HANDLE ownership | Every launch | Closes runner duplicates after process creation and Job assignment while `WindowsChild` retains its parent pipe endpoints until their documented lifecycle boundary. |
 | Authenticated runner transport | Every launch | Uses bounded, versioned typed frames for readiness, spawn, failure, and exit; expected failures become typed library errors. |
 | Private named-pipe authentication | Runner bootstrap and lifecycle | Uses launch-unique protected pipes, verifies server PID and owner identity, and rejects forged or direct helper protocols. |
+| Restricted named-pipe local IPC | Launches with `local_ipc.named_pipes` | Grants the selected dedicated runner-account SID plus a fresh launch capability SID only to the explicitly named local pipes, uses a strict restricted token so unrelated permissive pipes remain inaccessible, verifies ACL read-back, and journals/restores each host ACL. |
 | Offline firewall and WFP deny boundary | Disabled and proxy-routed networking | Blocks direct outbound and loopback access for the offline account; failure to verify WFP is fatal. |
 | Direct networking account separation | Unrestricted direct networking | Uses the separately verified online account for direct sockets without weakening restricted filesystem enforcement. |
 | Four-tuple PID attribution | Proxy-routed networking | Maps an accepted IPv4 connection to its owning PID, pins process identity against PID reuse, and reads the exact token restriction set. |
@@ -363,13 +364,25 @@ launch.
 | Concurrent-instance isolation | Multiple backend instances or children | Keeps account state, profile authorities, lifecycle leases, routes, gateway policies, and process trees separate. |
 | Typed fail-closed errors | Setup, prepare, spawn, wait, and cleanup | Identifies the failing native stage and code. |
 
-`External` filesystem or network ownership and pathname local-IPC policy are
+`External` filesystem or network ownership and pathname Unix-socket policy are
 not advertised as Windows-native capabilities. Unrestricted filesystem
 execution and the platform-specific conventional Unix temporary scope are also
 rejected before lowering because this backend has no verified native boundary
-for them. Windows named pipes are handled as Windows objects through token,
-desktop, DACL, and explicit-handle controls; they are not silently treated as
-Unix sockets.
+for them. Windows named pipes are distinct policy endpoints:
+
+```toml
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ['\\.\pipe\tool-service']
+```
+
+They are not silently treated as Unix sockets or TCP. The
+`NetworkWindowsNamedPipeRules` capability is enforced through a launch-unique
+restricted token, explicit host-pipe ACL transactions, local-only pipe
+creation requirements, and durable ACL recovery. Each approved pipe keeps one
+host-side handle for the complete ACL transaction: original-state capture,
+DACL activation, read-back, restoration, and final verification all use that
+handle. A requested Unix socket on Windows remains a typed unsupported
+capability rather than a fallback.
 
 ## Network behavior
 

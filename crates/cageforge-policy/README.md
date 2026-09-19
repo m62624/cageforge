@@ -1,12 +1,10 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
 # cageforge-policy
+
+Read the shared [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md) for TOML profiles, symbolic paths, local IPC, and first-launch resource rules.
 
 `cageforge-policy` is the platform-independent policy model for Cageforge. It
 describes filesystem and network boundaries, validates them, resolves symbolic
@@ -79,16 +77,34 @@ construct an unchecked selector by writing a public enum payload.
 | `PathSelector` and `PathResolutionContext` | Represents absolute, system-root, workspace, minimal-runtime, temporary-directory, and runtime current-directory scopes. |
 | `PathPattern` | Represents validated absolute or workspace-relative globs. |
 | `AccessMode` | Expresses `Read`, `Write`, or `Deny`. |
-| `NetworkPolicy` | Describes network enforcement ownership and domain/socket defaults; `enabled()` keeps local destinations denied, while `unrestricted()` removes that local restriction explicitly. |
+| `NetworkPolicy` | Describes network enforcement ownership, domain/socket defaults, and typed Local IPC endpoints; `enabled()` keeps local destinations denied, while `unrestricted()` removes that local restriction explicitly. |
 | `LocalNetworkAccess` | Controls whether resolved non-public and special-purpose addresses are allowed. |
 | `NetworkDecision` | Distinguishes local allow/deny from externally owned network enforcement. |
 | `ResolvedNetworkTarget` | Keeps one normalized host and its exact resolved socket addresses together for a safe connection check. |
 | `ConnectionAuthorization` and `AuthorizedSocketAddr` | Returns the exact checked address that a network backend may use. |
-| `DomainRule` and `UnixSocketRule` | Adds validated network destinations and decisions. |
+| `DomainRule`, `UnixSocketRule`, and `LocalIpcRule` | Adds validated network destinations and platform-neutral local-IPC endpoints. |
+| `LocalIpcEndpoint`, `AbsolutePath`, and `NamedPipeName` | Distinguishes Unix sockets from Windows named pipes without converting one transport into another. |
 | `PolicyError` | Reports invalid paths, patterns, domains, contexts, and policy combinations. |
 
 `PolicyError` is a dedicated library error enum. Callers can match path,
 pattern, context, and policy-rule failures without parsing display strings.
+
+Local IPC is declared through the common endpoint model:
+
+```rust
+use cageforge_policy::{DomainAccess, LocalIpcEndpoint, NetworkPolicy};
+
+let policy = NetworkPolicy::disabled()
+    .with_local_ipc(
+        LocalIpcEndpoint::unix_socket("/run/tool/service.sock")?,
+        DomainAccess::Allow,
+    )?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`LocalIpcEndpoint::windows_named_pipe("\\\\.\\pipe\\tool-service")` is the
+corresponding Windows form. Native support is decided by backend capability
+preflight; an unsupported endpoint fails closed before process creation.
 
 The built-in `SandboxPolicy::read_only`, `SandboxPolicy::workspace`, and
 `SandboxPolicy::full_access` constructors are Cageforge presets. They are not

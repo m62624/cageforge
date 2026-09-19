@@ -11,6 +11,7 @@ impl CapabilityState {
             namespace_sid: random_namespace_sid()?,
             entries: Vec::new(),
             acl_objects: Vec::new(),
+            named_pipe_acls: Vec::new(),
             pending_acl_mutation: None,
             pending_inherited_acl_release: None,
             materialized_objects: Vec::new(),
@@ -23,6 +24,7 @@ impl CapabilityState {
 
     pub(crate) fn filesystem_cleanup_complete(&self) -> bool {
         self.acl_objects.is_empty()
+            && self.named_pipe_acls.is_empty()
             && self.pending_acl_mutation.is_none()
             && self.pending_inherited_acl_release.is_none()
             && self.materialized_objects.is_empty()
@@ -35,6 +37,7 @@ impl CapabilityState {
             && self.pending_inherited_acl_release.is_none()
             && self.pending_materialization.is_none()
             && self.pending_materialization_removal.is_none()
+            && self.named_pipe_acls.is_empty()
     }
 }
 

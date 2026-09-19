@@ -1,8 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
@@ -21,14 +17,14 @@ a typed error before the command starts. The backend lowers the complete
 effective policy into Bubblewrap mounts, namespaces, seccomp rules,
 environment state, and process-lifecycle controls.
 
-For most applications, start with [`cageforge`](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
-the unified library API for Linux, macOS, and Windows. The facade selects this
+For most applications, start with [`cageforge`](https://crates.io/crates/cageforge),
+the unified library API for Linux, macOS, and Windows. The `cageforge` crate selects this
 backend automatically when compiled for Linux while retaining the native
 configuration options. You can also use `cageforge-linux` directly, as shown
 below.
 
 For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
-`minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+`minimal` target, see the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 ## Sandbox model
 
@@ -44,7 +40,7 @@ descendant process tree. The boundary:
 
 `LinuxBackend` and the policy can be reused for several commands, while every
 spawn receives its own process boundary, lifecycle, and native enforcement
-state. The `cageforge` facade selects this backend on Linux;
+state. The `cageforge` crate selects this backend on Linux;
 applications may also use `LinuxBackend` directly.
 
 ## Workspace role
@@ -58,7 +54,7 @@ applications may also use `LinuxBackend` directly.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces restricted HTTP, CONNECT, and SOCKS5 destinations through exact resolved addresses. |
 | `cageforge-linux` | Converts the prepared values above into the Linux-native process boundary. |
-| `cageforge` | Provides the final target-selecting facade over native backends. |
+| `cageforge` | Provides the target-selecting library API over native backends. |
 
 The data flow is:
 
@@ -212,7 +208,7 @@ fresh root, so a command's executable and ELF loader must be visible through
 to its `PathResolutionContext`.
 
 The runnable example is
-[`runnable/linux/smoke.toml`](../cageforge-config/examples/runnable/linux/smoke.toml).
+[`runnable/linux/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/linux/smoke.toml).
 
 Build and compose the portable values first, provide the runtime paths used by
 symbolic selectors, then prepare and spawn through the same backend instance:

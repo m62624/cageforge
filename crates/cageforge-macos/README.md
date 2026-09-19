@@ -1,8 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate adapts sandbox design ideas from open-source OpenAI Codex into an
-> independent library API and contains no copied Codex source.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 This crate is a supporting component of the [`cageforge`](https://crates.io/crates/cageforge) crate, a cross-platform Rust sandbox for AI agents and untrusted code.
 
@@ -19,14 +15,14 @@ caller gives it a validated command, a composed effective policy, and the
 runtime paths needed to resolve that policy; the backend returns a
 backend-bound prepared request or a typed error before the command starts.
 
-For most applications, start with [`cageforge`](https://github.com/m62624/cageforge/blob/main/crates/cageforge/README.md),
-the unified library API for Linux, macOS, and Windows. The facade selects this
+For most applications, start with [`cageforge`](https://crates.io/crates/cageforge),
+the unified library API for Linux, macOS, and Windows. The `cageforge` crate selects this
 backend automatically when compiled for macOS while retaining the native
 configuration options. You can also use `cageforge-macos` directly, as shown
 below.
 
 For copyable TOML profiles and the Linux/macOS/Windows meaning of the symbolic
-`minimal` target, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+`minimal` target, see the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 ## Sandbox model
 
@@ -56,7 +52,7 @@ concurrently with different policies.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces restricted HTTP, CONNECT, and SOCKS5 destinations through exact resolved addresses. |
 | `cageforge-macos` | Converts the prepared values above into the macOS-native Seatbelt process boundary. |
-| `cageforge` | Provides the final target-selecting facade over native backends. |
+| `cageforge` | Provides the target-selecting library API over native backends. |
 
 The integration sequence is:
 
@@ -119,7 +115,7 @@ visible. Use the workspace rule for application data rather than broadening
 the policy to `root`.
 
 The runnable example is
-[`runnable/macos/smoke.toml`](../cageforge-config/examples/runnable/macos/smoke.toml).
+[`runnable/macos/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/macos/smoke.toml).
 
 Compose the portable values first, provide the runtime paths used by symbolic
 selectors, then prepare and spawn through the same backend instance:

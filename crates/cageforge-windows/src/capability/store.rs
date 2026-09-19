@@ -25,8 +25,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 use crate::capability::lock::{CapabilityLock, CapabilityLockError};
 use crate::capability::state::{
     CAPABILITY_LOCK_NAME, CAPABILITY_STATE_NAME, CapabilityRole, CapabilityState,
-    CapabilityStateError, ManagedAclObject, ManagedAclParent, MaterializedObject, PersistedDacl,
-    PersistedFileIdentity,
+    CapabilityStateError, ManagedAclObject, ManagedAclParent, MaterializedObject,
+    NamedPipeAclObject, PersistedDacl, PersistedFileIdentity,
 };
 use crate::capability::state_runtime::{
     AclMutationRecovery, CapabilityStateTransitionError, InheritedAclReleaseRecovery,
@@ -37,6 +37,7 @@ use crate::error::WindowsSetupVerificationError;
 use crate::filesystem::path::{ValidatedPath, ValidatedPathError};
 use crate::native_strings::wide_path;
 
+#[derive(Clone)]
 pub(crate) struct CapabilityStateStore {
     state_path: PathBuf,
     lock_path: PathBuf,
@@ -44,6 +45,13 @@ pub(crate) struct CapabilityStateStore {
 }
 
 pub(crate) struct CapabilityActiveLease {
+    _lock: CapabilityLock,
+}
+
+/// Serializes named-pipe ACL transactions across Cageforge processes while a
+/// local-IPC boundary is active. The lock is independent from the filesystem
+/// mutation and active-child ranges so unrelated sandboxes remain concurrent.
+pub(crate) struct CapabilityLocalIpcLease {
     _lock: CapabilityLock,
 }
 
@@ -155,6 +163,29 @@ impl CapabilityStateStore {
             Err(error) => Err(error.into()),
             Ok(lock) => Ok(CapabilityActiveLease { _lock: lock }),
         }
+    }
+
+    pub(crate) fn acquire_local_ipc_lease(
+        &self,
+    ) -> Result<CapabilityLocalIpcLease, CapabilityStateStoreError> {
+        let file = self.open_protected_file(&self.lock_path)?;
+        let lock = CapabilityLock::acquire_file(file, 2, true, false, "local-IPC ACL")?;
+        Ok(CapabilityLocalIpcLease { _lock: lock })
+    }
+
+    pub(crate) fn try_acquire_local_ipc_lease(
+        &self,
+    ) -> Result<Option<CapabilityLocalIpcLease>, CapabilityStateStoreError> {
+        let file = self.open_protected_file(&self.lock_path)?;
+        let lock = match CapabilityLock::acquire_file(file, 2, true, true, "local-IPC ACL") {
+            Ok(lock) => lock,
+            Err(CapabilityLockError::Acquire {
+                code: ERROR_LOCK_VIOLATION,
+                ..
+            }) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Some(CapabilityLocalIpcLease { _lock: lock }))
     }
 
     pub(crate) fn acquire_uninstall_guard(
@@ -569,6 +600,36 @@ impl CapabilityStateSession<'_> {
 
     pub(crate) fn managed_acl_objects(&self) -> &[ManagedAclObject] {
         self.state.managed_acl_objects()
+    }
+
+    pub(crate) fn named_pipe_acl_objects(&self) -> &[NamedPipeAclObject] {
+        self.state.named_pipe_acl_objects()
+    }
+
+    pub(crate) fn begin_named_pipe_acl(
+        &mut self,
+        object: NamedPipeAclObject,
+    ) -> Result<(), CapabilityStateStoreError> {
+        self.state.begin_named_pipe_acl(object)?;
+        self.persist()
+    }
+
+    pub(crate) fn resolve_named_pipe_acl(
+        &mut self,
+        name: &str,
+        actual: &PersistedDacl,
+    ) -> Result<(), CapabilityStateStoreError> {
+        self.state.resolve_named_pipe_acl(name, actual)?;
+        self.persist()
+    }
+
+    pub(crate) fn update_named_pipe_acl_current(
+        &mut self,
+        name: &str,
+        current: PersistedDacl,
+    ) -> Result<(), CapabilityStateStoreError> {
+        self.state.update_named_pipe_acl_current(name, current)?;
+        self.persist()
     }
 
     pub(crate) fn materialized_object(&self, path: &Path) -> Option<&MaterializedObject> {

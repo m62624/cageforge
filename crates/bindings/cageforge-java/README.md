@@ -1,6 +1,4 @@
-> **Independent project:** Cageforge is not affiliated with, sponsored by, or
-> endorsed by OpenAI. Its implementation and public API are independently
-> authored; repository notices document upstream behavioral references.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 # Cageforge Java binding
 
@@ -9,9 +7,11 @@ applications on Linux, macOS, and Windows. It loads a TOML profile, supplies the
 host paths that the profile leaves symbolic, launches a command, and manages
 the complete descendant process boundary.
 
-The binding uses the same policy and native backends as the Rust facade. The
-platform-specific configuration files and the meaning of `minimal` are covered
-in the shared [configuration guide](../../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+The binding uses the native Cageforge backend selected for the running
+platform. The published [cageforge crate](https://crates.io/crates/cageforge)
+is the project-level reference for the sandbox API. Platform-specific
+configuration files and the meaning of `minimal` are covered in the shared
+[configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
 
 ## Install
 
@@ -78,9 +78,9 @@ request.use { preflight ->
 }
 ```
 
-The three profiles are [`linux/smoke.toml`](../../cageforge-config/examples/runnable/linux/smoke.toml),
-[`macos/smoke.toml`](../../cageforge-config/examples/runnable/macos/smoke.toml),
-and [`windows/smoke.toml`](../../cageforge-config/examples/runnable/windows/smoke.toml).
+The three profiles are [`linux/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/linux/smoke.toml),
+[`macos/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/macos/smoke.toml),
+and [`windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml).
 They use the current Cageforge TOML schema, include `minimal` read access,
 declare a workspace root, allow writes to `workspace-root`, and disable the
 network. The Windows profile uses `cmd.exe`; the POSIX profiles use `/bin/echo`.
@@ -91,6 +91,12 @@ opaque; approval never changes permissions of an already-running process.
 When `permissionRequest` is called with custom identity or digest arguments,
 pass that same `PermissionRequest` to `fromToml` or `fromTomlFile`; the runtime
 then authorizes the grant against the exact identity that was approved.
+
+`PermissionRequest.localIpc` returns typed `LocalIpcEndpoint` values:
+`LocalIpcEndpoint.UnixSocket` for Linux/macOS and
+`LocalIpcEndpoint.WindowsNamedPipe` for Windows. The endpoint value is already
+validated by Rust; Windows never converts a named pipe into a Unix path or TCP
+fallback and fails closed if native isolation is not proven.
 
 ### Persistent grants and store paths
 
@@ -170,7 +176,7 @@ try (InputStream stdout = process.getInputStream()) {
 }
 ```
 
-This `Process` is a Java facade over the same Rust-owned native sandbox child;
+This `Process` is a Java API over the same Rust-owned native sandbox child;
 it never starts a second process. `waitFor(timeout, unit)` delegates to the
 native wait future without Java polling, `isAlive`, `exitValue`, and `pid` read
 the native handle, and `destroy`/`destroyForcibly` terminate the complete
@@ -219,6 +225,6 @@ The loader selects the matching directory at runtime, verifies its resources,
 and extracts them to a process-owned cache directory. Applications do not need
 to hard-code a Linux, macOS, or Windows path.
 
-The Gradle project is under [`jvm/`](jvm/). Its Java and Kotlin API uses the
+The Gradle project is under [`jvm/`](https://github.com/m62624/cageforge/tree/main/crates/bindings/cageforge-java/jvm). Its Java and Kotlin API uses the
 same native policy contract as the Python binding while keeping each language's
 normal naming and error conventions.

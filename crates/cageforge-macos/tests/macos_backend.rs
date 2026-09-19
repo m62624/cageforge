@@ -20,10 +20,13 @@ use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendContractError, BackendRequest, SandboxBackend,
 };
 use cageforge_command::{CommandRequest, CommandSpec, EnvironmentSpec, StdioMode, StdioSpec};
+use cageforge_config::Config;
 use cageforge_macos::{MacosBackend, MacosBackendConfig, MacosBackendError, MacosFilesystemError};
+use cageforge_permissions::PlatformId;
 use cageforge_policy::{
-    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalNetworkAccess,
-    NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy, UnixSocketMode,
+    AccessMode, DomainAccess, DomainMode, FilesystemPolicy, FilesystemRule, LocalIpcEndpoint,
+    LocalNetworkAccess, NetworkPolicy, PathResolutionContext, PathSelector, SandboxPolicy,
+    UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, PolicyCeiling, compose};
 use tempfile::TempDir;
@@ -87,6 +90,53 @@ fn context(workspace: &Path) -> PathResolutionContext {
         .expect("slash tmp")
         .with_current_directory(workspace.to_path_buf())
         .expect("cwd")
+}
+
+#[test]
+fn runnable_macos_profile_launches_through_the_native_backend_api() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cageforge-config/examples/runnable/macos/smoke.toml");
+    let profile = Config::from_file(&config_path)
+        .expect("macOS runnable configuration")
+        .resolve_default_for_platform(PlatformId::Macos)
+        .expect("macOS runnable profile");
+    let workspace = TempDir::new().expect("runnable workspace");
+    let command = profile
+        .command()
+        .cloned()
+        .expect("runnable profile command")
+        .with_working_directory(workspace.path().to_path_buf())
+        .expect("runnable working directory");
+    let environment = command.environment().clone();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective = compose(CompositionRequest::new(
+        profile.policy(),
+        &environment,
+        &ceiling,
+    ))
+    .expect("compose macOS runnable policy");
+    let backend = backend();
+    let prepared = backend
+        .prepare(
+            BackendRequest::new(&command, &effective),
+            &context(workspace.path()),
+        )
+        .expect("prepare macOS runnable profile");
+    let mut child = backend
+        .spawn(prepared)
+        .expect("spawn macOS runnable profile");
+    let status = child.wait().expect("wait for macOS runnable profile");
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .expect("macOS runnable stdout")
+        .read_to_string(&mut stdout)
+        .expect("read macOS runnable stdout");
+    assert!(
+        status.success(),
+        "macOS runnable profile failed: {status:?}"
+    );
+    assert_eq!(stdout.trim(), "cageforge-macos-smoke");
 }
 
 fn backend() -> MacosBackend {
@@ -2118,8 +2168,10 @@ fn restricted_unix_socket_policy_allows_an_explicit_path() {
     let workspace = TempDir::new().expect("workspace");
     let network = NetworkPolicy::enabled()
         .with_local_network_access(LocalNetworkAccess::Allow)
-        .with_unix_socket_mode(UnixSocketMode::Restricted)
-        .with_unix_socket(&allowed, DomainAccess::Allow)
+        .with_local_ipc(
+            LocalIpcEndpoint::unix_socket(allowed.clone()).expect("absolute socket"),
+            DomainAccess::Allow,
+        )
         .expect("allowed Unix socket rule");
     let policy = SandboxPolicy::new(FilesystemPolicy::unrestricted(), network);
     let (command, effective, context) =

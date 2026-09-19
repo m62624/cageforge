@@ -121,6 +121,13 @@ The binding must keep these invariants from the Rust facade:
 9. Native errors become Java exceptions with the original diagnostic text;
    Rust model types and native backend internals do not cross the ABI.
 
+Local IPC follows Specification 0023 without a Java-specific transport string:
+the TOML profile carries platform overlays, and the binding exposes the same
+validated endpoint values and structured unsupported-capability failures as the
+Rust API. Linux and macOS use absolute Unix-socket endpoints; Windows uses
+named-pipe names. A POSIX socket request on Windows fails before launch rather
+than being converted to loopback networking.
+
 The binding exports all security controls present in the Cageforge TOML and
 native facade, including process-tree lifecycle, filesystem ownership and
 path rules, network modes/domain/socket authorization, gateway bounds,
@@ -205,6 +212,10 @@ It must also prove that an in-flight asynchronous wait can be interrupted by
 This checks resource selection,
 extraction, JNI loading, TOML runtime creation, and native process execution
 together rather than testing only compiled classes.
+The consumer also loads a platform-overlay profile when local IPC is part of
+the selected fixture and verifies that unsupported endpoint kinds become the
+documented typed exception. It uses the same runnable-profile contract as the
+Rust CLI and Python binding; it does not duplicate native policy lowering.
 
 The Linux VM launcher is suite-oriented rather than binding-oriented. A suite
 under `ci/vm-suites/<name>/` declares its guest packages and the
@@ -251,7 +262,8 @@ publication path.
 
 The binding consumes the facade, command, configuration, policy-composition,
 backend API, and native backend contracts from Specifications 0008-0019. It
-does not duplicate their path parser or platform policy logic. Platform
+also consumes the portable local IPC contract in Specification 0023. It does
+not duplicate their path parser or platform policy logic. Platform
 resource naming and helper behavior remain owned by the corresponding native
 backend specifications; this document only defines how the JVM package locates
 and passes those resources to the existing APIs.

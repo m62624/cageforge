@@ -6,13 +6,14 @@
 use super::super::error::{ConfigError, invalid_value};
 use super::super::model::{
     RawAccessMode, RawDomainAccess, RawDomainMode, RawDomainRule, RawFilesystem, RawFilesystemMode,
-    RawFilesystemRule, RawFilesystemTarget, RawLocalNetworkAccess, RawMissingPathBehavior,
-    RawNetwork, RawNetworkMode, RawSelector, RawUnixSocketMode, RawUnixSocketRule,
+    RawFilesystemRule, RawFilesystemTarget, RawLocalIpc, RawLocalNetworkAccess,
+    RawMissingPathBehavior, RawNetwork, RawNetworkMode, RawSelector, RawUnixSocketMode,
+    RawUnixSocketRule,
 };
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemPolicy, FilesystemRule,
-    FilesystemTarget, LocalNetworkAccess, MissingPathBehavior, NetworkMode, NetworkPolicy,
-    PathPattern, PathSelector, SandboxPolicy, UnixSocketMode,
+    FilesystemTarget, LocalIpcEndpoint, LocalNetworkAccess, MissingPathBehavior, NetworkMode,
+    NetworkPolicy, PathPattern, PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -20,10 +21,11 @@ use std::path::PathBuf;
 pub(crate) fn build_policy(
     filesystem: Option<&RawFilesystem>,
     network: Option<&RawNetwork>,
+    local_ipc: Option<&RawLocalIpc>,
     profile: &str,
 ) -> Result<SandboxPolicy, ConfigError> {
     let filesystem = build_filesystem(filesystem, profile)?;
-    let network = build_network(network, profile)?;
+    let network = build_network(network, local_ipc, profile)?;
     let policy = SandboxPolicy::new(filesystem, network);
     policy.validate().map_err(|source| ConfigError::Policy {
         profile: profile.to_owned(),
@@ -265,14 +267,29 @@ fn build_selector(
     })
 }
 
-fn build_network(raw: Option<&RawNetwork>, profile: &str) -> Result<NetworkPolicy, ConfigError> {
+fn build_network(
+    raw: Option<&RawNetwork>,
+    local_ipc: Option<&RawLocalIpc>,
+    profile: &str,
+) -> Result<NetworkPolicy, ConfigError> {
     let raw = raw.cloned().unwrap_or_default();
-    let mode = network_mode(raw.mode);
+    let mode = network_mode(raw.mode.or_else(|| {
+        // POSIX pathname IPC is lowered through the network namespace. A
+        // Windows named pipe is a kernel IPC object and must not implicitly
+        // enable external networking.
+        local_ipc
+            .filter(|value| !value.unix_sockets.is_empty())
+            .map(|_| RawNetworkMode::Enabled)
+    }));
     let mut policy = match mode {
         NetworkMode::Disabled => NetworkPolicy::disabled(),
         NetworkMode::Enabled => NetworkPolicy::enabled(),
         NetworkMode::External => NetworkPolicy::external(),
     };
+    if mode == NetworkMode::Enabled && local_ipc.is_some_and(|value| !value.unix_sockets.is_empty())
+    {
+        policy = policy.with_unix_socket_mode(UnixSocketMode::Restricted);
+    }
     if let Some(mode) = raw.domain_mode {
         policy = policy.with_domain_mode(domain_mode(mode));
     }
@@ -297,6 +314,40 @@ fn build_network(raw: Option<&RawNetwork>, profile: &str) -> Result<NetworkPolic
                 profile: profile.to_owned(),
                 source,
             })?;
+    }
+    if let Some(local_ipc) = local_ipc {
+        for path in &local_ipc.unix_sockets {
+            policy = policy
+                .with_local_ipc(
+                    LocalIpcEndpoint::unix_socket(path.clone()).map_err(|source| {
+                        ConfigError::Policy {
+                            profile: profile.to_owned(),
+                            source,
+                        }
+                    })?,
+                    DomainAccess::Allow,
+                )
+                .map_err(|source| ConfigError::Policy {
+                    profile: profile.to_owned(),
+                    source,
+                })?;
+        }
+        for name in &local_ipc.named_pipes {
+            policy = policy
+                .with_local_ipc(
+                    LocalIpcEndpoint::windows_named_pipe(name.clone()).map_err(|source| {
+                        ConfigError::Policy {
+                            profile: profile.to_owned(),
+                            source,
+                        }
+                    })?,
+                    DomainAccess::Allow,
+                )
+                .map_err(|source| ConfigError::Policy {
+                    profile: profile.to_owned(),
+                    source,
+                })?;
+        }
     }
     policy.validate().map_err(|source| ConfigError::Policy {
         profile: profile.to_owned(),

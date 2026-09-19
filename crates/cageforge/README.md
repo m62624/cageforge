@@ -1,7 +1,4 @@
-> ⚠️ **Independent project**
->
-> Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI. This
-> crate is an independent facade over Cageforge's public sandbox API.
+> **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
 # cageforge
 
@@ -17,7 +14,7 @@ native enforcement, and a correct Cageforge implementation.
 
 Use this crate as a library when sandboxed execution is part of your Rust
 application. If you need a ready-to-use terminal wrapper for launching an
-explicit program, install `cageforge-cli`; it uses this facade and the same
+explicit program, install `cageforge-cli`; it uses this crate and the same
 native backend instead of implementing a separate sandbox.
 
 ## Add the crate
@@ -27,14 +24,21 @@ native backend instead of implementing a separate sandbox.
 cageforge = { version = "x.y.z", features = ["config"] }
 ```
 
-The facade selects `cageforge-linux`, `cageforge-windows`, or
+The `cageforge` crate selects `cageforge-linux`, `cageforge-windows`, or
 `cageforge-macos` automatically from the compilation target. The portable
 model and native backend are therefore available without an OS feature. Add
 `config` when the application wants to load TOML profiles. The standalone network gateway is
 available through the optional `network-runtime` feature.
 
 For the complete TOML flow and separate runnable profiles for each operating
-system, see the [`cageforge-config` configuration guide](../cageforge-config/examples/CONFIGURATION_GUIDE.md).
+system, see the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md).
+
+Local IPC uses one typed Rust model across platforms. Use absolute Unix-socket
+paths for Linux/macOS and `\\\\.\\pipe\\name` named-pipe names for Windows in
+the matching TOML platform overlay. Linux/macOS enforce Unix-socket endpoints;
+Windows enforces local named-pipe endpoints through its native boundary. A
+wrong-platform endpoint remains a typed unsupported-capability error and never
+falls back to TCP or an unsandboxed process.
 
 On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
 not want to build or provide Bubblewrap separately. It includes Cageforge's
@@ -60,7 +64,7 @@ can launch commands through one API without naming a Linux, Windows, or macOS
 backend type. The static `Sandbox` API is available when the application needs
 direct access to a concrete backend and its native configuration.
 
-```rust,no_run
+```rust,ignore
 use std::{path::PathBuf, process::ExitStatus, time::Duration};
 
 use cageforge::{
@@ -132,9 +136,10 @@ uses the native backend's termination and recovery lifecycle.
 The static flow is also available when an application needs concrete backend
 configuration: create the matching backend, compose the policy, call
 `prepare`, then call `spawn`. Windows setup is documented in the
-[Windows backend README](../cageforge-windows/README.md); the [Linux backend
-README](../cageforge-linux/README.md) and [macOS backend
-README](../cageforge-macos/README.md) describe their native requirements and
+[cageforge-windows](https://crates.io/crates/cageforge-windows),
+[cageforge-linux](https://crates.io/crates/cageforge-linux), and
+[cageforge-macos](https://crates.io/crates/cageforge-macos) crates describe
+their native requirements and
 configuration.
 
 Create the backend once when running several commands. Each thread can supply
@@ -154,13 +159,13 @@ the concrete native error in its source chain.
 
 ## Rust preflight integration
 
-The facade exposes the same typed permission flow used by the CLI, Python, and
+The crate exposes the same typed permission flow used by the CLI, Python, and
 Java adapters. A `PreflightPlan` describes the exact launch identity and
 capabilities; only a trusted `GrantAuthority` can produce the opaque grant
 that authorizes it. The grant is checked before native launch and is combined
 with the existing policy ceiling:
 
-```rust,no_run
+```rust,ignore
 use cageforge::{
     native_sandbox, sha256_digest, BackendRequest, CommandRequest, EffectiveSandbox,
     GrantAuthority, PathResolutionContext, PreflightPlan, SandboxPolicy,
@@ -259,7 +264,7 @@ The operating system carries the native restrictions through the process tree.
 The descendants can use their normal command-line options and APIs, but they
 cannot use them to grant themselves permissions outside the effective policy.
 When the root command exits, the child handle reports its typed status and the
-facade closes the instance's native resources. A timeout or explicit
+crate closes the instance's native resources. A timeout or explicit
 termination applies to the complete descendant tree.
 
 To run several independent operations, call `spawn` separately for each
@@ -268,7 +273,7 @@ native enforcement state. If one root command deliberately starts a shell and
 runs several commands inside that shell, those commands share the same
 instance and policy.
 
-For example, an application can start Cargo through the facade in the same way
+For example, an application can start Cargo through the crate in the same way
 it starts any other program:
 
 ```text
@@ -307,7 +312,7 @@ types.
 waiting, and termination. Native child types and errors remain available when
 platform-specific behavior or diagnostics are needed.
 
-The public facade is synchronous. Internal network gateways may use helper
+The public API is synchronous. Internal network gateways may use helper
 threads or asynchronous tasks. An async application only needs to run the
 blocking process operations in its blocking-task facility.
 

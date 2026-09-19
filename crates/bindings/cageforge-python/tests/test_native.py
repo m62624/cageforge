@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from cageforge import (
     Cageforge,
+    CageforgeError,
     CageforgeInvalidCursorError,
     CageforgeInvalidGrantIdError,
     CageforgePermissionError,
@@ -43,6 +44,20 @@ def smoke_config() -> Path:
 def smoke_toml() -> str:
     """Read TOML bytes without newline normalization on Windows."""
     return smoke_config().read_bytes().decode("utf-8")
+
+
+def local_ipc_toml() -> str:
+    source = smoke_toml()
+    if sys.platform == "win32":
+        overlay = "windows"
+        value = "named_pipes = ['\\\\.\\pipe\\cageforge-test']"
+    elif sys.platform == "darwin":
+        overlay = "macos"
+        value = 'unix_sockets = ["/tmp/cageforge-test.sock"]'
+    else:
+        overlay = "linux"
+        value = 'unix_sockets = ["/tmp/cageforge-test.sock"]'
+    return f"{source}\n[profiles.smoke.platforms.{overlay}.local_ipc]\n{value}\n"
 
 
 def toml_for_argv(argv: list[str]) -> str:
@@ -130,6 +145,19 @@ def test_persistent_grant_store_uses_the_explicit_path(tmp_path: Path) -> None:
     request.close()
     with pytest.raises(CageforgePermissionError):
         request.digest()
+
+
+def test_permission_request_exposes_typed_local_ipc_endpoints(tmp_path: Path) -> None:
+    request = Cageforge.permission_request(
+        local_ipc_toml(), context=runtime_context(tmp_path)
+    )
+    try:
+        endpoints = request.local_ipc()
+        assert len(endpoints) == 1
+        assert endpoints[0].kind in {"unix_socket", "windows_named_pipe"}
+        assert endpoints[0].value
+    finally:
+        request.close()
 
 
 def test_persistent_store_handles_concurrent_binding_calls(tmp_path: Path) -> None:
@@ -279,6 +307,55 @@ def test_wait_releases_the_gil(tmp_path: Path) -> None:
         assert wait_result and wait_result[0] in (0, None)
         process.close()
     finally:
+        runtime.close()
+
+
+def test_blocking_stream_io_is_released_by_kill(tmp_path: Path) -> None:
+    require_linux_guest()
+    ensure_windows_setup()
+    context = runtime_context(tmp_path)
+    argv = long_running_argv()
+    toml = (
+        toml_for_argv(argv)
+        + """
+
+[profiles.smoke.command.stdio]
+stdin = "pipe"
+stdout = "pipe"
+stderr = "pipe"
+"""
+    )
+    runtime = Cageforge.from_toml(
+        toml, context=context, grant=smoke_grant(toml, context)
+    )
+    process = runtime.launch(argv)
+    executor = ThreadPoolExecutor(max_workers=2)
+    read_started = threading.Event()
+    write_started = threading.Event()
+
+    def read_stdout() -> bytes:
+        read_started.set()
+        return process.read_stdout(1)
+
+    def write_stdin() -> int:
+        write_started.set()
+        return process.write_stdin(b"x" * (16 * 1024 * 1024))
+
+    try:
+        read_future = executor.submit(read_stdout)
+        write_future = executor.submit(write_stdin)
+        assert read_started.wait(timeout=1)
+        assert write_started.wait(timeout=1)
+        process.kill()
+        for future in (read_future, write_future):
+            try:
+                future.result(timeout=5)
+            except CageforgeError:
+                pass
+        assert process.try_wait() is not None
+    finally:
+        process.close()
+        executor.shutdown(wait=True, cancel_futures=True)
         runtime.close()
 
 
