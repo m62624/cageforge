@@ -481,9 +481,11 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         stdout.contains("named-pipe-ok"),
         "named-pipe probe did not report its result: {stdout}"
     );
+    drop(child);
     assert!(allowed_server.finish().expect("approved named-pipe server"));
     assert!(!denied_server.finish().expect("denied named-pipe server"));
 
+    drop(backend);
     setup.uninstall().expect("cleanup Windows setup");
     cleanup.armed = false;
 }
