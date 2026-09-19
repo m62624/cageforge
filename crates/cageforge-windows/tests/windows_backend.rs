@@ -202,40 +202,50 @@ fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
         let deadline = Instant::now() + FIXTURE_START_DEADLINE;
         let mut first_instance = true;
         let mut connection_count = 0;
+        let mut handle = None;
         loop {
-            let flags = PIPE_ACCESS_DUPLEX
-                | if first_instance {
-                    FILE_FLAG_FIRST_PIPE_INSTANCE
-                } else {
-                    0
+            if handle.is_none() {
+                let flags = PIPE_ACCESS_DUPLEX
+                    | if first_instance {
+                        FILE_FLAG_FIRST_PIPE_INSTANCE
+                    } else {
+                        0
+                    };
+                let raw_handle = unsafe {
+                    CreateNamedPipeW(
+                        wide_name.as_ptr(),
+                        flags,
+                        PIPE_TYPE_BYTE
+                            | PIPE_READMODE_BYTE
+                            | PIPE_NOWAIT
+                            | PIPE_REJECT_REMOTE_CLIENTS,
+                        PIPE_UNLIMITED_INSTANCES,
+                        4096,
+                        4096,
+                        5000,
+                        std::ptr::null(),
+                    )
                 };
-            let handle = unsafe {
-                CreateNamedPipeW(
-                    wide_name.as_ptr(),
-                    flags,
-                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                    PIPE_UNLIMITED_INSTANCES,
-                    4096,
-                    4096,
-                    5000,
-                    std::ptr::null(),
-                )
-            };
-            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-                return Err(format!(
-                    "create named-pipe test server {name:?}: Windows error {}",
-                    unsafe { GetLastError() }
-                ));
+                if raw_handle.is_null() || raw_handle == INVALID_HANDLE_VALUE {
+                    return Err(format!(
+                        "create named-pipe test server {name:?}: Windows error {}",
+                        unsafe { GetLastError() }
+                    ));
+                }
+                first_instance = false;
+                handle = Some(unsafe { OwnedHandle::from_raw_handle(raw_handle as RawHandle) });
             }
-            first_instance = false;
-            let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
-            let result =
-                unsafe { ConnectNamedPipe(handle.as_raw_handle() as _, std::ptr::null_mut()) };
+            let current_handle = handle
+                .as_ref()
+                .ok_or_else(|| "named-pipe server handle was not initialized".to_string())?;
+            let current_handle = current_handle.as_raw_handle();
+            let result = unsafe { ConnectNamedPipe(current_handle as _, std::ptr::null_mut()) };
             if result != 0 {
                 connection_count += 1;
                 if connection_count >= 2 {
                     return Ok(true);
                 }
+                handle = None;
                 continue;
             }
             let code = unsafe { GetLastError() };
@@ -244,6 +254,7 @@ fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
                 if connection_count >= 2 {
                     return Ok(true);
                 }
+                handle = None;
                 continue;
             }
             if code != ERROR_PIPE_LISTENING {
