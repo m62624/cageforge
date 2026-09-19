@@ -154,9 +154,10 @@ checks its target surface; native enforcement requires Windows.
 For a restricted Windows launch, include `minimal` read access (or the broader
 `root` read access) before preparation. The ACL planner requires one of those
 readable platform bases so a system executable and its dependencies can be
-opened. The CLI resolves `minimal` to `Windows\\System32` and supplies the
-system root separately. Windows has a `tmpdir` scope; it does not have the
-POSIX `slash-tmp` scope.
+opened. The CLI resolves `minimal` from the absolute `SystemRoot` environment
+value to `SystemRoot\\System32`; it does not assume that the workspace and
+Windows installation use the same drive. Windows has a `tmpdir` scope; it does
+not have the POSIX `slash-tmp` scope.
 
 The runnable example is
 [`runnable/windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml).

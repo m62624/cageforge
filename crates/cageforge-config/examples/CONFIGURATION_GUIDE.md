@@ -118,7 +118,7 @@ The meaning on each platform is:
 |---|---|---|
 | Linux | `/usr`, `/bin`, `/lib`, and `/lib64` | Bubblewrap starts from a fresh root. Without `minimal` or readable `root`, the executable or its ELF loader is absent. |
 | macOS | `/usr` by default; Seatbelt also has an explicit standard-runtime baseline | A simple system command can use the fixed baseline, but `minimal` keeps the platform-runtime dependency explicit and portable. It does not grant the workspace or arbitrary host paths. |
-| Windows | `Windows\\System32` plus the system root context | Restricted ACL planning requires a readable `root` or `minimal` platform base. `minimal` is the narrow choice for system executables. |
+| Windows | The absolute `SystemRoot` value plus `SystemRoot\\System32` | Restricted ACL planning requires a readable `root` or `minimal` platform base. `minimal` is the narrow choice for system executables and is independent of the workspace drive. |
 
 The CLI and JVM binding populate these paths automatically. A direct Rust
 backend caller must provide the paths for the target OS explicitly. This is a
