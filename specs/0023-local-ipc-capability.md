@@ -68,8 +68,12 @@ does not restore broad user or Everyone access. The authenticated logon SID is
 retained where Windows session initialization requires it, including the
 session `ApiPort`; it is not an approval for any named pipe. The capability
 SID remains the narrow authorization for the explicitly approved pipe, and is
-also authorized on the private desktop and token default DACL so the child can
-complete startup without widening pipe access. Neighboring unauthorized
+also authorized on the private desktop and token default DACL. The DACL for an
+approved pipe additionally grants the selected dedicated runner-account SID,
+which supplies the normal-token side of Windows restricted-token access
+checking; the launch capability SID remains the second, launch-specific
+condition. This lets the child complete startup without widening pipe access.
+Neighboring unauthorized
 endpoints remain denied, descendants inherit the restriction, and cleanup is
 durable and deterministic. The original and intended DACLs are journaled
 before mutation and restored only after exact read-back; unexpected drift

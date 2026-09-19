@@ -143,9 +143,14 @@ impl WindowsBackend {
             self.setup.accounts().group_sid(),
         )
         .map_err(WindowsBackendError::filesystem_enforcement)?;
+        let runner_account_sid = match plan.account {
+            RunnerAccount::Offline => self.setup.accounts().offline_sid(),
+            RunnerAccount::Online => self.setup.accounts().online_sid(),
+        };
         let local_ipc = WindowsLocalIpcEnforcement::apply(
             prepared.network_lowering(self)?,
             &self.capability_state,
+            runner_account_sid,
         )
         .map_err(WindowsBackendError::local_ipc_enforcement)?;
         let command = prepared.command_spec(self)?;

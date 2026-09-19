@@ -5,9 +5,10 @@
 //! Windows has no pathname IPC namespace that can be unshared per process.
 //! The native boundary therefore combines a fresh restricting SID with an
 //! ACL transaction on each explicitly approved pipe. The restricted token is
-//! put into the strict local-IPC mode only for this launch: broad user/logon/
-//! Everyone restricting SIDs are not retained, so an unrelated pipe that
-//! merely grants Everyone cannot satisfy the restricted access check.
+//! put into the strict local-IPC mode only for this launch: broad user and
+//! Everyone restricting SIDs are not retained, while the authenticated logon
+//! SID is retained only for Windows session initialization. An unrelated pipe
+//! that merely grants Everyone cannot satisfy the restricted access check.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -83,6 +84,7 @@ pub(crate) struct WindowsLocalIpcEnforcement {
 
 struct NamedPipeAclLease {
     name: String,
+    runner_account_sid: String,
     handle: OwnedHandle,
     original: AclSnapshot,
     after: AclSnapshot,
@@ -106,6 +108,7 @@ impl WindowsLocalIpcEnforcement {
     pub(crate) fn apply(
         lowering: EffectiveNetworkLowering<'_>,
         state: &CapabilityStateStore,
+        runner_account_sid: &str,
     ) -> Result<Option<Self>, WindowsLocalIpcError> {
         let mut names = Vec::new();
         for layer in lowering.layers() {
@@ -141,25 +144,29 @@ impl WindowsLocalIpcEnforcement {
         let mut state_session = state.begin()?;
         let mut pipes = Vec::with_capacity(names.len());
         for name in names {
-            match NamedPipeAclLease::prepare(name, &capability_sid).and_then(|mut pipe| {
-                state_session.begin_named_pipe_acl(NamedPipeAclObject {
-                    name: pipe.name.clone(),
-                    capability_sid: capability_sid.clone(),
-                    original: pipe.original.persisted(),
-                    current: pipe.after.persisted(),
-                })?;
-                if let Err(error) = pipe.activate(&capability_sid) {
-                    let _ = restore_snapshot_on_handle(&pipe.name, &pipe.handle, &pipe.original);
-                    return Err(error);
-                }
-                if let Err(error) =
-                    state_session.update_named_pipe_acl_current(&pipe.name, pipe.after.persisted())
-                {
-                    let _ = restore_snapshot_on_handle(&pipe.name, &pipe.handle, &pipe.original);
-                    return Err(error.into());
-                }
-                Ok(pipe)
-            }) {
+            match NamedPipeAclLease::prepare(name, &capability_sid, runner_account_sid).and_then(
+                |mut pipe| {
+                    state_session.begin_named_pipe_acl(NamedPipeAclObject {
+                        name: pipe.name.clone(),
+                        capability_sid: capability_sid.clone(),
+                        original: pipe.original.persisted(),
+                        current: pipe.after.persisted(),
+                    })?;
+                    if let Err(error) = pipe.activate(&capability_sid) {
+                        let _ =
+                            restore_snapshot_on_handle(&pipe.name, &pipe.handle, &pipe.original);
+                        return Err(error);
+                    }
+                    if let Err(error) = state_session
+                        .update_named_pipe_acl_current(&pipe.name, pipe.after.persisted())
+                    {
+                        let _ =
+                            restore_snapshot_on_handle(&pipe.name, &pipe.handle, &pipe.original);
+                        return Err(error.into());
+                    }
+                    Ok(pipe)
+                },
+            ) {
                 Ok(pipe) => pipes.push(pipe),
                 Err(error) => {
                     drop(state_session);
@@ -226,19 +233,30 @@ impl WindowsLocalIpcEnforcement {
 }
 
 impl NamedPipeAclLease {
-    fn prepare(name: String, capability_sid: &str) -> Result<Self, WindowsLocalIpcError> {
+    fn prepare(
+        name: String,
+        capability_sid: &str,
+        runner_account_sid: &str,
+    ) -> Result<Self, WindowsLocalIpcError> {
         let handle = open_pipe(&name)?;
         let original = read_snapshot_from_handle(&name, &handle)?;
-        let sid = LocalSid::parse(capability_sid).map_err(|code| {
+        let capability = LocalSid::parse(capability_sid).map_err(|code| {
             WindowsLocalIpcError::DescriptorBuild {
                 name: name.clone(),
                 code,
             }
         })?;
-        let updated_acl = build_granted_acl(&name, &original, sid.0)?;
+        let runner_account = LocalSid::parse(runner_account_sid).map_err(|code| {
+            WindowsLocalIpcError::DescriptorBuild {
+                name: name.clone(),
+                code,
+            }
+        })?;
+        let updated_acl = build_granted_acl(&name, &original, capability.0, runner_account.0)?;
         let updated = snapshot_from_acl(&name, updated_acl.0, original.protected)?;
         Ok(Self {
             name,
+            runner_account_sid: runner_account_sid.to_owned(),
             handle,
             original,
             after: updated,
@@ -247,7 +265,13 @@ impl NamedPipeAclLease {
     }
 
     fn activate(&mut self, capability_sid: &str) -> Result<(), WindowsLocalIpcError> {
-        let sid = LocalSid::parse(capability_sid).map_err(|code| {
+        let capability = LocalSid::parse(capability_sid).map_err(|code| {
+            WindowsLocalIpcError::DescriptorBuild {
+                name: self.name.clone(),
+                code,
+            }
+        })?;
+        let runner_account = LocalSid::parse(&self.runner_account_sid).map_err(|code| {
             WindowsLocalIpcError::DescriptorBuild {
                 name: self.name.clone(),
                 code,
@@ -260,7 +284,12 @@ impl NamedPipeAclLease {
             self.original.protected,
         )?;
         let after = match read_snapshot_from_handle(&self.name, &self.handle) {
-            Ok(snapshot) if snapshot_contains_sid(&snapshot, sid.0) => snapshot,
+            Ok(snapshot)
+                if snapshot_contains_sid(&snapshot, capability.0)
+                    && snapshot_contains_sid(&snapshot, runner_account.0) =>
+            {
+                snapshot
+            }
             Ok(_) => {
                 let _ = write_snapshot_on_handle(
                     &self.name,
@@ -502,22 +531,44 @@ fn read_snapshot_from_handle(
 fn build_granted_acl(
     name: &str,
     original: &AclSnapshot,
-    sid: *mut c_void,
+    capability_sid: *mut c_void,
+    runner_account_sid: *mut c_void,
 ) -> Result<LocalAcl, WindowsLocalIpcError> {
-    let mut entry = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: PIPE_ACCESS_MASK,
-        grfAccessMode: GRANT_ACCESS,
-        grfInheritance: 0,
-        Trustee: TRUSTEE_W {
-            pMultipleTrustee: ptr::null_mut(),
-            MultipleTrusteeOperation: 0,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_UNKNOWN,
-            ptstrName: sid.cast(),
+    let mut entries = [
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: PIPE_ACCESS_MASK,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_UNKNOWN,
+                ptstrName: capability_sid.cast(),
+            },
         },
-    };
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: PIPE_ACCESS_MASK,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_UNKNOWN,
+                ptstrName: runner_account_sid.cast(),
+            },
+        },
+    ];
     let mut updated = ptr::null_mut();
-    let status = unsafe { SetEntriesInAclW(1, &raw mut entry, original.as_acl(), &mut updated) };
+    let status = unsafe {
+        SetEntriesInAclW(
+            entries.len() as u32,
+            entries.as_mut_ptr(),
+            original.as_acl(),
+            &mut updated,
+        )
+    };
     if status != ERROR_SUCCESS || updated.is_null() {
         return Err(WindowsLocalIpcError::DescriptorBuild {
             name: name.to_owned(),
