@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#[cfg(target_os = "windows")]
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, UdpSocket};
@@ -459,9 +461,9 @@ fn named_pipe_probe() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
-fn open_named_pipe(name: &str) -> Result<OwnedHandle, u32> {
+fn open_named_pipe(name: &OsStr) -> Result<OwnedHandle, u32> {
     let wide = name
-        .encode_utf16()
+        .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
     let handle = unsafe {
