@@ -1579,9 +1579,15 @@ fn runnable_windows_profile_launches_through_the_native_backend_api() {
         .expect("Windows runnable stdout")
         .read_to_string(&mut stdout)
         .expect("read Windows runnable stdout");
+    let mut stderr = String::new();
+    child
+        .stderr()
+        .expect("Windows runnable stderr")
+        .read_to_string(&mut stderr)
+        .expect("read Windows runnable stderr");
     assert!(
         status.success(),
-        "Windows runnable profile failed: {status:?}"
+        "Windows runnable profile failed: {status:?}; stdout={stdout:?}; stderr={stderr:?}"
     );
     assert!(stdout.contains("cageforge-windows-smoke"));
 }
