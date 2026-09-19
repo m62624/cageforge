@@ -14,7 +14,7 @@ native enforcement, and a correct Cageforge implementation.
 
 Use this crate as a library when sandboxed execution is part of your Rust
 application. If you need a ready-to-use terminal wrapper for launching an
-explicit program, install `cageforge-cli`; it uses this facade and the same
+explicit program, install `cageforge-cli`; it uses this crate and the same
 native backend instead of implementing a separate sandbox.
 
 ## Add the crate
@@ -24,7 +24,7 @@ native backend instead of implementing a separate sandbox.
 cageforge = { version = "x.y.z", features = ["config"] }
 ```
 
-The facade selects `cageforge-linux`, `cageforge-windows`, or
+The `cageforge` crate selects `cageforge-linux`, `cageforge-windows`, or
 `cageforge-macos` automatically from the compilation target. The portable
 model and native backend are therefore available without an OS feature. Add
 `config` when the application wants to load TOML profiles. The standalone network gateway is
@@ -159,7 +159,7 @@ the concrete native error in its source chain.
 
 ## Rust preflight integration
 
-The facade exposes the same typed permission flow used by the CLI, Python, and
+The crate exposes the same typed permission flow used by the CLI, Python, and
 Java adapters. A `PreflightPlan` describes the exact launch identity and
 capabilities; only a trusted `GrantAuthority` can produce the opaque grant
 that authorizes it. The grant is checked before native launch and is combined
@@ -264,7 +264,7 @@ The operating system carries the native restrictions through the process tree.
 The descendants can use their normal command-line options and APIs, but they
 cannot use them to grant themselves permissions outside the effective policy.
 When the root command exits, the child handle reports its typed status and the
-facade closes the instance's native resources. A timeout or explicit
+crate closes the instance's native resources. A timeout or explicit
 termination applies to the complete descendant tree.
 
 To run several independent operations, call `spawn` separately for each
@@ -273,7 +273,7 @@ native enforcement state. If one root command deliberately starts a shell and
 runs several commands inside that shell, those commands share the same
 instance and policy.
 
-For example, an application can start Cargo through the facade in the same way
+For example, an application can start Cargo through the crate in the same way
 it starts any other program:
 
 ```text
@@ -312,7 +312,7 @@ types.
 waiting, and termination. Native child types and errors remain available when
 platform-specific behavior or diagnostics are needed.
 
-The public facade is synchronous. Internal network gateways may use helper
+The public API is synchronous. Internal network gateways may use helper
 threads or asynchronous tasks. An async application only needs to run the
 blocking process operations in its blocking-task facility.
 

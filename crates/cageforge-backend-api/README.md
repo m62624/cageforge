@@ -22,7 +22,7 @@ requirement.
 `Sandbox` and `SandboxChild` define shared preparation, launch, streams, and
 child lifecycle operations. Each native crate implements these traits
 directly; applications can use them through this crate or through the
-`cageforge` facade. The concrete child and error types remain available.
+`cageforge` crate. The concrete child and error types remain available.
 
 `DynSandbox` supports a runtime-selected implementation behind
 `Box<dyn DynSandbox>` or a shared `Arc<dyn DynSandbox>`. Its `launch` method
@@ -162,7 +162,7 @@ The native backend owns:
 - platform-specific core environment selection; and
 - process launch, stdio, timeout, cancellation, and lifecycle handling.
 
-`cageforge` provides the ergonomic facade and target-specific backend
+`cageforge` provides the ergonomic library API and target-specific backend
 selection that connect this contract to a concrete execution flow.
 
 ## Workspace role

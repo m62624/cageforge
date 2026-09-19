@@ -2,7 +2,7 @@
 
 # Cageforge Python binding
 
-`cageforge` provides a typed Python facade over the Cageforge sandbox on Linux,
+`cageforge` provides a typed Python API for the Cageforge sandbox on Linux,
 macOS, and Windows. It loads the selected profile and uses the native backend
 provided by the installed wheel.
 

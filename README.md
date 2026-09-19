@@ -2,7 +2,7 @@
 
 > **Independent project:** Cageforge is not affiliated with, sponsored by, or endorsed by OpenAI.
 
-**[What Cageforge is](#what-cageforge-is) · [Use it as a library](#start-with-the-facade) ·
+**[What Cageforge is](#what-cageforge-is) · [Use it as a library](#start-with-the-cageforge-crate) ·
 [Install the CLI](#install-the-command-line-adapter) · [Workspace packages](#workspace-packages) ·
 [Isolation model](#isolation-model-and-references) ·
 [License](#license)**
@@ -24,7 +24,7 @@ The sandbox isolates processes using the host operating system's native
 enforcement mechanisms. Its guarantees depend on a correct host OS, correct
 native enforcement, and a correct Cageforge implementation.
 
-## Start with the facade
+## Start with the cageforge crate
 
 Most applications should begin with [`cageforge`](https://crates.io/crates/cageforge).
 ```toml
@@ -32,7 +32,7 @@ Most applications should begin with [`cageforge`](https://crates.io/crates/cagef
 cageforge = "x.y.z"
 ```
 
-The facade selects `cageforge-linux`, `cageforge-windows`, or
+The `cageforge` crate selects `cageforge-linux`, `cageforge-windows`, or
 `cageforge-macos` automatically from the compilation target. Add `config` only
 when profiles should come from TOML.
 
@@ -58,7 +58,7 @@ let status = child.wait()?;
 builders or a resolved TOML profile. Use `native_sandbox_with(config)` for
 native configuration and `Arc<dyn DynSandbox>` to share one reusable backend
 between threads. Windows provisioning remains an explicit preceding step.
-The [facade README](crates/cageforge/README.md) includes examples and the
+The [`cageforge` README](crates/cageforge/README.md) includes examples and the
 concrete `prepare`/`spawn` API.
 
 The execution flow is:
@@ -84,12 +84,12 @@ process boundary, timeout, lifecycle, and network state. If Cargo starts
 `rustc`, `build.rs`, or a linker, those descendants remain inside the same
 boundary as Cargo.
 
-The facade is synchronous. An application with an async runtime can execute
+The `cageforge` crate is synchronous. An application with an async runtime can execute
 blocking preparation, spawning, and waiting in its blocking-task facility.
 
 ## Install the command-line adapter
 
-Applications can embed the `cageforge` facade directly, or install
+Applications can embed the `cageforge` crate directly, or install
 `cageforge-cli` when a standalone wrapper is more convenient. The CLI accepts a
 TOML profile that names the files, environment, network destinations, and
 timeout a program needs, then runs one explicit argv command inside the
@@ -191,14 +191,14 @@ resource, binding, or CLI packages and one internal upstream-review tool.
 
 | Package | Role | Native target or feature |
 | --- | --- | --- |
-| [`cageforge`](crates/cageforge/README.md) | Unified application-facing facade | Native backend selected from `target_os` |
-| [`cageforge-cli`](crates/cageforge-cli/README.md) | Explicit command-line adapter over the facade | Native backend selected from `target_os` |
+| [`cageforge`](crates/cageforge/README.md) | Unified application-facing crate | Native backend selected from `target_os` |
+| [`cageforge-cli`](crates/cageforge-cli/README.md) | Explicit command-line adapter over the `cageforge` crate | Native backend selected from `target_os` |
 | [`cageforge-permissions`](crates/cageforge-permissions/README.md) | Typed preflight requests, grants, and host-owned permission store | Portable |
 | [`cageforge-java`](crates/bindings/cageforge-java/README.md) | Internal JNI implementation for the JVM binding | Linux, macOS, or Windows |
 | [`cageforge-python`](crates/bindings/cageforge-python/README.md) | PyO3 implementation for the Python binding published through maturin | Linux, macOS, or Windows |
 | [`cageforge-backend-api`](crates/cageforge-backend-api/README.md) | Capability preflight and backend-bound handoff | Portable |
 | [`cageforge-command`](crates/cageforge-command/README.md) | Validated command, environment, stdio, and timeout values | Portable |
-| [`cageforge-config`](crates/cageforge-config/README.md) | TOML profiles and inheritance resolution | Portable, optional facade feature `config` |
+| [`cageforge-config`](crates/cageforge-config/README.md) | TOML profiles and inheritance resolution | Portable, optional `cageforge` feature `config` |
 | [`cageforge-network-proxy`](crates/cageforge-network-proxy/README.md) | Policy-enforcing HTTP/SOCKS gateway | Portable; runtime feature is optional |
 | [`cageforge-path`](crates/cageforge-path/README.md) | Native lexical path identity and containment | Portable |
 | [`cageforge-policy`](crates/cageforge-policy/README.md) | Filesystem and network policy model | Portable |
@@ -228,7 +228,7 @@ symlink, mount, reparse-point, and TOCTOU-safe enforcement by the selected
 backend. Unsupported native requirements become typed errors before launch.
 
 Commands launched outside an application’s Cageforge integration are not
-automatically sandboxed. A CLI can wrap the facade, for example:
+automatically sandboxed. A CLI can wrap the `cageforge` crate, for example:
 
 ```text
 my-tool cargo test --workspace

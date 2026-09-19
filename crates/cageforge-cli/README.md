@@ -225,7 +225,7 @@ steps in one instance, explicitly launch a shell and pass its arguments after
 
 The CLI uses inherited standard streams so interactive programs and build
 output remain visible. Applications that need captured streams should use the
-typed `SandboxChild` API from the `cageforge` facade directly.
+typed `SandboxChild` API from the `cageforge` crate directly.
 
 ## Profile example
 
@@ -264,9 +264,9 @@ rejected.
 The execution sequence is `Config::from_file` → profile resolution → policy
 composition → `native_sandbox_with` → `DynSandbox::launch` → child lifecycle.
 The shared launch operation performs native preparation and spawn. The CLI
-passes its configured gateway and platform resources through the facade.
+passes its configured gateway and platform resources through the `cageforge` crate.
 
 For native behavior and host requirements, see the [Linux backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-linux/README.md),
 [Windows backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-windows/README.md),
 and [macOS backend README](https://github.com/m62624/cageforge/blob/main/crates/cageforge-macos/README.md).
-The underlying facade is published as the [`cageforge` crate](https://crates.io/crates/cageforge).
+The library is published as the [`cageforge` crate](https://crates.io/crates/cageforge).

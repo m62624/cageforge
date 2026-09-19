@@ -18,7 +18,7 @@ effective policy into Bubblewrap mounts, namespaces, seccomp rules,
 environment state, and process-lifecycle controls.
 
 For most applications, start with [`cageforge`](https://crates.io/crates/cageforge),
-the unified library API for Linux, macOS, and Windows. The facade selects this
+the unified library API for Linux, macOS, and Windows. The `cageforge` crate selects this
 backend automatically when compiled for Linux while retaining the native
 configuration options. You can also use `cageforge-linux` directly, as shown
 below.
@@ -40,7 +40,7 @@ descendant process tree. The boundary:
 
 `LinuxBackend` and the policy can be reused for several commands, while every
 spawn receives its own process boundary, lifecycle, and native enforcement
-state. The `cageforge` facade selects this backend on Linux;
+state. The `cageforge` crate selects this backend on Linux;
 applications may also use `LinuxBackend` directly.
 
 ## Workspace role
@@ -54,7 +54,7 @@ applications may also use `LinuxBackend` directly.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces restricted HTTP, CONNECT, and SOCKS5 destinations through exact resolved addresses. |
 | `cageforge-linux` | Converts the prepared values above into the Linux-native process boundary. |
-| `cageforge` | Provides the final target-selecting facade over native backends. |
+| `cageforge` | Provides the target-selecting library API over native backends. |
 
 The data flow is:
 

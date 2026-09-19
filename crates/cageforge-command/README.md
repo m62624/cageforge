@@ -189,7 +189,7 @@ For a TOML-driven application, resolve the command through
 same adapter. This keeps the process boundary independent from the choice of
 configuration format.
 
-The `cageforge` facade re-exports this model, so an application can use the
+The `cageforge` crate re-exports this model, so an application can use the
 same validated command values with its target-native sandbox backend without
 depending on this crate name directly.
 

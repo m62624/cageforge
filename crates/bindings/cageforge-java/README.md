@@ -176,7 +176,7 @@ try (InputStream stdout = process.getInputStream()) {
 }
 ```
 
-This `Process` is a Java facade over the same Rust-owned native sandbox child;
+This `Process` is a Java API over the same Rust-owned native sandbox child;
 it never starts a second process. `waitFor(timeout, unit)` delegates to the
 native wait future without Java polling, `isAlive`, `exitValue`, and `pid` read
 the native handle, and `destroy`/`destroyForcibly` terminate the complete

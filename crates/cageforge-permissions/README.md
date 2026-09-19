@@ -65,7 +65,7 @@ The host performs this sequence before starting a process:
 2. load a matching grant, or ask the trusted approver;
 3. validate expiry, platform, architecture, digests, and capability scope;
 4. compose the approved scope with the immutable policy ceiling; and
-5. pass the resulting authorization to the native Cageforge facade.
+5. pass the resulting authorization to the native Cageforge crate.
 
 There is no permission escalation inside a running process. A request that
 cannot be approved before launch is rejected with a typed error.
@@ -174,12 +174,12 @@ non-default location.
 
 ## Integration
 
-The `cageforge` facade builds requests from resolved profiles and combines an
+The `cageforge` crate builds requests from resolved profiles and combines an
 approved grant with the effective policy before invoking the selected native
 backend. The Python and Java bindings expose the same request identity,
 approval scope, expiry, and structured permission-error semantics. The CLI
 uses the same flow when a profile selects preflight approval.
 
-See the [cageforge facade](https://crates.io/crates/cageforge) and the
+See the [`cageforge` crate](https://crates.io/crates/cageforge) and the
 [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md)
 for the complete profile-to-launch flow.

@@ -19,7 +19,7 @@ process tree with account, token, ACL, desktop, Job Object, handle-inheritance,
 firewall/WFP, and per-process network-route enforcement.
 
 For most applications, start with [`cageforge`](https://crates.io/crates/cageforge),
-the unified library API for Linux, macOS, and Windows. The facade selects this
+the unified library API for Linux, macOS, and Windows. The `cageforge` crate selects this
 backend automatically when compiled for Windows while retaining the native
 configuration options. You can also use `cageforge-windows` directly, as shown
 below.
@@ -56,7 +56,7 @@ capability authority.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces exact resolved-target HTTP and SOCKS5 gateway policy. |
 | `cageforge-windows` | Applies the Windows-native setup, ACL, token, process, Job Object, desktop, firewall/WFP, and route boundary. |
-| `cageforge` | Provides the final target-selecting facade over native backends. |
+| `cageforge` | Provides the target-selecting library API over native backends. |
 
 The integration sequence is:
 

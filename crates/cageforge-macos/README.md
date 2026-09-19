@@ -16,7 +16,7 @@ runtime paths needed to resolve that policy; the backend returns a
 backend-bound prepared request or a typed error before the command starts.
 
 For most applications, start with [`cageforge`](https://crates.io/crates/cageforge),
-the unified library API for Linux, macOS, and Windows. The facade selects this
+the unified library API for Linux, macOS, and Windows. The `cageforge` crate selects this
 backend automatically when compiled for macOS while retaining the native
 configuration options. You can also use `cageforge-macos` directly, as shown
 below.
@@ -52,7 +52,7 @@ concurrently with different policies.
 | `cageforge-backend-api` | Binds preflight output to this backend instance and verifies every required capability. |
 | `cageforge-network-proxy` | Enforces restricted HTTP, CONNECT, and SOCKS5 destinations through exact resolved addresses. |
 | `cageforge-macos` | Converts the prepared values above into the macOS-native Seatbelt process boundary. |
-| `cageforge` | Provides the final target-selecting facade over native backends. |
+| `cageforge` | Provides the target-selecting library API over native backends. |
 
 The integration sequence is:
 
