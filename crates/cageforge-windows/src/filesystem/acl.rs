@@ -277,12 +277,13 @@ pub(crate) enum FilesystemAclError {
     #[error("complete DACL bytes differ after read-back for {path:?}")]
     DescriptorSnapshotMismatch { path: PathBuf },
     #[error(
-        "complete DACL bytes differ after read-back for {path:?}; expected={expected}, actual={actual}, {actual_entries}"
+        "complete DACL bytes differ after read-back for {path:?}; expected={expected}, actual={actual}, expected_entries={expected_entries}, actual_entries={actual_entries}"
     )]
     DescriptorSnapshotMismatchDetails {
         path: PathBuf,
         expected: String,
         actual: String,
+        expected_entries: String,
         actual_entries: String,
     },
     #[error(
@@ -1170,6 +1171,7 @@ impl PreparedAclOperation {
                 path: self.path.final_path().to_path_buf(),
                 expected: dacl_fingerprint(expected),
                 actual: dacl_fingerprint(&actual),
+                expected_entries: dacl_entry_summary(&self.path, expected)?,
                 actual_entries: dacl_entry_summary(&self.path, &actual)?,
             });
         }
