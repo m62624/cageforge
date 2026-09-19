@@ -458,6 +458,7 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare named-pipe policy");
+    assert_named_pipe_descriptor_reopen(&allowed_name);
     let mut child = backend.spawn(prepared).expect("spawn named-pipe probe");
     let status = child.wait().expect("wait named-pipe probe");
     let mut stdout = String::new();
