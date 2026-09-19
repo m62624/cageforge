@@ -10,11 +10,13 @@ use std::time::Duration;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::io::{FromRawHandle, OwnedHandle};
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
-    ERROR_PRIVILEGE_NOT_HELD, GetLastError, WAIT_OBJECT_0,
+    ERROR_PRIVILEGE_NOT_HELD, GetLastError, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -37,6 +39,11 @@ use windows_sys::Win32::Networking::WinInet::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_QUERY};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING,
+};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 #[cfg(target_os = "windows")]
@@ -433,26 +440,44 @@ fn signal_unrelated_named_object() -> Result<(), String> {
 fn named_pipe_probe() -> Result<(), String> {
     let allowed = environment(NAMED_PIPE_ALLOWED)?;
     let denied = environment(NAMED_PIPE_DENIED)?;
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&allowed)
-        .map_err(|error| format!("approved named pipe {allowed:?} was denied: {error}"))?;
-    match OpenOptions::new().read(true).write(true).open(&denied) {
+    let _allowed_handle = open_named_pipe(&allowed).map_err(|code| {
+        format!("approved named pipe {allowed:?} was denied: Windows error {code}")
+    })?;
+    match open_named_pipe(&denied) {
         Ok(_) => Err(format!("unapproved named pipe {denied:?} was accessible")),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
-            ) =>
-        {
+        Err(code) if code == ERROR_ACCESS_DENIED || code == ERROR_FILE_NOT_FOUND => {
             std::io::stdout()
                 .write_all(b"named-pipe-ok")
                 .map_err(|error| format!("write named-pipe probe result: {error}"))
         }
-        Err(error) => Err(format!(
-            "unapproved named pipe {denied:?} returned unexpected error: {error}"
+        Err(code) => Err(format!(
+            "unapproved named pipe {denied:?} returned unexpected Windows error {code}"
         )),
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn open_named_pipe(name: &str) -> Result<OwnedHandle, u32> {
+    let wide = name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        Err(unsafe { GetLastError() })
+    } else {
+        Ok(unsafe { OwnedHandle::from_raw_handle(handle as _) })
     }
 }
 
