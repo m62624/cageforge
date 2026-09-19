@@ -292,6 +292,7 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
         let mut connection_count = 0;
         let mut ready_sender = Some(ready_sender);
         let mut handles = Vec::with_capacity(NAMED_PIPE_FIXTURE_INSTANCE_RESERVE);
+        let mut connected_handles = Vec::new();
         for index in 0..NAMED_PIPE_FIXTURE_INSTANCE_RESERVE {
             match create_instance(index == 0) {
                 Ok(instance) => handles.push(instance),
@@ -331,7 +332,7 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
                 };
                 if connected {
                     connection_count += 1;
-                    handles.swap_remove(index);
+                    connected_handles.push(handles.swap_remove(index));
                 } else {
                     index += 1;
                 }
