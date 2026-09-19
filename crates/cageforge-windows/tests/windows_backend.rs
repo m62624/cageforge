@@ -79,6 +79,7 @@ const PARENT_DEATH_CHILD: &str = "CAGEFORGE_WINDOWS_PARENT_DEATH_CHILD";
 const POWERSHELL_COMMAND: &str = "powershell";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
+const NAMED_PIPE_FIXTURE_INSTANCE_RESERVE: usize = 16;
 // Keep the host-side target alive longer than the backend's 15-second probe
 // timeout; the backend must own timeout classification for a stalled launch.
 const FIXTURE_IO_TIMEOUT: Duration = Duration::from_secs(30);
@@ -288,57 +289,52 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
             }
             Ok(unsafe { OwnedHandle::from_raw_handle(raw_handle as RawHandle) })
         };
-        let mut first_instance = true;
         let mut connection_count = 0;
-        let mut handle = None;
         let mut ready_sender = Some(ready_sender);
+        let mut handles = Vec::with_capacity(NAMED_PIPE_FIXTURE_INSTANCE_RESERVE);
+        for index in 0..NAMED_PIPE_FIXTURE_INSTANCE_RESERVE {
+            match create_instance(index == 0) {
+                Ok(instance) => handles.push(instance),
+                Err(error) => {
+                    let error = format!(
+                        "create named-pipe test server instance {index} {thread_name:?}: {error}"
+                    );
+                    if let Some(sender) = ready_sender.take() {
+                        let _ = sender.send(Err(error.clone()));
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        if let Some(sender) = ready_sender.take() {
+            let _ = sender.send(Ok(()));
+        }
         loop {
             if stop_receiver.try_recv().is_ok() {
                 return Ok(connection_count > 0);
             }
-            if handle.is_none() {
-                match create_instance(first_instance) {
-                    Ok(instance) => handle = Some(instance),
-                    Err(error) => {
-                        if let Some(sender) = ready_sender.take() {
-                            let _ = sender.send(Err(error.clone()));
-                        }
-                        return Err(error);
-                    }
-                }
-                first_instance = false;
-                if let Some(sender) = ready_sender.take() {
-                    let _ = sender.send(Ok(()));
-                }
-            }
-            let current_handle = handle
-                .as_ref()
-                .ok_or_else(|| "named-pipe server handle was not initialized".to_string())?;
-            let current_handle = current_handle.as_raw_handle();
-            let result = unsafe { ConnectNamedPipe(current_handle as _, std::ptr::null_mut()) };
-            let connected = if result != 0 {
-                true
-            } else {
-                let code = unsafe { GetLastError() };
-                if code == ERROR_PIPE_CONNECTED {
+            let mut index = 0;
+            while index < handles.len() {
+                let current_handle = handles[index].as_raw_handle();
+                let result = unsafe { ConnectNamedPipe(current_handle as _, std::ptr::null_mut()) };
+                let connected = if result != 0 {
                     true
-                } else if code == ERROR_PIPE_LISTENING {
-                    false
                 } else {
-                    return Err(format!("ConnectNamedPipe failed: Windows error {code}"));
+                    let code = unsafe { GetLastError() };
+                    if code == ERROR_PIPE_CONNECTED {
+                        true
+                    } else if code == ERROR_PIPE_LISTENING {
+                        false
+                    } else {
+                        return Err(format!("ConnectNamedPipe failed: Windows error {code}"));
+                    }
+                };
+                if connected {
+                    connection_count += 1;
+                    handles.swap_remove(index);
+                } else {
+                    index += 1;
                 }
-            };
-            if connected {
-                connection_count += 1;
-                // Keep the named object continuously available while the
-                // parent performs the next ACL read/write. Creating the next
-                // instance before dropping the connected one avoids a brief
-                // ERROR_FILE_NOT_FOUND window between ACL operations.
-                let next = create_instance(false).map_err(|error| {
-                    format!("replace connected named-pipe instance {thread_name:?}: {error}")
-                })?;
-                let previous = handle.replace(next);
-                drop(previous);
             }
             thread::sleep(Duration::from_millis(10));
         }
