@@ -242,18 +242,12 @@ fn start_test_named_pipe(name: &str) -> TestNamedPipeServer {
             let result = unsafe { ConnectNamedPipe(current_handle as _, std::ptr::null_mut()) };
             if result != 0 {
                 connection_count += 1;
-                if connection_count >= 2 {
-                    return Ok(true);
-                }
                 handle = None;
                 continue;
             }
             let code = unsafe { GetLastError() };
             if code == ERROR_PIPE_CONNECTED {
                 connection_count += 1;
-                if connection_count >= 2 {
-                    return Ok(true);
-                }
                 handle = None;
                 continue;
             }
