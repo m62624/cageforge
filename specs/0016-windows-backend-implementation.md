@@ -852,6 +852,14 @@ interrupted parent. Unexpected descriptor drift is a typed fail-closed error.
 POSIX Unix-socket endpoints remain unsupported on Windows and are never
 converted to TCP or an unrestricted named pipe.
 
+This section is the Windows-native realization of the portable endpoint and
+fail-closed contract in [Specification 0023](0023-local-ipc-capability.md).
+`NetworkWindowsNamedPipeRules` is advertised only after the backend has
+validated the complete setup, ACL, token, runner, and cleanup machinery. The
+portable `LocalIpcEndpoint::WindowsNamedPipe` value is lowered to the exact
+named-pipe object; it is never converted into a Unix path or a TCP loopback
+permission.
+
 ## 8. Environment and standard streams
 
 The backend selects a conservative Windows core environment containing only
@@ -928,6 +936,12 @@ Windows-native black-box tests must cover at least:
 - private-desktop GUI and shell-activation escapes fail;
 - unrelated handles and named objects do not cross the boundary;
 - timeout, kill, drop, and parent death terminate the complete process tree;
+- `windows_named_pipe_allowlist_is_enforced_by_the_native_boundary` creates
+  separate approved and neighboring pipe servers, launches a real restricted
+  child, proves the approved connection succeeds and the neighboring one is
+  denied, and verifies exact setup cleanup;
+- a requested Windows named-pipe capability cannot be replaced by a POSIX
+  socket or unrestricted loopback fallback; and
 - simultaneous backends keep identities, ACL state, routes, and jobs separate;
   and
 - typed setup failures identify UAC cancellation, ineffective firewall policy,
@@ -947,7 +961,8 @@ combination exposed by the platform-independent crates on each target.
 
 The separate Windows sandbox lane performs formatting and Clippy, all
 `cageforge-windows` feature combinations, native tests, setup-helper tests,
-command-runner tests, and a machine-readable test report. It runs on an
+command-runner tests, the runnable Windows TOML profile through the shared
+`ci/run-runnable-example.sh` script, and a machine-readable test report. It runs on an
 explicit Windows Server 2025 runner. `main` always runs this lane. Pull requests
 run it for shared dependencies, Windows crate changes, workflow changes, a
 manual `sandbox-windows` label, or manual workflow dispatch.

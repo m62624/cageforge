@@ -4,6 +4,14 @@
 
 Active implementation contract.
 
+This is the cross-platform capability contract, not a Windows-only
+specification. The native details are recorded in
+[Specification 0014](0014-linux-backend-implementation.md),
+[Specification 0017](0017-macos-backend-implementation.md), and
+[Specification 0016](0016-windows-backend-implementation.md). Those backend
+specifications must implement this model without changing its public endpoint
+or fail-closed semantics.
+
 ## Purpose
 
 `LocalIpcEndpoint` is Cageforge's platform-neutral description of one local
@@ -80,5 +88,17 @@ generated/updated with the corresponding binding changes.
 The implementation requires policy/config parsing tests, platform-overlay
 tests, Linux and macOS native allow/deny tests, Windows named-pipe allow/deny,
 descendant and ACL-recovery tests, typed unsupported Unix-socket tests, and
-binding success/error parity tests. Native tests run only in their matching CI
-environments; missing native prerequisites are failures, not skips.
+binding success/error parity tests. The required native process scenario is
+host endpoint creation, an approved child connection, denial of a neighboring
+endpoint, restriction of a spawned descendant, and cleanup with no surviving
+helper or temporary enforcement state. Windows additionally verifies that an
+approved named pipe succeeds, another named pipe and loopback remain denied by
+the effective policy, and ACL drift or setup failure returns a typed error
+before spawn. Native tests run only in their matching CI environments; missing
+native prerequisites are failures, not skips.
+
+The three checked-in runnable configuration profiles are executed through the
+shared CLI smoke runner after the platform backend checks. All other TOML
+examples are parse-and-resolve fixtures because some intentionally describe a
+policy without a command, a placeholder executable, an external service, or
+host paths that must not be created by CI.

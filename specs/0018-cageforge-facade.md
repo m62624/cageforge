@@ -89,6 +89,12 @@ The facade also re-exports `SandboxChild` for the common lifecycle operations:
 process identifier, standard streams, non-blocking status, blocking wait, and
 termination. All operations return the native backend's typed error.
 
+Local IPC uses the portable `LocalIpcEndpoint` model from Specification 0023.
+The facade accepts Unix-socket endpoints on Linux and macOS and Windows named
+pipe endpoints on Windows through the target-native backend. An endpoint that
+the active backend cannot enforce is rejected with a typed capability error
+before spawn; the facade never converts it to a broader network permission.
+
 Preparation remains a separate, synchronous, side-effect-free step. It takes
 `BackendRequest` and the runtime `PathResolutionContext`, returns a
 backend-bound prepared request, and must not bypass the effective policy or
@@ -131,6 +137,9 @@ shell share one instance.
 The README must describe the facade in plain technical language and link to
 the Linux, Windows, and macOS crate documentation. It must not reproduce the
 platform security inventories or discuss internal locks and synchronization.
+The configuration guide is the source for the TOML platform-overlay examples,
+including local IPC endpoints and the first-launch requirements of each
+native backend.
 
 ## CI contract
 
@@ -145,7 +154,10 @@ an OS feature:
 Portable checks also run the facade with `config` and its supported portable
 feature combinations, including `network-runtime`. The Linux Bubblewrap source
 build remains in its existing dedicated job and is not duplicated by the
-facade check.
+facade check. After each native backend check, the corresponding job executes
+the checked-in runnable TOML profile through `ci/run-runnable-example.sh`; the
+other TOML examples remain parse-and-resolve fixtures as defined by
+Specification 0023.
 
 ## Security and compatibility invariants
 

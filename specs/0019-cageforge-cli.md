@@ -23,11 +23,14 @@ The user supplies a TOML profile and an explicit command:
 cageforge-cli run --config cageforge.toml --profile isolated -- untrusted-program --safe-mode
 ```
 
-The profile enumerates the filesystem scopes, network rules, environment,
-workspace roots, gateway bounds, and timeout. The command after `--` is argv,
-not shell text; shell syntax is not interpreted. If a profile contains a
-command, it can be used when the command after `--` is omitted. A run without
-an explicit profile command is rejected rather than inferred from the host.
+The profile enumerates the filesystem scopes, network rules, local IPC
+endpoints, environment, workspace roots, gateway bounds, and timeout. Local
+IPC follows the platform-overlay contract in Specification 0023: Linux and
+macOS profiles name absolute Unix sockets, while Windows profiles name
+`\\.\pipe\...` named pipes. The command after `--` is argv, not shell
+text; shell syntax is not interpreted. If a profile contains a command, it can
+be used when the command after `--` is omitted. A run without an explicit
+profile command is rejected rather than inferred from the host.
 
 One `run` invocation creates one sandbox instance around the top-level
 program and all descendants. A caller can invoke the CLI repeatedly or an
@@ -53,6 +56,9 @@ build does not compile Linux or macOS enforcement, and a Linux build does not
 compile Windows or macOS enforcement. Linux's bundled
 Bubblewrap option is explicit and keeps the same fixed verified resource
 contract as `cageforge-linux`.
+The CLI reports a typed unsupported-capability error when a profile requests an
+endpoint kind that the target backend cannot enforce; it never widens the
+network policy or launches without the requested boundary.
 
 ## Execution sequence
 
@@ -178,8 +184,12 @@ form; it does not replace the OIDC exchange or a real publication.
 
 Black-box CLI tests must cover profile loading, explicit command and argv
 handling, missing profile/command failures, unsupported feature behavior,
-child exit-code propagation, and the no-shell-parsing boundary. Native CI
-must exercise the CLI with the matching backend feature on each supported OS.
+child exit-code propagation, local IPC endpoint parsing, unsupported endpoint
+failure, and the no-shell-parsing boundary. Native CI must exercise the CLI
+with the matching backend feature on each supported OS and run the corresponding
+checked-in runnable profile through the shared runner. The profile suite must
+execute a real command and verify its marker; parsing every other example is a
+separate configuration-crate contract.
 Tests must not weaken the backend API or add test-only public escape hatches.
 
 ## Relationship to upstream

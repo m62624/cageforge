@@ -84,6 +84,13 @@ wait, status, termination, and stream operations; blocking methods release
 the GIL. Async waiting delegates to a worker without polling from the Python
 event loop, and cancellation terminates the native boundary.
 
+Local IPC follows the shared contract in Specification 0023. Python receives
+validated endpoint objects and the same platform-overlay behavior as Rust:
+absolute Unix-socket paths on Linux/macOS and named-pipe names on Windows.
+Unsupported endpoint kinds and native setup failures use stable exception
+categories before child creation; Python does not encode transports as an
+unvalidated string or widen a denied network policy.
+
 ## 6. Validation contract
 
 Every target row runs Rust formatting, Clippy, stub generation, strict mypy,
@@ -92,6 +99,10 @@ with the resources staged for that exact runner. Linux additionally passes
 the tested wheel through the disposable QEMU/KVM consumer suite. Release
 validation audits wheel members, target isolation, ABI tags, license files,
 and the sdist member set before trusted PyPI publication.
+The native smoke rows execute the matching checked-in runnable TOML profile;
+the configuration crate separately parses and resolves every other example
+without treating illustrative or host-specific profiles as universal launch
+commands.
 
 The generated `_cageforge.pyi` file is a checked-in release artifact. Any
 public binding change must regenerate it and fail CI if the committed stub is
@@ -100,6 +111,7 @@ out of date.
 ## 7. Relationship to other specifications
 
 This specification depends on the portable command, configuration, facade,
-backend, and native safety contracts in Specifications 0008-0019. It defines
-the Python ABI and distribution boundary only; native security behavior stays
-in the selected Linux, macOS, or Windows backend specification.
+backend, native safety, and local IPC contracts in Specifications 0008-0019
+and 0023. It defines the Python ABI and distribution boundary only; native
+security behavior stays in the selected Linux, macOS, or Windows backend
+specification.
