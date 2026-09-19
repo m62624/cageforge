@@ -441,23 +441,11 @@ fn signal_unrelated_named_object() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn named_pipe_probe() -> Result<(), String> {
-    std::io::stdout()
-        .write_all(b"named-pipe-start\n")
-        .and_then(|()| std::io::stdout().flush())
-        .map_err(|error| format!("write named-pipe probe start: {error}"))?;
     let allowed = environment(NAMED_PIPE_ALLOWED)?;
     let denied = environment(NAMED_PIPE_DENIED)?;
-    std::io::stdout()
-        .write_all(b"named-pipe-environment\n")
-        .and_then(|()| std::io::stdout().flush())
-        .map_err(|error| format!("write named-pipe probe environment: {error}"))?;
     let _allowed_handle = open_named_pipe(&allowed).map_err(|code| {
         format!("approved named pipe {allowed:?} was denied: Windows error {code}")
     })?;
-    std::io::stdout()
-        .write_all(b"named-pipe-allowed\n")
-        .and_then(|()| std::io::stdout().flush())
-        .map_err(|error| format!("write named-pipe probe allowed: {error}"))?;
     match open_named_pipe(&denied) {
         Ok(_) => Err(format!("unapproved named pipe {denied:?} was accessible")),
         Err(code) if code == ERROR_ACCESS_DENIED || code == ERROR_FILE_NOT_FOUND => {

@@ -400,7 +400,12 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let denied_server = start_test_named_pipe(&denied_name).expect("start denied named pipe");
     let workspace = temporary.path().join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
-    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"));
+    let fixture = workspace.join("cageforge-windows-named-pipe-fixture.exe");
+    fs::copy(
+        env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"),
+        &fixture,
+    )
+    .expect("copy named-pipe fixture into the writable workspace");
     let environment = EnvironmentSpec::inherit_core()
         .with_var(SANDBOX_FIXTURE_MODE, "named-pipe")
         .expect("named-pipe fixture mode")
