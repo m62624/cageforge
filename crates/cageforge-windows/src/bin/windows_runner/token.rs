@@ -36,6 +36,7 @@ const WRITE_RESTRICTED: u32 = 0x0000_0008;
 const EVERYONE_SID: &str = "S-1-1-0";
 pub(super) struct RestrictedPrimaryToken {
     handle: OwnedHandle,
+    capability_sids: Vec<String>,
     user_sid: String,
     logon_sid: String,
 }
@@ -205,6 +206,7 @@ impl RestrictedPrimaryToken {
         )?;
         Ok(Self {
             handle,
+            capability_sids: capability_sids.to_vec(),
             user_sid: actual_user_sid,
             logon_sid,
         })
@@ -212,6 +214,10 @@ impl RestrictedPrimaryToken {
 
     pub(super) fn raw(&self) -> *mut c_void {
         self.handle.as_raw_handle() as _
+    }
+
+    pub(super) fn capability_sids(&self) -> &[String] {
+        &self.capability_sids
     }
 
     pub(super) fn user_sid(&self) -> &str {
