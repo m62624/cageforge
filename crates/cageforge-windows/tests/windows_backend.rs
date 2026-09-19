@@ -401,6 +401,7 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let workspace = temporary.path().join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
     let fixture = workspace.join("cageforge-windows-named-pipe-fixture.exe");
+    let progress = workspace.join("named-pipe-progress.txt");
     fs::copy(
         env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"),
         &fixture,
@@ -412,7 +413,9 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         .with_var(SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED, &allowed_name)
         .expect("approved pipe environment")
         .with_var(SANDBOX_FIXTURE_NAMED_PIPE_DENIED, &denied_name)
-        .expect("denied pipe environment");
+        .expect("denied pipe environment")
+        .with_var(SANDBOX_FIXTURE_PROGRESS, &progress)
+        .expect("named-pipe progress environment");
     let network = NetworkPolicy::disabled()
         .with_local_ipc(
             LocalIpcEndpoint::windows_named_pipe(allowed_name.clone())
@@ -441,7 +444,10 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
             if let Some(mut stream) = child.take_stderr() {
                 let _ = stream.read_to_string(&mut stderr);
             }
-            panic!("wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}");
+            let progress = fs::read_to_string(&progress).ok();
+            panic!(
+                "wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}; progress={progress:?}"
+            );
         }
     };
     let mut stdout = String::new();
