@@ -170,7 +170,10 @@ fn request_with_full_filesystem_environment(
 ) {
     request_with_filesystem_environment(
         workspace,
-        FilesystemPolicy::restricted([]),
+        FilesystemPolicy::restricted([FilesystemRule::new(
+            PathSelector::workspace_root(),
+            AccessMode::Write,
+        )]),
         network,
         command,
         environment,
