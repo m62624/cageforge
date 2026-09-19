@@ -381,9 +381,11 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         armed: true,
     };
     setup.install().expect("install native Windows setup");
-    let backend =
-        WindowsBackend::new(WindowsBackendConfig::new().with_setup(setup.config().clone()))
-            .expect("construct verified backend");
+    let backend_config = WindowsBackendConfig::new()
+        .with_setup(setup.config().clone())
+        .with_default_timeout(END_TO_END_PROBE_TIMEOUT)
+        .expect("bounded named-pipe probe timeout");
+    let backend = WindowsBackend::new(backend_config).expect("construct verified backend");
 
     let suffix = format!("{}-{}", std::process::id(), temporary.path().display());
     let suffix = Sha256::digest(suffix.as_bytes());
@@ -423,7 +425,20 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare named-pipe policy");
     let mut child = backend.spawn(prepared).expect("spawn named-pipe probe");
-    let status = child.wait().expect("wait named-pipe probe");
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            let mut stdout = String::new();
+            if let Some(mut stream) = child.take_stdout() {
+                let _ = stream.read_to_string(&mut stdout);
+            }
+            let mut stderr = String::new();
+            if let Some(mut stream) = child.take_stderr() {
+                let _ = stream.read_to_string(&mut stderr);
+            }
+            panic!("wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}");
+        }
+    };
     let mut stdout = String::new();
     child
         .stdout()
