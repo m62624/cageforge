@@ -461,6 +461,7 @@ fn named_pipe_probe() -> Result<(), String> {
 #[allow(unsafe_code)]
 fn open_named_pipe(name: &OsString) -> Result<OwnedHandle, u32> {
     let wide = name
+        .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
