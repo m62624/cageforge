@@ -46,6 +46,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, CreateDesktopW, DESKTOP_CREATEWINDOW, GetThreadDesktop,
     GetUserObjectInformationW, UOI_NAME,
@@ -465,6 +467,9 @@ fn open_named_pipe(name: &OsString) -> Result<OwnedHandle, u32> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
+    if unsafe { WaitNamedPipeW(wide.as_ptr(), 1_000) } == 0 {
+        return Err(unsafe { GetLastError() });
+    }
     let handle = unsafe {
         CreateFileW(
             wide.as_ptr(),
