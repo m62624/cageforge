@@ -435,9 +435,15 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare named-pipe policy");
     let mut child = backend.spawn(prepared).expect("spawn named-pipe probe");
+    let (wait_chain_cancel, wait_chain_monitor) = monitor_fixture_wait_chain(child.id());
     let status = match child.wait() {
         Ok(status) => status,
         Err(error) => {
+            let wait_chains = wait_chain_monitor
+                .join()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "unavailable".to_owned());
             let mut stdout = String::new();
             if let Some(mut stream) = child.take_stdout() {
                 let _ = stream.read_to_string(&mut stdout);
@@ -448,10 +454,12 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
             }
             let progress = read_open_progress(&mut progress_reader);
             panic!(
-                "wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}; progress={progress:?}"
+                "wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}; progress={progress:?}; wait_chains={wait_chains}"
             );
         }
     };
+    let _ = wait_chain_cancel.send(());
+    let _ = wait_chain_monitor.join();
     let mut stdout = String::new();
     child
         .stdout()
@@ -478,6 +486,19 @@ fn read_open_progress(file: &mut fs::File) -> Option<String> {
     let mut progress = String::new();
     file.read_to_string(&mut progress).ok()?;
     Some(progress)
+}
+
+fn monitor_fixture_wait_chain(
+    process_id: u32,
+) -> (mpsc::Sender<()>, thread::JoinHandle<Option<String>>) {
+    let (cancel, receiver) = mpsc::channel();
+    let monitor = thread::spawn(move || {
+        if receiver.recv_timeout(Duration::from_secs(5)).is_ok() {
+            return None;
+        }
+        fixture_wait_chains(process_id).ok()
+    });
+    (cancel, monitor)
 }
 
 fn access_fixture_command(path: &Path) -> CommandSpec {
