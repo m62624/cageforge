@@ -1543,11 +1543,12 @@ fn runnable_windows_profile_launches_through_the_native_backend_api() {
     )
     .expect("native Windows backend");
     let workspace = tempfile::tempdir().expect("runnable workspace");
-    let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+    let minimal_runtime = workspace.path().join(".cageforge-test-runtime");
+    fs::create_dir_all(&minimal_runtime).expect("minimal runtime fixture directory");
     let context = PathResolutionContext::new()
         .with_workspace_root(workspace.path().to_path_buf())
         .expect("workspace root")
-        .with_minimal_path(system_root.join("System32"))
+        .with_minimal_path(minimal_runtime)
         .expect("Windows minimal runtime")
         .with_current_directory(workspace.path().to_path_buf())
         .expect("current directory");
