@@ -550,8 +550,17 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
                     });
                 }
             };
+            let validated = match access {
+                FilesystemPlanAccess::PlatformReadRoot => {
+                    ValidatedPath::open_file_for_readback(path)?
+                }
+                FilesystemPlanAccess::ReadRoot
+                | FilesystemPlanAccess::WriteRoot
+                | FilesystemPlanAccess::ReadOnly
+                | FilesystemPlanAccess::Deny => ValidatedPath::open_for_acl(path)?,
+            };
             targets.push(FilesystemPlanTarget {
-                path: ValidatedPath::open_for_acl(path)?,
+                path: validated,
                 access,
                 origins: pending.origins,
             });
