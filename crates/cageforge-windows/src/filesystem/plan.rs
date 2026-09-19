@@ -10,9 +10,10 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use cageforge_backend_api::{BackendContractError, PreparedBackendRequest, SandboxBackend};
-use cageforge_path::{NativePathKey, is_within, normalize_lexical_path};
+use cageforge_path::{NativePathKey, is_within, normalize_lexical_path, paths_equal};
 use cageforge_policy::{
     FilesystemDecision, FilesystemMode, FilesystemTarget, MissingPathBehavior, PathPattern,
+    PathSelector,
 };
 use cageforge_policy_compose::{EffectiveFilesystemLayer, EffectivePathContext};
 use sha2::{Digest, Sha256};
@@ -61,6 +62,7 @@ struct PendingFilesystemTarget {
 #[derive(Debug, Clone, Copy, Default)]
 struct TargetOrigins {
     scope: bool,
+    platform_default: bool,
     read_only: bool,
     glob: bool,
     protected: bool,
@@ -76,6 +78,8 @@ pub(crate) enum MissingFilesystemTargetKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FilesystemPlanAccess {
     ReadRoot,
+    /// An existing OS runtime root whose DACL is validated but not mutated.
+    PlatformReadRoot,
     WriteRoot,
     ReadOnly,
     Deny,
@@ -246,6 +250,9 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
                             rule.missing_path_behavior(),
                             TargetOrigins {
                                 scope: true,
+                                platform_default: is_windows_platform_default_read_root(
+                                    selector, &path,
+                                ),
                                 ..TargetOrigins::default()
                             },
                         )?;
@@ -382,7 +389,11 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
                 path: policy_path.to_path_buf(),
             });
         }
-        let validated = ValidatedPath::open_for_acl(path)?;
+        let validated = if origins.platform_default {
+            ValidatedPath::open_file_for_readback(path)?
+        } else {
+            ValidatedPath::open_for_acl(path)?
+        };
         let key = NativePathKey::new(validated.final_path());
         if let Some(existing) = self.pending.get_mut(&key) {
             existing.decision = combine_local_decisions(existing.decision, decision)?;
@@ -493,7 +504,9 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
             .find(|target| {
                 matches!(
                     target.access,
-                    FilesystemPlanAccess::ReadRoot | FilesystemPlanAccess::WriteRoot
+                    FilesystemPlanAccess::ReadRoot
+                        | FilesystemPlanAccess::PlatformReadRoot
+                        | FilesystemPlanAccess::WriteRoot
                 )
             })
             .map(|target| target.path.final_path().to_path_buf())
@@ -525,6 +538,9 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
                     if write_roots.iter().any(|root| is_within(path, root)) =>
                 {
                     FilesystemPlanAccess::ReadOnly
+                }
+                FilesystemDecision::Read if pending.origins.platform_default => {
+                    FilesystemPlanAccess::PlatformReadRoot
                 }
                 FilesystemDecision::Read => FilesystemPlanAccess::ReadRoot,
                 FilesystemDecision::Deny => FilesystemPlanAccess::Deny,
@@ -569,6 +585,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemPlanCollector<'scope, 'reque
 impl TargetOrigins {
     fn merge(&mut self, other: Self) {
         self.scope |= other.scope;
+        self.platform_default |= other.platform_default;
         self.read_only |= other.read_only;
         self.glob |= other.glob;
         self.protected |= other.protected;
@@ -583,6 +600,16 @@ fn combine_local_decisions(
         (Some(left), Some(right)) => Ok(left.most_restrictive(right).into()),
         _ => Err(FilesystemPlanError::ExternalOwnership),
     }
+}
+
+fn is_windows_platform_default_read_root(selector: &PathSelector, path: &Path) -> bool {
+    if !selector.is_minimal_scope() {
+        return false;
+    }
+    let Some(system_root) = std::env::var_os("SystemRoot") else {
+        return false;
+    };
+    paths_equal(path, &PathBuf::from(system_root).join("System32"))
 }
 
 fn nearest_existing_ancestor(
@@ -734,6 +761,7 @@ const fn access_digest_tag(access: FilesystemPlanAccess) -> u8 {
         FilesystemPlanAccess::WriteRoot => 1,
         FilesystemPlanAccess::ReadOnly => 2,
         FilesystemPlanAccess::Deny => 3,
+        FilesystemPlanAccess::PlatformReadRoot => 4,
     }
 }
 

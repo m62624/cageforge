@@ -118,7 +118,7 @@ The meaning on each platform is:
 |---|---|---|
 | Linux | `/usr`, `/bin`, `/lib`, and `/lib64` | Bubblewrap starts from a fresh root. Without `minimal` or readable `root`, the executable or its ELF loader is absent. |
 | macOS | `/usr` by default; Seatbelt also has an explicit standard-runtime baseline | A simple system command can use the fixed baseline, but `minimal` keeps the platform-runtime dependency explicit and portable. It does not grant the workspace or arbitrary host paths. |
-| Windows | The absolute `SystemRoot` value plus `SystemRoot\\System32` | Restricted ACL planning requires a readable `root` or `minimal` platform base. `minimal` is the narrow choice for system executables and is independent of the workspace drive. |
+| Windows | The absolute `SystemRoot` value plus `SystemRoot\\System32` | `minimal` is the narrow platform-runtime read base for system executables. The native backend validates this protected OS directory for read/execute access but does not try to rewrite its DACL; ACL mutation remains limited to application-owned policy roots. |
 
 The CLI and JVM binding populate these paths automatically. A direct Rust
 backend caller must provide the paths for the target OS explicitly. This is a
@@ -140,9 +140,13 @@ broader than `minimal`; neither selector is inferred from the TOML text.
 This follows the same platform-default principle reviewed in the local Codex
 baseline: Linux adds standard executable and loader roots when minimal
 defaults are requested, macOS adds its standard runtime/framework rules, and
-Windows carries platform defaults as an explicit native input. Cageforge keeps
-the public TOML schema independent and requires the corresponding symbolic
-policy rule before a backend can use any of these paths.
+Windows carries platform defaults as an explicit native input. On Windows,
+`%SystemRoot%\\System32` is an existing OS-readable platform root, not a
+user-owned ACL target. Cageforge therefore validates it with read access and
+leaves its protected system DACL unchanged; workspace and other application
+roots still use the handle-pinned ACL transaction. Cageforge keeps the public
+TOML schema independent and requires the corresponding symbolic policy rule
+before a backend can use any of these paths.
 
 ## Paths and selectors
 

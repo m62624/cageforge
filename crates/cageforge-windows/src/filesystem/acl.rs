@@ -561,6 +561,7 @@ impl<'plan> AclPlanBuilder<'plan> {
         for target in self.filesystem.targets() {
             let path = target.path().final_path();
             match target.access() {
+                FilesystemPlanAccess::PlatformReadRoot => {}
                 FilesystemPlanAccess::ReadRoot => {
                     let entries = vec![
                         AclEntry::allow(self.group_sid, READ_ALLOW_MASK),

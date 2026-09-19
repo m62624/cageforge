@@ -156,8 +156,11 @@ For a restricted Windows launch, include `minimal` read access (or the broader
 readable platform bases so a system executable and its dependencies can be
 opened. The CLI resolves `minimal` from the absolute `SystemRoot` environment
 value to `SystemRoot\\System32`; it does not assume that the workspace and
-Windows installation use the same drive. Windows has a `tmpdir` scope; it does
-not have the POSIX `slash-tmp` scope.
+Windows installation use the same drive. The backend validates this protected
+platform directory for read/execute access without attempting to rewrite its
+DACL. ACL mutation is reserved for application-owned workspace and other
+policy roots. Windows has a `tmpdir` scope; it does not have the POSIX
+`slash-tmp` scope.
 
 The runnable example is
 [`runnable/windows/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/windows/smoke.toml).

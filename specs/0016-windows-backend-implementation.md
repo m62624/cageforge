@@ -605,6 +605,18 @@ Windows filesystem enforcement combines:
 - reparse-point and final-handle validation before a path can participate in
   an ACL plan.
 
+The built-in Windows `minimal` context resolves to `%SystemRoot%\\System32`.
+When that exact platform-default path is readable under a restricted policy,
+the planner validates it with a read/execute handle and classifies it as a
+`PlatformReadRoot`; it does not include the protected OS directory in the
+request's ACL mutation plan. The sandbox identities are ordinary members of
+the built-in Users group, so the existing Windows platform DACL supplies this
+runtime read access. Application-owned workspace, temporary, and explicit
+absolute roots remain ordinary ACL targets and retain the full handle-pinned
+mutation, journaling, and rollback rules above. A `root` rule or an arbitrary
+absolute path is never treated as a platform default merely because it is
+under the Windows installation directory.
+
 Handle validation expands only filesystem-provided short-name aliases through
 `GetLongPathNameW` before comparing them with `GetFinalPathNameByHandleW`.
 Consequently a legitimate 8.3 spelling such as `RUNNER~1` resolves to the same
