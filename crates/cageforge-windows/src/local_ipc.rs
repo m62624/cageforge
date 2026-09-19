@@ -57,8 +57,14 @@ pub enum WindowsLocalIpcError {
     PosixEndpoint { endpoint: String },
     #[error("failed to generate the launch-unique local-IPC capability SID: {source}")]
     SidGeneration { source: RandomError },
-    #[error("failed to read the named-pipe DACL for {name:?}: Windows error {code}")]
-    DescriptorRead { name: String, code: u32 },
+    #[error(
+        "failed to read the named-pipe DACL for {name:?} during {operation}: Windows error {code}"
+    )]
+    DescriptorRead {
+        name: String,
+        operation: &'static str,
+        code: u32,
+    },
     #[error("named-pipe DACL for {name:?} is absent or malformed")]
     DescriptorInvalid { name: String },
     #[error("failed to construct the named-pipe DACL for {name:?}: Windows error {code}")]
@@ -185,7 +191,7 @@ impl WindowsLocalIpcEnforcement {
         let mut state_session = self.state.begin()?;
         for pipe in self.pipes.iter_mut().rev() {
             pipe.release()?;
-            let actual = read_snapshot(&pipe.name)?;
+            let actual = read_snapshot(&pipe.name, "release verification")?;
             let actual = actual.persisted();
             state_session.resolve_named_pipe_acl(&pipe.name, &actual)?;
         }
@@ -204,7 +210,7 @@ impl WindowsLocalIpcEnforcement {
         let mut session = state.begin()?;
         let records = session.named_pipe_acl_objects().to_vec();
         for record in records {
-            let current = read_snapshot(&record.name)?;
+            let current = read_snapshot(&record.name, "recovery current-state read")?;
             let original = snapshot_from_persisted(&record.name, &record.original)?;
             let expected = snapshot_from_persisted(&record.name, &record.current)?;
             if current == original {
@@ -215,7 +221,7 @@ impl WindowsLocalIpcEnforcement {
                 return Err(WindowsLocalIpcError::DescriptorDrift { name: record.name });
             }
             restore_snapshot(&record.name, &original)?;
-            let restored = read_snapshot(&record.name)?;
+            let restored = read_snapshot(&record.name, "recovery restore verification")?;
             if restored != original {
                 return Err(WindowsLocalIpcError::DescriptorDrift { name: record.name });
             }
@@ -228,7 +234,7 @@ impl WindowsLocalIpcEnforcement {
 
 impl NamedPipeAclLease {
     fn prepare(name: String, capability_sid: &str) -> Result<Self, WindowsLocalIpcError> {
-        let original = read_snapshot(&name)?;
+        let original = read_snapshot(&name, "prepare original-state read")?;
         let sid = LocalSid::parse(capability_sid).map_err(|code| {
             WindowsLocalIpcError::DescriptorBuild {
                 name: name.clone(),
@@ -253,7 +259,7 @@ impl NamedPipeAclLease {
             }
         })?;
         write_snapshot(&self.name, &self.after, self.original.protected)?;
-        let after = match read_snapshot(&self.name) {
+        let after = match read_snapshot(&self.name, "activation read-back") {
             Ok(snapshot) if snapshot_contains_sid(&snapshot, sid.0) => snapshot,
             Ok(_) => {
                 let _ = write_snapshot(&self.name, &self.original, self.original.protected);
@@ -274,7 +280,7 @@ impl NamedPipeAclLease {
         if self.released {
             return Ok(());
         }
-        let current = read_snapshot(&self.name)?;
+        let current = read_snapshot(&self.name, "release current-state read")?;
         if current != self.after {
             return Err(WindowsLocalIpcError::DescriptorDrift {
                 name: self.name.clone(),
@@ -291,7 +297,7 @@ impl Drop for NamedPipeAclLease {
         if self.released {
             return;
         }
-        if let Ok(current) = read_snapshot(&self.name)
+        if let Ok(current) = read_snapshot(&self.name, "drop cleanup read")
             && current == self.after
         {
             let _ = write_snapshot(&self.name, &self.original, self.original.protected);
@@ -400,8 +406,8 @@ impl Drop for LocalAcl {
 }
 
 #[allow(unsafe_code)]
-fn read_snapshot(name: &str) -> Result<AclSnapshot, WindowsLocalIpcError> {
-    let pipe = open_pipe(name)?;
+fn read_snapshot(name: &str, operation: &'static str) -> Result<AclSnapshot, WindowsLocalIpcError> {
+    let pipe = open_pipe(name, operation)?;
     let mut dacl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     let status = unsafe {
@@ -420,6 +426,7 @@ fn read_snapshot(name: &str) -> Result<AclSnapshot, WindowsLocalIpcError> {
     if status != ERROR_SUCCESS {
         return Err(WindowsLocalIpcError::DescriptorRead {
             name: name.to_owned(),
+            operation,
             code: status,
         });
     }
@@ -537,7 +544,7 @@ fn write_snapshot(
     snapshot: &AclSnapshot,
     protected: bool,
 ) -> Result<(), WindowsLocalIpcError> {
-    let pipe = open_pipe(name)?;
+    let pipe = open_pipe(name, "DACL write")?;
     let security = DACL_SECURITY_INFORMATION
         | if protected {
             PROTECTED_DACL_SECURITY_INFORMATION
@@ -566,7 +573,7 @@ fn write_snapshot(
 }
 
 #[allow(unsafe_code)]
-fn open_pipe(name: &str) -> Result<OwnedHandle, WindowsLocalIpcError> {
+fn open_pipe(name: &str, operation: &'static str) -> Result<OwnedHandle, WindowsLocalIpcError> {
     let name_wide = wide(name);
     let handle = unsafe {
         CreateFileW(
@@ -582,6 +589,7 @@ fn open_pipe(name: &str) -> Result<OwnedHandle, WindowsLocalIpcError> {
     if handle == INVALID_HANDLE_VALUE {
         return Err(WindowsLocalIpcError::DescriptorRead {
             name: name.to_owned(),
+            operation,
             code: unsafe { GetLastError() },
         });
     }
