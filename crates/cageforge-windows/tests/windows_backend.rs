@@ -29,8 +29,9 @@ use cageforge_windows::{
 use pretty_assertions::assert_eq;
 use sha2::{Digest, Sha256};
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING,
-    GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, STILL_ACTIVE, WAIT_TIMEOUT,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
+    ERROR_PIPE_LISTENING, GetLastError, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, STILL_ACTIVE,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -324,6 +325,12 @@ fn start_test_named_pipe(name: &str) -> Result<TestNamedPipeServer, String> {
                 } else {
                     let code = unsafe { GetLastError() };
                     if code == ERROR_PIPE_CONNECTED {
+                        true
+                    } else if code == ERROR_NO_DATA {
+                        // The child may close immediately after the approved
+                        // open. Windows then reports the completed connection
+                        // to the next synchronous ConnectNamedPipe poll as
+                        // ERROR_NO_DATA.
                         true
                     } else if code == ERROR_PIPE_LISTENING {
                         false
