@@ -103,9 +103,21 @@ named_pipes = ['\\.\pipe\tool-service']
 The endpoint is explicit and validated before backend launch. A backend must
 advertise native enforcement for the endpoint type; otherwise preflight
 returns a typed unsupported-capability error and does not start the child.
-Windows named-pipe support is intentionally not advertised until the backend
-can prove both endpoint authorization and denial of unauthorized named-pipe
-access. There is no TCP or unsandboxed fallback.
+Windows named-pipe support is advertised only for the native
+`NetworkWindowsNamedPipeRules` capability, which authorizes the exact local
+pipe through a launch-scoped ACL transaction and a restricted token. A Unix
+socket requested on Windows remains a typed unsupported-capability error.
+There is no TCP or unsandboxed fallback.
+
+The endpoint declaration is separate from the resources needed to start the
+command. A runnable restricted profile normally also declares `minimal` read
+access for the platform runtime, `workspace-root` write access when the
+working directory is the workspace, and `network.mode = "disabled"` unless
+the application needs another mode. An IPC rule does not grant those
+resources, arbitrary files, TCP loopback, or unrelated local IPC. The
+[configuration guide](examples/CONFIGURATION_GUIDE.md) and
+[`local-ipc-platforms.toml`](examples/local-ipc-platforms.toml) show the
+complete Linux/macOS/Windows shape.
 
 ## Workspace role
 

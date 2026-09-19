@@ -1,6 +1,6 @@
 # One portable profile with native local-IPC endpoints selected by platform.
-# The Windows endpoint remains fail-closed until the Windows backend advertises
-# proven named-pipe namespace isolation.
+# The filesystem entries are still required: an IPC endpoint does not grant a
+# working directory, executable runtime files, or unrelated filesystem access.
 default_profile = "tool"
 
 [profiles.tool.filesystem]

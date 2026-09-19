@@ -28,6 +28,47 @@ Run the profile for the host operating system only. Windows paths and
 command. Each restricted smoke profile includes `minimal` read access and a
 writable workspace root.
 
+### First launch and local IPC
+
+The first launch must declare the ordinary command resources and the IPC
+resource independently. A local-IPC entry only authorizes the named endpoint;
+it does not authorize the executable's runtime files, the working directory,
+or network access. A minimal restricted profile therefore normally looks like
+this:
+
+```toml
+[profiles.tool.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.tool.network]
+mode = "disabled"
+
+[profiles.tool.platforms.linux.local_ipc]
+unix_sockets = ["/run/tool/service.sock"]
+
+[profiles.tool.platforms.macos.local_ipc]
+unix_sockets = ["/var/run/tool/service.sock"]
+
+[profiles.tool.platforms.windows.local_ipc]
+named_pipes = ['\\.\pipe\tool-service']
+```
+
+Use `workspace-root` only when the command actually starts in or writes to the
+workspace. Add other filesystem rules explicitly for other inputs or outputs.
+The platform overlay changes only the native endpoint spelling: Linux and
+macOS use absolute Unix-socket paths, while Windows uses the local named-pipe
+namespace. An IPC rule never enables TCP loopback or unrelated local IPC.
+
+The Windows named-pipe backend applies a launch-scoped ACL grant to the exact
+pipe and restores the host ACL after the child exits. The child still needs
+the regular filesystem and environment declarations above. Python, Java, and
+Rust callers use the same endpoint kinds and receive the same fail-closed
+unsupported-capability behavior for a wrong platform endpoint.
+
 Linux also needs a compatible Bubblewrap and unprivileged namespaces. The
 bundled feature supplies the pinned Bubblewrap resource:
 
@@ -164,9 +205,10 @@ timeout and persistence values for inspection.
 
 For Local IPC, use [`local-ipc-platforms.toml`](local-ipc-platforms.toml).
 Linux and macOS retain the existing Unix-socket enforcement. Windows validates
-named-pipe names but remains fail-closed until the native backend proves strict
-authorization and denial of neighboring named pipes; it never converts the
-request to TCP or launches without the requested boundary.
+named-pipe names and enforces the exact local endpoint through the Windows
+native boundary. A Unix socket requested on Windows remains a typed
+unsupported-capability error; the request is never converted to TCP or
+launched without the requested boundary.
 
 Approval is disabled when the `[profiles.<name>.approval]` section is omitted.
 `mode = "preflight"` is fail-closed: an absent or late approval denies the

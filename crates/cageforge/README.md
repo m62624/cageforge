@@ -38,9 +38,10 @@ system, see the [`cageforge-config` configuration guide](../cageforge-config/exa
 
 Local IPC uses one typed Rust model across platforms. Use absolute Unix-socket
 paths for Linux/macOS and `\\\\.\\pipe\\name` named-pipe names for Windows in
-the matching TOML platform overlay. The selected backend must advertise and
-prove the endpoint capability before launch; unsupported Windows named-pipe
-isolation fails closed and never falls back to TCP or an unsandboxed process.
+the matching TOML platform overlay. Linux/macOS enforce Unix-socket endpoints;
+Windows enforces local named-pipe endpoints through its native boundary. A
+wrong-platform endpoint remains a typed unsupported-capability error and never
+falls back to TCP or an unsandboxed process.
 
 On Linux, `linux-bundled-bubblewrap` is an optional alternative when you do
 not want to build or provide Bubblewrap separately. It includes Cageforge's

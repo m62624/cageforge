@@ -49,6 +49,30 @@ expose the same endpoint kinds as typed values.
 The selected native backend must prove enforcement before launch; unsupported
 endpoint types fail closed.
 
+### What a first launch must declare
+
+An endpoint declaration is not a general permission grant. A command still
+needs the resources it uses to start and run:
+
+- `minimal` read access for the platform runtime and executable loader;
+- `workspace-root` write access when the command's working directory is the
+  workspace or it creates output there; and
+- `network.mode = "disabled"` unless the application explicitly needs a different
+  network mode.
+
+The local-IPC rule is then added separately for the exact endpoint. On Linux
+and macOS that endpoint is an absolute Unix-socket path. On Windows it is a
+local `\\.\pipe\...` named pipe. Allowing an IPC endpoint does not grant the
+working directory, arbitrary files, TCP loopback, or other sockets. A missing
+resource must be added to the appropriate policy section and profile; it is
+not inferred from the IPC rule.
+
+The [`local-ipc-platforms.toml`](local-ipc-platforms.toml) file is the
+complete minimal policy shape: its common filesystem section makes the command
+launchable, and its three platform overlays select only the native endpoint
+syntax for the current OS. Use the overlay for the host that will run the
+command; the other endpoint kinds are not translated or silently widened.
+
 The environment order applies to a command environment, not to filesystem
 permissions or profile inheritance. `cageforge-config` parses and resolves the
 TOML into `EnvironmentSpec`; `cageforge-command` applies the portable stages

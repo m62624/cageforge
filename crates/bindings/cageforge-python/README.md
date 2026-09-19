@@ -11,6 +11,11 @@ integrations and uses the native backend selected by the installed wheel.
 The package is built with PyO3 and maturin. The published package name is
 `cageforge`.
 
+The binding uses the same TOML schema and platform overlays as Rust and Java.
+See the shared [`cageforge-config` configuration guide](../../cageforge-config/examples/CONFIGURATION_GUIDE.md)
+for the complete Linux/macOS/Windows profile shape, including the resources a
+first restricted launch must declare separately from local IPC.
+
 ## Install
 
 ```bash
