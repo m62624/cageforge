@@ -674,11 +674,12 @@ mod tests {
             r"C:\Windows\System32\cmd.exe".encode_utf16().collect(),
             "/d".encode_utf16().collect(),
             "/c".encode_utf16().collect(),
-            "echo(cageforge-windows-smoke".encode_utf16().collect(),
+            "echo".encode_utf16().collect(),
+            "cageforge-windows-smoke".encode_utf16().collect(),
         ];
         let actual = String::from_utf16(&command_line(&arguments)).expect("valid UTF-16");
 
-        assert_eq!(actual, "/d /c echo(cageforge-windows-smoke");
+        assert_eq!(actual, "/d /c echo cageforge-windows-smoke");
     }
 
     #[test]

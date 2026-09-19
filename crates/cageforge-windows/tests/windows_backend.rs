@@ -1589,10 +1589,7 @@ fn runnable_windows_profile_launches_through_the_native_backend_api() {
         status.success(),
         "Windows runnable profile failed: {status:?}; stdout={stdout:?}; stderr={stderr:?}"
     );
-    assert!(
-        stdout.contains("Microsoft Windows"),
-        "unexpected cmd.exe output: {stdout:?}"
-    );
+    assert!(stdout.contains("cageforge-windows-smoke"));
 }
 
 #[test]
