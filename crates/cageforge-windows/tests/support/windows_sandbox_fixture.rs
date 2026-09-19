@@ -441,28 +441,11 @@ fn signal_unrelated_named_object() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn named_pipe_probe() -> Result<(), String> {
-    std::io::stdout()
-        .write_all(b"named-pipe-start\n")
-        .and_then(|_| std::io::stdout().flush())
-        .map_err(|error| format!("write named-pipe probe start: {error}"))?;
-    let progress = environment(PROGRESS)?;
-    std::fs::write(&progress, b"start\n")
-        .map_err(|error| format!("write named-pipe probe progress: {error}"))?;
     let allowed = environment(NAMED_PIPE_ALLOWED)?;
     let denied = environment(NAMED_PIPE_DENIED)?;
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&progress)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, b"environment\n"))
-        .map_err(|error| format!("record named-pipe probe environment: {error}"))?;
     let _allowed_handle = open_named_pipe(&allowed).map_err(|code| {
         format!("approved named pipe {allowed:?} was denied: Windows error {code}")
     })?;
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&progress)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, b"allowed\n"))
-        .map_err(|error| format!("record named-pipe probe allowed: {error}"))?;
     match open_named_pipe(&denied) {
         Ok(_) => Err(format!("unapproved named pipe {denied:?} was accessible")),
         Err(code) if code == ERROR_ACCESS_DENIED || code == ERROR_FILE_NOT_FOUND => {

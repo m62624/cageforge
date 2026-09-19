@@ -4,7 +4,7 @@
 
 use std::ffi::c_void;
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Write};
 use std::mem::offset_of;
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -401,9 +401,6 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
     let workspace = temporary.path().join("workspace");
     fs::create_dir_all(&workspace).expect("workspace");
     let fixture = workspace.join("cageforge-windows-named-pipe-fixture.exe");
-    let progress = workspace.join("named-pipe-progress.txt");
-    fs::write(&progress, b"host-created\n").expect("create named-pipe progress fixture");
-    let mut progress_reader = fs::File::open(&progress).expect("open named-pipe progress handle");
     fs::copy(
         env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"),
         &fixture,
@@ -415,9 +412,7 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
         .with_var(SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED, &allowed_name)
         .expect("approved pipe environment")
         .with_var(SANDBOX_FIXTURE_NAMED_PIPE_DENIED, &denied_name)
-        .expect("denied pipe environment")
-        .with_var(SANDBOX_FIXTURE_PROGRESS, &progress)
-        .expect("named-pipe progress environment");
+        .expect("denied pipe environment");
     let network = NetworkPolicy::disabled()
         .with_local_ipc(
             LocalIpcEndpoint::windows_named_pipe(allowed_name.clone())
@@ -452,9 +447,8 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
             if let Some(mut stream) = child.take_stderr() {
                 let _ = stream.read_to_string(&mut stderr);
             }
-            let progress = read_open_progress(&mut progress_reader);
             panic!(
-                "wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}; progress={progress:?}; wait_chains={wait_chains}"
+                "wait named-pipe probe: {error}; stdout={stdout:?}; stderr={stderr:?}; wait_chains={wait_chains}"
             );
         }
     };
@@ -479,13 +473,6 @@ fn windows_named_pipe_allowlist_is_enforced_by_the_native_boundary() {
 
     setup.uninstall().expect("cleanup Windows setup");
     cleanup.armed = false;
-}
-
-fn read_open_progress(file: &mut fs::File) -> Option<String> {
-    file.seek(SeekFrom::Start(0)).ok()?;
-    let mut progress = String::new();
-    file.read_to_string(&mut progress).ok()?;
-    Some(progress)
 }
 
 fn monitor_fixture_wait_chain(
