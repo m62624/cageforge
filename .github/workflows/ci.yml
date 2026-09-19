@@ -1343,6 +1343,7 @@ jobs:
           cargo test -p cageforge-cli --no-default-features --features config --all-targets
           cargo doc -p cageforge-cli --no-default-features --features config --no-deps
       - name: Run the Windows runnable configuration profile after native checks
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           CAGEFORGE_RUNNABLE_OS=windows ci/run-runnable-example.sh

@@ -24,15 +24,19 @@ case "${CAGEFORGE_RUNNABLE_OS:-}" in
     grep -Fx 'cageforge-macos-smoke' <<<"$output"
     ;;
   windows)
-    echo 'Building the Windows runnable example and native helpers.'
-    cargo build --locked --release -p cageforge-cli \
+    # This is a configuration smoke, not a release-artifact test. The native
+    # Windows job has already compiled and tested the same sources; rebuilding
+    # both packages with --release here needlessly starts a second cold build
+    # and can make the runnable check look hung on hosted runners.
+    echo 'Building the Windows runnable example and native helpers (debug profile).'
+    cargo build --locked -p cageforge-cli \
       --no-default-features --features config
-    cargo build --locked --release -p cageforge-windows --bins \
+    cargo build --locked -p cageforge-windows --bins \
       --features bundled-helpers
     echo 'Installing the Windows native setup for the runnable example.'
-    target/release/cageforge-cli.exe setup install
+    target/debug/cageforge-cli.exe setup install
     echo 'Running the Windows runnable configuration example.'
-    output=$(target/release/cageforge-cli.exe run --approve \
+    output=$(target/debug/cageforge-cli.exe run --approve \
       --config crates/cageforge-config/examples/runnable/windows/smoke.toml)
     grep -Fx 'cageforge-windows-smoke' <<<"$output"
     ;;
