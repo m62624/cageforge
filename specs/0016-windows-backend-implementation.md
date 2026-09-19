@@ -852,6 +852,15 @@ interrupted parent. Unexpected descriptor drift is a typed fail-closed error.
 POSIX Unix-socket endpoints remain unsupported on Windows and are never
 converted to TCP or an unrestricted named pipe.
 
+Each approved pipe has one retained host-side ACL handle for the complete
+launch transaction. The handle is used for original-state capture, DACL
+activation, read-back verification, restoration, and final restoration
+verification, and is released only after the journal is resolved. The
+transaction never relies on reopening the named-pipe path to obtain a fresh
+instance between these security steps. Interrupted-transaction recovery uses
+a separately opened and revalidated handle because the original live handle is
+not available.
+
 This section is the Windows-native realization of the portable endpoint and
 fail-closed contract in [Specification 0023](0023-local-ipc-capability.md).
 `NetworkWindowsNamedPipeRules` is advertised only after the backend has

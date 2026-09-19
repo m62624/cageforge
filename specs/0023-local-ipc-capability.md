@@ -71,6 +71,15 @@ unexpected drift fails closed. A Windows Unix-socket endpoint is unsupported
 and receives the typed capability error before spawn. There is no unrestricted,
 TCP, or unsandboxed fallback.
 
+The Windows ACL transaction holds one host-side handle for each approved pipe
+from original-state capture through DACL activation, read-back verification,
+restoration, and final restoration verification. All security operations for
+that transaction address the retained handle; launch enforcement does not
+depend on repeatedly opening fresh named-pipe instances between transaction
+steps. The handle is released only after the journal is resolved. Recovery of
+an interrupted transaction opens and validates a replacement handle because no
+live launch transaction handle exists.
+
 ## Foreign-language contract
 
 Rust, Python, and Java expose the same endpoint kinds, endpoint values,

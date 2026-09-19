@@ -105,6 +105,11 @@ pipe through a launch-scoped ACL transaction and a restricted token. A Unix
 socket requested on Windows remains a typed unsupported-capability error.
 There is no TCP or unsandboxed fallback.
 
+The transaction retains one host-side handle per approved pipe for
+original-state capture, DACL activation, read-back, restoration, and final
+verification. It does not reopen a fresh named-pipe instance between those
+steps.
+
 The endpoint declaration is separate from the resources needed to start the
 command. A runnable restricted profile normally also declares `minimal` read
 access for the platform runtime, `workspace-root` write access when the

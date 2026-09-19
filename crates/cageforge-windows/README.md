@@ -374,8 +374,11 @@ named_pipes = ['\\.\pipe\tool-service']
 They are not silently treated as Unix sockets or TCP. The
 `NetworkWindowsNamedPipeRules` capability is enforced through a launch-unique
 restricted token, explicit host-pipe ACL transactions, local-only pipe
-creation requirements, and durable ACL recovery. A requested Unix socket on
-Windows remains a typed unsupported capability rather than a fallback.
+creation requirements, and durable ACL recovery. Each approved pipe keeps one
+host-side handle for the complete ACL transaction: original-state capture,
+DACL activation, read-back, restoration, and final verification all use that
+handle. A requested Unix socket on Windows remains a typed unsupported
+capability rather than a fallback.
 
 ## Network behavior
 
