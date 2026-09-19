@@ -307,8 +307,9 @@ sandbox account. The token:
   active;
 - keeps the user, `Everyone`, logon, and request capability SIDs as the
   complete default object DACL, excluding the route SID; for strict named-pipe
-  local-IPC launches it instead contains only the request capability SIDs and
-  any required route SID; and
+  local-IPC launches it instead contains the request capability SIDs and the
+  authenticated logon SID required for session startup, excluding broad user
+  and `Everyone` restricting SIDs and any route SID; and
 - authorizes every request capability SID on the private desktop object as
   well as on the pipe and token default DACL, so a strict launch can complete
   Windows session initialization without restoring broad user or logon access;
@@ -319,7 +320,11 @@ canonical restricting-SID set, default-DACL ACE set and masks, and enabled
 privileges must exactly match the requested boundary. `WRITE_RESTRICTED` keeps
 Windows session, loader, and IPC reads such as CSRSS `ApiPort` usable through
 the dedicated account's normal token while the capability restricting set still
-authorizes writes. Explicit deny ACEs for a capability SID remain mandatory and
+authorizes writes. For an approved named pipe, the pipe DACL grants both the
+selected dedicated runner-account SID (the normal-token side of the access
+check) and the launch-unique capability SID (the launch-specific restricted
+side); it never grants `Everyone` as a substitute. Explicit deny ACEs for a
+capability SID remain mandatory and
 native tests prove their read and write effect; a policy requiring a global
 default-deny read namespace remains unsupported. The launch-unique logon SID
 remains only for objects explicitly created for that logon, including the
@@ -845,9 +850,13 @@ authorization immediately before connect. Firewall and route attribution are
 native ingress boundaries, not replacements for portable policy checks.
 
 Windows named-pipe local IPC is implemented as a launch-scoped capability.
-Each approved pipe receives a fresh capability SID in its DACL, the strict
-local-IPC token retains no broad user/logon/Everyone restricting SIDs, and the
-parent verifies the resulting DACL before the child starts. Original and
+Each approved pipe receives a fresh capability SID and the selected dedicated
+runner-account SID in its DACL. The strict local-IPC token retains the logon
+SID only where Windows session initialization requires it; broad user and
+`Everyone` restricting SIDs are not used for pipe authorization. The private
+desktop and token default DACL also authorize the launch capability so the
+child can complete startup without widening the pipe boundary. The parent
+verifies the resulting DACL before the child starts. Original and
 post-mutation descriptors are journaled in the protected capability state;
 cleanup restores the exact original descriptor and removes the journal entry.
 Startup recovery performs the same comparison and restoration after an
