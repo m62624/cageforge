@@ -155,6 +155,17 @@ impl RestrictedPrimaryToken {
                 Attributes: 0,
             });
         }
+        // Windows session objects such as CSRSS's ApiPort require the
+        // authenticated logon SID for write-restricted startup. Keep that
+        // session identity in the restricted set, while leaving the
+        // launch-unique capability SID as the additional requirement for
+        // approved named pipes.
+        if strict_local_ipc {
+            restricting.push(SID_AND_ATTRIBUTES {
+                Sid: logon.0,
+                Attributes: 0,
+            });
+        }
         if let Some(route) = &route {
             restricting.push(SID_AND_ATTRIBUTES {
                 Sid: route.0,
@@ -182,7 +193,11 @@ impl RestrictedPrimaryToken {
 
         let handle = create_restricted_token(base.as_raw_handle() as _, &restricting)?;
         let default_dacl_sids = if strict_local_ipc {
-            capabilities.iter().map(|sid| sid.0).collect::<Vec<_>>()
+            capabilities
+                .iter()
+                .map(|sid| sid.0)
+                .chain(std::iter::once(logon.0))
+                .collect::<Vec<_>>()
         } else {
             capabilities
                 .iter()
