@@ -468,7 +468,7 @@ fn network_request(
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    let executable = PathBuf::from(std::env::current_exe().expect("test executable"));
+    let executable = std::env::current_exe().expect("test executable");
     let context = context_for_command(workspace, &executable);
     (command, effective, context)
 }
@@ -602,7 +602,7 @@ fn unix_network_request(
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    let executable = PathBuf::from(std::env::current_exe().expect("test executable"));
+    let executable = std::env::current_exe().expect("test executable");
     let context = context_for_command(workspace, &executable);
     (command, effective, context)
 }
