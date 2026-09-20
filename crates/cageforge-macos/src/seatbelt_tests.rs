@@ -74,6 +74,7 @@ fn base_profile_keeps_dynamic_loader_and_standard_stdio_explicit() {
     .expect("profile");
     let policy = profile.policy();
 
+    assert!(policy.contains("(deny file-map-executable)"));
     assert!(policy.contains("(allow file-map-executable"));
     assert!(policy.contains("(regex \"^/dev/fd/(0|1|2)$\")"));
     assert!(policy.contains("(regex \"^/dev/ttys[0-9]+$\")"));

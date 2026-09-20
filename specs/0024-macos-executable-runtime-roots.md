@@ -51,8 +51,9 @@ advertises `FilesystemExecutableMapping` only on macOS; Linux and Windows
 reject a non-empty executable-root context with the typed unsupported
 capability error rather than ignoring it.
 
-The macOS filesystem plan validates every root before spawn. Seatbelt receives
-one `file-map-executable` allowlist scoped to those canonical directories. The
+The macOS filesystem plan validates every root before spawn. Seatbelt first
+denies `file-map-executable` and then receives one allowlist for the fixed
+system runtime roots plus the caller's canonical directories. The caller's
 allowlist is separate from the normal `file-read*` and `file-write*` rules and
 is narrowed by the effective deny paths and deny globs. The prepared request is
 immutable after validation and every descendant inherits the same profile.
@@ -80,8 +81,9 @@ macOS-specific launch method or path convention.
 The config tests cover parsing, platform selection, duplicate rejection, and
 unsafe-path rejection. The backend API verifies unsupported capability
 negotiation. The macOS native integration test builds a small Mach-O program
-and a dynamic library in a temporary user runtime directory, grants that
-directory read access, and proves that the child fails to load its library
-without `runtime.executable_roots` and prints its marker successfully when
-the mapping capability is present. The test runs inside the existing native
-macOS backend job; it is not a config-only fixture.
+and a dynamic library in a temporary user runtime directory. The program
+explicitly maps a sibling Mach-O executable payload with executable
+permissions, proving that the child fails without `runtime.executable_roots`
+and prints its marker successfully when the mapping capability is present. The
+test runs inside the existing native macOS backend job; it is not a config-only
+fixture.

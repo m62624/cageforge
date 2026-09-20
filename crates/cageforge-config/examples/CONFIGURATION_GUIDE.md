@@ -157,7 +157,7 @@ executable_roots = ["/opt/example-runtime"]
 `runtime.executable_roots` accepts existing absolute directories only. The
 backend rejects relative paths, parent traversal, missing roots, and symlinked
 ancestors before spawning. Each selected root is canonicalized and added only
-to Seatbelt's `file-map-executable` allowlist; it does not make the directory
+to Seatbelt's explicit `file-map-executable` allowlist; it does not make the directory
 writable and does not make other readable roots executable. Keep the root as
 narrow as the runtime layout permits. The complete runnable fixture is
 [`runnable/macos/runtime-executable.toml`](runnable/macos/runtime-executable.toml).

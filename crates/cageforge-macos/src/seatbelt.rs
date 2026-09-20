@@ -16,6 +16,7 @@ use crate::network::{MacosNetworkPlan, MacosUnixSocketPlan};
 const SEATBELT_BASE_POLICY: &str = r#"
 (version 1)
 (deny default)
+(deny file-map-executable)
 
 ; Process descendants inherit the same closed-by-default profile.
 (allow process-exec)
