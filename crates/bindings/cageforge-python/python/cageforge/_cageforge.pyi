@@ -383,7 +383,8 @@ class PermissionRequest:
         """
     def filesystem(self) -> builtins.list[tuple[builtins.str, builtins.str]]:
         r"""
-        Returns filesystem capabilities as `(operation, path)` pairs.
+        Returns filesystem capabilities as `(operation, path)` pairs. Operation
+        labels are `read`, `write`, `deny`, and `map-executable`.
         """
     def network(self) -> builtins.list[builtins.str]:
         r"""

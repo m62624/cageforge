@@ -141,6 +141,8 @@ pub enum BackendCapability {
     /// Enforce concrete and symbolic filesystem scopes, including workspace
     /// roots required by workspace-relative selectors and globs.
     FilesystemScopes,
+    /// Map executable files from explicitly validated runtime roots.
+    FilesystemExecutableMapping,
     /// Enforce native absolute filesystem scopes and absolute globs.
     FilesystemAbsoluteScopes,
     /// Resolve filesystem scopes and globs against runtime workspace roots.

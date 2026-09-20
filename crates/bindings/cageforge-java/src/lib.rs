@@ -78,17 +78,8 @@ fn resolve_workspace_roots(
     declarations
         .iter()
         .map(|declaration| {
-            if cageforge::contains_parent_traversal(declaration) {
-                return Err(
-                    format!("workspace root contains parent traversal: {declaration:?}").into(),
-                );
-            }
-            let path = if declaration.is_absolute() {
-                declaration.clone()
-            } else {
-                current_directory.join(declaration)
-            };
-            Ok(cageforge::normalize_lexical_path(&path).into_owned())
+            cageforge::resolve_lexical_path(current_directory, declaration)
+                .map_err(|error| format!("invalid workspace root {declaration:?}: {error}").into())
         })
         .collect()
 }
@@ -134,6 +125,7 @@ fn runtime_context(
     current_directory: &Path,
     workspace_roots: &[PathBuf],
     minimal_path: Option<&Path>,
+    executable_roots: &[PathBuf],
 ) -> Result<cageforge::PathResolutionContext, String> {
     let mut context = cageforge::PathResolutionContext::new()
         .with_root(platform_root(current_directory))
@@ -172,6 +164,11 @@ fn runtime_context(
     for root in workspace_roots {
         context = context
             .with_workspace_root(root.clone())
+            .map_err(|error| error.to_string())?;
+    }
+    for root in executable_roots {
+        context = context
+            .with_executable_root(root.clone())
             .map_err(|error| error.to_string())?;
     }
     Ok(context)
@@ -403,7 +400,12 @@ fn runtime_inputs_with_ceiling(
     String,
 > {
     let workspace_roots = resolve_workspace_roots(current_directory, profile.workspace_roots())?;
-    let context = runtime_context(current_directory, &workspace_roots, minimal_path)?;
+    let context = runtime_context(
+        current_directory,
+        &workspace_roots,
+        minimal_path,
+        profile.executable_roots(),
+    )?;
     let environment = profile
         .command()
         .map(|command| command.environment().clone())
@@ -645,7 +647,8 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestGra
     })
 }
 
-/// Returns filesystem capabilities from an opaque permission request.
+/// Returns filesystem capabilities from an opaque permission request. Operation
+/// labels are `read`, `write`, `deny`, and `map-executable`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestFilesystem<'caller>(
     mut unowned_env: EnvUnowned<'caller>,
@@ -659,7 +662,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionRequestFil
             .iter()
             .flat_map(|capability| {
                 [
-                    format!("{:?}", capability.operation()).to_lowercase(),
+                    capability.operation().as_str().to_owned(),
                     capability.path().to_owned(),
                 ]
             });

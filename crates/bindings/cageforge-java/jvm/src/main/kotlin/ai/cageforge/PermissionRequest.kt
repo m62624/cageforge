@@ -19,7 +19,7 @@ class PermissionRequest internal constructor(
             { CageforgePermissionException("Cageforge permission request is closed") },
         )
 
-    /** Requested filesystem capabilities as `(operation, path)` pairs. */
+    /** Requested filesystem capabilities as `(operation, path)` pairs. Operations include `read`, `write`, `deny`, and `map-executable`. */
     val filesystem: List<Pair<String, String>> =
         filesystemValues.toList().chunked(2).map { values ->
             require(values.size == 2) { "Cageforge returned malformed filesystem capabilities" }

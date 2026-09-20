@@ -137,6 +137,38 @@ let context = PathResolutionContext::new()
 Use `root` only when the command needs the entire supplied system root. It is
 broader than `minimal`; neither selector is inferred from the TOML text.
 
+## macOS executable runtime roots
+
+On macOS, Seatbelt treats reading a runtime directory and mapping a Mach-O
+file executable as separate permissions. A native runtime outside the fixed
+system baseline therefore needs both declarations:
+
+```toml
+[profiles.tool.platforms.macos.filesystem]
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "absolute", path = "/opt/example-runtime", access = "read" },
+]
+
+[profiles.tool.platforms.macos.runtime]
+executable_roots = ["/opt/example-runtime"]
+```
+
+`runtime.executable_roots` accepts existing absolute directories only. The
+backend rejects relative paths, parent traversal, missing roots, and symlinked
+ancestors before spawning. Each selected root is canonicalized and added only
+to Seatbelt's explicit `file-map-executable` allowlist; it does not make the directory
+writable and does not make other readable roots executable. Keep the root as
+narrow as the runtime layout permits. The complete runnable fixture is
+[`runnable/macos/runtime-executable.toml`](runnable/macos/runtime-executable.toml).
+
+The path syntax is checked against the platform named by the overlay, not
+against the machine that merely parses the document. A portable TOML file may
+therefore contain Linux, macOS, and Windows overlays together; only the
+selected platform overlay enters the runtime context. This declaration is
+macOS-specific, and Linux or Windows native backends reject an executable-root
+context instead of ignoring or widening it.
+
 This follows the same platform-default principle reviewed in the local Codex
 baseline: Linux adds standard executable and loader roots when minimal
 defaults are requested, macOS adds its standard runtime/framework rules, and
@@ -185,12 +217,29 @@ working directory is the workspace.
 
 The TOML controls the policy and approval behavior; it does not contain a
 grant. When a resolved profile uses `approval.mode = "preflight"`, the Rust
-the `cageforge` crate, CLI, Python binding, or Java binding builds a
-`PermissionRequest` from the resolved policy and runtime identity. That request includes the selected
-`PlatformId`, architecture, executable/tool identity, config and manifest
+`cageforge` crate, CLI, Python binding, or Java binding builds a
+`PermissionRequest` from the resolved policy and runtime identity. That request
+includes the selected `PlatformId`, architecture, executable/tool identity,
+config and manifest
 digests, resolved native paths, network capabilities, and child-process
 capabilities. A trusted host then returns an opaque `PermissionGrant` before
 the native backend is launched.
+
+These are three separate artifacts:
+
+1. TOML is the application's policy and profile input.
+2. `PermissionRequest` is the typed, temporary description sent to the
+   trusted host. `request.json()` in Python or `request.json` in Java is only
+   a stable transport representation of that request.
+3. `PermissionGrant` is the opaque approval. If its scope is persistent, the
+   host stores it in `permissions.json` so an identical future request can be
+   approved without asking again. The store is a grant cache, not another
+   TOML file and not a source of additional permissions.
+
+For every later launch, the host still resolves the selected TOML profile and
+rebuilds the request. The stored grant is reused only when its complete
+identity and capability set still match; changing the profile or requested
+permissions creates a new request and requires a new approval.
 
 Use [`permission-preflight.toml`](permission-preflight.toml) for one profile
 that applies the same policy to all three operating systems while adding a
@@ -220,6 +269,50 @@ launch. `persistence = "session"` keeps the grant in memory, while
 `persistence = "persistent"` allows the trusted host to write it to its
 host-owned `permissions.json` store after approval. The store is not policy
 input and must not be edited as TOML.
+
+### Approving a second command with additional access
+
+Permissions are fixed for one sandbox launch. If command A needs only the
+base policy and command B needs one additional resource, B uses another
+profile and another request; it does not extend A's running sandbox:
+
+```toml
+[profiles.base]
+workspace_roots = { "." = true }
+
+[profiles.base.approval]
+mode = "preflight"
+persistence = "session"
+
+[profiles.base.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+]
+
+[profiles.more]
+inherits = ["base"]
+
+[profiles.more.filesystem]
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "absolute", path = "/opt/data", access = "read" },
+]
+```
+
+The host resolves `base` for A, builds a `PermissionRequest`, obtains a
+`PermissionGrant`, and launches A. It then resolves `more` for B and repeats
+the same request, approval, and launch sequence. Rust uses
+`resolve_for_platform` and `PreflightPlan`; Python uses
+`permission_request(..., profile_name="more")`; Java uses the equivalent
+`profileName` argument. All three paths use the same TOML and the same Rust
+capability model. A request is structured data, not a command string, and
+contains the complete filesystem, network/local-IPC, executable, and identity
+information for that launch.
+
+The additional access is therefore granted only to B's new sandbox. A keeps
+its original immutable policy. `PermissionStore` can reuse a matching
+persistent grant on a later launch, but it never changes a running process.
 
 An omitted filesystem section resolves to an empty restricted policy. An
 omitted network section denies networking. A profile without `command` is

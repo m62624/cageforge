@@ -6,9 +6,9 @@ use std::io::Write;
 use std::mem::{align_of, offset_of, size_of};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use cageforge_path::paths_equal;
+use cageforge_path::{contains_parent_traversal, paths_equal};
 use getrandom::fill;
 use windows_sys::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, ERROR_INVALID_DATA, GENERIC_WRITE, GetLastError,
@@ -185,10 +185,7 @@ pub(super) fn validate_request_boundary(request: &SetupRequest) -> NativeSetupRe
         ));
     }
     if !request.state_directory.is_absolute()
-        || request
-            .state_directory
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
+        || contains_parent_traversal(&request.state_directory)
         || request
             .state_directory
             .as_os_str()

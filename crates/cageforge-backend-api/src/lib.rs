@@ -161,6 +161,13 @@ impl<'a> BackendRequest<'a> {
             .sandbox
             .path_context(base_context)
             .map_err(|source| BackendContractError::InvalidRuntimeContext { source })?;
+        if !path_context.executable_roots().is_empty()
+            && !capabilities.supports(BackendCapability::FilesystemExecutableMapping)
+        {
+            return Err(BackendContractError::UnsupportedCapability {
+                capability: BackendCapability::FilesystemExecutableMapping,
+            });
+        }
         let working_directory = match self.command.working_directory() {
             Some(path) if path.is_absolute() => normalize_lexical_path(path).into_owned(),
             Some(path) => {

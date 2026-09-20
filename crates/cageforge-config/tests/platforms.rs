@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use cageforge_config::Config;
+use cageforge_config::{Config, ConfigError};
 use cageforge_permissions::PlatformId;
 use cageforge_permissions::{ApprovalPersistence, PermissionMode};
 
@@ -185,4 +185,102 @@ named_pipes = ["\\\\.\\pipe\\windows-service"]
             .named_pipe()
             .is_some()
     );
+}
+
+#[test]
+fn macos_runtime_roots_are_selected_only_by_the_macos_overlay() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "tool"
+
+[profiles.tool.platforms.macos.runtime]
+executable_roots = ["/opt/example-runtime"]
+"#,
+    )
+    .expect("runtime-root configuration");
+
+    assert_eq!(
+        config
+            .resolve_default_for_platform(PlatformId::Macos)
+            .expect("macOS profile")
+            .executable_roots(),
+        &[std::path::PathBuf::from("/opt/example-runtime")]
+    );
+    assert!(
+        config
+            .resolve_default_for_platform(PlatformId::Linux)
+            .expect("Linux profile")
+            .executable_roots()
+            .is_empty()
+    );
+}
+
+#[test]
+fn platform_runtime_overlays_validate_their_target_path_syntax() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "tool"
+
+[profiles.tool.platforms.macos.runtime]
+executable_roots = ["/opt/example-runtime"]
+
+[profiles.tool.platforms.windows.runtime]
+executable_roots = ["C:/Program Files/example-runtime"]
+"#,
+    )
+    .expect("target platform runtime paths should parse on every host");
+
+    assert_eq!(
+        config
+            .resolve_default_for_platform(PlatformId::Macos)
+            .expect("macOS runtime path")
+            .executable_roots(),
+        &[std::path::PathBuf::from("/opt/example-runtime")]
+    );
+    assert_eq!(
+        config
+            .resolve_default_for_platform(PlatformId::Windows)
+            .expect("Windows runtime path")
+            .executable_roots(),
+        &[std::path::PathBuf::from("C:/Program Files/example-runtime")]
+    );
+}
+
+#[test]
+fn windows_overlay_merges_use_windows_identity_on_a_non_windows_host() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "child"
+
+[profiles.base.platforms.windows.runtime]
+executable_roots = ["C:/Runtime"]
+
+[profiles.child]
+inherits = ["base"]
+
+[profiles.child.platforms.windows.runtime]
+executable_roots = ["c:\\runtime"]
+"#,
+    )
+    .expect("portable Windows overlay should parse");
+
+    let resolved = config
+        .resolve_default_for_platform(PlatformId::Windows)
+        .expect("Windows overlay should resolve");
+    assert_eq!(
+        resolved.executable_roots(),
+        &[std::path::PathBuf::from("c:\\runtime")]
+    );
+}
+
+#[test]
+fn runtime_roots_require_absolute_unique_safe_paths() {
+    for source in [
+        "[profiles.tool.runtime]\nexecutable_roots = [\"runtime\"]\n",
+        "[profiles.tool.runtime]\nexecutable_roots = [\"/opt/../runtime\"]\n",
+        "[profiles.tool.runtime]\nexecutable_roots = [\"/opt/runtime\", \"/opt/runtime/\"]\n",
+    ] {
+        let error = Config::from_toml(source).expect_err("unsafe runtime root must be rejected");
+        assert!(matches!(error, ConfigError::InvalidValue { .. }));
+    }
 }

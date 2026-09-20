@@ -209,6 +209,7 @@ impl SandboxBackend for MacosBackend {
             BackendCapability::FilesystemRestricted,
             BackendCapability::FilesystemUnrestricted,
             BackendCapability::FilesystemScopes,
+            BackendCapability::FilesystemExecutableMapping,
             BackendCapability::FilesystemAbsoluteScopes,
             BackendCapability::FilesystemWorkspaceScopes,
             BackendCapability::FilesystemRootScopes,

@@ -19,6 +19,9 @@ The implementation is independently authored in Cageforge. The frozen Codex
 checkout is a behavioral reference only; no Codex source or product protocol
 is copied into this crate.
 
+The separate runtime mapping contract is defined in
+[Specification 0024](0024-macos-executable-runtime-roots.md).
+
 ## 2. Platform and dependency boundary
 
 The native backend and child directly implement `Sandbox` and `SandboxChild`

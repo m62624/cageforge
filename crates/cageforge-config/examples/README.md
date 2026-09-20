@@ -42,6 +42,7 @@ profile.
 | [`platform-targets-unix.toml`](platform-targets-unix.toml) | Linux/macOS path and socket syntax | All portable filesystem and network rule fields |
 | [`platform-targets-windows.toml`](platform-targets-windows.toml) | Windows-native equivalent | Drive-qualified paths and the same portable policy fields |
 | [`local-ipc-platforms.toml`](local-ipc-platforms.toml) | Portable local IPC declaration | Unix sockets on Linux/macOS and named-pipe validation on Windows |
+| [`runnable/macos/runtime-executable.toml`](runnable/macos/runtime-executable.toml) | macOS runtime executable mapping | Separate read access from Seatbelt `file-map-executable` access |
 
 Local IPC endpoint syntax is platform-specific inside one portable document:
 `local_ipc.unix_sockets` contains absolute POSIX paths for Linux/macOS, while
@@ -85,6 +86,14 @@ complete minimal policy shape: its common filesystem section makes the command
 launchable, and its three platform overlays select only the native endpoint
 syntax for the current OS. Use the overlay for the host that will run the
 command; the other endpoint kinds are not translated or silently widened.
+
+The [`runnable/macos/runtime-executable.toml`](runnable/macos/runtime-executable.toml)
+profile shows the macOS case where reading a custom runtime directory is not
+enough to start a Mach-O executable from it. The selected profile must grant
+the directory as `filesystem` read access and list the same absolute directory
+under `platforms.macos.runtime.executable_roots`. Cageforge validates that root
+before launch and emits a narrow Seatbelt `file-map-executable` rule. It does
+not add that permission to every readable path.
 
 The environment order applies to a command environment, not to filesystem
 permissions or profile inheritance. `cageforge-config` parses and resolves the

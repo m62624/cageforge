@@ -107,6 +107,9 @@ milliseconds = 60000
 Filesystem rule targets are `absolute`, `workspace`, `workspace-root`, `root`,
 `minimal`, `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`.
 Absolute and workspace paths are still validated by `cageforge-policy`.
+macOS runtime mapping is an additional explicit `runtime.executable_roots`
+declaration described in [Specification 0024](0024-macos-executable-runtime-roots.md);
+it is not implied by a readable filesystem rule.
 
 Network modes are `disabled`, `enabled`, and `external`. Domain and Unix
 socket defaults are `disabled`, `enabled`, or `restricted`.
@@ -132,8 +135,10 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   cycle. A child overrides scalar values and an exact canonical rule target,
   while distinct rules remain available for specificity-based evaluation.
 - Filesystem, domain, and local-IPC rules use deterministic canonical target
-  keys. Domain keys use the policy crate's host normalization, including
-  ports, trailing dots, bracketed IP literals, and supported globs. An exact
+  keys. Filesystem selectors and glob declarations in a platform overlay use
+  the selected `PathDialect` from `cageforge-path`; domain keys use the policy
+  crate's host normalization, including ports, trailing dots, bracketed IP
+  literals, and supported globs. An exact
   child target replaces an inherited target; overlapping but distinct targets
   are evaluated by specificity, and equal-specificity capability conflicts are
   resolved conservatively.
@@ -148,12 +153,13 @@ empty, NUL-containing, and parent-traversing paths before backend resolution.
   child that does not define one.
 - `workspace_roots` is an inheritable path-to-enabled map. A child can disable
   an inherited declaration with `false`. Inheritance compares declarations
-  using `cageforge-path` native path identity, including Windows case rules,
-  before applying the child value. Resolution returns enabled path declarations
-  in deterministic lexical order. A single profile rejects duplicate keys under
-  native path identity; this preserves case-sensitive POSIX behavior while
-  refusing ambiguous case-only duplicates on Windows. The backend resolves
-  relative paths and registers absolute roots in its execution context.
+  using the selected target dialect from `cageforge-path`, including Windows
+  case rules, before applying the child value. Resolution returns enabled path
+  declarations in deterministic lexical order. A single profile rejects
+  duplicate keys under the same target dialect; this preserves case-sensitive
+  POSIX behavior while refusing ambiguous case-only duplicates on Windows. The
+  backend resolves relative paths and registers absolute roots in its execution
+  context.
 - Gateway settings merge field by field. Omitted settings use secure
   `GatewayConfig` defaults, numeric settings must be positive and representable
   on the target, and the relay byte ceiling can be removed only through the
@@ -235,6 +241,7 @@ The crate exposes:
 - `ResolvedProfile::policy` and `ResolvedProfile::command`;
 - `ResolvedProfile::network_gateway`;
 - `ResolvedProfile::description` and `ResolvedProfile::workspace_roots`;
+- `ResolvedProfile::executable_roots` for selected native runtime roots;
 - `config_schema_json` for editor and preflight tooling;
 - `ConfigError::diagnostic` for stable JSON-ready diagnostics with parser
   locations when available;

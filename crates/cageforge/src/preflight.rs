@@ -217,6 +217,19 @@ impl PreflightPlan {
         if grant.approved().child_processes() != self.request.capabilities().child_processes() {
             return Err(PreflightError::PartialGrantUnsupported);
         }
+        for capability in self.request.capabilities().filesystem() {
+            if capability.operation() != FilesystemOperation::MapExecutable {
+                continue;
+            }
+            let read =
+                FilesystemCapability::new(FilesystemOperation::Read, capability.path().to_owned())?;
+            if !grant.approved().filesystem().contains(capability)
+                || (self.request.capabilities().filesystem().contains(&read)
+                    && !grant.approved().filesystem().contains(&read))
+            {
+                return Err(PreflightError::PartialGrantUnsupported);
+            }
+        }
         let effective = if grant.approved() == self.request.capabilities() {
             self.effective.clone()
         } else if let Some(inputs) = &self.narrowing {
@@ -302,6 +315,12 @@ fn permission_set(
         capabilities = capabilities.with_filesystem(FilesystemCapability::new(
             FilesystemOperation::Write,
             "filesystem://unrestricted",
+        )?);
+    }
+    for path in context.executable_roots() {
+        capabilities = capabilities.with_filesystem(FilesystemCapability::new(
+            FilesystemOperation::MapExecutable,
+            path_to_string(path),
         )?);
     }
     for domain in policy.network().domains() {
@@ -587,6 +606,64 @@ mod tests {
         .unwrap();
         let grant = GrantAuthority::new().approve(plan.request());
         assert!(plan.authorize(grant).is_ok());
+    }
+
+    #[test]
+    fn executable_mapping_is_a_separate_capability_and_cannot_be_partially_approved() {
+        let runtime_root = test_absolute_path("runtime-root");
+        let policy = SandboxPolicy::new(
+            FilesystemPolicy::restricted([FilesystemRule::new(
+                PathSelector::absolute(runtime_root.clone()).unwrap(),
+                AccessMode::Read,
+            )]),
+            NetworkPolicy::disabled(),
+        );
+        let context = cageforge_policy::PathResolutionContext::new()
+            .with_executable_root(runtime_root.clone())
+            .unwrap();
+        let environment = EnvironmentSpec::default();
+        let ceiling = PolicyCeiling::new(policy.clone(), environment.clone());
+        let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling)).unwrap();
+        let plan = PreflightPlan::from_policy_with_ceiling(
+            &policy,
+            &context,
+            effective,
+            &environment,
+            &ceiling,
+            PreflightIdentity::new(
+                "tool",
+                "1",
+                "a".repeat(64),
+                "b".repeat(64),
+                PlatformId::Macos,
+                "arm64",
+            ),
+        )
+        .unwrap();
+        let read = FilesystemCapability::new(
+            FilesystemOperation::Read,
+            runtime_root.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        let map = FilesystemCapability::new(
+            FilesystemOperation::MapExecutable,
+            runtime_root.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        assert!(plan.request().capabilities().filesystem().contains(&read));
+        assert!(plan.request().capabilities().filesystem().contains(&map));
+        assert_eq!(
+            FilesystemOperation::MapExecutable.as_str(),
+            "map-executable"
+        );
+
+        let grant = GrantAuthority::new()
+            .approve_subset(plan.request(), PermissionSet::new().with_filesystem(read))
+            .unwrap();
+        assert!(matches!(
+            plan.authorize(grant),
+            Err(PreflightError::PartialGrantUnsupported)
+        ));
     }
 
     #[test]

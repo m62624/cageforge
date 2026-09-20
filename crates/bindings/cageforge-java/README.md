@@ -150,6 +150,8 @@ The `minimal` selector is symbolic. It does not contain a universal path in
 TOML; the native adapter supplies paths such as `/usr` and `/bin` on Linux or
 the system runtime directories on Windows. A path in `RuntimeContext` does not
 grant access unless the selected profile contains the matching filesystem rule.
+The macOS `runtime.executable_roots` overlay uses the same TOML and preflight
+request in this binding; `map-executable` remains separate from `read`.
 
 ## Process and error handling
 

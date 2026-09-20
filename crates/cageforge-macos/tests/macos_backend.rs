@@ -7,6 +7,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
@@ -137,6 +138,213 @@ fn runnable_macos_profile_launches_through_the_native_backend_api() {
         "macOS runnable profile failed: {status:?}"
     );
     assert_eq!(stdout.trim(), "cageforge-macos-smoke");
+}
+
+struct RuntimeLaunchOutcome {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn launch_runtime_profile(source: &str, workspace: &Path) -> Result<RuntimeLaunchOutcome, String> {
+    let profile = Config::from_toml(source)
+        .map_err(|error| error.to_string())?
+        .resolve_default_for_platform(PlatformId::Macos)
+        .map_err(|error| error.to_string())?;
+    let command = profile
+        .command()
+        .cloned()
+        .ok_or_else(|| "runtime example must provide a command".to_owned())?
+        .with_working_directory(workspace.to_path_buf())
+        .map_err(|error| error.to_string())?;
+    let environment = command.environment().clone();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective = compose(CompositionRequest::new(
+        profile.policy(),
+        &environment,
+        &ceiling,
+    ))
+    .map_err(|error| error.to_string())?;
+    let mut runtime_context = context(workspace);
+    for root in profile.executable_roots() {
+        runtime_context = runtime_context
+            .with_executable_root(root.clone())
+            .map_err(|error| error.to_string())?;
+    }
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime_context)
+        .map_err(|error| error.to_string())?;
+    let mut child = backend.spawn(prepared).map_err(|error| error.to_string())?;
+    let status = child.wait().map_err(|error| error.to_string())?;
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .ok_or_else(|| "runtime example did not provide stdout".to_owned())?
+        .read_to_string(&mut stdout)
+        .map_err(|error| error.to_string())?;
+    let mut stderr = String::new();
+    child
+        .stderr()
+        .ok_or_else(|| "runtime example did not provide stderr".to_owned())?
+        .read_to_string(&mut stderr)
+        .map_err(|error| error.to_string())?;
+    Ok(RuntimeLaunchOutcome {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+#[test]
+fn custom_macos_runtime_requires_explicit_executable_mapping() {
+    const PLACEHOLDER: &str = "/tmp/cageforge-runtime-executable-root";
+    let template_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cageforge-config/examples/runnable/macos/runtime-executable.toml");
+    let template = fs::read_to_string(&template_path).expect("runtime-root example");
+    let temporary = TempDir::new().expect("runtime-root workspace");
+    let runtime_root = temporary.path().join("runtime");
+    let workspace = temporary.path().join("workspace");
+    fs::create_dir(&runtime_root).expect("runtime root");
+    fs::create_dir(&workspace).expect("runtime workspace");
+
+    let runtime_executable = runtime_root.join("echo");
+    compile_runtime_fixture(&runtime_root, &runtime_executable);
+
+    let runtime_root_text = runtime_root.to_str().expect("UTF-8 runtime root");
+    let source = template.replace(PLACEHOLDER, runtime_root_text);
+    let runtime_section = format!(
+        "\n[profiles.runtime.platforms.macos.runtime]\nexecutable_roots = [\"{runtime_root_text}\"]\n"
+    );
+    let without_mapping = source.replace(&runtime_section, "");
+
+    let denied = launch_runtime_profile(&without_mapping, &workspace);
+    match denied {
+        Ok(outcome) => assert!(
+            !outcome.status.success(),
+            "runtime launched without file-map-executable: stdout={:?} stderr={:?}",
+            outcome.stdout,
+            outcome.stderr
+        ),
+        Err(error) => assert!(!error.is_empty(), "empty failure without mapping: {error}"),
+    }
+
+    let allowed = launch_runtime_profile(&source, &workspace).expect("mapped runtime launch");
+    assert!(
+        allowed.status.success(),
+        "mapped runtime failed: stdout={:?} stderr={:?}",
+        allowed.stdout,
+        allowed.stderr
+    );
+    assert_eq!(allowed.stdout.trim(), "cageforge-runtime-root-smoke");
+}
+
+fn compile_runtime_fixture(runtime_root: &Path, executable: &Path) {
+    let library_source = runtime_root.join("runtime.c");
+    let library = runtime_root.join("libcageforge_runtime.dylib");
+    let program_source = runtime_root.join("main.c");
+    fs::write(
+        &library_source,
+        r#"const char *cageforge_runtime_message(void) {
+    return "cageforge-runtime-root-smoke";
+}
+"#,
+    )
+    .expect("write runtime library source");
+    fs::write(
+        &program_source,
+        r#"#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+extern const char *cageforge_runtime_message(void);
+
+int main(int argc, char **argv) {
+    if (argc < 1 || argv[0] == NULL) {
+        return 70;
+    }
+    char payload_path[PATH_MAX];
+    int written = snprintf(payload_path, sizeof(payload_path), "%s", argv[0]);
+    if (written < 0 || (size_t)written >= sizeof(payload_path)) {
+        return 71;
+    }
+    char *separator = strrchr(payload_path, '/');
+    if (separator == NULL) {
+        return 72;
+    }
+    const char *payload_name = "cageforge_runtime_payload";
+    size_t prefix_length = (size_t)(separator - payload_path) + 1;
+    if (prefix_length + strlen(payload_name) + 1 > sizeof(payload_path)) {
+        return 72;
+    }
+    memcpy(separator + 1, payload_name, strlen(payload_name) + 1);
+    int descriptor = open(payload_path, O_RDONLY);
+    if (descriptor < 0) {
+        return 73;
+    }
+    struct stat metadata;
+    if (fstat(descriptor, &metadata) != 0 || metadata.st_size <= 0) {
+        close(descriptor);
+        return 74;
+    }
+    void *mapping = mmap(NULL, (size_t)metadata.st_size, PROT_READ | PROT_EXEC,
+                         MAP_PRIVATE, descriptor, 0);
+    close(descriptor);
+    if (mapping == MAP_FAILED) {
+        return 75;
+    }
+    munmap(mapping, (size_t)metadata.st_size);
+    puts(cageforge_runtime_message());
+    return 0;
+}
+"#,
+    )
+    .expect("write runtime program source");
+
+    let library_name = library.to_str().expect("UTF-8 runtime library path");
+    let library_status = Command::new("clang")
+        .args([
+            "-dynamiclib",
+            library_source.to_str().expect("UTF-8 library source path"),
+            "-install_name",
+            "@rpath/libcageforge_runtime.dylib",
+            "-o",
+            library_name,
+        ])
+        .status()
+        .expect("run clang for runtime library");
+    assert!(
+        library_status.success(),
+        "runtime library compilation failed"
+    );
+
+    let executable_name = executable.to_str().expect("UTF-8 runtime executable path");
+    let program_status = Command::new("clang")
+        .args([
+            program_source.to_str().expect("UTF-8 program source path"),
+            "-L",
+            runtime_root.to_str().expect("UTF-8 runtime root path"),
+            "-lcageforge_runtime",
+            "-Wl,-rpath,@loader_path",
+            "-o",
+            executable_name,
+        ])
+        .status()
+        .expect("run clang for runtime executable");
+    assert!(
+        program_status.success(),
+        "runtime executable compilation failed"
+    );
+    let payload = runtime_root.join("cageforge_runtime_payload");
+    fs::copy(executable, &payload).expect("copy Mach-O runtime payload");
+    fs::set_permissions(executable, fs::Permissions::from_mode(0o755))
+        .expect("make runtime executable executable");
+    fs::set_permissions(payload, fs::Permissions::from_mode(0o755))
+        .expect("make runtime payload executable");
 }
 
 fn backend() -> MacosBackend {
@@ -802,6 +1010,7 @@ fn backend_is_send_sync_and_reusable_for_independent_instances() {
         BackendCapability::FilesystemRestricted,
         BackendCapability::FilesystemUnrestricted,
         BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemExecutableMapping,
         BackendCapability::FilesystemAbsoluteScopes,
         BackendCapability::FilesystemWorkspaceScopes,
         BackendCapability::FilesystemRootScopes,

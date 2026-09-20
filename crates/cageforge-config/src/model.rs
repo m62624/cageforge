@@ -145,6 +145,7 @@ pub(crate) struct RawProfile {
     pub(crate) local_ipc: Option<RawLocalIpc>,
     pub(crate) command: Option<RawCommand>,
     pub(crate) approval: Option<RawApproval>,
+    pub(crate) runtime: Option<RawRuntime>,
     #[serde(default)]
     pub(crate) platforms: BTreeMap<PlatformId, RawPlatformProfile>,
 }
@@ -162,6 +163,15 @@ pub(crate) struct RawPlatformProfile {
     pub(crate) local_ipc: Option<RawLocalIpc>,
     pub(crate) command: Option<RawCommand>,
     pub(crate) approval: Option<RawApproval>,
+    pub(crate) runtime: Option<RawRuntime>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawRuntime {
+    #[serde(default)]
+    pub(crate) executable_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]

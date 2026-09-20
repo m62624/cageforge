@@ -187,6 +187,21 @@ pub enum FilesystemOperation {
     Write,
     /// Explicitly deny access to a path.
     Deny,
+    /// Map executable files from a runtime root into process memory.
+    #[serde(rename = "map-executable")]
+    MapExecutable,
+}
+
+impl FilesystemOperation {
+    /// Returns the stable host-facing operation label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Deny => "deny",
+            Self::MapExecutable => "map-executable",
+        }
+    }
 }
 
 /// One portable or platform-resolved filesystem capability.

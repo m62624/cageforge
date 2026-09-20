@@ -12,6 +12,7 @@ fn filesystem_plan(denied_path: &str) -> MacosFilesystemPlan {
     MacosFilesystemPlan {
         read_roots: vec![PathBuf::from("/workspace")],
         write_roots: vec![PathBuf::from("/workspace")],
+        executable_roots: Vec::new(),
         denied_paths: vec![PathBuf::from(denied_path)],
         write_denied_paths: vec![PathBuf::from("/workspace/readonly")],
         denied_globs: vec![
@@ -73,6 +74,7 @@ fn base_profile_keeps_dynamic_loader_and_standard_stdio_explicit() {
     .expect("profile");
     let policy = profile.policy();
 
+    assert!(policy.contains("(deny file-map-executable)"));
     assert!(policy.contains("(allow file-map-executable"));
     assert!(policy.contains("(regex \"^/dev/fd/(0|1|2)$\")"));
     assert!(policy.contains("(regex \"^/dev/ttys[0-9]+$\")"));

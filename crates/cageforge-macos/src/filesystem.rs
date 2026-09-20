@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use cageforge_backend_api::{PreparedBackendRequest, SandboxBackend};
-use cageforge_path::{NativePathKey, is_within, normalize_lexical_path};
+use cageforge_path::{NativePathKey, contains_parent_traversal, is_within, normalize_lexical_path};
 use cageforge_policy::{AccessMode, FilesystemDecision, FilesystemMode, FilesystemTarget};
 use cageforge_policy_compose::{EffectiveFilesystemLayer, EffectivePathContext};
 
@@ -18,6 +18,7 @@ use crate::error::MacosFilesystemError;
 pub(crate) struct MacosFilesystemPlan {
     pub(crate) read_roots: Vec<PathBuf>,
     pub(crate) write_roots: Vec<PathBuf>,
+    pub(crate) executable_roots: Vec<PathBuf>,
     pub(crate) denied_paths: Vec<PathBuf>,
     pub(crate) write_denied_paths: Vec<PathBuf>,
     pub(crate) denied_globs: Vec<String>,
@@ -59,6 +60,26 @@ impl MacosFilesystemPlan {
         collector.apply_protected_paths();
 
         let mut plan = collector.finish();
+        plan.executable_roots = context
+            .executable_roots()
+            .iter()
+            .map(|path| {
+                let decision = prepared
+                    .filesystem_access_for_path(backend, path)
+                    .map_err(MacosFilesystemError::BackendContract)?;
+                match decision {
+                    FilesystemDecision::Read | FilesystemDecision::Write => {
+                        validate_executable_root(path)
+                    }
+                    FilesystemDecision::Deny => {
+                        Err(MacosFilesystemError::ExecutableRootNotReadable { path: path.clone() })
+                    }
+                    FilesystemDecision::ExternallyEnforced => {
+                        Err(MacosFilesystemError::ExternalOwnership)
+                    }
+                }
+            })
+            .collect::<Result<_, _>>()?;
         plan.unrestricted = mode == FilesystemMode::Unrestricted;
         Ok(plan)
     }
@@ -69,6 +90,10 @@ impl MacosFilesystemPlan {
 
     pub(crate) fn write_roots(&self) -> &[PathBuf] {
         &self.write_roots
+    }
+
+    pub(crate) fn executable_roots(&self) -> &[PathBuf] {
+        &self.executable_roots
     }
 
     pub(crate) fn denied_paths(&self) -> &[PathBuf] {
@@ -240,7 +265,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         missing: cageforge_policy::MissingPathBehavior,
     ) -> Result<Option<PathBuf>, MacosFilesystemError> {
         let path = normalize_macos_system_alias(path);
-        if !path.is_absolute() || contains_parent_component(&path) {
+        if !path.is_absolute() || contains_parent_traversal(&path) {
             return Err(MacosFilesystemError::InvalidScope { path });
         }
         let Some(existing) = self.first_missing_component(&path)? else {
@@ -354,12 +379,52 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         MacosFilesystemPlan {
             read_roots: to_paths(self.read_roots),
             write_roots: to_paths(self.write_roots),
+            executable_roots: Vec::new(),
             denied_paths: to_paths(self.denied_paths),
             write_denied_paths: to_paths(self.write_denied_paths),
             denied_globs: self.denied_globs.into_iter().collect(),
             unrestricted: false,
         }
     }
+}
+
+fn validate_executable_root(path: &Path) -> Result<PathBuf, MacosFilesystemError> {
+    let path = normalize_macos_system_alias(path.to_path_buf());
+    if !path.is_absolute() || contains_parent_traversal(&path) {
+        return Err(MacosFilesystemError::InvalidExecutableRoot { path });
+    }
+    let mut current = PathBuf::from("/");
+    for component in path.components() {
+        let Component::Normal(value) = component else {
+            continue;
+        };
+        current.push(value);
+        let metadata = fs::symlink_metadata(&current).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                MacosFilesystemError::ExecutableRootMissing { path: path.clone() }
+            } else {
+                MacosFilesystemError::Metadata {
+                    path: current.clone(),
+                    source,
+                }
+            }
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(MacosFilesystemError::Symlink { path: current });
+        }
+    }
+    let metadata = fs::metadata(&path).map_err(|source| MacosFilesystemError::Metadata {
+        path: path.clone(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(MacosFilesystemError::ExecutableRootNotDirectory { path });
+    }
+    let canonical = fs::canonicalize(&path).map_err(|source| MacosFilesystemError::Metadata {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(normalize_lexical_path(&normalize_macos_system_alias(canonical)).into_owned())
 }
 
 fn normalize_macos_system_alias(path: PathBuf) -> PathBuf {
@@ -379,11 +444,6 @@ fn normalize_macos_system_alias(path: PathBuf) -> PathBuf {
         }
     }
     path
-}
-
-fn contains_parent_component(path: &Path) -> bool {
-    path.components()
-        .any(|component| component == Component::ParentDir)
 }
 
 fn canonicalize_glob_static_prefix(pattern: &str) -> Result<Option<String>, MacosFilesystemError> {

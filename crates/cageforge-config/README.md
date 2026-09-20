@@ -40,7 +40,8 @@ ResolvedProfile
     ├── policy()  -> SandboxPolicy
     ├── command() -> CommandRequest
     ├── network_gateway() -> GatewayConfig
-    └── workspace_roots() -> backend declarations
+    ├── workspace_roots() -> backend declarations
+    └── executable_roots() -> macOS runtime declarations
 ```
 
 `ResolvedProfile` is an owned, validated result. It does not discover paths or
@@ -80,6 +81,14 @@ The platform overlay can also override `filesystem`, `network`, `command`,
 `workspace_roots`, and `approval`. `resolve` remains available for consumers
 that intentionally want the unselected portable declaration; execution layers
 should use `resolve_for_platform` or `resolve_default_for_platform`.
+
+For a custom macOS runtime, the platform overlay can also declare
+`runtime.executable_roots`. Each root must additionally be readable through an
+explicit filesystem rule. The macOS backend turns the validated root into a
+narrow Seatbelt `file-map-executable` rule; ordinary readable paths do not
+receive that permission. See the [configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md#macos-executable-runtime-roots)
+and the [`runtime-executable.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/macos/runtime-executable.toml)
+example.
 
 Local IPC uses the same platform-overlay model. Linux and macOS accept
 absolute Unix-socket paths; Windows uses the local named-pipe namespace and
@@ -228,8 +237,9 @@ may still override the matching inherited entry explicitly.
 
 `workspace_roots` is an inheritable path-to-enabled map. `true` enables a root
 and `false` disables an inherited root. Inheritance compares roots with the
-native path identity from `cageforge-path`, so a Windows case variant can
-override the same inherited root. The resolved paths are declarations;
+selected target dialect from `cageforge-path`, so a Windows case variant can
+override the same inherited root even when the portable TOML is read on a
+different host. The resolved paths are declarations;
 the backend resolves relative paths against its execution context before
 registering absolute roots in its path context. When passing these roots to
 `cageforge-policy-compose`, resolve them first: composition accepts only
