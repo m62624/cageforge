@@ -121,6 +121,23 @@ effective `tmpdir` or `slash_tmp` scope. Native tests must prove that an
 unlisted conventional temporary path remains unavailable to a restricted
 command.
 
+The fixed runtime compatibility baseline also includes the read-only
+`kern.sysv.semmns` sysctl. Python's `ProcessPoolExecutor` queries this value
+through `sysconf` before creating workers, so denying it would break a common
+standard-library operation even when POSIX semaphores themselves are allowed.
+This is an internal macOS compatibility rule, not a user filesystem,
+network, or approval capability; it is not configurable through TOML and is
+not included in `PermissionGrant`.
+
+The baseline deliberately does not infer user-installed runtime roots. Python,
+Node.js, Rust, Go, Java, and other toolchains may live under different
+per-user directories. Such roots must be declared through the ordinary
+filesystem read rules and, for non-system Mach-O runtimes, the explicit
+`runtime.executable_roots` capability in Specification 0024. A new runtime
+denial is added to the fixed baseline only when a native compatibility test
+demonstrates that it is common, read-only, and safe to grant to every
+restricted command.
+
 Compared with Codex's restricted platform defaults, Cageforge intentionally
 does not grant write access to the conventional temporary directories and
 does not grant unrestricted access to `/dev/fd`. The former is supplied only

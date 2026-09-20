@@ -97,6 +97,7 @@ fn base_profile_keeps_required_platform_runtime_rules_explicit() {
     assert!(policy.contains("(fsctl-command FSIOC_CAS_BSDFLAGS)"));
     assert!(policy.contains("/__KMP_REGISTERED_LIB_[0-9]+"));
     assert!(policy.contains("(sysctl-name \"hw.logicalcpu\")"));
+    assert!(policy.contains("(sysctl-name \"kern.sysv.semmns\")"));
     assert!(policy.contains("(literal \"/dev/autofs_nowait\")"));
     assert!(policy.contains("(global-name \"com.apple.dt.automationmode.reader\")"));
     assert!(policy.contains("(global-name \"com.apple.espd\")"));

@@ -150,6 +150,8 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (sysctl-name "kern.osvariant_status")
   (sysctl-name "kern.osversion")
   (sysctl-name "kern.secure_kernel")
+  ; Python's ProcessPoolExecutor queries this limit through sysconf.
+  (sysctl-name "kern.sysv.semmns")
   (sysctl-name "kern.bootargs")
   (sysctl-name "security.mac.lockdown_mode_state")
   (sysctl-name "kern.usrstack64")

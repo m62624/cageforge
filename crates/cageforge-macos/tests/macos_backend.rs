@@ -993,6 +993,61 @@ fn restricted_command_can_start_a_native_runtime_program() {
 }
 
 #[test]
+fn restricted_python_process_pool_can_start_workers() {
+    let workspace = TempDir::new().expect("Python multiprocessing workspace");
+    let script = workspace.path().join("process_pool.py");
+    fs::write(
+        &script,
+        r#"from concurrent.futures import ProcessPoolExecutor
+
+def increment(value):
+    return value + 1
+
+if __name__ == "__main__":
+    with ProcessPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(increment, 41).result() == 42
+    print("cageforge-python-process-pool-smoke")
+"#,
+    )
+    .expect("write Python multiprocessing fixture");
+
+    let command = CommandSpec::new("/usr/bin/python3")
+        .expect("system Python 3")
+        .with_arg(script.as_os_str())
+        .expect("Python fixture argument");
+    let (command, effective, context) = request_for(
+        workspace.path(),
+        &restricted_policy(workspace.path()),
+        command,
+    );
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect("prepare Python multiprocessing fixture");
+    let mut child = backend
+        .spawn(prepared)
+        .expect("spawn Python multiprocessing fixture");
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout()
+        .expect("Python multiprocessing stdout")
+        .read_to_string(&mut stdout)
+        .expect("read Python multiprocessing stdout");
+    child
+        .stderr()
+        .expect("Python multiprocessing stderr")
+        .read_to_string(&mut stderr)
+        .expect("read Python multiprocessing stderr");
+    let status = child.wait().expect("wait for Python multiprocessing");
+    assert!(
+        status.success(),
+        "Python multiprocessing failed: {status:?}; stderr={stderr:?}"
+    );
+    assert_eq!(stdout.trim(), "cageforge-python-process-pool-smoke");
+}
+
+#[test]
 fn backend_is_send_sync_and_reusable_for_independent_instances() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Arc<MacosBackend>>();
