@@ -20,7 +20,7 @@ use cageforge_path::{
 };
 use cageforge_permissions::{ApprovalConfig, PermissionMode, PlatformId};
 use cageforge_policy::SandboxPolicy;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -38,7 +38,7 @@ struct SourceDocument {
 }
 
 /// A fully resolved profile ready for a backend or harness adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ResolvedProfile {
     description: Option<String>,
     workspace_roots: Vec<PathBuf>,
@@ -47,6 +47,41 @@ pub struct ResolvedProfile {
     command: Option<CommandRequest>,
     network_gateway: GatewayConfig,
     approval: ApprovalConfig,
+    source_context: ProfileSourceContext,
+}
+
+impl PartialEq for ResolvedProfile {
+    fn eq(&self, other: &Self) -> bool {
+        self.description == other.description
+            && self.workspace_roots == other.workspace_roots
+            && self.executable_roots == other.executable_roots
+            && self.policy == other.policy
+            && self.command == other.command
+            && self.network_gateway == other.network_gateway
+            && self.approval == other.approval
+    }
+}
+
+impl Eq for ResolvedProfile {}
+
+/// Source metadata retained with a resolved profile for runtime diagnostics.
+///
+/// Backends receive validated policy values and must not parse TOML. This
+/// context lets an adapter report where an effective value came from without
+/// coupling native enforcement to the configuration format.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ProfileSourceContext {
+    profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform: Option<PlatformId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_location: Option<SourceLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    field_locations: BTreeMap<String, SourceLocation>,
 }
 
 struct ResolveFrame {
@@ -176,6 +211,7 @@ impl Config {
             })
             .unwrap_or_default();
         let approval = build_approval(merged.approval.as_ref(), name)?;
+        let source_context = self.source_context(name, platform, command.as_ref());
         Ok(ResolvedProfile {
             description: merged.description,
             workspace_roots,
@@ -184,6 +220,7 @@ impl Config {
             command,
             network_gateway,
             approval,
+            source_context,
         })
     }
 
@@ -297,9 +334,64 @@ impl Config {
         }
         Ok(merger.finish())
     }
+
+    fn source_context(
+        &self,
+        profile: &str,
+        platform: Option<PlatformId>,
+        command: Option<&CommandRequest>,
+    ) -> ProfileSourceContext {
+        let fields = [
+            "workspace_roots",
+            "filesystem",
+            "network",
+            "local_ipc",
+            "command",
+            "command.program",
+            "approval",
+            "runtime.executable_roots",
+        ]
+        .into_iter()
+        .filter_map(|field| {
+            self.source
+                .location_for(Some(profile), platform, Some(field))
+                .map(|location| (field.to_owned(), location))
+        })
+        .collect();
+        ProfileSourceContext {
+            profile: profile.to_owned(),
+            config_path: self.source.path.clone(),
+            platform,
+            profile_location: self.source.first_profile_location(profile, platform),
+            command: command.map(display_command),
+            field_locations: fields,
+        }
+    }
 }
 
 impl SourceDocument {
+    fn first_profile_location(
+        &self,
+        profile: &str,
+        platform: Option<PlatformId>,
+    ) -> Option<SourceLocation> {
+        let prefix = match platform {
+            Some(platform) => format!("[profiles.{profile}.platforms.{}", platform.as_str()),
+            None => format!("[profiles.{profile}"),
+        };
+        let mut offset = 0;
+        for line in self.text.split_inclusive('\n') {
+            let current = line.trim();
+            let matches = current.starts_with(&prefix)
+                && matches!(current.as_bytes().get(prefix.len()), Some(b'.' | b']'));
+            if matches {
+                return Some(source_location(&self.text, offset..offset + current.len()));
+            }
+            offset += line.len();
+        }
+        None
+    }
+
     fn location_for(
         &self,
         profile: Option<&str>,
@@ -307,52 +399,100 @@ impl SourceDocument {
         field: Option<&str>,
     ) -> Option<SourceLocation> {
         let profile = profile?;
-        let base_header = match platform {
-            Some(platform) => format!("[profiles.{profile}.platforms.{}]", platform.as_str()),
-            None => format!("[profiles.{profile}]"),
-        };
-        let field_prefix = field.and_then(|value| value.rsplit_once('.').map(|(prefix, _)| prefix));
-        let nested_header = field_prefix.map(|prefix| format!("{base_header}.{prefix}"));
-        let headers = nested_header
-            .as_deref()
-            .into_iter()
-            .chain(std::iter::once(base_header.as_str()));
-        let mut section_start = None;
-        let mut offset = 0;
-        for line in self.text.split_inclusive('\n') {
-            let current = line.trim().trim_end_matches('\n');
-            if headers.clone().any(|header| current == header) {
-                section_start = Some(offset);
-                break;
-            }
-            offset += line.len();
-        }
-        let section_start = section_start?;
-        let section = &self.text[section_start..];
         let key = field
             .and_then(|value| value.rsplit('.').next())
             .unwrap_or_default();
-        let mut line_offset = section_start;
-        for line in section.split_inclusive('\n') {
-            if line_offset != section_start && line.trim_start().starts_with('[') {
-                break;
-            }
-            let trimmed = line.trim_start();
-            if !key.is_empty()
-                && trimmed.starts_with(key)
-                && trimmed[key.len()..].trim_start().starts_with('=')
-            {
-                let start = line_offset + line.len() - line.trim_start().len();
-                let end = start + key.len();
-                return Some(source_location(&self.text, start..end));
-            }
-            line_offset += line.len();
+        let prefix = field.and_then(|value| value.rsplit_once('.').map(|(prefix, _)| prefix));
+        let mut nested_prefixes = Vec::new();
+        if let Some(field) = field {
+            nested_prefixes.push(field);
         }
-        Some(source_location(
-            &self.text,
-            section_start..section_start + base_header.len(),
-        ))
+        if let Some(prefix) = prefix
+            && !nested_prefixes.contains(&prefix)
+        {
+            nested_prefixes.push(prefix);
+        }
+        let mut headers = Vec::new();
+        if let Some(platform) = platform {
+            let root = format!("profiles.{profile}.platforms.{}", platform.as_str());
+            for prefix in &nested_prefixes {
+                headers.push(format!("[{root}.{prefix}]"));
+            }
+            headers.push(format!("[{root}]"));
+        }
+        let root = format!("profiles.{profile}");
+        for prefix in &nested_prefixes {
+            headers.push(format!("[{root}.{prefix}]"));
+        }
+        headers.push(format!("[{root}]"));
+
+        let sections = headers.iter().filter_map(|header| {
+            self.section(header)
+                .map(|(start, end)| (start, end, header.len()))
+        });
+        let mut fallback = None;
+        for (section_start, section_end, header_length) in sections {
+            fallback.get_or_insert((section_start, header_length));
+            if let Some(location) = find_key_location(&self.text, section_start, section_end, key) {
+                return Some(location);
+            }
+        }
+        fallback
+            .map(|(start, header_length)| source_location(&self.text, start..start + header_length))
     }
+
+    fn section(&self, header: &str) -> Option<(usize, usize)> {
+        let mut offset = 0;
+        let mut start = None;
+        for line in self.text.split_inclusive('\n') {
+            let current = line.trim().trim_end_matches('\n');
+            if start.is_none() {
+                if current == header {
+                    start = Some(offset);
+                }
+            } else if line.trim_start().starts_with('[') {
+                return Some((start?, offset));
+            }
+            offset += line.len();
+        }
+        start.map(|value| (value, self.text.len()))
+    }
+}
+
+fn find_key_location(
+    source: &str,
+    section_start: usize,
+    section_end: usize,
+    key: &str,
+) -> Option<SourceLocation> {
+    if key.is_empty() {
+        return None;
+    }
+    let section = &source[section_start..section_end];
+    let mut line_offset = section_start;
+    for line in section.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(key) && trimmed[key.len()..].trim_start().starts_with('=') {
+            let start = line_offset + line.len() - line.trim_start().len();
+            return Some(source_location(source, start..start + key.len()));
+        }
+        line_offset += line.len();
+    }
+    None
+}
+
+fn display_command(command: &CommandRequest) -> String {
+    std::iter::once(command.command().program())
+        .chain(
+            command
+                .command()
+                .args()
+                .iter()
+                .map(std::ffi::OsString::as_os_str),
+        )
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl ResolvedProfile {
@@ -394,6 +534,49 @@ impl ResolvedProfile {
     /// Returns the resolved host-approval settings.
     pub fn approval(&self) -> ApprovalConfig {
         self.approval
+    }
+
+    /// Returns source metadata for diagnostics produced after resolution.
+    pub fn source_context(&self) -> &ProfileSourceContext {
+        &self.source_context
+    }
+}
+
+impl ProfileSourceContext {
+    /// Returns the resolved profile name.
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    /// Returns the source TOML path, when the profile was loaded from a file.
+    pub fn config_path(&self) -> Option<&Path> {
+        self.config_path.as_deref()
+    }
+
+    /// Returns the selected platform overlay.
+    pub const fn platform(&self) -> Option<PlatformId> {
+        self.platform
+    }
+
+    /// Returns the effective command rendered for diagnostics.
+    pub fn command(&self) -> Option<&str> {
+        self.command.as_deref()
+    }
+
+    /// Returns the source location for a logical field, when it was found.
+    pub fn field_location(&self, field: &str) -> Option<SourceLocation> {
+        self.field_locations.get(field).copied()
+    }
+
+    /// Returns the profile header location used as a fallback diagnostic span.
+    pub const fn profile_location(&self) -> Option<SourceLocation> {
+        self.profile_location
+    }
+
+    /// Replaces the displayed command after a CLI argv override.
+    pub fn with_command(mut self, command: impl Into<String>) -> Self {
+        self.command = Some(command.into());
+        self
     }
 }
 

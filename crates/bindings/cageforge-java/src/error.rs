@@ -97,6 +97,7 @@ pub(crate) struct BindingDiagnostic {
     pub(crate) profile: Option<String>,
     pub(crate) platform: Option<String>,
     pub(crate) field: Option<String>,
+    pub(crate) command: Option<String>,
     pub(crate) line: Option<i32>,
     pub(crate) column: Option<i32>,
 }
@@ -115,10 +116,59 @@ impl BindingDiagnostic {
                 .platform()
                 .map(|platform| platform.as_str().to_owned()),
             field: diagnostic.field().map(str::to_owned),
+            command: diagnostic.command().map(str::to_owned),
             line: location.and_then(|value| i32::try_from(value.line).ok()),
             column: location.and_then(|value| i32::try_from(value.column).ok()),
         }
     }
+
+    pub(crate) fn from_runtime(
+        source: &cageforge::ProfileSourceContext,
+        command: &cageforge::CommandRequest,
+        kind: &'static str,
+        message: impl Into<String>,
+    ) -> (Self, String) {
+        let source = source.clone().with_command(display_command(command));
+        let message = message.into();
+        let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
+            &source,
+            kind,
+            message,
+            Some("command.program"),
+        );
+        let location = diagnostic.location();
+        (
+            Self {
+                code: diagnostic.code().to_owned(),
+                config_path: diagnostic
+                    .config_path()
+                    .map(|path| path.display().to_string()),
+                profile: diagnostic.profile().map(str::to_owned),
+                platform: diagnostic
+                    .platform()
+                    .map(|platform| platform.as_str().to_owned()),
+                field: diagnostic.field().map(str::to_owned),
+                command: diagnostic.command().map(str::to_owned),
+                line: location.and_then(|value| i32::try_from(value.line).ok()),
+                column: location.and_then(|value| i32::try_from(value.column).ok()),
+            },
+            diagnostic.render_human(),
+        )
+    }
+}
+
+fn display_command(command: &cageforge::CommandRequest) -> String {
+    std::iter::once(command.command().program())
+        .chain(
+            command
+                .command()
+                .args()
+                .iter()
+                .map(std::ffi::OsString::as_os_str),
+        )
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Debug)]
@@ -143,6 +193,22 @@ impl BindingError {
             kind: BindingErrorKind::Configuration,
             message: diagnostic.render_human(),
             diagnostic: Some(Box::new(BindingDiagnostic::from_config(&error))),
+        }
+    }
+
+    pub(crate) fn runtime(
+        kind: BindingErrorKind,
+        source: &cageforge::ProfileSourceContext,
+        command: &cageforge::CommandRequest,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        let (diagnostic, rendered) =
+            BindingDiagnostic::from_runtime(source, command, code, message);
+        Self {
+            message: rendered,
+            kind,
+            diagnostic: Some(Box::new(diagnostic)),
         }
     }
 
@@ -184,7 +250,7 @@ impl From<jni::errors::Error> for BindingError {
     }
 }
 
-fn throw_configuration_exception(
+fn throw_diagnostic_exception(
     env: &mut Env<'_>,
     class: &JClass<'_>,
     message: &str,
@@ -212,6 +278,11 @@ fn throw_configuration_exception(
         .as_deref()
         .map(|value| env.new_string(value))
         .transpose()?;
+    let command = diagnostic
+        .command
+        .as_deref()
+        .map(|value| env.new_string(value))
+        .transpose()?;
     let line = match diagnostic.line {
         Some(value) => env.new_object(
             jni::jni_str!("java/lang/Integer"),
@@ -230,7 +301,7 @@ fn throw_configuration_exception(
     };
     let object = env.new_object(
         class,
-        jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Integer;)V"),
+        jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Integer;Ljava/lang/String;)V"),
         &[
             JValue::Object(message.as_ref()),
             JValue::Object(code.as_ref()),
@@ -240,6 +311,7 @@ fn throw_configuration_exception(
             JValue::Object(field.as_ref().map_or(JObject::null().as_ref(), |value| value.as_ref())),
             JValue::Object(&line),
             JValue::Object(&column),
+            JValue::Object(command.as_ref().map_or(JObject::null().as_ref(), |value| value.as_ref())),
         ],
     )?;
     let throwable = unsafe { JThrowable::from_raw(env, object.into_raw()) };
@@ -259,7 +331,7 @@ impl<T: Default> ErrorPolicy<T, BindingError> for ThrowCageforgeException {
         if !env.exception_check() {
             let class = error.kind.class(env)?;
             if let Some(diagnostic) = error.diagnostic.as_ref() {
-                if throw_configuration_exception(env, &class, &error.message, diagnostic).is_err() {
+                if throw_diagnostic_exception(env, &class, &error.message, diagnostic).is_err() {
                     let message = jni::strings::JNIString::new(error.to_string());
                     let _ = env.throw_new(class, message);
                 }

@@ -223,6 +223,7 @@ class Cageforge private constructor(
                     error.field,
                     error.line,
                     error.column,
+                    error.command,
                 )
             }
         }

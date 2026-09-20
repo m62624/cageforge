@@ -160,6 +160,7 @@ struct RuntimeState {
     preflight_required: bool,
     approved_program: Option<String>,
     preflight_plan: Option<cageforge::PreflightPlan>,
+    source: cageforge::ProfileSourceContext,
 }
 
 struct LifecycleState {
@@ -367,6 +368,7 @@ fn configuration_diagnostic_error(error: cageforge::ConfigError) -> PyErr {
                 diagnostic.platform().map(|platform| platform.as_str()),
             )?;
             value.setattr("field", diagnostic.field())?;
+            value.setattr("command", diagnostic.command())?;
             value.setattr("line", diagnostic.location().map(|location| location.line))?;
             value.setattr(
                 "column",
@@ -387,6 +389,50 @@ fn initialization_error(error: impl ToString) -> PyErr {
 
 fn launch_error(error: impl ToString) -> PyErr {
     CageforgeLaunchError::new_err(error.to_string())
+}
+
+fn launch_diagnostic_error(
+    source: &cageforge::ProfileSourceContext,
+    command: &cageforge::CommandRequest,
+    error: impl ToString,
+) -> PyErr {
+    let source = source.clone().with_command(display_command(command));
+    let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
+        &source,
+        "native_launch_error",
+        error.to_string(),
+        Some("command.program"),
+    );
+    let exception = CageforgeLaunchError::new_err(diagnostic.render_human());
+    Python::attach(|py| {
+        let value = exception.value(py);
+        let set_result = (|| -> PyResult<()> {
+            value.setattr("code", diagnostic.code())?;
+            value.setattr(
+                "config_path",
+                diagnostic
+                    .config_path()
+                    .map(|path| path.display().to_string()),
+            )?;
+            value.setattr("profile", diagnostic.profile())?;
+            value.setattr(
+                "platform",
+                diagnostic.platform().map(|platform| platform.as_str()),
+            )?;
+            value.setattr("field", diagnostic.field())?;
+            value.setattr("command", diagnostic.command())?;
+            value.setattr("line", diagnostic.location().map(|location| location.line))?;
+            value.setattr(
+                "column",
+                diagnostic.location().map(|location| location.column),
+            )?;
+            Ok(())
+        })();
+        if let Err(attribute_error) = set_result {
+            return attribute_error;
+        }
+        exception
+    })
 }
 
 fn permission_error(error: impl ToString) -> PyErr {
@@ -424,6 +470,20 @@ fn store_error(error: cageforge::StoreError) -> PyErr {
 
 fn process_error(error: impl ToString) -> PyErr {
     CageforgeProcessError::new_err(error.to_string())
+}
+
+fn display_command(command: &cageforge::CommandRequest) -> String {
+    std::iter::once(command.command().program())
+        .chain(
+            command
+                .command()
+                .args()
+                .iter()
+                .map(std::ffi::OsString::as_os_str),
+        )
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn stream_error(error: impl ToString) -> PyErr {
@@ -1074,6 +1134,7 @@ impl Cageforge {
                     preflight_required: false,
                     approved_program: None,
                     preflight_plan: None,
+                    source: profile.source_context().clone(),
                 });
             }
             let identity = preflight_identity(request.as_ref(), &toml)
@@ -1127,6 +1188,7 @@ impl Cageforge {
                 preflight_required: requires_grant,
                 approved_program,
                 preflight_plan: Some(plan),
+                source: profile.source_context().clone(),
             })
         })?;
         Ok(Self {
@@ -1202,10 +1264,11 @@ impl Cageforge {
                 }
             }
             let backend_request = cageforge::BackendRequest::new(&request, &runtime.effective);
+            let source = runtime.source.clone();
             let mut child = runtime
                 .backend
                 .launch(backend_request, &runtime.context)
-                .map_err(launch_error)?;
+                .map_err(|error| launch_diagnostic_error(&source, &request, error))?;
             Ok::<_, PyErr>(ChildState {
                 stdin: Mutex::new(child.take_stdin()),
                 stdout: Mutex::new(child.take_stdout()),
@@ -1301,10 +1364,11 @@ impl Cageforge {
                 .cloned()
                 .unwrap_or_else(|| runtime.context.clone());
             let backend_request = cageforge::BackendRequest::new(&request, authorized.effective());
+            let source = runtime.source.clone();
             let mut child = runtime
                 .backend
                 .launch(backend_request, &context)
-                .map_err(launch_error)?;
+                .map_err(|error| launch_diagnostic_error(&source, &request, error))?;
             Ok::<_, PyErr>(ChildState {
                 stdin: Mutex::new(child.take_stdin()),
                 stdout: Mutex::new(child.take_stdout()),

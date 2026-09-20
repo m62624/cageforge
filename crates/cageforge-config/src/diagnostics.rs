@@ -5,8 +5,9 @@
 //! The diagnostic shape is intended for editors, CLIs, and JSON-producing
 //! integrations; typed [`crate::ConfigError`] remains the primary Rust error.
 
-use crate::{ConfigError, SourceLocation};
+use crate::{ConfigError, ProfileSourceContext, SourceLocation};
 use serde::Serialize;
+use std::fmt;
 use std::path::Path;
 
 /// Severity of a configuration diagnostic.
@@ -33,6 +34,8 @@ pub struct ConfigDiagnostic {
     config_path: Option<std::path::PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     platform: Option<cageforge_permissions::PlatformId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
 }
 
 impl ConfigDiagnostic {
@@ -76,6 +79,35 @@ impl ConfigDiagnostic {
         self.platform
     }
 
+    /// Returns the command associated with a runtime failure, when known.
+    pub fn command(&self) -> Option<&str> {
+        self.command.as_deref()
+    }
+
+    /// Builds a diagnostic for a native failure while retaining the resolved
+    /// profile's source metadata. The native error itself remains the typed
+    /// source error owned by the caller.
+    pub fn for_runtime_failure(
+        source: &ProfileSourceContext,
+        code: &'static str,
+        message: impl Into<String>,
+        field: Option<&str>,
+    ) -> Self {
+        Self {
+            code,
+            severity: DiagnosticSeverity::Error,
+            message: message.into(),
+            profile: Some(source.profile().to_owned()),
+            field: field.map(str::to_owned),
+            location: field
+                .and_then(|value| source.field_location(value))
+                .or_else(|| source.profile_location()),
+            config_path: source.config_path().map(std::path::Path::to_path_buf),
+            platform: source.platform(),
+            command: source.command().map(str::to_owned),
+        }
+    }
+
     /// Serializes this diagnostic as a JSON object.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
@@ -98,10 +130,19 @@ impl ConfigDiagnostic {
         if let Some(platform) = self.platform {
             output.push_str(&format!("\n  platform: {}", platform.as_str()));
         }
+        if let Some(command) = self.command.as_deref() {
+            output.push_str(&format!("\n  command: {command}"));
+        }
         if let Some(field) = self.field.as_deref() {
             output.push_str(&format!("\n  field: {field}"));
         }
         output
+    }
+}
+
+impl fmt::Display for ConfigDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.render_human())
     }
 }
 
@@ -147,6 +188,7 @@ impl ConfigError {
                 .or(intrinsic_location),
             config_path: context.and_then(|value| value.config_path.clone()),
             platform: context.and_then(|value| value.platform),
+            command: None,
         }
     }
 }

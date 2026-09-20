@@ -41,6 +41,7 @@ struct Invocation {
     effective: cageforge::EffectiveSandbox,
     context: cageforge::PathResolutionContext,
     gateway: cageforge::GatewayConfig,
+    source: cageforge::ProfileSourceContext,
 }
 
 /// Executes a parsed CLI request and returns the process exit code.
@@ -146,6 +147,10 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
         None => config.resolve_default_for_platform(platform)?,
     };
     let command = command_from_args(&profile, args.command)?;
+    let source = profile
+        .source_context()
+        .clone()
+        .with_command(display_command(&command));
     let current_directory = std::env::current_dir()?;
     let workspace_roots = resolve_workspace_roots(&current_directory, profile.workspace_roots())?;
     let context = runtime_context(
@@ -236,6 +241,7 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
         effective,
         context,
         gateway: profile.network_gateway().clone(),
+        source,
     };
     #[cfg(target_os = "windows")]
     warn_if_windows_setup_is_unavailable();
@@ -473,6 +479,21 @@ fn command_from_args(
 }
 
 #[cfg(feature = "config")]
+fn display_command(command: &cageforge::CommandRequest) -> String {
+    std::iter::once(command.command().program())
+        .chain(
+            command
+                .command()
+                .args()
+                .iter()
+                .map(std::ffi::OsString::as_os_str),
+        )
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(feature = "config")]
 fn resolve_workspace_roots(
     current_directory: &Path,
     declarations: &[PathBuf],
@@ -574,6 +595,15 @@ fn platform_minimal_root(current_directory: &Path) -> Result<PathBuf, CliError> 
     any(target_os = "linux", target_os = "windows", target_os = "macos",)
 ))]
 fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
+    let source = invocation.source.clone();
+    execute_native_inner(invocation).map_err(|error| enrich_native_error(source, error))
+}
+
+#[cfg(all(
+    feature = "config",
+    any(target_os = "linux", target_os = "windows", target_os = "macos",)
+))]
+fn execute_native_inner(invocation: Invocation) -> Result<u8, CliError> {
     let config = cageforge::NativeSandboxConfig::new().with_network_gateway(invocation.gateway);
     #[cfg(target_os = "linux")]
     let config = config.with_hardening_helper_path(std::env::current_exe()?);
@@ -589,6 +619,73 @@ fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
 
 #[cfg(all(
     feature = "config",
+    any(target_os = "linux", target_os = "windows", target_os = "macos",)
+))]
+fn enrich_native_error(source: cageforge::ProfileSourceContext, error: CliError) -> CliError {
+    let (code, field) = native_diagnostic_metadata(&error);
+    let diagnostic =
+        cageforge::ConfigDiagnostic::for_runtime_failure(&source, code, error.to_string(), field);
+    CliError::NativeDiagnostic {
+        diagnostic: Box::new(diagnostic),
+        source: Box::new(error),
+    }
+}
+
+#[cfg(all(
+    feature = "config",
+    any(target_os = "linux", target_os = "windows", target_os = "macos",)
+))]
+fn native_diagnostic_metadata(error: &CliError) -> (&'static str, Option<&'static str>) {
+    #[cfg(target_os = "macos")]
+    if let Some(native) = find_error::<cageforge::MacosFilesystemError>(error) {
+        return match native {
+            cageforge::MacosFilesystemError::ProgramRequiresRead { .. } => {
+                ("macos_program_requires_read", Some("command.program"))
+            }
+            cageforge::MacosFilesystemError::ProgramRequiresExecutableRoot { .. } => (
+                "macos_program_requires_executable_root",
+                Some("runtime.executable_roots"),
+            ),
+            cageforge::MacosFilesystemError::ExecutableRootMissing { .. }
+            | cageforge::MacosFilesystemError::ExecutableRootNotDirectory { .. }
+            | cageforge::MacosFilesystemError::ExecutableRootNotReadable { .. }
+            | cageforge::MacosFilesystemError::InvalidExecutableRoot { .. } => (
+                "macos_invalid_executable_root",
+                Some("runtime.executable_roots"),
+            ),
+            _ => ("macos_native_error", None),
+        };
+    }
+
+    #[cfg(target_os = "linux")]
+    let code = "linux_native_error";
+    #[cfg(target_os = "windows")]
+    let code = "windows_native_error";
+    #[cfg(target_os = "macos")]
+    let code = "macos_native_error";
+    let _ = error;
+    (code, None)
+}
+
+#[cfg(all(feature = "config", target_os = "macos"))]
+fn find_error<'a, T: std::error::Error + 'static>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a T> {
+    if let Some(value) = error.downcast_ref::<T>() {
+        return Some(value);
+    }
+    let mut source = error.source();
+    while let Some(value) = source {
+        if let Some(value) = value.downcast_ref::<T>() {
+            return Some(value);
+        }
+        source = value.source();
+    }
+    None
+}
+
+#[cfg(all(
+    feature = "config",
     not(any(target_os = "linux", target_os = "windows", target_os = "macos",))
 ))]
 fn execute_native(_invocation: Invocation) -> Result<u8, CliError> {
@@ -597,8 +694,9 @@ fn execute_native(_invocation: Invocation) -> Result<u8, CliError> {
         effective,
         context,
         gateway,
+        source,
     } = _invocation;
-    drop((command, effective, context, gateway));
+    drop((command, effective, context, gateway, source));
     Err(CliError::NativeSandbox(
         cageforge::NativeSandboxError::UnsupportedPlatform {
             target_os: std::env::consts::OS,

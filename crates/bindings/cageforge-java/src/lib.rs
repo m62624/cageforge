@@ -30,6 +30,7 @@ struct RuntimeState {
     preflight_required: bool,
     approved_program: Option<String>,
     preflight_plan: Option<cageforge::PreflightPlan>,
+    source: cageforge::ProfileSourceContext,
 }
 
 struct ChildState {
@@ -252,6 +253,7 @@ fn runtime_from_toml(
             preflight_required: false,
             approved_program: None,
             preflight_plan: None,
+            source: profile.source_context().clone(),
         };
         return Ok(Box::into_raw(Box::new(state)) as jlong);
     }
@@ -302,6 +304,7 @@ fn runtime_from_toml(
         preflight_required: requires_grant,
         approved_program,
         preflight_plan: Some(plan),
+        source: profile.source_context().clone(),
     };
     Ok(Box::into_raw(Box::new(state)) as jlong)
 }
@@ -1306,7 +1309,15 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
         let mut child = runtime
             .backend
             .launch(backend_request, &runtime.context)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                BindingError::runtime(
+                    BindingErrorKind::Launch,
+                    &runtime.source,
+                    &request,
+                    "native_launch_error",
+                    error.to_string(),
+                )
+            })?;
         let stdin = child.take_stdin();
         let stdout = child.take_stdout();
         let stderr = child.take_stderr();
@@ -1354,7 +1365,15 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunchEscalated<'cal
         let mut child = runtime
             .backend
             .launch(backend_request, &context)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                BindingError::runtime(
+                    BindingErrorKind::Escalation,
+                    &runtime.source,
+                    &request,
+                    "native_escalation_error",
+                    error.to_string(),
+                )
+            })?;
         Ok(Box::into_raw(Box::new(ChildState {
             stdin: Mutex::new(child.take_stdin()),
             stdout: Mutex::new(child.take_stdout()),

@@ -111,6 +111,7 @@ class CageforgeConfigurationError(CageforgeError):
     profile: typing.Optional[builtins.str]
     platform: typing.Optional[builtins.str]
     field: typing.Optional[builtins.str]
+    command: typing.Optional[builtins.str]
     line: typing.Optional[builtins.int]
     column: typing.Optional[builtins.int]
 
@@ -160,6 +161,15 @@ class CageforgeLaunchError(CageforgeError):
     r"""
     The native sandbox process could not be launched.
     """
+    code: builtins.str
+    config_path: typing.Optional[builtins.str]
+    profile: typing.Optional[builtins.str]
+    platform: typing.Optional[builtins.str]
+    field: typing.Optional[builtins.str]
+    command: typing.Optional[builtins.str]
+    line: typing.Optional[builtins.int]
+    column: typing.Optional[builtins.int]
+
     ...
 
 class CageforgeListingSnapshotExpiredError(CageforgeStoreError):

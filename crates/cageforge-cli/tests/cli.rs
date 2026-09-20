@@ -3,7 +3,10 @@
 use std::ffi::OsString;
 use std::process::Command as ProcessCommand;
 
-use cageforge::{GrantAuthority, PermissionRequest, PermissionScope, PermissionSet, PlatformId};
+use cageforge::{
+    Config, ConfigDiagnostic, GrantAuthority, PermissionRequest, PermissionScope, PermissionSet,
+    PlatformId,
+};
 #[cfg(target_os = "windows")]
 use cageforge_cli::SetupCommand;
 use cageforge_cli::{Cli, Command, RunArgs};
@@ -211,6 +214,60 @@ fn configuration_error_is_rendered_with_source_context() {
     let stderr = String::from_utf8_lossy(&output.stderr)
         .replace(&config.display().to_string(), "<config.toml>");
     insta::assert_snapshot!(stderr);
+}
+
+#[test]
+fn native_diagnostic_variants_are_snapshotted_with_source_context() {
+    let workspace = tempfile::tempdir().expect("temporary diagnostic configuration");
+    let config_path = workspace.path().join("tool.toml");
+    std::fs::write(
+        &config_path,
+        r#"default_profile = "tool"
+
+[profiles.tool.platforms.macos.command]
+program = "/opt/tool/bin/runner"
+args = ["--worker", "one"]
+
+[profiles.tool.platforms.macos.runtime]
+executable_roots = ["/opt/tool/runtime"]
+"#,
+    )
+    .expect("write diagnostic fixture");
+    let config = Config::from_file(&config_path).expect("valid diagnostic fixture");
+    let profile = config
+        .resolve_for_platform("tool", PlatformId::Macos)
+        .expect("diagnostic fixture resolves");
+    let source = profile
+        .source_context()
+        .clone()
+        .with_command("/opt/tool/bin/runner --worker one");
+
+    for (name, code, message, field) in [
+        (
+            "native_generic_failure",
+            "macos_native_error",
+            "sandbox preparation failed: native setup failed",
+            None,
+        ),
+        (
+            "native_program_requires_read",
+            "macos_program_requires_read",
+            "macOS program requires a filesystem read rule: \"/opt/tool/bin/runner\"",
+            Some("command.program"),
+        ),
+        (
+            "native_program_requires_executable_root",
+            "macos_program_requires_executable_root",
+            "macOS program requires runtime.executable_roots: \"/opt/tool/bin/runner\"",
+            Some("runtime.executable_roots"),
+        ),
+    ] {
+        let diagnostic = ConfigDiagnostic::for_runtime_failure(&source, code, message, field);
+        let rendered = diagnostic
+            .render_human()
+            .replace(&config_path.display().to_string(), "<config.toml>");
+        insta::assert_snapshot!(name, rendered);
+    }
 }
 
 #[test]

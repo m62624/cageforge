@@ -238,15 +238,17 @@ dns_timeout_ms = 0
     .expect("zero is structurally valid TOML")
     .resolve("safe")
     .expect_err("zero timeout must fail semantic validation");
-    assert_eq!(
+    assert!(matches!(
         zero,
         ConfigError::InvalidValue {
-            profile: "safe".to_owned(),
-            field: "network.gateway.dns_timeout_ms".to_owned(),
-            value: "0 must be representable and greater than zero".to_owned(),
-            context: None,
-        }
-    );
+            profile,
+            field,
+            value,
+            context: Some(_),
+        } if profile == "safe"
+            && field == "network.gateway.dns_timeout_ms"
+            && value == "0 must be representable and greater than zero"
+    ));
 
     let small_header = Config::from_toml(
         r#"
@@ -257,17 +259,19 @@ http_header_bytes = 4096
     .expect("small header is structurally valid TOML")
     .resolve("safe")
     .expect_err("small HTTP parser buffer must fail semantic validation");
-    assert_eq!(
+    assert!(matches!(
         small_header,
         ConfigError::NetworkGateway {
-            profile: "safe".to_owned(),
+            profile,
             source: GatewayConfigError::HttpHeaderLimitTooSmall {
-                minimum: 8192,
-                actual: 4096,
+                minimum,
+                actual,
             },
-            context: None,
-        }
-    );
+            context: Some(_),
+        } if profile == "safe"
+            && minimum == 8192
+            && actual == 4096
+    ));
 
     let invalid_mode = Config::from_toml(
         r#"

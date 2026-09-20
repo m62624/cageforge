@@ -23,7 +23,11 @@ fn main() -> pyo3_stub_gen::Result<()> {
         .replace("os.PathLike", "os.PathLike[str]");
     let stub = stub.replace(
         "    ...\n\nclass CageforgeError(builtins.Exception):",
-        "    code: builtins.str\n    config_path: typing.Optional[builtins.str]\n    profile: typing.Optional[builtins.str]\n    platform: typing.Optional[builtins.str]\n    field: typing.Optional[builtins.str]\n    line: typing.Optional[builtins.int]\n    column: typing.Optional[builtins.int]\n\nclass CageforgeError(builtins.Exception):",
+        "    code: builtins.str\n    config_path: typing.Optional[builtins.str]\n    profile: typing.Optional[builtins.str]\n    platform: typing.Optional[builtins.str]\n    field: typing.Optional[builtins.str]\n    command: typing.Optional[builtins.str]\n    line: typing.Optional[builtins.int]\n    column: typing.Optional[builtins.int]\n\nclass CageforgeError(builtins.Exception):",
+        );
+    let stub = stub.replace(
+        "class CageforgeLaunchError(CageforgeError):\n    r\"\"\"\n    The native sandbox process could not be launched.\n    \"\"\"\n    ...",
+        "class CageforgeLaunchError(CageforgeError):\n    r\"\"\"\n    The native sandbox process could not be launched.\n    \"\"\"\n    code: builtins.str\n    config_path: typing.Optional[builtins.str]\n    profile: typing.Optional[builtins.str]\n    platform: typing.Optional[builtins.str]\n    field: typing.Optional[builtins.str]\n    command: typing.Optional[builtins.str]\n    line: typing.Optional[builtins.int]\n    column: typing.Optional[builtins.int]\n\n    ...",
     );
     let stub = format!("{}\n", stub.trim_end());
     std::fs::write(target, stub)?;

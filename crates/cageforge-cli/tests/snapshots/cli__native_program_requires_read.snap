@@ -1,0 +1,10 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: rendered
+---
+[macos_program_requires_read] macOS program requires a filesystem read rule: "/opt/tool/bin/runner"
+  --> <config.toml>:4:1
+  profile: tool
+  platform: macos
+  command: /opt/tool/bin/runner --worker one
+  field: command.program

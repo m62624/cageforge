@@ -26,8 +26,12 @@ Each `ConfigError` may carry `ConfigErrorContext` containing:
 - the profile and logical field identified by the error.
 
 `ConfigDiagnostic` exposes a stable code, severity, message, profile, field,
-platform, path, and source location. `to_json()` is for machines; the CLI
-uses `render_human()` and must not require callers to parse a display string.
+platform, command, path, and source location. `to_json()` is for machines; the
+CLI uses `render_human()` and must not require callers to parse a display
+string. A resolved profile retains source metadata separately from its
+semantic policy value. Native adapters use that metadata to attach the
+selected profile, effective command, logical field, and TOML line/column to a
+backend failure without making the backend parse TOML.
 
 ## Native boundary
 
@@ -36,7 +40,9 @@ before process creation. For macOS, Seatbelt owns the fixed executable
 baseline and checks absolute custom programs against effective read access and
 explicit `runtime.executable_roots`. It returns typed errors such as
 `ProgramRequiresRead` and `ProgramRequiresExecutableRoot`; config does not
-duplicate the Seatbelt baseline.
+duplicate the Seatbelt baseline. The CLI and host-language adapters may wrap
+the typed native cause in a source-aware diagnostic, but must retain the
+original typed error for programmatic inspection.
 
 ## Foreign bindings
 
@@ -50,7 +56,9 @@ the public error protocol.
 ## Verification
 
 Rust tests cover typed variants, source context, platform overlays, and native
-preflight failures. CLI tests use snapshots for the human rendering. Python
-and Java tests verify the stable exception category and metadata. Native jobs
-remain responsible for executing the backend-specific checks on their actual
+preflight failures. CLI snapshots cover generic native failures, missing
+filesystem read access, and missing executable-root declarations, including
+the platform, command, profile, field, and source location. Python and Java
+tests verify the stable exception category and metadata. Native jobs remain
+responsible for executing the backend-specific checks on their actual
 operating system.

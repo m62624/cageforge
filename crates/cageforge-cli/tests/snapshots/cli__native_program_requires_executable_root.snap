@@ -1,0 +1,10 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: rendered
+---
+[macos_program_requires_executable_root] macOS program requires runtime.executable_roots: "/opt/tool/bin/runner"
+  --> <config.toml>:8:1
+  profile: tool
+  platform: macos
+  command: /opt/tool/bin/runner --worker one
+  field: runtime.executable_roots
