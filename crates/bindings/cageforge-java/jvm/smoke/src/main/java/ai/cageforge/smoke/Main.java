@@ -86,6 +86,7 @@ public final class Main {
         System.out.println("toml-validation=ok");
         System.out.println("native-target=" + Cageforge.nativeTarget());
         boolean cleanupWindowsSetup = false;
+        Path approvedInput = null;
         try {
             if (windows) {
                 cleanupWindowsSetup = WindowsSetup.status() != WindowsSetupState.READY;
@@ -128,7 +129,7 @@ public final class Main {
                 System.out.println("consumer-smoke=ok");
             }
             System.out.println("stage=dynamic-escalation");
-            Path approvedInput = Files.createTempDirectory("cageforge-java-approved-")
+            approvedInput = Files.createTempDirectory("cageforge-java-approved-")
                     .toAbsolutePath().normalize();
             String onDemandToml = toml + """
 
@@ -150,8 +151,6 @@ public final class Main {
                     throw new CageforgeException("dynamically authorized sandbox command failed");
                 }
                 System.out.println("dynamic-escalation=ok");
-            } finally {
-                Files.deleteIfExists(approvedInput);
             }
             List<String> longRunningArgv = windows
                     ? List.of(
@@ -344,10 +343,18 @@ public final class Main {
                 System.out.println("stdio-routing=ok");
             }
         } finally {
-            if (windows && cleanupWindowsSetup) {
-                WindowsSetup.uninstall();
-                if (WindowsSetup.status() != WindowsSetupState.MISSING) {
-                    throw new CageforgeException("Windows setup was not removed");
+            try {
+                if (windows && cleanupWindowsSetup) {
+                    WindowsSetup.uninstall();
+                    if (WindowsSetup.status() != WindowsSetupState.MISSING) {
+                        throw new CageforgeException("Windows setup was not removed");
+                    }
+                }
+            } finally {
+                // WindowsSetup restores ACLs for every declared path before the
+                // temporary path is removed. Unix backends have no such journal.
+                if (approvedInput != null) {
+                    Files.deleteIfExists(approvedInput);
                 }
             }
         }
