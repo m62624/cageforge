@@ -3,10 +3,9 @@
 use std::ffi::OsString;
 use std::process::Command as ProcessCommand;
 
-use cageforge::{
-    Config, ConfigDiagnostic, GrantAuthority, PermissionRequest, PermissionScope, PermissionSet,
-    PlatformId,
-};
+#[cfg(feature = "config")]
+use cageforge::{Config, ConfigDiagnostic};
+use cageforge::{GrantAuthority, PermissionRequest, PermissionScope, PermissionSet, PlatformId};
 #[cfg(target_os = "windows")]
 use cageforge_cli::SetupCommand;
 use cageforge_cli::{Cli, Command, RunArgs};
@@ -216,6 +215,7 @@ fn configuration_error_is_rendered_with_source_context() {
     insta::assert_snapshot!(stderr);
 }
 
+#[cfg(feature = "config")]
 #[test]
 fn native_diagnostic_variants_are_snapshotted_with_source_context() {
     let workspace = tempfile::tempdir().expect("temporary diagnostic configuration");
@@ -259,6 +259,12 @@ executable_roots = ["/opt/tool/runtime"]
             "native_program_requires_executable_root",
             "macos_program_requires_executable_root",
             "macOS program requires runtime.executable_roots: \"/opt/tool/bin/runner\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
+            "native_invalid_executable_root",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is not an absolute safe path: \"relative/runtime\"",
             Some("runtime.executable_roots"),
         ),
     ] {
