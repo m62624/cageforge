@@ -1011,15 +1011,49 @@ if __name__ == "__main__":
     )
     .expect("write Python multiprocessing fixture");
 
-    let command = CommandSpec::new("/usr/bin/python3")
-        .expect("system Python 3")
+    let python = Command::new("python3")
+        .args(["-c", "import sys; print(sys.executable)"])
+        .output()
+        .expect("discover the CI Python interpreter");
+    assert!(
+        python.status.success(),
+        "CI Python interpreter discovery failed: stderr={:?}",
+        String::from_utf8_lossy(&python.stderr)
+    );
+    let python_executable = PathBuf::from(
+        String::from_utf8(python.stdout)
+            .expect("Python interpreter path is UTF-8")
+            .trim(),
+    )
+    .canonicalize()
+    .expect("canonicalize the CI Python interpreter");
+    let python_root = python_executable
+        .parent()
+        .and_then(Path::parent)
+        .expect("Python interpreter installation root")
+        .to_path_buf();
+    let policy = SandboxPolicy::new(
+        FilesystemPolicy::restricted([
+            FilesystemRule::new(
+                PathSelector::absolute(workspace.path().to_path_buf()).expect("workspace selector"),
+                AccessMode::Read,
+            ),
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(
+                PathSelector::absolute(python_root.clone()).expect("Python root selector"),
+                AccessMode::Read,
+            ),
+        ]),
+        NetworkPolicy::disabled(),
+    );
+    let command = CommandSpec::new(&python_executable)
+        .expect("CI Python 3")
         .with_arg(script.as_os_str())
         .expect("Python fixture argument");
-    let (command, effective, context) = request_for(
-        workspace.path(),
-        &restricted_policy(workspace.path()),
-        command,
-    );
+    let (command, effective, mut context) = request_for(workspace.path(), &policy, command);
+    context = context
+        .with_executable_root(python_root)
+        .expect("Python executable root");
     let backend = backend();
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
