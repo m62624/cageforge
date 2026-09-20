@@ -150,6 +150,8 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (sysctl-name "kern.osvariant_status")
   (sysctl-name "kern.osversion")
   (sysctl-name "kern.secure_kernel")
+  (sysctl-name "kern.bootargs")
+  (sysctl-name "security.mac.lockdown_mode_state")
   (sysctl-name "kern.usrstack64")
   (sysctl-name "kern.version")
   (sysctl-name "sysctl.proc_cputype")
@@ -206,6 +208,11 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (literal "/System/Volumes")
   (literal "/System/Volumes/Data")
   (literal "/System/Volumes/Data/Users"))
+(allow file-read-metadata file-test-existence
+  (literal "/System/Cryptexes")
+  (literal "/System/Cryptexes/OS")
+  (literal "/Users")
+  (regex #"^/Users/[^/]+$"))
 (allow file-read* file-test-existence
   (literal "/System/Volumes/Data")
   (literal "/System/Volumes/Data/Users")
