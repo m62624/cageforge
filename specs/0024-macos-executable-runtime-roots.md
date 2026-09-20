@@ -58,6 +58,14 @@ allowlist is separate from the normal `file-read*` and `file-write*` rules and
 is narrowed by the effective deny paths and deny globs. The prepared request is
 immutable after validation and every descendant inherits the same profile.
 
+For every explicit read or executable root, the backend also grants
+`file-read-metadata` and `file-test-existence` only for that root and its
+parent path components. This permits macOS runtime path resolution through
+directories such as a user-installed framework location without granting
+directory contents, sibling paths, or write access. The metadata ancestors are
+derived from the validated root, not from a global `/Users`, `/Library`, or
+`/Applications` allowlist.
+
 System runtime paths retain the fixed Seatbelt baseline. This capability is for
 non-system runtime roots and must not be implemented by granting executable
 mapping to all readable paths or the whole filesystem.

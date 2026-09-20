@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::MacosNetworkPlan;
@@ -194,6 +194,45 @@ fn file_roots_use_literal_rules() {
 
     assert!(policy.contains("(literal (param \"READ_ROOT_0\"))"));
     assert!(!policy.contains("(subpath (param \"READ_ROOT_0\"))"));
+}
+
+#[test]
+fn explicit_roots_allow_metadata_traversal_only_for_their_ancestors() {
+    let root = PathBuf::from("/Users/runner/Library/Frameworks/Python.framework/Versions/3.10");
+    let profile = SeatbeltProfile::build(
+        &MacosFilesystemPlan {
+            read_roots: vec![root.clone()],
+            executable_roots: vec![root.clone()],
+            ..MacosFilesystemPlan::default()
+        },
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+
+    assert!(
+        profile
+            .policy()
+            .contains("(allow file-read-metadata file-test-existence")
+    );
+    assert!(
+        profile
+            .definitions()
+            .iter()
+            .any(|definition| definition.value() == root)
+    );
+    assert!(
+        profile.definitions().iter().any(|definition| {
+            definition.value() == Path::new("/Users/runner/Library/Frameworks")
+        })
+    );
+    assert!(
+        !profile
+            .definitions()
+            .iter()
+            .any(|definition| { definition.value() == Path::new("/Users/runner/Library/Secrets") })
+    );
 }
 
 #[test]
