@@ -267,22 +267,22 @@ int main(int argc, char **argv) {
     if (argc < 1 || argv[0] == NULL) {
         return 70;
     }
-    char library_path[PATH_MAX];
-    int written = snprintf(library_path, sizeof(library_path), "%s", argv[0]);
-    if (written < 0 || (size_t)written >= sizeof(library_path)) {
+    char payload_path[PATH_MAX];
+    int written = snprintf(payload_path, sizeof(payload_path), "%s", argv[0]);
+    if (written < 0 || (size_t)written >= sizeof(payload_path)) {
         return 71;
     }
-    char *separator = strrchr(library_path, '/');
+    char *separator = strrchr(payload_path, '/');
     if (separator == NULL) {
         return 72;
     }
-    const char *library_name = "libcageforge_runtime.dylib";
-    size_t prefix_length = (size_t)(separator - library_path) + 1;
-    if (prefix_length + strlen(library_name) + 1 > sizeof(library_path)) {
+    const char *payload_name = "cageforge_runtime_payload";
+    size_t prefix_length = (size_t)(separator - payload_path) + 1;
+    if (prefix_length + strlen(payload_name) + 1 > sizeof(payload_path)) {
         return 72;
     }
-    memcpy(separator + 1, library_name, strlen(library_name) + 1);
-    int descriptor = open(library_path, O_RDONLY);
+    memcpy(separator + 1, payload_name, strlen(payload_name) + 1);
+    int descriptor = open(payload_path, O_RDONLY);
     if (descriptor < 0) {
         return 73;
     }
@@ -339,8 +339,12 @@ int main(int argc, char **argv) {
         program_status.success(),
         "runtime executable compilation failed"
     );
+    let payload = runtime_root.join("cageforge_runtime_payload");
+    fs::copy(executable, &payload).expect("copy Mach-O runtime payload");
     fs::set_permissions(executable, fs::Permissions::from_mode(0o755))
         .expect("make runtime executable executable");
+    fs::set_permissions(payload, fs::Permissions::from_mode(0o755))
+        .expect("make runtime payload executable");
 }
 
 fn backend() -> MacosBackend {
