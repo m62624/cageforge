@@ -109,6 +109,28 @@ fn context_for_command(workspace: &Path, program: &Path) -> PathResolutionContex
     context
 }
 
+fn policy_for_command(policy: &SandboxPolicy, program: &Path) -> SandboxPolicy {
+    let test_executable = std::env::current_exe().expect("test executable");
+    if program != test_executable
+        || policy.filesystem().mode() != cageforge_policy::FilesystemMode::Restricted
+    {
+        return policy.clone();
+    }
+    let root = test_executable
+        .parent()
+        .expect("test executable directory")
+        .to_path_buf();
+    let filesystem = policy
+        .filesystem()
+        .clone()
+        .with_rule(FilesystemRule::new(
+            PathSelector::absolute(root).expect("test executable root selector"),
+            AccessMode::Read,
+        ))
+        .expect("restricted test policy");
+    SandboxPolicy::new(filesystem, policy.network().clone())
+}
+
 #[test]
 fn runnable_macos_profile_launches_through_the_native_backend_api() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -421,9 +443,10 @@ fn request_for(
     PathResolutionContext,
 ) {
     let environment = EnvironmentSpec::inherit_core();
+    let policy = policy_for_command(policy, Path::new(command.program()));
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective =
-        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+        compose(CompositionRequest::new(&policy, &environment, &ceiling)).expect("compose policy");
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
@@ -456,9 +479,13 @@ fn network_request(
         .expect("test executable command")
         .with_args(["--exact", "network_client_fixture", "--nocapture"])
         .expect("fixture arguments");
+    let policy = policy_for_command(
+        policy,
+        std::env::current_exe().expect("test executable").as_path(),
+    );
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective =
-        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+        compose(CompositionRequest::new(&policy, &environment, &ceiling)).expect("compose policy");
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
@@ -590,9 +617,13 @@ fn unix_network_request(
         .expect("test executable command")
         .with_args(["--exact", "network_client_fixture", "--nocapture"])
         .expect("fixture arguments");
+    let policy = policy_for_command(
+        policy,
+        std::env::current_exe().expect("test executable").as_path(),
+    );
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective =
-        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+        compose(CompositionRequest::new(&policy, &environment, &ceiling)).expect("compose policy");
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
@@ -2020,7 +2051,7 @@ fn successful_wait_terminates_descendants_that_change_group_or_session() {
             .expect("fixture mode")
             .with_var(GROUP_CHANGE_ROOT, root.as_os_str())
             .expect("fixture root");
-        let policy = writable_policy(&root);
+        let policy = policy_for_command(&writable_policy(&root), &executable);
         let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
         let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
             .expect("compose policy");
