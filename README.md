@@ -291,6 +291,7 @@ The legal and provenance records are maintained in
 [`specs/0001-project-charter-and-licensing.md`](specs/0001-project-charter-and-licensing.md),
 [`specs/0023-local-ipc-capability.md`](specs/0023-local-ipc-capability.md),
 [`specs/0024-macos-executable-runtime-roots.md`](specs/0024-macos-executable-runtime-roots.md),
+[`specs/0025-dynamic-permission-escalation.md`](specs/0025-dynamic-permission-escalation.md),
 [`NOTICE`](NOTICE), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and
 [`UPSTREAM.md`](UPSTREAM.md).
 

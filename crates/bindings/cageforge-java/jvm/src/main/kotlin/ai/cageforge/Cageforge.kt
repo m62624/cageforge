@@ -31,6 +31,60 @@ class Cageforge private constructor(
     @JvmOverloads
     fun launchProcess(argv: List<String> = emptyList()): CageforgeProcess = launch(argv).asJavaProcess()
 
+    /** Creates additional permissions for a future sandbox relaunch. */
+    fun requestEscalation(
+        filesystem: List<Pair<String, String>>,
+        network: List<String>,
+        reason: String,
+    ): PermissionEscalationRequest {
+        val handle =
+            native.use { runtime ->
+                NativeBridge.nativeRequestPermissionEscalation(
+                    runtime,
+                    filesystem.flatMap { listOf(it.first, it.second) }.toTypedArray(),
+                    network.toTypedArray(),
+                    reason,
+                )
+            }
+        if (handle == 0L) throw CageforgeEscalationException("Cageforge escalation request failed")
+        return try {
+            PermissionEscalationRequest(
+                handle = handle,
+                json = NativeBridge.nativePermissionEscalationJson(handle),
+                reason = NativeBridge.nativePermissionEscalationReason(handle),
+                filesystemValues = NativeBridge.nativePermissionEscalationFilesystem(handle),
+                network = NativeBridge.nativePermissionEscalationNetwork(handle).toList(),
+            )
+        } catch (error: Throwable) {
+            NativeBridge.nativeClosePermissionEscalation(handle)
+            throw error
+        }
+    }
+
+    /** Relaunches the profile in a new sandbox authorized by an escalation. */
+    @JvmOverloads
+    fun launchEscalated(
+        escalation: PermissionEscalationRequest,
+        grant: PermissionGrant,
+        argv: List<String> = emptyList(),
+    ): SandboxProcess {
+        val process =
+            native.use { runtime ->
+                escalation.useNative { escalationHandle ->
+                    grant.useNative { grantHandle ->
+                        NativeBridge.nativeLaunchEscalated(
+                            runtime,
+                            escalationHandle,
+                            grantHandle,
+                            argv.toTypedArray(),
+                        )
+                    }
+                }
+            }
+        if (process == 0L) throw CageforgeEscalationException("Cageforge escalated launch failed")
+        return SandboxProcess.fromHandle(process)
+    }
+
     /** Releases the native backend. Active processes must be closed first. */
     override fun close() = native.close()
 

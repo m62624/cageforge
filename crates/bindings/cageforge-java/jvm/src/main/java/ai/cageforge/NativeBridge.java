@@ -50,7 +50,27 @@ final class NativeBridge {
 
     static native void nativeClosePermissionRequest(long request);
 
+    static native long nativeRequestPermissionEscalation(
+            long runtime, String[] filesystem, String[] network, String reason);
+
+    static native String nativePermissionEscalationJson(long escalation);
+
+    static native String nativePermissionEscalationReason(long escalation);
+
+    static native String[] nativePermissionEscalationFilesystem(long escalation);
+
+    static native String[] nativePermissionEscalationNetwork(long escalation);
+
+    static native void nativeClosePermissionEscalation(long escalation);
+
     static native long nativeApprovePermissionRequest(long request, String scope, long expiresAt);
+
+    static native long nativeApprovePermissionEscalation(
+            long escalation,
+            String[] filesystem,
+            String[] network,
+            String scope,
+            long expiresAt);
 
     static native String nativePermissionGrantRequestDigest(long grant);
 
@@ -75,6 +95,9 @@ final class NativeBridge {
     static native void nativeClosePermissionStore(long store);
 
     static native long nativeLaunch(long runtime, String[] argv);
+
+    static native long nativeLaunchEscalated(
+            long runtime, long escalation, long grant, String[] argv);
 
     static native int nativeId(long process);
 

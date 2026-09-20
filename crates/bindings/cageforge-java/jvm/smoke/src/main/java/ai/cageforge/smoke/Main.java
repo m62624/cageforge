@@ -8,6 +8,7 @@ import ai.cageforge.CageforgeException;
 import ai.cageforge.CageforgeProcess;
 import ai.cageforge.CageforgeProcessException;
 import ai.cageforge.PermissionApprover;
+import ai.cageforge.PermissionEscalationRequest;
 import ai.cageforge.PermissionGrant;
 import ai.cageforge.PermissionRequest;
 import ai.cageforge.RuntimeContext;
@@ -85,6 +86,7 @@ public final class Main {
         System.out.println("toml-validation=ok");
         System.out.println("native-target=" + Cageforge.nativeTarget());
         boolean cleanupWindowsSetup = false;
+        Path approvedInput = null;
         try {
             if (windows) {
                 cleanupWindowsSetup = WindowsSetup.status() != WindowsSetupState.READY;
@@ -125,6 +127,30 @@ public final class Main {
                     throw new CageforgeException("sandbox command did not exit successfully");
                 }
                 System.out.println("consumer-smoke=ok");
+            }
+            System.out.println("stage=dynamic-escalation");
+            approvedInput = Files.createTempDirectory("cageforge-java-approved-")
+                    .toAbsolutePath().normalize();
+            String onDemandToml = toml + """
+
+                    [profiles.smoke.approval]
+                    mode = "on-demand"
+                    timeout_ms = 10000
+                    on_timeout = "deny"
+                    persistence = "session"
+                    """;
+            try (Cageforge runtime = Cageforge.fromToml(onDemandToml, null, context);
+                 PermissionEscalationRequest escalation = runtime.requestEscalation(
+                         List.of(new kotlin.Pair<>(
+                                 "read", approvedInput.toString())),
+                         List.of(),
+                         "read an approved input");
+                 PermissionGrant grant = new PermissionApprover().approveEscalation(escalation);
+                 SandboxProcess process = runtime.launchEscalated(escalation, grant, argv)) {
+                if (!Integer.valueOf(0).equals(process.waitForAsync().join().getExitCode())) {
+                    throw new CageforgeException("dynamically authorized sandbox command failed");
+                }
+                System.out.println("dynamic-escalation=ok");
             }
             List<String> longRunningArgv = windows
                     ? List.of(
@@ -317,10 +343,18 @@ public final class Main {
                 System.out.println("stdio-routing=ok");
             }
         } finally {
-            if (windows && cleanupWindowsSetup) {
-                WindowsSetup.uninstall();
-                if (WindowsSetup.status() != WindowsSetupState.MISSING) {
-                    throw new CageforgeException("Windows setup was not removed");
+            try {
+                if (windows && cleanupWindowsSetup) {
+                    WindowsSetup.uninstall();
+                    if (WindowsSetup.status() != WindowsSetupState.MISSING) {
+                        throw new CageforgeException("Windows setup was not removed");
+                    }
+                }
+            } finally {
+                // WindowsSetup restores ACLs for every declared path before the
+                // temporary path is removed. Unix backends have no such journal.
+                if (approvedInput != null) {
+                    Files.deleteIfExists(approvedInput);
                 }
             }
         }

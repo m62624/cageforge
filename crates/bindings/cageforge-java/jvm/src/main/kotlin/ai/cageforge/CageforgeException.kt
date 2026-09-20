@@ -25,6 +25,9 @@ class CageforgeLaunchException(message: String) : CageforgeException(message)
 /** Raised when a trusted preflight grant is missing, invalid, or insufficient. */
 open class CageforgePermissionException(message: String) : CageforgeException(message)
 
+/** Raised when an additional permission request cannot be approved or relaunched. */
+class CageforgeEscalationException(message: String) : CageforgePermissionException(message)
+
 /** Raised when persistent permission-store I/O or format validation fails. */
 open class CageforgePermissionStoreException(message: String) : CageforgePermissionException(message)
 

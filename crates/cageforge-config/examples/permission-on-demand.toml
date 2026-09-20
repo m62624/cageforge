@@ -1,0 +1,22 @@
+# The base launch is created without an approval prompt. A host may approve
+# an explicit additional capability for a separate sandbox relaunch.
+default_profile = "tool"
+
+[profiles.tool]
+workspace_roots = { "." = true }
+
+[profiles.tool.approval]
+mode = "on-demand"
+timeout_ms = 10000
+on_timeout = "deny"
+persistence = "session"
+
+[profiles.tool.filesystem]
+mode = "restricted"
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "workspace-root", access = "write" },
+]
+
+[profiles.tool.network]
+mode = "disabled"

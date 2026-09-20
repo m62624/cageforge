@@ -270,11 +270,42 @@ launch. `persistence = "session"` keeps the grant in memory, while
 host-owned `permissions.json` store after approval. The store is not policy
 input and must not be edited as TOML.
 
-### Approving a second command with additional access
+### Requesting additional access for a new sandbox
 
-Permissions are fixed for one sandbox launch. If command A needs only the
-base policy and command B needs one additional resource, B uses another
-profile and another request; it does not extend A's running sandbox:
+Permissions are fixed for one sandbox launch. A profile with
+`approval.mode = "on-demand"` or `"preflight-and-on-demand"` may create a
+typed escalation request when the running tool needs an explicitly declared
+resource. The trusted host approves all or a subset of that request, the
+current child is stopped, and the host launches a new sandbox with the
+expanded immutable policy. The current process is never widened in place.
+
+The TOML still defines the base policy and approval mode. It does not contain
+an approval grant or a list of future approvals. Use
+[`permission-on-demand.toml`](permission-on-demand.toml) for the smallest
+base profile:
+
+```toml
+[profiles.tool.approval]
+mode = "on-demand"
+persistence = "session"
+```
+
+From Rust, Python, or Java the host creates an escalation from the active
+runtime, sends its structured request to the trusted approver, and relaunches
+with the returned `PermissionGrant`. Filesystem read/write and
+`map-executable` roots, domains, and typed local-IPC endpoints are supported
+when the selected backend can enforce them. Unrestricted sentinels,
+deny-only additions, and changing the child-process identity are rejected
+with a typed error. A persistent grant is only a cache for the exact expanded
+request in `permissions.json`; it is not a second policy file.
+
+The CLI currently exposes the static preflight launch path. Applications that
+need an interactive on-demand approval loop use the Rust, Python, or Java host
+API and keep the approval UI or broker outside the sandbox library.
+
+If the host does not use dynamic escalation, the equivalent explicit-profile
+flow remains available. Command A uses the base profile and command B uses a
+separate profile with the additional rule:
 
 ```toml
 [profiles.base]
@@ -300,12 +331,8 @@ rules = [
 ]
 ```
 
-The host resolves `base` for A, builds a `PermissionRequest`, obtains a
-`PermissionGrant`, and launches A. It then resolves `more` for B and repeats
-the same request, approval, and launch sequence. Rust uses
-`resolve_for_platform` and `PreflightPlan`; Python uses
-`permission_request(..., profile_name="more")`; Java uses the equivalent
-`profileName` argument. All three paths use the same TOML and the same Rust
+The host resolves `base` for A and `more` for B and repeats the same request,
+approval, and launch sequence. All three paths use the same TOML and Rust
 capability model. A request is structured data, not a command string, and
 contains the complete filesystem, network/local-IPC, executable, and identity
 information for that launch.

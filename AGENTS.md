@@ -178,6 +178,15 @@ These rules are mandatory:
     callbacks while locks are held, and add concurrency tests for every
     shared-handle/store path so deadlocks and lock-order inversions fail in CI.
 
+20. Workspace release versions are managed exclusively by the release CI.
+    Never bump `workspace.package.version`, workspace dependency version pins,
+    or matching `Cargo.lock` package entries in a feature branch or pull
+    request. The only approved version mutation is the release workflow's
+    release-candidate preparation after an explicit `pin/vX.Y.Z` trigger;
+    ordinary changes must retain the version from `main`. Do not create a
+    release tag, publish a registry package, or edit package versions manually
+    to work around this rule.
+
 ## Specification ordering
 
 Keep specifications ordered from broad contracts to narrow implementation

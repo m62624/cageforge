@@ -9,6 +9,7 @@ __all__ = [
     "Cageforge",
     "CageforgeConfigurationError",
     "CageforgeError",
+    "CageforgeEscalationError",
     "CageforgeGrantNotFoundError",
     "CageforgeInitializationError",
     "CageforgeInvalidCursorError",
@@ -32,6 +33,7 @@ __all__ = [
     "GrantSummary",
     "LocalIpcEndpoint",
     "PermissionApprover",
+    "PermissionEscalationRequest",
     "PermissionGrant",
     "PermissionRequest",
     "PermissionStore",
@@ -83,6 +85,15 @@ class Cageforge:
         r"""
         Launches the profile command, or an explicit argv when supplied.
         """
+    def request_escalation(self, filesystem: typing.Sequence[tuple[builtins.str, builtins.str]], network: typing.Sequence[builtins.str], reason: builtins.str) -> PermissionEscalationRequest:
+        r"""
+        Creates an additional-permission request for a future relaunch.
+        """
+    def launch_escalated(self, escalation: PermissionEscalationRequest, grant: PermissionGrant, argv: typing.Optional[typing.Sequence[builtins.str]] = None) -> SandboxProcess:
+        r"""
+        Relaunches the profile in a new sandbox after a trusted escalation
+        grant. The existing sandbox, if any, is never widened or modified.
+        """
     def close(self) -> None:
         r"""
         Releases the runtime handle. Existing process objects remain owned by
@@ -100,6 +111,12 @@ class CageforgeConfigurationError(CageforgeError):
 class CageforgeError(builtins.Exception):
     r"""
     Base class for errors raised by Cageforge.
+    """
+    ...
+
+class CageforgeEscalationError(CageforgePermissionError):
+    r"""
+    The dynamic permission escalation could not be created or authorized.
     """
     ...
 
@@ -327,6 +344,39 @@ class PermissionApprover:
         r"""
         Approves the complete request through the trusted host capability.
         """
+    def approve_escalation(self, request: PermissionEscalationRequest, filesystem: typing.Optional[typing.Sequence[tuple[builtins.str, builtins.str]]] = None, network: typing.Optional[typing.Sequence[builtins.str]] = None, scope: builtins.str = ..., expires_at: typing.Optional[builtins.int] = None) -> PermissionGrant:
+        r"""
+        Approves all additional capabilities, or an explicit subset, for a
+        new sandbox relaunch.
+        """
+
+@typing.final
+class PermissionEscalationRequest:
+    r"""
+    A validated permission expansion that must be approved before relaunch.
+    """
+    def json(self) -> builtins.str:
+        r"""
+        Returns the exact expanded request sent to the trusted host.
+        """
+    def reason(self) -> builtins.str:
+        r"""
+        Returns the human-readable reason for the requested expansion.
+        """
+    def filesystem(self) -> builtins.list[tuple[builtins.str, builtins.str]]:
+        r"""
+        Returns additional filesystem capabilities as `(operation, path)`.
+        """
+    def network(self) -> builtins.list[builtins.str]:
+        r"""
+        Returns additional network and local-IPC endpoints.
+        """
+    def close(self) -> None:
+        r"""
+        Releases the request and makes later operations fail closed.
+        """
+    def __enter__(self) -> PermissionEscalationRequest: ...
+    def __exit__(self, _ty: typing.Optional[typing.Any], _value: typing.Optional[typing.Any], _traceback: typing.Optional[typing.Any]) -> builtins.bool: ...
 
 @typing.final
 class PermissionGrant:
