@@ -1,0 +1,9 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: stderr
+---
+cageforge-cli: configuration error:
+[invalid_value] profile "broken" has invalid workspace_roots: path must not contain parent traversal
+  --> <config.toml>:4:1
+  profile: broken
+  field: workspace_roots

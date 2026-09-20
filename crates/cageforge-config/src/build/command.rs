@@ -27,10 +27,12 @@ pub(crate) fn build_command(
         .as_deref()
         .ok_or_else(|| ConfigError::MissingCommandProgram {
             profile: profile.to_owned(),
+            context: None,
         })?;
     let mut command = CommandSpec::new(program).map_err(|source| ConfigError::Command {
         profile: profile.to_owned(),
         source,
+        context: None,
     })?;
     if let Some(args) = &raw.args {
         command = command
@@ -38,6 +40,7 @@ pub(crate) fn build_command(
             .map_err(|source| ConfigError::Command {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     let mut request = CommandRequest::new(command);
@@ -47,6 +50,7 @@ pub(crate) fn build_command(
             .map_err(|source| ConfigError::Command {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     if let Some(environment) = &raw.environment {
@@ -78,6 +82,7 @@ fn build_environment(raw: &RawEnvironment, profile: &str) -> Result<EnvironmentS
                 .map_err(|source| ConfigError::Command {
                     profile: profile.to_owned(),
                     source,
+                    context: None,
                 })?;
     }
     for (name, value) in &raw.set {
@@ -86,6 +91,7 @@ fn build_environment(raw: &RawEnvironment, profile: &str) -> Result<EnvironmentS
             .map_err(|source| ConfigError::Command {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     for name in &raw.remove {
@@ -94,6 +100,7 @@ fn build_environment(raw: &RawEnvironment, profile: &str) -> Result<EnvironmentS
             .map_err(|source| ConfigError::Command {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     Ok(environment)

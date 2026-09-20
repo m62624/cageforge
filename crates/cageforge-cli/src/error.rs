@@ -113,4 +113,15 @@ impl CliError {
     pub(crate) const fn exit_code(&self) -> u8 {
         2
     }
+
+    pub(crate) fn render(&self) -> String {
+        match self {
+            #[cfg(feature = "config")]
+            Self::Config(error) => format!(
+                "configuration error:\n{}",
+                error.diagnostic().render_human()
+            ),
+            _ => self.to_string(),
+        }
+    }
 }

@@ -188,6 +188,32 @@ fn permission_revoke_validation_error_is_snapshotted() {
 }
 
 #[test]
+fn configuration_error_is_rendered_with_source_context() {
+    let workspace = tempfile::tempdir().expect("temporary configuration directory");
+    let config = workspace.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "default_profile = \"broken\"\n\n[profiles.broken]\nworkspace_roots = { \"../outside\" = true }\n",
+    )
+    .expect("write invalid configuration");
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .args([
+            "run",
+            "--config",
+            config.to_str().expect("UTF-8 config path"),
+            "--",
+            "/bin/true",
+        ])
+        .output()
+        .expect("run cageforge-cli with invalid configuration");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr)
+        .replace(&config.display().to_string(), "<config.toml>");
+    insta::assert_snapshot!(stderr);
+}
+
+#[test]
 fn no_command_is_a_usage_error() {
     let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
         .output()

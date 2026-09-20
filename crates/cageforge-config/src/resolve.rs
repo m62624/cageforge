@@ -7,7 +7,7 @@
 //! layers. Runtime path discovery remains outside this module.
 
 use crate::build;
-use crate::error::{ConfigError, invalid_value};
+use crate::error::{ConfigError, ConfigErrorContext, SourceLocation, invalid_value};
 
 use crate::merge::{
     MergedProfile, ProfileMerger, domain_rule_key, environment_filter_key, filesystem_rule_key,
@@ -28,6 +28,13 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct Config {
     raw: RawConfig,
+    source: SourceDocument,
+}
+
+#[derive(Debug, Clone)]
+struct SourceDocument {
+    text: String,
+    path: Option<PathBuf>,
 }
 
 /// A fully resolved profile ready for a backend or harness adapter.
@@ -50,12 +57,7 @@ struct ResolveFrame {
 impl Config {
     /// Parses a strict Cageforge TOML document.
     pub fn from_toml(source: &str) -> Result<Self, ConfigError> {
-        let raw = toml::from_str(source).map_err(|error| ConfigError::InvalidToml {
-            message: error.to_string(),
-            location: error.span().map(|span| source_location(source, span)),
-        })?;
-        validate_raw_config(&raw)?;
-        Ok(Self { raw })
+        Self::from_source(source.to_owned(), None)
     }
 
     /// Reads and parses a Cageforge TOML document from a file.
@@ -64,8 +66,44 @@ impl Config {
         let source = std::fs::read_to_string(&path).map_err(|error| ConfigError::ReadFile {
             path: path.clone(),
             message: error.to_string(),
+            context: Some(Box::new(ConfigErrorContext {
+                config_path: Some(path.clone()),
+                platform: None,
+                location: None,
+            })),
         })?;
-        Self::from_toml(&source)
+        Self::from_source(source, Some(path))
+    }
+
+    fn from_source(source: String, path: Option<PathBuf>) -> Result<Self, ConfigError> {
+        let raw = toml::from_str(&source).map_err(|error| ConfigError::InvalidToml {
+            message: error.to_string(),
+            location: error.span().map(|span| source_location(&source, span)),
+            context: Some(Box::new(ConfigErrorContext {
+                config_path: path.clone(),
+                platform: None,
+                location: error.span().map(|span| source_location(&source, span)),
+            })),
+        })?;
+        let config = Self {
+            raw,
+            source: SourceDocument { text: source, path },
+        };
+        validate_raw_config(&config.raw).map_err(|error| config.decorate(error, None))?;
+        Ok(config)
+    }
+
+    fn decorate(&self, error: ConfigError, platform: Option<PlatformId>) -> ConfigError {
+        let (profile, field) = error.profile_field();
+        let profile = profile.map(str::to_owned);
+        let field = field.map(str::to_owned);
+        error.with_context(ConfigErrorContext {
+            config_path: self.source.path.clone(),
+            platform,
+            location: self
+                .source
+                .location_for(profile.as_deref(), platform, field.as_deref()),
+        })
     }
 
     /// Returns profile names in deterministic lexical order.
@@ -97,6 +135,15 @@ impl Config {
         name: &str,
         platform: Option<PlatformId>,
     ) -> Result<ResolvedProfile, ConfigError> {
+        self.resolve_with_platform_inner(name, platform)
+            .map_err(|error| self.decorate(error, platform))
+    }
+
+    fn resolve_with_platform_inner(
+        &self,
+        name: &str,
+        platform: Option<PlatformId>,
+    ) -> Result<ResolvedProfile, ConfigError> {
         let merged = self.resolve_raw(name, platform)?;
         let policy = build::build_policy(
             merged.filesystem.as_ref(),
@@ -120,7 +167,13 @@ impl Config {
         let executable_roots = merged
             .runtime
             .as_ref()
-            .map(|runtime| runtime.executable_roots.iter().map(PathBuf::from).collect())
+            .map(|runtime| {
+                runtime
+                    .executable_roots
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<PathBuf>>()
+            })
             .unwrap_or_default();
         let approval = build_approval(merged.approval.as_ref(), name)?;
         Ok(ResolvedProfile {
@@ -138,7 +191,7 @@ impl Config {
     pub fn resolve_default(&self) -> Result<ResolvedProfile, ConfigError> {
         let name = self
             .default_profile_name()
-            .ok_or(ConfigError::NoDefaultProfile)?;
+            .ok_or_else(|| self.decorate(ConfigError::NoDefaultProfile { context: None }, None))?;
         self.resolve(name)
     }
 
@@ -147,9 +200,12 @@ impl Config {
         &self,
         platform: PlatformId,
     ) -> Result<ResolvedProfile, ConfigError> {
-        let name = self
-            .default_profile_name()
-            .ok_or(ConfigError::NoDefaultProfile)?;
+        let name = self.default_profile_name().ok_or_else(|| {
+            self.decorate(
+                ConfigError::NoDefaultProfile { context: None },
+                Some(platform),
+            )
+        })?;
         self.resolve_for_platform(name, platform)
     }
 
@@ -161,6 +217,7 @@ impl Config {
         if !self.raw.profiles.contains_key(name) {
             return Err(ConfigError::UnknownProfile {
                 name: name.to_owned(),
+                context: None,
             });
         }
 
@@ -181,6 +238,7 @@ impl Config {
                     .get(&frame_name)
                     .ok_or_else(|| ConfigError::UnknownProfile {
                         name: frame_name.clone(),
+                        context: None,
                     })?;
 
             if let Some(parent_name) = profile
@@ -195,10 +253,16 @@ impl Config {
                 if let Some(start) = active.get(&parent_name) {
                     let mut chain = active_names[*start..].to_vec();
                     chain.push(parent_name);
-                    return Err(ConfigError::ProfileCycle { chain });
+                    return Err(ConfigError::ProfileCycle {
+                        chain,
+                        context: None,
+                    });
                 }
                 if !self.raw.profiles.contains_key(&parent_name) {
-                    return Err(ConfigError::UnknownProfile { name: parent_name });
+                    return Err(ConfigError::UnknownProfile {
+                        name: parent_name,
+                        context: None,
+                    });
                 }
                 active.insert(parent_name.clone(), active_names.len());
                 active_names.push(parent_name.clone());
@@ -209,6 +273,7 @@ impl Config {
             let Some(frame) = frames.pop() else {
                 return Err(ConfigError::ResolutionInvariant {
                     message: "resolution stack was empty while completing a profile",
+                    context: None,
                 });
             };
             active.remove(&frame.name);
@@ -223,11 +288,70 @@ impl Config {
         let mut merger = ProfileMerger::new(path_dialect(platform));
         for profile_name in order {
             let Some(profile) = self.raw.profiles.get(&profile_name) else {
-                return Err(ConfigError::UnknownProfile { name: profile_name });
+                return Err(ConfigError::UnknownProfile {
+                    name: profile_name,
+                    context: None,
+                });
             };
             merger.apply(profile, platform);
         }
         Ok(merger.finish())
+    }
+}
+
+impl SourceDocument {
+    fn location_for(
+        &self,
+        profile: Option<&str>,
+        platform: Option<PlatformId>,
+        field: Option<&str>,
+    ) -> Option<SourceLocation> {
+        let profile = profile?;
+        let base_header = match platform {
+            Some(platform) => format!("[profiles.{profile}.platforms.{}]", platform.as_str()),
+            None => format!("[profiles.{profile}]"),
+        };
+        let field_prefix = field.and_then(|value| value.rsplit_once('.').map(|(prefix, _)| prefix));
+        let nested_header = field_prefix.map(|prefix| format!("{base_header}.{prefix}"));
+        let headers = nested_header
+            .as_deref()
+            .into_iter()
+            .chain(std::iter::once(base_header.as_str()));
+        let mut section_start = None;
+        let mut offset = 0;
+        for line in self.text.split_inclusive('\n') {
+            let current = line.trim().trim_end_matches('\n');
+            if headers.clone().any(|header| current == header) {
+                section_start = Some(offset);
+                break;
+            }
+            offset += line.len();
+        }
+        let section_start = section_start?;
+        let section = &self.text[section_start..];
+        let key = field
+            .and_then(|value| value.rsplit('.').next())
+            .unwrap_or_default();
+        let mut line_offset = section_start;
+        for line in section.split_inclusive('\n') {
+            if line_offset != section_start && line.trim_start().starts_with('[') {
+                break;
+            }
+            let trimmed = line.trim_start();
+            if !key.is_empty()
+                && trimmed.starts_with(key)
+                && trimmed[key.len()..].trim_start().starts_with('=')
+            {
+                let start = line_offset + line.len() - line.trim_start().len();
+                let end = start + key.len();
+                return Some(source_location(&self.text, start..end));
+            }
+            line_offset += line.len();
+        }
+        Some(source_location(
+            &self.text,
+            section_start..section_start + base_header.len(),
+        ))
     }
 }
 
@@ -288,6 +412,7 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
         if !config.profiles.contains_key(default_profile) {
             return Err(ConfigError::UnknownProfile {
                 name: default_profile.clone(),
+                context: None,
             });
         }
     }
@@ -476,6 +601,7 @@ fn validate_profile_name(name: &str) -> Result<(), ConfigError> {
     } else {
         Err(ConfigError::InvalidProfileName {
             name: name.to_owned(),
+            context: None,
         })
     }
 }

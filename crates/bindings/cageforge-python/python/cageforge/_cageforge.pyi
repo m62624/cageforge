@@ -106,7 +106,13 @@ class CageforgeConfigurationError(CageforgeError):
     r"""
     The TOML configuration or runtime context is invalid.
     """
-    ...
+    code: builtins.str
+    config_path: typing.Optional[builtins.str]
+    profile: typing.Optional[builtins.str]
+    platform: typing.Optional[builtins.str]
+    field: typing.Optional[builtins.str]
+    line: typing.Optional[builtins.int]
+    column: typing.Optional[builtins.int]
 
 class CageforgeError(builtins.Exception):
     r"""

@@ -14,7 +14,19 @@ open class CageforgeException
 class UnsupportedPlatformException(message: String) : CageforgeException(message)
 
 /** Raised when TOML configuration cannot be parsed or resolved. */
-class CageforgeConfigurationException(message: String) : CageforgeException(message)
+class CageforgeConfigurationException(
+    message: String,
+    val code: String,
+    val configPath: String?,
+    val profile: String?,
+    val platform: String?,
+    val field: String?,
+    val line: Int?,
+    val column: Int?,
+) : CageforgeException(message) {
+    /** Creates a category-only configuration failure for host-side validation. */
+    constructor(message: String) : this(message, "configuration_error", null, null, null, null, null, null)
+}
 
 /** Raised when the native Cageforge runtime cannot be initialized. */
 class CageforgeInitializationException(message: String) : CageforgeException(message)

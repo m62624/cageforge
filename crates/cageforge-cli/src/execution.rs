@@ -138,6 +138,7 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
             profile: args.profile.clone().unwrap_or_else(|| "default".to_owned()),
             field: "platform".to_owned(),
             value: error.to_string(),
+            context: None,
         })
     })?;
     let profile = match args.profile.as_deref() {

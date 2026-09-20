@@ -5,19 +5,23 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::path::Path;
 
 use cageforge_backend_api::{
     BackendCapabilities, BackendCapability, BackendIdentity, BackendRequest,
     PreparedBackendRequest, Sandbox, SandboxBackend,
 };
 use cageforge_command::{CoreEnvironment, EnvironmentBase, EnvironmentInput};
+use cageforge_path::is_within;
+use cageforge_policy::FilesystemDecision;
 use cageforge_policy::PathResolutionContext;
 
 use crate::config::MacosBackendConfig;
-use crate::error::MacosBackendError;
+use crate::error::{MacosBackendError, MacosFilesystemError};
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::{GatewayRuntime, MacosNetworkPlan};
 use crate::process::{MacosChild, launchd};
+use crate::runtime::is_fixed_executable;
 use crate::seatbelt::SeatbeltProfile;
 
 /// A macOS-native backend bound to one validated Seatbelt executable.
@@ -75,9 +79,44 @@ impl MacosBackend {
         context: &PathResolutionContext,
     ) -> Result<PreparedBackendRequest<'a, Self>, MacosBackendError> {
         let prepared = request.prepare_for(self, context)?;
+        self.validate_program(&prepared)?;
         MacosFilesystemPlan::lower(self, &prepared)?;
         MacosNetworkPlan::lower(self, &prepared)?;
         Ok(prepared)
+    }
+
+    fn validate_program<'a>(
+        &self,
+        prepared: &PreparedBackendRequest<'a, Self>,
+    ) -> Result<(), MacosBackendError> {
+        let program = prepared.command_spec(self)?.program();
+        if !Path::new(program).is_absolute() {
+            return Ok(());
+        }
+        let program = Path::new(program).to_path_buf();
+        if is_fixed_executable(&program) {
+            return Ok(());
+        }
+        match prepared.filesystem_access_for_path(self, &program)? {
+            FilesystemDecision::Read | FilesystemDecision::Write => {}
+            FilesystemDecision::Deny => {
+                return Err(MacosFilesystemError::ProgramRequiresRead { path: program }.into());
+            }
+            FilesystemDecision::ExternallyEnforced => {
+                return Err(MacosFilesystemError::ExternalOwnership.into());
+            }
+        }
+        let path_context = prepared.path_context(self)?;
+        if !path_context
+            .executable_roots()
+            .iter()
+            .any(|root| is_within(&program, root))
+        {
+            return Err(
+                MacosFilesystemError::ProgramRequiresExecutableRoot { path: program }.into(),
+            );
+        }
+        Ok(())
     }
 
     /// Launches one command in its own Seatbelt process boundary.

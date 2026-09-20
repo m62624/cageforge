@@ -244,6 +244,7 @@ dns_timeout_ms = 0
             profile: "safe".to_owned(),
             field: "network.gateway.dns_timeout_ms".to_owned(),
             value: "0 must be representable and greater than zero".to_owned(),
+            context: None,
         }
     );
 
@@ -264,6 +265,7 @@ http_header_bytes = 4096
                 minimum: 8192,
                 actual: 4096,
             },
+            context: None,
         }
     );
 
@@ -1095,7 +1097,7 @@ fn rejects_unknown_fields_and_invalid_profile_names() {
     assert!(matches!(error, ConfigError::InvalidToml { .. }));
 
     let error = Config::from_toml("[profiles.\"bad.name\"]\n").expect_err("invalid profile name");
-    assert!(matches!(error, ConfigError::InvalidProfileName { name } if name == "bad.name"));
+    assert!(matches!(error, ConfigError::InvalidProfileName { name, .. } if name == "bad.name"));
 
     let error = Config::from_toml(
         r#"
@@ -1215,7 +1217,7 @@ unix_sockets = [
 fn rejects_inheritance_and_default_errors() {
     let error = Config::from_toml("default_profile = \"missing\"\n[profiles.safe]\n")
         .expect_err("unknown default profile");
-    assert!(matches!(error, ConfigError::UnknownProfile { name } if name == "missing"));
+    assert!(matches!(error, ConfigError::UnknownProfile { name, .. } if name == "missing"));
 
     let error = Config::from_toml(
         "[profiles.safe]\ninherits = [\"parent\", \"parent\"]\n[profiles.parent]\n",
@@ -1237,7 +1239,7 @@ inherits = ["a"]
     .expect("parse cycle");
     assert!(matches!(
         config.resolve("a"),
-        Err(ConfigError::ProfileCycle { chain }) if chain == ["a", "b", "a"]
+        Err(ConfigError::ProfileCycle { chain, .. }) if chain == ["a", "b", "a"]
     ));
 
     let config = Config::from_toml(
@@ -1249,17 +1251,17 @@ inherits = ["missing"]
     .expect("parse unknown parent");
     assert!(matches!(
         config.resolve("safe"),
-        Err(ConfigError::UnknownProfile { name }) if name == "missing"
+        Err(ConfigError::UnknownProfile { name, .. }) if name == "missing"
     ));
 
     let config = Config::from_toml("[profiles.safe]\n").expect("profile");
     assert!(matches!(
         config.resolve_default(),
-        Err(ConfigError::NoDefaultProfile)
+        Err(ConfigError::NoDefaultProfile { .. })
     ));
     assert!(matches!(
         config.resolve("missing"),
-        Err(ConfigError::UnknownProfile { name }) if name == "missing"
+        Err(ConfigError::UnknownProfile { name, .. }) if name == "missing"
     ));
 }
 
@@ -1656,36 +1658,45 @@ fn config_errors_have_context_and_sources() {
         ConfigError::InvalidToml {
             message: "bad syntax".to_owned(),
             location: None,
+            context: None,
         },
         ConfigError::ReadFile {
             path: PathBuf::from("config.toml"),
             message: "missing".to_owned(),
+            context: None,
         },
         ConfigError::InvalidProfileName {
             name: "bad.name".to_owned(),
+            context: None,
         },
         ConfigError::UnknownProfile {
             name: "missing".to_owned(),
+            context: None,
         },
-        ConfigError::NoDefaultProfile,
+        ConfigError::NoDefaultProfile { context: None },
         ConfigError::ProfileCycle {
             chain: vec!["a".to_owned(), "b".to_owned(), "a".to_owned()],
+            context: None,
         },
         ConfigError::InvalidValue {
             profile: "safe".to_owned(),
             field: "filesystem.mode".to_owned(),
             value: "bad".to_owned(),
+            context: None,
         },
         ConfigError::MissingCommandProgram {
             profile: "safe".to_owned(),
+            context: None,
         },
         ConfigError::Policy {
             profile: "safe".to_owned(),
             source: cageforge_policy::PolicyError::EmptyPath,
+            context: None,
         },
         ConfigError::Command {
             profile: "safe".to_owned(),
             source: cageforge_command::CommandError::EmptyProgram,
+            context: None,
         },
     ];
     for error in &errors {
@@ -1715,14 +1726,20 @@ fn config_errors_have_context_and_sources() {
     let policy = ConfigError::Policy {
         profile: "safe".to_owned(),
         source: cageforge_policy::PolicyError::EmptyPath,
+        context: None,
     };
     assert!(policy.source().is_some());
     let command = ConfigError::Command {
         profile: "safe".to_owned(),
         source: cageforge_command::CommandError::EmptyProgram,
+        context: None,
     };
     assert!(command.source().is_some());
-    assert!(ConfigError::NoDefaultProfile.source().is_none());
+    assert!(
+        ConfigError::NoDefaultProfile { context: None }
+            .source()
+            .is_none()
+    );
 }
 
 #[test]

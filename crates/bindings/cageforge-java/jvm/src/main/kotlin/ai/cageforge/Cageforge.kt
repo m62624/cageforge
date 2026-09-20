@@ -209,6 +209,22 @@ class Cageforge private constructor(
             context: RuntimeContext = RuntimeContext(file.toAbsolutePath().parent ?: Path.of(".")),
             grant: PermissionGrant? = null,
             request: PermissionRequest? = null,
-        ): Cageforge = fromToml(Files.readString(file), profileName, context, grant, request)
+        ): Cageforge {
+            try {
+                return fromToml(Files.readString(file), profileName, context, grant, request)
+            } catch (error: CageforgeConfigurationException) {
+                if (error.configPath != null) throw error
+                throw CageforgeConfigurationException(
+                    error.message ?: "configuration error",
+                    error.code,
+                    file.toAbsolutePath().toString(),
+                    error.profile,
+                    error.platform,
+                    error.field,
+                    error.line,
+                    error.column,
+                )
+            }
+        }
     }
 }

@@ -348,6 +348,39 @@ fn configuration_error(error: impl ToString) -> PyErr {
     CageforgeConfigurationError::new_err(error.to_string())
 }
 
+fn configuration_diagnostic_error(error: cageforge::ConfigError) -> PyErr {
+    let diagnostic = error.diagnostic();
+    let exception = CageforgeConfigurationError::new_err(diagnostic.render_human());
+    Python::attach(|py| {
+        let value = exception.value(py);
+        let set_result = (|| -> PyResult<()> {
+            value.setattr("code", diagnostic.code())?;
+            value.setattr(
+                "config_path",
+                diagnostic
+                    .config_path()
+                    .map(|path| path.display().to_string()),
+            )?;
+            value.setattr("profile", diagnostic.profile())?;
+            value.setattr(
+                "platform",
+                diagnostic.platform().map(|platform| platform.as_str()),
+            )?;
+            value.setattr("field", diagnostic.field())?;
+            value.setattr("line", diagnostic.location().map(|location| location.line))?;
+            value.setattr(
+                "column",
+                diagnostic.location().map(|location| location.column),
+            )?;
+            Ok(())
+        })();
+        if let Err(attribute_error) = set_result {
+            return attribute_error;
+        }
+        exception
+    })
+}
+
 fn initialization_error(error: impl ToString) -> PyErr {
     CageforgeInitializationError::new_err(error.to_string())
 }
@@ -763,8 +796,8 @@ fn module_native_directory(py: Python<'_>) -> PyResult<PathBuf> {
     native_directory(&module)
 }
 
-fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
-    cageforge::Config::from_toml(toml).map_err(|error| error.to_string())
+fn config_from_toml(toml: &str) -> Result<cageforge::Config, cageforge::ConfigError> {
+    cageforge::Config::from_toml(toml)
 }
 
 fn normalize_toml_source(toml: String) -> String {
@@ -779,17 +812,18 @@ fn build_preflight_request(
     tool_version: String,
     manifest_digest: String,
     config_digest: String,
-) -> Result<cageforge::PermissionRequest, String> {
-    let config = config_from_toml(toml)?;
-    let profile = resolve_profile(&config, profile_name)?;
+) -> PyResult<cageforge::PermissionRequest> {
+    let config = config_from_toml(toml).map_err(configuration_diagnostic_error)?;
+    let profile = resolve_profile(&config, profile_name).map_err(configuration_diagnostic_error)?;
     let (resolution, effective, environment, ceiling) =
-        runtime_inputs_with_ceiling(&profile, &context.0, context.1.as_deref())?;
+        runtime_inputs_with_ceiling(&profile, &context.0, context.1.as_deref())
+            .map_err(configuration_error)?;
     let identity = cageforge::PreflightIdentity::new(
         tool_id,
         tool_version,
         manifest_digest,
         config_digest,
-        cageforge::PlatformId::current().map_err(|error| error.to_string())?,
+        cageforge::PlatformId::current().map_err(|error| configuration_error(error.to_string()))?,
         std::env::consts::ARCH,
     );
     let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
@@ -800,12 +834,12 @@ fn build_preflight_request(
         &ceiling,
         identity,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(permission_error)?;
     if let Some(command) = profile.command() {
         return plan
             .with_process_program(command.command().program().to_string_lossy().into_owned())
             .map(|plan| plan.request().clone())
-            .map_err(|error| error.to_string());
+            .map_err(permission_error);
     }
     Ok(plan.request().clone())
 }
@@ -837,13 +871,18 @@ fn preflight_identity(
 fn resolve_profile(
     config: &cageforge::Config,
     profile_name: Option<&str>,
-) -> Result<cageforge::ResolvedProfile, String> {
-    let platform = cageforge::PlatformId::current().map_err(|error| error.to_string())?;
+) -> Result<cageforge::ResolvedProfile, cageforge::ConfigError> {
+    let platform =
+        cageforge::PlatformId::current().map_err(|error| cageforge::ConfigError::InvalidValue {
+            profile: profile_name.unwrap_or("default").to_owned(),
+            field: "platform".to_owned(),
+            value: error.to_string(),
+            context: None,
+        })?;
     match profile_name {
         Some(name) if !name.is_empty() => config.resolve_for_platform(name, platform),
         _ => config.resolve_default_for_platform(platform),
     }
-    .map_err(|error| error.to_string())
 }
 
 fn command_request(
@@ -910,7 +949,7 @@ impl Cageforge {
         if toml.is_empty() {
             return Err(configuration_error("TOML must not be empty"));
         }
-        let config = config_from_toml(&toml).map_err(configuration_error)?;
+        let config = config_from_toml(&toml).map_err(configuration_diagnostic_error)?;
         Ok(config.profile_names().map(str::to_owned).collect())
     }
 
@@ -943,8 +982,7 @@ impl Cageforge {
             tool_version.to_owned(),
             manifest_digest.unwrap_or_else(|| cageforge::sha256_digest(b"cageforge-python")),
             config_digest.unwrap_or_else(|| cageforge::sha256_digest(toml.as_bytes())),
-        )
-        .map_err(configuration_error)?;
+        )?;
         Ok(PermissionRequest {
             inner: Some(request),
         })
@@ -968,9 +1006,9 @@ impl Cageforge {
             });
         Python::attach(|py| {
             py.detach(move || {
-                let config = config_from_toml(&toml).map_err(configuration_error)?;
+                let config = config_from_toml(&toml).map_err(configuration_diagnostic_error)?;
                 let profile = resolve_profile(&config, profile_name.as_deref())
-                    .map_err(configuration_error)?;
+                    .map_err(configuration_diagnostic_error)?;
                 runtime_inputs(&profile, &context.0, context.1.as_deref())
                     .map(|_| ())
                     .map_err(configuration_error)
@@ -1019,9 +1057,9 @@ impl Cageforge {
             })
             .transpose()?;
         let state = py.detach(move || {
-            let config = config_from_toml(&toml).map_err(configuration_error)?;
-            let profile =
-                resolve_profile(&config, profile_name.as_deref()).map_err(configuration_error)?;
+            let config = config_from_toml(&toml).map_err(configuration_diagnostic_error)?;
+            let profile = resolve_profile(&config, profile_name.as_deref())
+                .map_err(configuration_diagnostic_error)?;
             let (resolution, effective, environment, ceiling) =
                 runtime_inputs_with_ceiling(&profile, &context.0, context.1.as_deref())
                     .map_err(configuration_error)?;
@@ -1119,7 +1157,17 @@ impl Cageforge {
                 current_directory,
                 minimal_path,
             });
-        Self::from_toml(py, source, profile_name, context.as_ref(), grant, request)
+        let result = Self::from_toml(py, source, profile_name, context.as_ref(), grant, request);
+        if let Err(error) = &result
+            && error.is_instance_of::<CageforgeConfigurationError>(py)
+        {
+            let value = error.value(py);
+            let config_path = value.getattr("config_path")?;
+            if config_path.is_none() {
+                value.setattr("config_path", file.to_string_lossy().as_ref())?;
+            }
+        }
+        result
     }
 
     /// Returns the native resource target selected by this interpreter.

@@ -23,6 +23,28 @@ class RuntimeContextTest {
     }
 
     @Test
+    fun configurationExceptionKeepsStructuredDiagnosticFields() {
+        val error =
+            CageforgeConfigurationException(
+                "invalid configuration",
+                "invalid_value",
+                "/tmp/tool.toml",
+                "broken",
+                "macos",
+                "command.program",
+                12,
+                3,
+            )
+        assertEquals("invalid_value", error.code)
+        assertEquals("/tmp/tool.toml", error.configPath)
+        assertEquals("broken", error.profile)
+        assertEquals("macos", error.platform)
+        assertEquals("command.program", error.field)
+        assertEquals(12, error.line)
+        assertEquals(3, error.column)
+    }
+
+    @Test
     fun windowsSetupIsTypedAndNonDestructiveOnNonWindows() {
         if (WindowsSetup.isSupported()) return
         assertFailsWith<UnsupportedPlatformException> { WindowsSetup.install() }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use jni::errors::ErrorPolicy;
-use jni::objects::JClass;
+use jni::objects::{JClass, JObject, JThrowable, JValue};
 use jni::{Env, EnvUnowned};
 
 /// Stable exception categories exposed by the JVM binding.
@@ -91,9 +91,41 @@ impl BindingErrorKind {
 }
 
 #[derive(Debug)]
+pub(crate) struct BindingDiagnostic {
+    pub(crate) code: String,
+    pub(crate) config_path: Option<String>,
+    pub(crate) profile: Option<String>,
+    pub(crate) platform: Option<String>,
+    pub(crate) field: Option<String>,
+    pub(crate) line: Option<i32>,
+    pub(crate) column: Option<i32>,
+}
+
+impl BindingDiagnostic {
+    pub(crate) fn from_config(error: &cageforge::ConfigError) -> Self {
+        let diagnostic = error.diagnostic();
+        let location = diagnostic.location();
+        Self {
+            code: diagnostic.code().to_owned(),
+            config_path: diagnostic
+                .config_path()
+                .map(|path| path.display().to_string()),
+            profile: diagnostic.profile().map(str::to_owned),
+            platform: diagnostic
+                .platform()
+                .map(|platform| platform.as_str().to_owned()),
+            field: diagnostic.field().map(str::to_owned),
+            line: location.and_then(|value| i32::try_from(value.line).ok()),
+            column: location.and_then(|value| i32::try_from(value.column).ok()),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct BindingError {
     pub(crate) kind: BindingErrorKind,
     message: String,
+    diagnostic: Option<Box<BindingDiagnostic>>,
 }
 
 impl BindingError {
@@ -101,6 +133,16 @@ impl BindingError {
         Self {
             kind,
             message: message.into(),
+            diagnostic: None,
+        }
+    }
+
+    pub(crate) fn configuration(error: cageforge::ConfigError) -> Self {
+        let diagnostic = error.diagnostic();
+        Self {
+            kind: BindingErrorKind::Configuration,
+            message: diagnostic.render_human(),
+            diagnostic: Some(Box::new(BindingDiagnostic::from_config(&error))),
         }
     }
 
@@ -125,6 +167,7 @@ impl From<String> for BindingError {
         Self {
             kind: BindingErrorKind::Internal,
             message,
+            diagnostic: None,
         }
     }
 }
@@ -141,6 +184,68 @@ impl From<jni::errors::Error> for BindingError {
     }
 }
 
+fn throw_configuration_exception(
+    env: &mut Env<'_>,
+    class: &JClass<'_>,
+    message: &str,
+    diagnostic: &BindingDiagnostic,
+) -> jni::errors::Result<()> {
+    let message = env.new_string(message)?;
+    let code = env.new_string(&diagnostic.code)?;
+    let config_path = diagnostic
+        .config_path
+        .as_deref()
+        .map(|value| env.new_string(value))
+        .transpose()?;
+    let profile = diagnostic
+        .profile
+        .as_deref()
+        .map(|value| env.new_string(value))
+        .transpose()?;
+    let platform = diagnostic
+        .platform
+        .as_deref()
+        .map(|value| env.new_string(value))
+        .transpose()?;
+    let field = diagnostic
+        .field
+        .as_deref()
+        .map(|value| env.new_string(value))
+        .transpose()?;
+    let line = match diagnostic.line {
+        Some(value) => env.new_object(
+            jni::jni_str!("java/lang/Integer"),
+            jni::jni_sig!("(I)V"),
+            &[JValue::Int(value)],
+        )?,
+        None => JObject::null(),
+    };
+    let column = match diagnostic.column {
+        Some(value) => env.new_object(
+            jni::jni_str!("java/lang/Integer"),
+            jni::jni_sig!("(I)V"),
+            &[JValue::Int(value)],
+        )?,
+        None => JObject::null(),
+    };
+    let object = env.new_object(
+        class,
+        jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Integer;)V"),
+        &[
+            JValue::Object(message.as_ref()),
+            JValue::Object(code.as_ref()),
+            JValue::Object(config_path.as_ref().map_or(JObject::null().as_ref(), |value| value.as_ref())),
+            JValue::Object(profile.as_ref().map_or(JObject::null().as_ref(), |value| value.as_ref())),
+            JValue::Object(platform.as_ref().map_or(JObject::null().as_ref(), |value| value.as_ref())),
+            JValue::Object(field.as_ref().map_or(JObject::null().as_ref(), |value| value.as_ref())),
+            JValue::Object(&line),
+            JValue::Object(&column),
+        ],
+    )?;
+    let throwable = unsafe { JThrowable::from_raw(env, object.into_raw()) };
+    env.throw(throwable)
+}
+
 pub(crate) struct ThrowCageforgeException;
 
 impl<T: Default> ErrorPolicy<T, BindingError> for ThrowCageforgeException {
@@ -153,8 +258,15 @@ impl<T: Default> ErrorPolicy<T, BindingError> for ThrowCageforgeException {
     ) -> jni::errors::Result<T> {
         if !env.exception_check() {
             let class = error.kind.class(env)?;
-            let message = jni::strings::JNIString::new(error.to_string());
-            let _ = env.throw_new(class, message);
+            if let Some(diagnostic) = error.diagnostic.as_ref() {
+                if throw_configuration_exception(env, &class, &error.message, diagnostic).is_err() {
+                    let message = jni::strings::JNIString::new(error.to_string());
+                    let _ = env.throw_new(class, message);
+                }
+            } else {
+                let message = jni::strings::JNIString::new(error.to_string());
+                let _ = env.throw_new(class, message);
+            }
         }
         Ok(T::default())
     }

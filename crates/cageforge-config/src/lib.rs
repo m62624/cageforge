@@ -32,7 +32,7 @@ mod resolve;
 mod schema;
 
 pub use diagnostics::{ConfigDiagnostic, DiagnosticSeverity};
-pub use error::{ConfigError, SourceLocation};
+pub use error::{ConfigError, ConfigErrorContext, SourceLocation};
 pub use resolve::{Config, ResolvedProfile};
 pub use schema::config_schema_json;
 

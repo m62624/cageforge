@@ -236,10 +236,8 @@ fn runtime_from_toml(
     let minimal_directory = minimal_directory
         .map(|value| path(value, "minimal directory"))
         .transpose()?;
-    let config = config_from_toml(&toml)
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
-    let profile = resolve_profile(&config, profile_name.as_deref())
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let config = config_from_toml(&toml)?;
+    let profile = resolve_profile(&config, profile_name.as_deref())?;
     let (context, effective, environment, ceiling) =
         runtime_inputs_with_ceiling(&profile, &current_directory, minimal_directory.as_deref())
             .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
@@ -335,8 +333,8 @@ fn preflight_identity(
     ))
 }
 
-fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
-    cageforge::Config::from_toml(toml).map_err(|error| error.to_string())
+fn config_from_toml(toml: &str) -> Result<cageforge::Config, BindingError> {
+    cageforge::Config::from_toml(toml).map_err(BindingError::configuration)
 }
 
 fn permission_request_from_toml(
@@ -346,10 +344,8 @@ fn permission_request_from_toml(
     minimal_directory: Option<&Path>,
     identity: cageforge::PreflightIdentity,
 ) -> Result<cageforge::PermissionRequest, BindingError> {
-    let config = config_from_toml(toml)
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
-    let profile = resolve_profile(&config, profile_name)
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let config = config_from_toml(toml)?;
+    let profile = resolve_profile(&config, profile_name)?;
     let (context, effective, environment, ceiling) =
         runtime_inputs_with_ceiling(&profile, current_directory, minimal_directory)
             .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
@@ -376,13 +372,14 @@ fn permission_request_from_toml(
 fn resolve_profile(
     config: &cageforge::Config,
     profile_name: Option<&str>,
-) -> Result<cageforge::ResolvedProfile, String> {
-    let platform = cageforge::PlatformId::current().map_err(|error| error.to_string())?;
+) -> Result<cageforge::ResolvedProfile, BindingError> {
+    let platform = cageforge::PlatformId::current()
+        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error.to_string()))?;
     match profile_name {
         Some(name) if !name.is_empty() => config.resolve_for_platform(name, platform),
         _ => config.resolve_default_for_platform(platform),
     }
-    .map_err(|error| error.to_string())
+    .map_err(BindingError::configuration)
 }
 
 fn runtime_inputs(

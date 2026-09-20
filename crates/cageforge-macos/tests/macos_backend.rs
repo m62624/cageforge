@@ -351,6 +351,24 @@ fn backend() -> MacosBackend {
     MacosBackend::new(MacosBackendConfig::new()).expect("macOS Seatbelt is available")
 }
 
+#[test]
+fn absolute_custom_program_is_rejected_by_backend_without_executable_mapping() {
+    let workspace = TempDir::new().expect("workspace");
+    let policy = SandboxPolicy::full_access();
+    let command = CommandSpec::new("/tmp/cageforge-custom-program").expect("program");
+    let (command, effective, context) = request_for(workspace.path(), &policy, command);
+    let error = backend()
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect_err("custom absolute program must require an executable root");
+
+    assert!(matches!(
+        error,
+        MacosBackendError::Filesystem(MacosFilesystemError::ProgramRequiresExecutableRoot {
+            path
+        }) if path == Path::new("/tmp/cageforge-custom-program")
+    ));
+}
+
 fn restricted_policy(workspace: &Path) -> SandboxPolicy {
     SandboxPolicy::new(
         FilesystemPolicy::restricted([

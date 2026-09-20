@@ -179,6 +179,20 @@ pub enum MacosFilesystemError {
         /// The rejected runtime root.
         path: PathBuf,
     },
+    /// An absolute command path is readable but is outside the fixed Seatbelt
+    /// executable baseline and all explicitly mapped runtime roots.
+    #[error("macOS program requires runtime.executable_roots: {path:?}")]
+    ProgramRequiresExecutableRoot {
+        /// The command path that needs executable mapping.
+        path: PathBuf,
+    },
+    /// An absolute command path is not readable by the effective filesystem
+    /// policy, so executable mapping cannot make it launchable.
+    #[error("macOS program requires a filesystem read rule: {path:?}")]
+    ProgramRequiresRead {
+        /// The command path without an effective read grant.
+        path: PathBuf,
+    },
     /// The backend could not inspect a path.
     #[error("failed to inspect filesystem scope {path:?}: {source}")]
     Metadata {
