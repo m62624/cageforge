@@ -216,6 +216,37 @@ executable_roots = ["/opt/example-runtime"]
 }
 
 #[test]
+fn platform_runtime_overlays_validate_their_target_path_syntax() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "tool"
+
+[profiles.tool.platforms.macos.runtime]
+executable_roots = ["/opt/example-runtime"]
+
+[profiles.tool.platforms.windows.runtime]
+executable_roots = ["C:/Program Files/example-runtime"]
+"#,
+    )
+    .expect("target platform runtime paths should parse on every host");
+
+    assert_eq!(
+        config
+            .resolve_default_for_platform(PlatformId::Macos)
+            .expect("macOS runtime path")
+            .executable_roots(),
+        &[std::path::PathBuf::from("/opt/example-runtime")]
+    );
+    assert_eq!(
+        config
+            .resolve_default_for_platform(PlatformId::Windows)
+            .expect("Windows runtime path")
+            .executable_roots(),
+        &[std::path::PathBuf::from("C:/Program Files/example-runtime")]
+    );
+}
+
+#[test]
 fn runtime_roots_require_absolute_unique_safe_paths() {
     for source in [
         "[profiles.tool.runtime]\nexecutable_roots = [\"runtime\"]\n",

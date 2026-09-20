@@ -208,15 +208,8 @@ fn custom_macos_runtime_requires_explicit_executable_mapping() {
     fs::create_dir(&runtime_root).expect("runtime root");
     fs::create_dir(&workspace).expect("runtime workspace");
 
-    let source_executable = if Path::new("/bin/echo").is_file() {
-        "/bin/echo"
-    } else {
-        "/usr/bin/echo"
-    };
     let runtime_executable = runtime_root.join("echo");
-    fs::copy(source_executable, &runtime_executable).expect("copy Mach-O runtime helper");
-    fs::set_permissions(&runtime_executable, fs::Permissions::from_mode(0o755))
-        .expect("make runtime helper executable");
+    compile_runtime_fixture(&runtime_root, &runtime_executable);
 
     let runtime_root_text = runtime_root.to_str().expect("UTF-8 runtime root");
     let source = template.replace(PLACEHOLDER, runtime_root_text);
@@ -244,6 +237,70 @@ fn custom_macos_runtime_requires_explicit_executable_mapping() {
         allowed.stderr
     );
     assert_eq!(allowed.stdout.trim(), "cageforge-runtime-root-smoke");
+}
+
+fn compile_runtime_fixture(runtime_root: &Path, executable: &Path) {
+    let library_source = runtime_root.join("runtime.c");
+    let library = runtime_root.join("libcageforge_runtime.dylib");
+    let program_source = runtime_root.join("main.c");
+    fs::write(
+        &library_source,
+        r#"const char *cageforge_runtime_message(void) {
+    return "cageforge-runtime-root-smoke";
+}
+"#,
+    )
+    .expect("write runtime library source");
+    fs::write(
+        &program_source,
+        r#"#include <stdio.h>
+
+extern const char *cageforge_runtime_message(void);
+
+int main(void) {
+    puts(cageforge_runtime_message());
+    return 0;
+}
+"#,
+    )
+    .expect("write runtime program source");
+
+    let library_name = library.to_str().expect("UTF-8 runtime library path");
+    let library_status = Command::new("clang")
+        .args([
+            "-dynamiclib",
+            library_source.to_str().expect("UTF-8 library source path"),
+            "-install_name",
+            "@rpath/libcageforge_runtime.dylib",
+            "-o",
+            library_name,
+        ])
+        .status()
+        .expect("run clang for runtime library");
+    assert!(
+        library_status.success(),
+        "runtime library compilation failed"
+    );
+
+    let executable_name = executable.to_str().expect("UTF-8 runtime executable path");
+    let program_status = Command::new("clang")
+        .args([
+            program_source.to_str().expect("UTF-8 program source path"),
+            "-L",
+            runtime_root.to_str().expect("UTF-8 runtime root path"),
+            "-lcageforge_runtime",
+            "-Wl,-rpath,@loader_path",
+            "-o",
+            executable_name,
+        ])
+        .status()
+        .expect("run clang for runtime executable");
+    assert!(
+        program_status.success(),
+        "runtime executable compilation failed"
+    );
+    fs::set_permissions(executable, fs::Permissions::from_mode(0o755))
+        .expect("make runtime executable executable");
 }
 
 fn backend() -> MacosBackend {
@@ -909,6 +966,7 @@ fn backend_is_send_sync_and_reusable_for_independent_instances() {
         BackendCapability::FilesystemRestricted,
         BackendCapability::FilesystemUnrestricted,
         BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemExecutableMapping,
         BackendCapability::FilesystemAbsoluteScopes,
         BackendCapability::FilesystemWorkspaceScopes,
         BackendCapability::FilesystemRootScopes,

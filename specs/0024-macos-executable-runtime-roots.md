@@ -31,6 +31,12 @@ paths. The macOS backend additionally rejects missing roots, symlinked
 ancestors, non-directories, and roots not covered by effective read or write
 filesystem access. The root is canonicalized before native policy generation.
 
+Platform overlays validate path syntax for their declared target platform, so
+one portable TOML document may contain all three operating-system overlays.
+Only the selected overlay is resolved into the runtime context. This
+capability remains macOS-specific: Linux and Windows reject a direct
+executable-root context with a typed unsupported-capability error.
+
 The runtime declaration never grants read or write access. Those permissions
 remain ordinary filesystem rules and must be declared separately. A runtime
 root is not inferred from `command.program`, `minimal`, or any other readable
@@ -73,8 +79,9 @@ macOS-specific launch method or path convention.
 
 The config tests cover parsing, platform selection, duplicate rejection, and
 unsafe-path rejection. The backend API verifies unsupported capability
-negotiation. The macOS native integration test copies a normal Mach-O helper
-into a temporary user runtime directory, grants that directory read access,
-and proves that the child fails without `runtime.executable_roots` and prints
-its marker successfully when the mapping capability is present. The test runs
-inside the existing native macOS backend job; it is not a config-only fixture.
+negotiation. The macOS native integration test builds a small Mach-O program
+and a dynamic library in a temporary user runtime directory, grants that
+directory read access, and proves that the child fails to load its library
+without `runtime.executable_roots` and prints its marker successfully when
+the mapping capability is present. The test runs inside the existing native
+macOS backend job; it is not a config-only fixture.

@@ -293,10 +293,10 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
         validate_profile_name(name)?;
         validate_profile_policy_duplicates(name, profile)?;
         validate_approval(name, profile.approval.as_ref())?;
-        validate_runtime(name, profile.runtime.as_ref())?;
-        for overlay in profile.platforms.values() {
+        validate_runtime(name, profile.runtime.as_ref(), None)?;
+        for (platform, overlay) in &profile.platforms {
             validate_approval(name, overlay.approval.as_ref())?;
-            validate_runtime(name, overlay.runtime.as_ref())?;
+            validate_runtime(name, overlay.runtime.as_ref(), Some(*platform))?;
         }
         let mut roots = HashSet::with_capacity(profile.workspace_roots.len());
         for root in profile.workspace_roots.keys() {
@@ -494,7 +494,11 @@ fn validate_workspace_root(profile: &str, root: &str) -> Result<(), ConfigError>
     Ok(())
 }
 
-fn validate_runtime(profile: &str, runtime: Option<&RawRuntime>) -> Result<(), ConfigError> {
+fn validate_runtime(
+    profile: &str,
+    runtime: Option<&RawRuntime>,
+    platform: Option<PlatformId>,
+) -> Result<(), ConfigError> {
     let Some(runtime) = runtime else {
         return Ok(());
     };
@@ -515,14 +519,14 @@ fn validate_runtime(profile: &str, runtime: Option<&RawRuntime>) -> Result<(), C
             ));
         }
         let path = Path::new(root);
-        if !path.is_absolute() {
+        if !is_absolute_runtime_root(root, platform) {
             return Err(invalid_value(
                 profile,
                 "runtime.executable_roots",
                 format!("path must be absolute: {root:?}"),
             ));
         }
-        if contains_parent_traversal(path) {
+        if contains_runtime_parent_traversal(root) || contains_parent_traversal(path) {
             return Err(invalid_value(
                 profile,
                 "runtime.executable_roots",
@@ -538,6 +542,28 @@ fn validate_runtime(profile: &str, runtime: Option<&RawRuntime>) -> Result<(), C
         }
     }
     Ok(())
+}
+
+fn is_absolute_runtime_root(root: &str, platform: Option<PlatformId>) -> bool {
+    match platform {
+        Some(PlatformId::Linux | PlatformId::Macos) => root.starts_with('/'),
+        Some(PlatformId::Windows) => is_windows_absolute(root),
+        None => Path::new(root).is_absolute() || is_windows_absolute(root),
+    }
+}
+
+fn is_windows_absolute(root: &str) -> bool {
+    let bytes = root.as_bytes();
+    root.starts_with("\\\\")
+        || root.starts_with("//")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+}
+
+fn contains_runtime_parent_traversal(root: &str) -> bool {
+    root.split(['/', '\\']).any(|component| component == "..")
 }
 
 fn source_location(source: &str, span: std::ops::Range<usize>) -> crate::SourceLocation {

@@ -162,6 +162,13 @@ writable and does not make other readable roots executable. Keep the root as
 narrow as the runtime layout permits. The complete runnable fixture is
 [`runnable/macos/runtime-executable.toml`](runnable/macos/runtime-executable.toml).
 
+The path syntax is checked against the platform named by the overlay, not
+against the machine that merely parses the document. A portable TOML file may
+therefore contain Linux, macOS, and Windows overlays together; only the
+selected platform overlay enters the runtime context. This declaration is
+macOS-specific, and Linux or Windows native backends reject an executable-root
+context instead of ignoring or widening it.
+
 This follows the same platform-default principle reviewed in the local Codex
 baseline: Linux adds standard executable and loader roots when minimal
 defaults are requested, macOS adds its standard runtime/framework rules, and
