@@ -195,9 +195,6 @@ default_profile = "tool"
 
 [profiles.tool.platforms.macos.runtime]
 executable_roots = ["/opt/example-runtime"]
-
-[profiles.tool.platforms.macos.filesystem]
-rules = [{ target = "absolute", path = "/opt/example-runtime", access = "read" }]
 "#,
     )
     .expect("runtime-root configuration");
@@ -226,9 +223,6 @@ default_profile = "tool"
 
 [profiles.tool.platforms.macos.runtime]
 executable_roots = ["/opt/example-runtime"]
-
-[profiles.tool.platforms.macos.filesystem]
-rules = [{ target = "absolute", path = "/opt/example-runtime", access = "read" }]
 
 [profiles.tool.platforms.windows.runtime]
 executable_roots = ["C:/Program Files/example-runtime"]

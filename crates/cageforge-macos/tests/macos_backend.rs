@@ -72,6 +72,11 @@ impl Drop for LaunchdTestJob {
 }
 
 fn context(workspace: &Path) -> PathResolutionContext {
+    let test_executable_root = std::env::current_exe()
+        .expect("test executable")
+        .parent()
+        .expect("test executable directory")
+        .to_path_buf();
     PathResolutionContext::new()
         .with_root(PathBuf::from("/"))
         .expect("root")
@@ -91,6 +96,8 @@ fn context(workspace: &Path) -> PathResolutionContext {
         .expect("slash tmp")
         .with_current_directory(workspace.to_path_buf())
         .expect("cwd")
+        .with_executable_root(test_executable_root)
+        .expect("test executable root")
 }
 
 #[test]
