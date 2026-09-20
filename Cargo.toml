@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["Mansur Azatbek <mansur62624@gmail.com>"]
 license = "Apache-2.0"
@@ -65,20 +65,20 @@ lto = "thin"
 codegen-units = 16
 
 [workspace.dependencies]
-cageforge = { path = "crates/cageforge", version = "0.5.0" }
-cageforge-cli = { path = "crates/cageforge-cli", version = "0.5.0" }
-cageforge-command = { path = "crates/cageforge-command", version = "0.5.0" }
-cageforge-backend-api = { path = "crates/cageforge-backend-api", version = "0.5.0" }
-cageforge-bwrap = { path = "crates/cageforge-bwrap", version = "0.5.0", default-features = false }
-cageforge-config = { path = "crates/cageforge-config", version = "0.5.0" }
-cageforge-linux = { path = "crates/cageforge-linux", version = "0.5.0" }
-cageforge-macos = { path = "crates/cageforge-macos", version = "0.5.0" }
-cageforge-network-proxy = { path = "crates/cageforge-network-proxy", version = "0.5.0", default-features = false }
-cageforge-policy = { path = "crates/cageforge-policy", version = "0.5.0" }
-cageforge-policy-compose = { path = "crates/cageforge-policy-compose", version = "0.5.0" }
-cageforge-permissions = { path = "crates/cageforge-permissions", version = "0.5.0" }
-cageforge-path = { path = "crates/cageforge-path", version = "0.5.0" }
-cageforge-windows = { path = "crates/cageforge-windows", version = "0.5.0" }
+cageforge = { path = "crates/cageforge", version = "0.6.0" }
+cageforge-cli = { path = "crates/cageforge-cli", version = "0.6.0" }
+cageforge-command = { path = "crates/cageforge-command", version = "0.6.0" }
+cageforge-backend-api = { path = "crates/cageforge-backend-api", version = "0.6.0" }
+cageforge-bwrap = { path = "crates/cageforge-bwrap", version = "0.6.0", default-features = false }
+cageforge-config = { path = "crates/cageforge-config", version = "0.6.0" }
+cageforge-linux = { path = "crates/cageforge-linux", version = "0.6.0" }
+cageforge-macos = { path = "crates/cageforge-macos", version = "0.6.0" }
+cageforge-network-proxy = { path = "crates/cageforge-network-proxy", version = "0.6.0", default-features = false }
+cageforge-policy = { path = "crates/cageforge-policy", version = "0.6.0" }
+cageforge-policy-compose = { path = "crates/cageforge-policy-compose", version = "0.6.0" }
+cageforge-permissions = { path = "crates/cageforge-permissions", version = "0.6.0" }
+cageforge-path = { path = "crates/cageforge-path", version = "0.6.0" }
+cageforge-windows = { path = "crates/cageforge-windows", version = "0.6.0" }
 command-fds = "0.3.3"
 block2 = "0.6.2"
 clap = { version = "4.6.6", features = ["derive", "env"] }
