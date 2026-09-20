@@ -80,10 +80,15 @@ The host performs this sequence before starting a process:
 4. compose the approved scope with the immutable policy ceiling; and
 5. pass the resulting authorization to the native Cageforge crate.
 
-There is no permission escalation inside a running process. A request that
-cannot be approved before launch is rejected with a typed error.
+There is no permission escalation inside a running process. For a profile that
+uses on-demand approval, `PermissionEscalationRequest` combines the immutable
+base request with explicit additional capabilities. A trusted host approves
+all or a subset with `GrantAuthority::approve_escalation`; the caller then
+stops the old child and creates a new sandbox launch. The base capabilities
+remain in the new grant, while unrestricted sentinels, deny-only additions,
+and unsupported child-process changes are rejected by the preflight layer.
 
-For a second command that needs more access, select a profile with the
+For hosts that do not need dynamic approval, select a profile with the
 additional rules and create a new request and grant for that launch. The
 existing sandbox keeps its original policy; `PermissionStore` may reuse a
 matching persistent grant later, but it never widens a running process.

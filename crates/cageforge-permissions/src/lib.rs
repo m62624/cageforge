@@ -369,7 +369,8 @@ impl PermissionSet {
         &self.child_processes
     }
 
-    fn is_subset_of(&self, request: &Self) -> bool {
+    /// Returns whether this set contains no capabilities outside `request`.
+    pub fn is_subset_of(&self, request: &Self) -> bool {
         self.filesystem
             .iter()
             .all(|value| request.filesystem.contains(value))
@@ -381,6 +382,52 @@ impl PermissionSet {
                 .child_processes
                 .iter()
                 .all(|value| request.child_processes.contains(value))
+    }
+
+    /// Returns whether this set contains no capabilities.
+    pub fn is_empty(&self) -> bool {
+        self.filesystem.is_empty() && self.network.is_empty() && self.child_processes.is_empty()
+    }
+
+    fn additional_to(&self, base: &Self) -> Self {
+        let mut additional = Self::new();
+        for capability in &self.filesystem {
+            if !base.filesystem.contains(capability) {
+                additional.filesystem.push(capability.clone());
+            }
+        }
+        for capability in &self.network {
+            if !base.network.contains(capability) {
+                additional.network.push(capability.clone());
+            }
+        }
+        for capability in &self.child_processes {
+            if !base.child_processes.contains(capability) {
+                additional.child_processes.push(capability.clone());
+            }
+        }
+        additional
+    }
+
+    fn extend_from(&mut self, other: &Self) {
+        for capability in &other.filesystem {
+            if !self.filesystem.contains(capability) {
+                self.filesystem.push(capability.clone());
+            }
+        }
+        for capability in &other.network {
+            if !self.network.contains(capability) {
+                self.network.push(capability.clone());
+            }
+        }
+        for capability in &other.child_processes {
+            if !self.child_processes.contains(capability) {
+                self.child_processes.push(capability.clone());
+            }
+        }
+        self.filesystem.sort();
+        self.network.sort();
+        self.child_processes.sort();
     }
 }
 
@@ -394,6 +441,16 @@ pub struct PermissionRequest {
     platform: PlatformId,
     architecture: String,
     capabilities: PermissionSet,
+}
+
+/// A request to relaunch a tool with explicitly approved additional
+/// capabilities.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionEscalationRequest {
+    base: PermissionRequest,
+    request: PermissionRequest,
+    additional: PermissionSet,
+    reason: String,
 }
 
 /// Stable identity of the persistent grant for one exact permission request.
@@ -510,6 +567,69 @@ impl PermissionRequest {
     /// Returns the stable identity used by the persistent grant store.
     pub fn grant_id(&self) -> GrantId {
         GrantId::from_request(self)
+    }
+}
+
+impl PermissionEscalationRequest {
+    /// Creates an escalation request from an existing launch request.
+    ///
+    /// Capabilities already present in `base` are removed from the additional
+    /// set. The resulting request must contain at least one new capability.
+    pub fn new(
+        base: PermissionRequest,
+        requested_additional: PermissionSet,
+        reason: impl Into<String>,
+    ) -> Result<Self, PermissionError> {
+        let reason = reason.into();
+        if reason.trim().is_empty() || reason.contains('\0') {
+            return Err(PermissionError::InvalidEscalationReason);
+        }
+        let additional = requested_additional.additional_to(base.capabilities());
+        if additional.is_empty() {
+            return Err(PermissionError::EmptyEscalation);
+        }
+        let mut capabilities = base.capabilities().clone();
+        capabilities.extend_from(&additional);
+        let request = PermissionRequest::new(
+            base.tool_id(),
+            base.tool_version(),
+            base.manifest_digest(),
+            base.config_digest(),
+            base.platform(),
+            base.architecture(),
+            capabilities,
+        )?;
+        Ok(Self {
+            base,
+            request,
+            additional,
+            reason,
+        })
+    }
+
+    /// Returns the request used for the original launch.
+    pub fn base_request(&self) -> &PermissionRequest {
+        &self.base
+    }
+
+    /// Returns the exact expanded request that a trusted grant must authorize.
+    pub fn request(&self) -> &PermissionRequest {
+        &self.request
+    }
+
+    /// Returns only capabilities that were not present in the base request.
+    pub fn additional(&self) -> &PermissionSet {
+        &self.additional
+    }
+
+    /// Returns the host-visible reason supplied by the requesting tool.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// Returns the stable identity of the expanded request.
+    pub fn grant_id(&self) -> GrantId {
+        self.request.grant_id()
     }
 }
 
@@ -702,6 +822,23 @@ impl GrantAuthority {
         approved: PermissionSet,
     ) -> Result<PermissionGrant, PermissionError> {
         self.approve_with(request, approved, PermissionScope::Session, None)
+    }
+
+    /// Approves all or a subset of the additional capabilities in an
+    /// escalation while retaining the base launch capabilities.
+    pub fn approve_escalation(
+        &self,
+        escalation: &PermissionEscalationRequest,
+        approved_additional: PermissionSet,
+        scope: PermissionScope,
+        expires_at: Option<u64>,
+    ) -> Result<PermissionGrant, PermissionError> {
+        if !approved_additional.is_subset_of(escalation.additional()) {
+            return Err(PermissionError::GrantExceedsRequest);
+        }
+        let mut approved = escalation.base_request().capabilities().clone();
+        approved.extend_from(&approved_additional);
+        self.approve_with(escalation.request(), approved, scope, expires_at)
     }
 }
 
@@ -952,6 +1089,12 @@ pub enum PermissionError {
     /// Approval timeout must be positive.
     #[error("approval timeout must be greater than zero")]
     InvalidTimeout,
+    /// An escalation reason is empty or contains a forbidden NUL character.
+    #[error("permission escalation reason must be non-empty and NUL-free")]
+    InvalidEscalationReason,
+    /// An escalation did not add a capability to the base request.
+    #[error("permission escalation does not add a new capability")]
+    EmptyEscalation,
 }
 
 /// Errors returned by the persistent grant store.
@@ -1470,6 +1613,45 @@ mod tests {
         )
         .unwrap();
         assert!(!grant.matches(&changed));
+    }
+
+    #[test]
+    fn escalation_has_a_new_identity_and_retains_base_capabilities() {
+        let base = request();
+        let additional =
+            PermissionSet::new().with_network(NetworkCapability::new("example.com").unwrap());
+        let escalation = PermissionEscalationRequest::new(
+            base.clone(),
+            additional.clone(),
+            "download an approved artifact",
+        )
+        .unwrap();
+        assert_ne!(base.grant_id(), escalation.grant_id());
+        assert_eq!(escalation.additional(), &additional);
+
+        let grant = GrantAuthority::new()
+            .approve_escalation(&escalation, additional, PermissionScope::Session, None)
+            .unwrap();
+        assert!(grant.matches(escalation.request()));
+        assert!(
+            grant
+                .approved()
+                .filesystem()
+                .contains(&base.capabilities().filesystem()[0])
+        );
+    }
+
+    #[test]
+    fn escalation_rejects_a_request_without_new_capabilities() {
+        let base = request();
+        assert!(matches!(
+            PermissionEscalationRequest::new(
+                base.clone(),
+                base.capabilities().clone(),
+                "nothing new",
+            ),
+            Err(PermissionError::EmptyEscalation)
+        ));
     }
 
     #[test]

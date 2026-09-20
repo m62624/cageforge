@@ -153,6 +153,15 @@ grant access unless the selected profile contains the matching filesystem rule.
 The macOS `runtime.executable_roots` overlay uses the same TOML and preflight
 request in this binding; `map-executable` remains separate from `read`.
 
+Profiles with `approval.mode = "on-demand"` may request additional access for
+a new sandbox launch. `runtime.requestEscalation(filesystem, network, reason)`
+returns a structured request; the trusted host approves it with
+`PermissionApprover.approveEscalation`, and `runtime.launchEscalated` launches
+the approved immutable policy. The existing process is never widened in place
+and must be stopped by the host before relaunch. The same methods are
+available for `preflight-and-on-demand`. Unsupported or unrestricted additions
+raise `CageforgeEscalationException`.
+
 ## Process and error handling
 
 `SandboxProcess` provides `tryWait`, `waitFor`, `waitForAsync`, `kill`, and

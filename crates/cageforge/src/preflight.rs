@@ -4,13 +4,14 @@
 
 use cageforge_command::EnvironmentSpec;
 use cageforge_permissions::{
-    FilesystemCapability, FilesystemOperation, NetworkCapability, PermissionError, PermissionGrant,
-    PermissionRequest, PermissionSet, PlatformId, ProcessCapability,
+    FilesystemCapability, FilesystemOperation, NetworkCapability, PermissionError,
+    PermissionEscalationRequest, PermissionGrant, PermissionRequest, PermissionSet, PlatformId,
+    ProcessCapability,
 };
 use cageforge_policy::{
     AccessMode, DomainAccess, DomainMode, FilesystemMode, FilesystemPolicy, FilesystemRule,
-    FilesystemTarget, LocalNetworkAccess, NetworkMode, NetworkPolicy, SandboxPolicy,
-    UnixSocketMode,
+    FilesystemTarget, LocalIpcEndpoint, LocalNetworkAccess, NetworkMode, NetworkPolicy,
+    PathSelector, SandboxPolicy, UnixSocketMode,
 };
 use cageforge_policy_compose::{CompositionRequest, EffectiveSandbox, PolicyCeiling, compose};
 use sha2::{Digest, Sha256};
@@ -72,6 +73,14 @@ struct NarrowingInputs {
 pub struct AuthorizedPlan {
     effective: EffectiveSandbox,
     grant: PermissionGrant,
+    context: Option<cageforge_policy::PathResolutionContext>,
+}
+
+/// A validated policy expansion that must be approved before relaunch.
+#[derive(Debug, Clone)]
+pub struct PermissionEscalationPlan {
+    request: PermissionEscalationRequest,
+    plan: PreflightPlan,
 }
 
 /// Errors returned while preparing or authorizing a preflight launch.
@@ -99,6 +108,14 @@ pub enum PreflightError {
     /// The approved subset could not be lowered safely inside the ceiling.
     #[error("approved permission subset cannot be lowered safely: {0}")]
     Narrowing(String),
+    /// The active plan has no policy context from which an expansion can be
+    /// composed.
+    #[error("dynamic permission escalation requires a policy-backed preflight plan")]
+    EscalationUnsupported,
+    /// The requested capability cannot be added to a relaunch with the
+    /// current command and policy model.
+    #[error("unsupported dynamic escalation capability: {0}")]
+    UnsupportedEscalationCapability(&'static str),
     /// The selected platform is unavailable on this target.
     #[error("unsupported platform: {0}")]
     Platform(#[from] cageforge_permissions::PlatformError),
@@ -203,6 +220,66 @@ impl PreflightPlan {
         Ok(self)
     }
 
+    /// Creates a validated escalation plan for an approved relaunch.
+    ///
+    /// Additional filesystem and network capabilities are translated back to
+    /// the same portable policy model used for the original launch. The
+    /// existing policy ceiling remains in force; the trusted grant never
+    /// widens that outer boundary.
+    pub fn request_escalation(
+        &self,
+        additional: PermissionSet,
+        reason: impl Into<String>,
+    ) -> Result<PermissionEscalationPlan, PreflightError> {
+        let inputs = self
+            .narrowing
+            .as_ref()
+            .ok_or(PreflightError::EscalationUnsupported)?;
+        if !additional.child_processes().is_empty() {
+            return Err(PreflightError::UnsupportedEscalationCapability(
+                "child-process",
+            ));
+        }
+        let (policy, context) = expanded_policy(&inputs.requested, &inputs.context, &additional)?;
+        let mut composition =
+            CompositionRequest::new(&policy, &inputs.environment, &inputs.ceiling);
+        if let Some(roots) = &inputs.workspace_roots {
+            composition = composition
+                .with_workspace_roots(roots.clone())
+                .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+        }
+        let effective =
+            compose(composition).map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+        let mut expanded = Self::from_policy_with_ceiling(
+            &policy,
+            &context,
+            effective,
+            &inputs.environment,
+            &inputs.ceiling,
+            PreflightIdentity::new(
+                self.request.tool_id(),
+                self.request.tool_version(),
+                self.request.manifest_digest(),
+                self.request.config_digest(),
+                self.request.platform(),
+                self.request.architecture(),
+            ),
+        )?;
+        for process in self.request.capabilities().child_processes() {
+            expanded = expanded.with_process_program(process.program())?;
+        }
+        let request = PermissionEscalationRequest::new(self.request.clone(), additional, reason)?;
+        if expanded.request != *request.request() {
+            return Err(PreflightError::Narrowing(
+                "expanded policy and permission request disagree".to_owned(),
+            ));
+        }
+        Ok(PermissionEscalationPlan {
+            request,
+            plan: expanded,
+        })
+    }
+
     /// Authorizes the plan with a trusted grant.
     pub fn authorize(&self, grant: PermissionGrant) -> Result<AuthorizedPlan, PreflightError> {
         if !grant.matches(&self.request) {
@@ -245,7 +322,33 @@ impl PreflightPlan {
         } else {
             return Err(PreflightError::PartialGrantUnsupported);
         };
-        Ok(AuthorizedPlan { effective, grant })
+        Ok(AuthorizedPlan {
+            effective,
+            grant,
+            context: self.narrowing.as_ref().map(|inputs| inputs.context.clone()),
+        })
+    }
+}
+
+impl PermissionEscalationPlan {
+    /// Returns the complete escalation request sent to the trusted host.
+    pub fn request(&self) -> &PermissionEscalationRequest {
+        &self.request
+    }
+
+    /// Returns the capabilities added by this escalation.
+    pub fn additional(&self) -> &PermissionSet {
+        self.request.additional()
+    }
+
+    /// Returns the host-visible reason for this escalation.
+    pub fn reason(&self) -> &str {
+        self.request.reason()
+    }
+
+    /// Authorizes the expanded plan with a trusted grant.
+    pub fn authorize(&self, grant: PermissionGrant) -> Result<AuthorizedPlan, PreflightError> {
+        self.plan.authorize(grant)
     }
 }
 
@@ -258,6 +361,11 @@ impl AuthorizedPlan {
     /// Returns the grant that authorized this plan.
     pub fn grant(&self) -> &PermissionGrant {
         &self.grant
+    }
+
+    /// Returns the runtime context used to compose this authorized plan.
+    pub fn context(&self) -> Option<&cageforge_policy::PathResolutionContext> {
+        self.context.as_ref()
     }
 }
 
@@ -363,6 +471,108 @@ fn permission_set(
         capabilities = capabilities.with_network(NetworkCapability::new("network://local")?);
     }
     Ok(capabilities)
+}
+
+fn expanded_policy(
+    policy: &SandboxPolicy,
+    context: &cageforge_policy::PathResolutionContext,
+    additional: &PermissionSet,
+) -> Result<(SandboxPolicy, cageforge_policy::PathResolutionContext), PreflightError> {
+    let mut filesystem = policy.filesystem().clone();
+    let mut network = policy.network().clone();
+    let mut context = context.clone();
+
+    for capability in additional.filesystem() {
+        match capability.operation() {
+            FilesystemOperation::Read | FilesystemOperation::Write => {
+                let selector = PathSelector::absolute(capability.path())
+                    .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+                filesystem = filesystem
+                    .with_rule(FilesystemRule::new(
+                        selector,
+                        match capability.operation() {
+                            FilesystemOperation::Read => AccessMode::Read,
+                            FilesystemOperation::Write => AccessMode::Write,
+                            _ => {
+                                return Err(PreflightError::UnsupportedEscalationCapability(
+                                    "invalid filesystem operation",
+                                ));
+                            }
+                        },
+                    ))
+                    .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+            }
+            FilesystemOperation::MapExecutable => {
+                let read = FilesystemCapability::new(
+                    FilesystemOperation::Read,
+                    capability.path().to_owned(),
+                )?;
+                if !policy_permission_contains(policy, &context, &read)?
+                    && !additional.filesystem().contains(&read)
+                {
+                    return Err(PreflightError::UnsupportedEscalationCapability(
+                        "map-executable without read",
+                    ));
+                }
+                context = context
+                    .with_executable_root(capability.path())
+                    .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+            }
+            FilesystemOperation::Deny => {
+                return Err(PreflightError::UnsupportedEscalationCapability(
+                    "deny-only filesystem rule",
+                ));
+            }
+        }
+    }
+
+    for capability in additional.network() {
+        let endpoint = capability.endpoint();
+        if endpoint.starts_with("network://") || endpoint.starts_with("unix://") {
+            return Err(PreflightError::UnsupportedEscalationCapability(
+                "unrestricted network sentinel",
+            ));
+        }
+        if let Some(path) = endpoint.strip_prefix("unix:") {
+            let endpoint = LocalIpcEndpoint::unix_socket(path)
+                .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+            network = network
+                .with_local_ipc(endpoint, DomainAccess::Allow)
+                .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+        } else if let Some(name) = endpoint.strip_prefix("pipe:") {
+            let endpoint = LocalIpcEndpoint::windows_named_pipe(name)
+                .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+            network = network
+                .with_local_ipc(endpoint, DomainAccess::Allow)
+                .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+        } else {
+            if network.mode() == NetworkMode::External {
+                return Err(PreflightError::UnsupportedEscalationCapability(
+                    "network on externally enforced policy",
+                ));
+            }
+            if network.mode() == NetworkMode::Disabled {
+                network = NetworkPolicy::enabled()
+                    .with_domain_mode(DomainMode::Restricted)
+                    .with_unix_socket_mode(UnixSocketMode::Disabled);
+            }
+            network = network
+                .with_domain(endpoint, DomainAccess::Allow)
+                .map_err(|error| PreflightError::Narrowing(error.to_string()))?;
+        }
+    }
+
+    Ok((SandboxPolicy::new(filesystem, network), context))
+}
+
+fn policy_permission_contains(
+    policy: &SandboxPolicy,
+    context: &cageforge_policy::PathResolutionContext,
+    capability: &FilesystemCapability,
+) -> Result<bool, PreflightError> {
+    Ok(permission_set(policy, context)?
+        .filesystem()
+        .contains(capability))
 }
 
 fn narrow_policy(
@@ -730,6 +940,75 @@ mod tests {
                 .access_for_path(&denied_path, &context)
                 .unwrap(),
             FilesystemDecision::Deny
+        );
+    }
+
+    #[test]
+    fn escalation_composes_an_additional_filesystem_capability_for_relaunch() {
+        let base_path = test_absolute_path("escalation-base");
+        let additional_path = test_absolute_path("escalation-additional");
+        let policy = SandboxPolicy::new(
+            FilesystemPolicy::restricted([FilesystemRule::new(
+                PathSelector::absolute(base_path.clone()).unwrap(),
+                AccessMode::Read,
+            )]),
+            NetworkPolicy::disabled(),
+        );
+        let context = cageforge_policy::PathResolutionContext::new();
+        let environment = EnvironmentSpec::default();
+        let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+        let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling)).unwrap();
+        let plan = PreflightPlan::from_policy_with_ceiling(
+            &policy,
+            &context,
+            effective,
+            &environment,
+            &ceiling,
+            PreflightIdentity::new(
+                "tool",
+                "1",
+                "a".repeat(64),
+                "b".repeat(64),
+                PlatformId::Linux,
+                "x86_64",
+            ),
+        )
+        .unwrap();
+        let additional = PermissionSet::new().with_filesystem(
+            FilesystemCapability::new(
+                FilesystemOperation::Read,
+                additional_path.to_string_lossy().into_owned(),
+            )
+            .unwrap(),
+        );
+        let escalation = plan
+            .request_escalation(additional.clone(), "read an approved input")
+            .unwrap();
+        let grant = GrantAuthority::new()
+            .approve_escalation(
+                escalation.request(),
+                additional,
+                cageforge_permissions::PermissionScope::Launch,
+                None,
+            )
+            .unwrap();
+        let authorized = escalation.authorize(grant).unwrap();
+        let context = authorized.effective().path_context(&context).unwrap();
+        assert_eq!(
+            authorized
+                .effective()
+                .filesystem()
+                .access_for_path(&additional_path, &context)
+                .unwrap(),
+            FilesystemDecision::Read
+        );
+        assert_eq!(
+            authorized
+                .effective()
+                .filesystem()
+                .access_for_path(&base_path, &context)
+                .unwrap(),
+            FilesystemDecision::Read
         );
     }
 }

@@ -48,7 +48,13 @@ class JavaApiTest {
         Function<Cageforge, Process> launchProcess = Cageforge::launchProcess;
         Function<SandboxProcess, Process> asJavaProcess = SandboxProcess::asJavaProcess;
         Consumer<Cageforge> closeRuntime = Cageforge::close;
+        Function<Cageforge, PermissionEscalationRequest> requestEscalation =
+                runtime -> runtime.requestEscalation(List.of(), List.of(), "api test");
         Function<PermissionRequest, PermissionGrant> approve = new PermissionApprover()::approve;
+        Function<PermissionEscalationRequest, PermissionGrant> approveEscalation =
+                new PermissionApprover()::approveEscalation;
+        TriFunction<Cageforge, PermissionEscalationRequest, PermissionGrant, SandboxProcess>
+                launchEscalated = (runtime, escalation, grant) -> runtime.launchEscalated(escalation, grant);
         Function<PermissionRequest, GrantId> grantId = PermissionRequest::getGrantId;
         Function<PermissionRequest, List<LocalIpcEndpoint>> localIpc = PermissionRequest::getLocalIpc;
         Function<Path, PermissionStore> openStore = PermissionStore::open;
@@ -88,7 +94,10 @@ class JavaApiTest {
         assertNotNull(launchProcess);
         assertNotNull(asJavaProcess);
         assertNotNull(closeRuntime);
+        assertNotNull(requestEscalation);
         assertNotNull(approve);
+        assertNotNull(approveEscalation);
+        assertNotNull(launchEscalated);
         assertNotNull(grantId);
         assertNotNull(localIpc);
         assertNotNull(openStore);

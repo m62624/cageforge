@@ -15,6 +15,7 @@ import pytest
 from cageforge import (
     Cageforge,
     CageforgeError,
+    CageforgeEscalationError,
     CageforgeInvalidCursorError,
     CageforgeInvalidGrantIdError,
     CageforgePermissionError,
@@ -230,6 +231,53 @@ def test_custom_permission_identity_is_reused_by_runtime(tmp_path: Path) -> None
     runtime.close()
     request.close()
     grant.close()
+
+
+def test_on_demand_escalation_relaunches_with_a_new_grant(tmp_path: Path) -> None:
+    require_linux_guest()
+    ensure_windows_setup()
+    context = RuntimeContext(tmp_path)
+    additional = tmp_path / "approved-input"
+    additional.mkdir()
+    toml = smoke_toml().replace('mode = "preflight"', 'mode = "on-demand"')
+    runtime = Cageforge.from_toml(toml, context=context)
+    escalation = runtime.request_escalation(
+        filesystem=[("read", str(additional))],
+        network=[],
+        reason="read an approved input",
+    )
+    try:
+        assert escalation.filesystem() == [("read", str(additional))]
+        assert escalation.reason() == "read an approved input"
+        grant = PermissionApprover().approve_escalation(escalation)
+        try:
+            process = runtime.launch_escalated(escalation, grant)
+            try:
+                assert process.wait().exit_code == 0
+            finally:
+                process.close()
+        finally:
+            grant.close()
+    finally:
+        escalation.close()
+        runtime.close()
+
+
+def test_on_demand_escalation_rejects_unsupported_capability(tmp_path: Path) -> None:
+    require_linux_guest()
+    ensure_windows_setup()
+    context = runtime_context(tmp_path)
+    toml = smoke_toml().replace('mode = "preflight"', 'mode = "on-demand"')
+    runtime = Cageforge.from_toml(toml, context=context)
+    try:
+        with pytest.raises(CageforgeEscalationError):
+            runtime.request_escalation(
+                filesystem=[("deny", str(tmp_path))],
+                network=[],
+                reason="invalid deny-only request",
+            )
+    finally:
+        runtime.close()
 
 
 def test_native_profile_launch_and_streams(tmp_path: Path) -> None:

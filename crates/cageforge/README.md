@@ -203,7 +203,15 @@ fn launch_with_preflight(
 
 The request is descriptive and the grant is opaque. A mismatched, expired, or
 insufficient grant returns a typed `PreflightError` before the backend can
-start a process; there is no permission escalation inside a running process.
+start a process. For profiles using `on-demand` approval, create a
+`PermissionEscalationPlan` from the active `PreflightPlan`, obtain a grant for
+its additional capabilities, stop the old child, and launch the authorized
+plan as a new sandbox. The existing process is never widened in place.
+
+The escalation request contains only explicit filesystem, network, or local
+IPC additions. The trusted host may approve a subset; the base grant remains
+in the new request. Unrestricted sentinels, deny-only additions, and changing
+the child-process identity are rejected before native launch.
 
 The three request types have different security roles:
 

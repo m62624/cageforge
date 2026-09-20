@@ -38,7 +38,8 @@ pub use cageforge_permissions::*;
 pub use cageforge_policy::*;
 pub use cageforge_policy_compose::*;
 pub use preflight::{
-    AuthorizedPlan, PreflightError, PreflightIdentity, PreflightPlan, sha256_digest,
+    AuthorizedPlan, PermissionEscalationPlan, PreflightError, PreflightIdentity, PreflightPlan,
+    sha256_digest,
 };
 
 #[cfg(feature = "config")]

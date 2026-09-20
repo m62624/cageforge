@@ -29,6 +29,7 @@ struct RuntimeState {
     profile_command: Option<cageforge::CommandRequest>,
     preflight_required: bool,
     approved_program: Option<String>,
+    preflight_plan: Option<cageforge::PreflightPlan>,
 }
 
 struct ChildState {
@@ -252,6 +253,7 @@ fn runtime_from_toml(
             profile_command: profile.command().cloned(),
             preflight_required: false,
             approved_program: None,
+            preflight_plan: None,
         };
         return Ok(Box::into_raw(Box::new(state)) as jlong);
     }
@@ -259,7 +261,7 @@ fn runtime_from_toml(
     let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
         profile.policy(),
         &context,
-        effective,
+        effective.clone(),
         &environment,
         &ceiling,
         identity,
@@ -271,12 +273,24 @@ fn runtime_from_toml(
     } else {
         plan
     };
-    let grant = grant_ref(grant_handle)?.clone();
-    let effective = plan
-        .authorize(grant)
-        .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?
-        .effective()
-        .clone();
+    let mode = profile.approval().mode();
+    let requires_grant = matches!(
+        mode,
+        cageforge::PermissionMode::Preflight | cageforge::PermissionMode::PreflightAndOnDemand
+    );
+    let effective = if grant_handle != 0 {
+        plan.authorize(grant_ref(grant_handle)?.clone())
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?
+            .effective()
+            .clone()
+    } else if requires_grant {
+        return Err(BindingError::new(
+            BindingErrorKind::Permission,
+            "preflight approval is required; pass a trusted grant",
+        ));
+    } else {
+        effective
+    };
     let approved_program = profile
         .command()
         .map(|command| command.command().program().to_string_lossy().into_owned());
@@ -287,8 +301,9 @@ fn runtime_from_toml(
         context,
         effective,
         profile_command: profile.command().cloned(),
-        preflight_required: true,
+        preflight_required: requires_grant,
         approved_program,
+        preflight_plan: Some(plan),
     };
     Ok(Box::into_raw(Box::new(state)) as jlong)
 }
@@ -410,7 +425,15 @@ fn runtime_inputs_with_ceiling(
         .command()
         .map(|command| command.environment().clone())
         .unwrap_or_default();
-    let mut ceiling = cageforge::PolicyCeiling::new(profile.policy().clone(), environment.clone());
+    let ceiling_policy = if matches!(
+        profile.approval().mode(),
+        cageforge::PermissionMode::OnDemand | cageforge::PermissionMode::PreflightAndOnDemand
+    ) {
+        cageforge::SandboxPolicy::full_access()
+    } else {
+        profile.policy().clone()
+    };
+    let mut ceiling = cageforge::PolicyCeiling::new(ceiling_policy, environment.clone());
     if !workspace_roots.is_empty() {
         ceiling = ceiling
             .with_workspace_roots(workspace_roots.clone())
@@ -439,6 +462,63 @@ fn java_string_array<'local>(
         array.set_element(env, index, &value)?;
     }
     Ok(array.into_raw())
+}
+
+fn permission_set_from_arrays<'local>(
+    env: &mut Env<'local>,
+    filesystem: JObjectArray<'local, JString<'local>>,
+    network: JObjectArray<'local, JString<'local>>,
+) -> Result<cageforge::PermissionSet, BindingError> {
+    let filesystem_length = filesystem
+        .len(env)
+        .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+    if filesystem_length % 2 != 0 {
+        return Err(BindingError::new(
+            BindingErrorKind::Permission,
+            "filesystem capabilities must contain operation/path pairs",
+        ));
+    }
+    let mut permissions = cageforge::PermissionSet::new();
+    for index in (0..filesystem_length).step_by(2) {
+        let operation_value = filesystem
+            .get_element(env, index)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        let path_value = filesystem
+            .get_element(env, index + 1)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        let operation = java_string(env, operation_value, "filesystem operation")?;
+        let path = java_string(env, path_value, "filesystem path")?;
+        let operation = match operation.as_str() {
+            "read" => cageforge::FilesystemOperation::Read,
+            "write" => cageforge::FilesystemOperation::Write,
+            "map-executable" => cageforge::FilesystemOperation::MapExecutable,
+            _ => {
+                return Err(BindingError::new(
+                    BindingErrorKind::Permission,
+                    format!("unsupported filesystem operation {operation:?}"),
+                ));
+            }
+        };
+        permissions = permissions.with_filesystem(
+            cageforge::FilesystemCapability::new(operation, path).map_err(|error| {
+                BindingError::new(BindingErrorKind::Permission, error.to_string())
+            })?,
+        );
+    }
+    let network_length = network
+        .len(env)
+        .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+    for index in 0..network_length {
+        let endpoint_value = network
+            .get_element(env, index)
+            .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        let endpoint = java_string(env, endpoint_value, "network endpoint")?;
+        permissions =
+            permissions.with_network(cageforge::NetworkCapability::new(endpoint).map_err(
+                |error| BindingError::new(BindingErrorKind::Permission, error.to_string()),
+            )?);
+    }
+    Ok(permissions)
 }
 
 fn store_binding_error(error: cageforge::StoreError) -> BindingError {
@@ -564,6 +644,20 @@ fn request_ref(handle: jlong) -> Result<&'static cageforge::PermissionRequest, B
     // SAFETY: the handle is created by nativePermissionRequest and reclaimed
     // exactly once by nativeClosePermissionRequest.
     Ok(unsafe { &*(handle as *const cageforge::PermissionRequest) })
+}
+
+fn escalation_ref(
+    handle: jlong,
+) -> Result<&'static cageforge::PermissionEscalationPlan, BindingError> {
+    if handle == 0 {
+        return Err(BindingError::new(
+            BindingErrorKind::Escalation,
+            "permission escalation handle is closed",
+        ));
+    }
+    // SAFETY: the handle is created by nativePermissionRequestEscalation and
+    // reclaimed exactly once by nativeClosePermissionEscalation.
+    Ok(unsafe { &*(handle as *const cageforge::PermissionEscalationPlan) })
 }
 
 /// Returns a read-only JSON representation of an opaque request.
@@ -700,6 +794,120 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeClosePermissionReque
     }
 }
 
+/// Creates an opaque JVM escalation plan from the active runtime.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeRequestPermissionEscalation<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    runtime: jlong,
+    filesystem: JObjectArray<'caller, JString<'caller>>,
+    network: JObjectArray<'caller, JString<'caller>>,
+    reason: JString<'caller>,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Escalation, |env| {
+        let runtime = runtime_ref(runtime)?;
+        let plan = runtime.preflight_plan.clone().ok_or_else(|| {
+            BindingError::new(
+                BindingErrorKind::Escalation,
+                "dynamic escalation is disabled",
+            )
+        })?;
+        let additional = permission_set_from_arrays(env, filesystem, network)?;
+        let reason = java_string(env, reason, "escalation reason")?;
+        let escalation = plan
+            .request_escalation(additional, reason)
+            .map_err(|error| BindingError::new(BindingErrorKind::Escalation, error.to_string()))?;
+        Ok(Box::into_raw(Box::new(escalation)) as jlong)
+    })
+}
+
+/// Returns the expanded request JSON for an opaque escalation plan.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionEscalationJson<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    escalation: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Escalation, |env| {
+        let json = serde_json::to_string(escalation_ref(escalation)?.request().request())
+            .map_err(|error| BindingError::new(BindingErrorKind::Escalation, error.to_string()))?;
+        Ok(env.new_string(json)?.into_raw())
+    })
+}
+
+/// Returns the reason attached to an opaque escalation plan.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionEscalationReason<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    escalation: jlong,
+) -> jstring {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Escalation, |env| {
+        Ok(env
+            .new_string(escalation_ref(escalation)?.reason())?
+            .into_raw())
+    })
+}
+
+/// Returns additional filesystem capabilities from an escalation plan.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionEscalationFilesystem<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    escalation: jlong,
+) -> jobjectArray {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Escalation, |env| {
+        let values = escalation_ref(escalation)?
+            .additional()
+            .filesystem()
+            .iter()
+            .flat_map(|capability| {
+                [
+                    capability.operation().as_str().to_owned(),
+                    capability.path().to_owned(),
+                ]
+            });
+        java_string_array(env, values)
+    })
+}
+
+/// Returns additional network capabilities from an escalation plan.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativePermissionEscalationNetwork<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    escalation: jlong,
+) -> jobjectArray {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Escalation, |env| {
+        let values = escalation_ref(escalation)?
+            .additional()
+            .network()
+            .iter()
+            .map(|capability| capability.endpoint().to_owned());
+        java_string_array(env, values)
+    })
+}
+
+/// Releases an opaque JVM escalation plan handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeClosePermissionEscalation(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    escalation: jlong,
+) {
+    if escalation != 0 {
+        // SAFETY: the handle is owned by PermissionEscalationRequest and is
+        // closed at most once by that object.
+        unsafe {
+            drop(Box::from_raw(
+                escalation as *mut cageforge::PermissionEscalationPlan,
+            ))
+        };
+    }
+}
+
 /// Issues an opaque session grant from a request presented by the JVM host.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeApprovePermissionRequest<'caller>(
@@ -718,6 +926,31 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeApprovePermissionReq
         let grant = cageforge::GrantAuthority::new()
             .approve_with(&request, request.capabilities().clone(), scope, expires_at)
             .map_err(|error| BindingError::new(BindingErrorKind::Permission, error.to_string()))?;
+        Ok(Box::into_raw(Box::new(grant)) as jlong)
+    })
+}
+
+/// Issues a grant for all or a subset of an escalation plan.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeApprovePermissionEscalation<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    escalation: jlong,
+    filesystem: JObjectArray<'caller, JString<'caller>>,
+    network: JObjectArray<'caller, JString<'caller>>,
+    scope: JString<'caller>,
+    expires_at: jlong,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Escalation, |env| {
+        let escalation = escalation_ref(escalation)?;
+        let approved = permission_set_from_arrays(env, filesystem, network)?;
+        let scope_value = java_string(env, scope, "permission scope")?;
+        let scope = cageforge::PermissionScope::parse(&scope_value)
+            .map_err(|error| BindingError::new(BindingErrorKind::Escalation, error.to_string()))?;
+        let expires_at = (expires_at >= 0).then_some(expires_at as u64);
+        let grant = cageforge::GrantAuthority::new()
+            .approve_escalation(escalation.request(), approved, scope, expires_at)
+            .map_err(|error| BindingError::new(BindingErrorKind::Escalation, error.to_string()))?;
         Ok(Box::into_raw(Box::new(grant)) as jlong)
     })
 }
@@ -1085,6 +1318,51 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
             stdin: Mutex::new(stdin),
             stdout: Mutex::new(stdout),
             stderr: Mutex::new(stderr),
+            completed_status: Mutex::new(None),
+        })) as jlong)
+    })
+}
+
+/// Relaunches a command in the immutable sandbox authorized by an escalation.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunchEscalated<'caller>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    runtime: jlong,
+    escalation: jlong,
+    grant: jlong,
+    argv: JObjectArray<'caller, JString<'caller>>,
+) -> jlong {
+    ffi_call_kind(&mut unowned_env, BindingErrorKind::Escalation, |env| {
+        let runtime = runtime_ref(runtime)?;
+        let escalation = escalation_ref(escalation)?;
+        let authorized = escalation
+            .authorize(grant_ref(grant)?.clone())
+            .map_err(|error| BindingError::new(BindingErrorKind::Escalation, error.to_string()))?;
+        let request = command_request(runtime, command_from_array(env, argv)?)?;
+        if runtime.preflight_required {
+            let program = request.command().program().to_string_lossy();
+            if runtime.approved_program.as_deref() != Some(program.as_ref()) {
+                return Err(BindingError::new(
+                    BindingErrorKind::Escalation,
+                    "escalation grant is bound to the profile command",
+                ));
+            }
+        }
+        let context = authorized
+            .context()
+            .cloned()
+            .unwrap_or_else(|| runtime.context.clone());
+        let backend_request = cageforge::BackendRequest::new(&request, authorized.effective());
+        let mut child = runtime
+            .backend
+            .launch(backend_request, &context)
+            .map_err(|error| error.to_string())?;
+        Ok(Box::into_raw(Box::new(ChildState {
+            stdin: Mutex::new(child.take_stdin()),
+            stdout: Mutex::new(child.take_stdout()),
+            stderr: Mutex::new(child.take_stderr()),
+            child: Mutex::new(child),
             completed_status: Mutex::new(None),
         })) as jlong)
     })

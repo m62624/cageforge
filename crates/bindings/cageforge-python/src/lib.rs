@@ -57,6 +57,12 @@ create_exception!(
 );
 create_exception!(
     cageforge._cageforge,
+    CageforgeEscalationError,
+    CageforgePermissionError,
+    "The dynamic permission escalation could not be created or authorized."
+);
+create_exception!(
+    cageforge._cageforge,
     CageforgeStoreError,
     CageforgePermissionError,
     "The host-owned permission store could not complete the requested operation."
@@ -153,6 +159,7 @@ struct RuntimeState {
     profile_command: Option<cageforge::CommandRequest>,
     preflight_required: bool,
     approved_program: Option<String>,
+    preflight_plan: Option<cageforge::PreflightPlan>,
 }
 
 struct LifecycleState {
@@ -305,6 +312,13 @@ pub struct PermissionGrant {
     inner: Option<cageforge::PermissionGrant>,
 }
 
+/// A validated permission expansion that must be approved before relaunch.
+#[gen_stub_pyclass]
+#[pyclass(module = "cageforge._cageforge")]
+pub struct PermissionEscalationRequest {
+    inner: Option<cageforge::PermissionEscalationPlan>,
+}
+
 /// Trusted host capability that can issue an opaque grant.
 #[gen_stub_pyclass]
 #[pyclass(frozen, module = "cageforge._cageforge")]
@@ -346,6 +360,10 @@ fn permission_error(error: impl ToString) -> PyErr {
     CageforgePermissionError::new_err(error.to_string())
 }
 
+fn escalation_error(error: impl ToString) -> PyErr {
+    CageforgeEscalationError::new_err(error.to_string())
+}
+
 fn store_error(error: cageforge::StoreError) -> PyErr {
     let message = error.to_string();
     match error {
@@ -379,6 +397,31 @@ fn stream_error(error: impl ToString) -> PyErr {
     CageforgeStreamError::new_err(error.to_string())
 }
 
+fn permission_set_from_parts(
+    filesystem: Vec<(String, String)>,
+    network: Vec<String>,
+) -> Result<cageforge::PermissionSet, String> {
+    let mut permissions = cageforge::PermissionSet::new();
+    for (operation, path) in filesystem {
+        let operation = match operation.as_str() {
+            "read" => cageforge::FilesystemOperation::Read,
+            "write" => cageforge::FilesystemOperation::Write,
+            "map-executable" => cageforge::FilesystemOperation::MapExecutable,
+            _ => return Err(format!("unsupported filesystem operation {operation:?}")),
+        };
+        permissions = permissions.with_filesystem(
+            cageforge::FilesystemCapability::new(operation, path)
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    for endpoint in network {
+        permissions = permissions.with_network(
+            cageforge::NetworkCapability::new(endpoint).map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(permissions)
+}
+
 #[cfg(target_os = "windows")]
 fn setup_error(error: impl ToString) -> PyErr {
     CageforgeWindowsSetupError::new_err(error.to_string())
@@ -404,6 +447,15 @@ fn grant_inner(value: &PermissionGrant) -> PyResult<&cageforge::PermissionGrant>
         .inner
         .as_ref()
         .ok_or_else(|| closed_permission_error("permission grant"))
+}
+
+fn escalation_inner(
+    value: &PermissionEscalationRequest,
+) -> PyResult<&cageforge::PermissionEscalationPlan> {
+    value
+        .inner
+        .as_ref()
+        .ok_or_else(|| closed_permission_error("permission escalation request"))
 }
 
 fn store_inner(value: &PermissionStore) -> PyResult<&Arc<cageforge::PermissionStore>> {
@@ -574,7 +626,15 @@ fn runtime_inputs_with_ceiling(
         .command()
         .map(|command| command.environment().clone())
         .unwrap_or_default();
-    let mut ceiling = cageforge::PolicyCeiling::new(profile.policy().clone(), environment.clone());
+    let ceiling_policy = if matches!(
+        profile.approval().mode(),
+        cageforge::PermissionMode::OnDemand | cageforge::PermissionMode::PreflightAndOnDemand
+    ) {
+        cageforge::SandboxPolicy::full_access()
+    } else {
+        profile.policy().clone()
+    };
+    let mut ceiling = cageforge::PolicyCeiling::new(ceiling_policy, environment.clone());
     if !workspace_roots.is_empty() {
         ceiling = ceiling
             .with_workspace_roots(workspace_roots.clone())
@@ -971,10 +1031,11 @@ impl Cageforge {
                 return Ok::<_, PyErr>(RuntimeState {
                     backend,
                     context: resolution,
-                    effective,
+                    effective: effective.clone(),
                     profile_command: profile.command().cloned(),
                     preflight_required: false,
                     approved_program: None,
+                    preflight_plan: None,
                 });
             }
             let identity = preflight_identity(request.as_ref(), &toml)
@@ -982,7 +1043,7 @@ impl Cageforge {
             let plan = cageforge::PreflightPlan::from_policy_with_ceiling(
                 profile.policy(),
                 &resolution,
-                effective,
+                effective.clone(),
                 &environment,
                 &ceiling,
                 identity,
@@ -996,14 +1057,25 @@ impl Cageforge {
             } else {
                 plan
             };
-            let grant = grant.ok_or_else(|| {
-                permission_error("preflight approval is required; call permission_request and pass its trusted grant")
-            })?;
-            let effective = plan
-                .authorize(grant)
-                .map_err(permission_error)?
-                .effective()
-                .clone();
+            let mode = profile.approval().mode();
+            let requires_grant = matches!(
+                mode,
+                cageforge::PermissionMode::Preflight
+                    | cageforge::PermissionMode::PreflightAndOnDemand
+            );
+            let effective = match grant {
+                Some(grant) => plan
+                    .authorize(grant)
+                    .map_err(permission_error)?
+                    .effective()
+                    .clone(),
+                None if !requires_grant => effective,
+                None => {
+                    return Err(permission_error(
+                        "preflight approval is required; call permission_request and pass its trusted grant",
+                    ));
+                }
+            };
             let approved_program = profile.command().map(|command| {
                 command.command().program().to_string_lossy().into_owned()
             });
@@ -1014,8 +1086,9 @@ impl Cageforge {
                 context: resolution,
                 effective,
                 profile_command: profile.command().cloned(),
-                preflight_required: true,
+                preflight_required: requires_grant,
                 approved_program,
+                preflight_plan: Some(plan),
             })
         })?;
         Ok(Self {
@@ -1084,6 +1157,105 @@ impl Cageforge {
             let mut child = runtime
                 .backend
                 .launch(backend_request, &runtime.context)
+                .map_err(launch_error)?;
+            Ok::<_, PyErr>(ChildState {
+                stdin: Mutex::new(child.take_stdin()),
+                stdout: Mutex::new(child.take_stdout()),
+                stderr: Mutex::new(child.take_stderr()),
+                child: Mutex::new(child),
+                completed_status: Mutex::new(None),
+                lifecycle: Mutex::new(LifecycleState {
+                    closing: false,
+                    closed: false,
+                    active_operations: 0,
+                }),
+                no_active_operations: Condvar::new(),
+            })
+        })?;
+        Ok(SandboxProcess {
+            state: Arc::new(child),
+        })
+    }
+
+    /// Creates an additional-permission request for a future relaunch.
+    #[pyo3(signature = (filesystem, network, reason))]
+    fn request_escalation(
+        &self,
+        py: Python<'_>,
+        filesystem: Vec<(String, String)>,
+        network: Vec<String>,
+        reason: String,
+    ) -> PyResult<PermissionEscalationRequest> {
+        let runtime = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| escalation_error("runtime is poisoned"))?;
+            Arc::clone(
+                state
+                    .as_ref()
+                    .ok_or_else(|| escalation_error("runtime is closed"))?,
+            )
+        };
+        let plan = runtime
+            .preflight_plan
+            .clone()
+            .ok_or_else(|| escalation_error("dynamic escalation is disabled for this runtime"))?;
+        py.detach(move || {
+            let additional =
+                permission_set_from_parts(filesystem, network).map_err(escalation_error)?;
+            let escalation = plan
+                .request_escalation(additional, reason)
+                .map_err(escalation_error)?;
+            Ok(PermissionEscalationRequest {
+                inner: Some(escalation),
+            })
+        })
+    }
+
+    /// Relaunches the profile in a new sandbox after a trusted escalation
+    /// grant. The existing sandbox, if any, is never widened or modified.
+    #[pyo3(signature = (escalation, grant, argv=None))]
+    fn launch_escalated(
+        &self,
+        py: Python<'_>,
+        escalation: &PermissionEscalationRequest,
+        grant: &PermissionGrant,
+        argv: Option<Vec<String>>,
+    ) -> PyResult<SandboxProcess> {
+        let runtime = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| escalation_error("runtime is poisoned"))?;
+            Arc::clone(
+                state
+                    .as_ref()
+                    .ok_or_else(|| escalation_error("runtime is closed"))?,
+            )
+        };
+        let escalation = escalation_inner(escalation)?.clone();
+        let grant = grant_inner(grant)?.clone();
+        let argv = argv.unwrap_or_default();
+        let child = py.detach(move || {
+            let authorized = escalation.authorize(grant).map_err(escalation_error)?;
+            let request = command_request(&runtime, argv).map_err(escalation_error)?;
+            if runtime.preflight_required {
+                let program = request.command().program().to_string_lossy();
+                if runtime.approved_program.as_deref() != Some(program.as_ref()) {
+                    return Err(escalation_error(
+                        "escalation grants are bound to the profile command",
+                    ));
+                }
+            }
+            let context = authorized
+                .context()
+                .cloned()
+                .unwrap_or_else(|| runtime.context.clone());
+            let backend_request = cageforge::BackendRequest::new(&request, authorized.effective());
+            let mut child = runtime
+                .backend
+                .launch(backend_request, &context)
                 .map_err(launch_error)?;
             Ok::<_, PyErr>(ChildState {
                 stdin: Mutex::new(child.take_stdin()),
@@ -1235,6 +1407,64 @@ impl PermissionRequest {
 
 #[gen_stub_pymethods]
 #[pymethods]
+impl PermissionEscalationRequest {
+    /// Returns the exact expanded request sent to the trusted host.
+    fn json(&self) -> PyResult<String> {
+        serde_json::to_string(escalation_inner(self)?.request()).map_err(escalation_error)
+    }
+
+    /// Returns the human-readable reason for the requested expansion.
+    fn reason(&self) -> PyResult<&str> {
+        Ok(escalation_inner(self)?.reason())
+    }
+
+    /// Returns additional filesystem capabilities as `(operation, path)`.
+    fn filesystem(&self) -> PyResult<Vec<(String, String)>> {
+        Ok(escalation_inner(self)?
+            .additional()
+            .filesystem()
+            .iter()
+            .map(|capability| {
+                (
+                    capability.operation().as_str().to_owned(),
+                    capability.path().to_owned(),
+                )
+            })
+            .collect())
+    }
+
+    /// Returns additional network and local-IPC endpoints.
+    fn network(&self) -> PyResult<Vec<String>> {
+        Ok(escalation_inner(self)?
+            .additional()
+            .network()
+            .iter()
+            .map(|capability| capability.endpoint().to_owned())
+            .collect())
+    }
+
+    /// Releases the request and makes later operations fail closed.
+    fn close(&mut self) {
+        self.inner = None;
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        _ty: Option<Py<PyAny>>,
+        _value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
+    ) -> PyResult<bool> {
+        self.close();
+        Ok(false)
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
 impl PermissionApprover {
     /// Creates a session-scoped grant for the complete request.
     #[new]
@@ -1255,6 +1485,33 @@ impl PermissionApprover {
         let inner = cageforge::GrantAuthority::new()
             .approve_with(request, request.capabilities().clone(), scope, expires_at)
             .map_err(permission_error)?;
+        Ok(PermissionGrant { inner: Some(inner) })
+    }
+
+    /// Approves all additional capabilities, or an explicit subset, for a
+    /// new sandbox relaunch.
+    #[pyo3(signature = (request, filesystem=None, network=None, scope="session", expires_at=None))]
+    fn approve_escalation(
+        &self,
+        request: &PermissionEscalationRequest,
+        filesystem: Option<Vec<(String, String)>>,
+        network: Option<Vec<String>>,
+        scope: &str,
+        expires_at: Option<u64>,
+    ) -> PyResult<PermissionGrant> {
+        let request = escalation_inner(request)?;
+        let approved = match (filesystem, network) {
+            (None, None) => request.additional().clone(),
+            (filesystem, network) => permission_set_from_parts(
+                filesystem.unwrap_or_default(),
+                network.unwrap_or_default(),
+            )
+            .map_err(escalation_error)?,
+        };
+        let scope = permission_scope(scope).map_err(escalation_error)?;
+        let inner = cageforge::GrantAuthority::new()
+            .approve_escalation(request.request(), approved, scope, expires_at)
+            .map_err(escalation_error)?;
         Ok(PermissionGrant { inner: Some(inner) })
     }
 }
@@ -1921,6 +2178,7 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<GrantPage>()?;
     module.add_class::<RevokeResult>()?;
     module.add_class::<PermissionGrant>()?;
+    module.add_class::<PermissionEscalationRequest>()?;
     module.add_class::<PermissionApprover>()?;
     module.add_class::<PermissionStore>()?;
     module.add_function(wrap_pyfunction!(native_target, module)?)?;
@@ -1940,6 +2198,10 @@ fn _cageforge(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "CageforgePermissionError",
         CageforgePermissionError::type_object(module.py()),
+    )?;
+    module.add(
+        "CageforgeEscalationError",
+        CageforgeEscalationError::type_object(module.py()),
     )?;
     module.add(
         "CageforgeStoreError",

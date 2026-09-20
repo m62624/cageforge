@@ -157,6 +157,15 @@ The macOS `runtime.executable_roots` overlay is passed through the same
 preflight request; its filesystem capabilities expose `map-executable`
 separately from `read`.
 
+Profiles with `approval.mode = "on-demand"` may request additional access for
+a new sandbox launch. `runtime.request_escalation(filesystem, network, reason)`
+returns a structured request; the trusted host approves it with
+`PermissionApprover.approve_escalation`, and `runtime.launch_escalated`
+launches the approved immutable policy. The existing process is never widened
+in place and must be stopped by the host before relaunch. The same methods are
+available for `preflight-and-on-demand`. Unsupported or unrestricted additions
+raise `CageforgeEscalationError`.
+
 ## Processes, asyncio, and errors
 
 `SandboxProcess` provides `try_wait`, `wait`, `wait_for`, `kill`, and `close`,
