@@ -23,6 +23,176 @@ use std::path::{Component, Path, PathBuf};
 
 mod native;
 
+/// Lexical path syntax used by a configuration value.
+///
+/// This is separate from the compiling host target so a portable
+/// configuration can validate a Windows overlay while it is read on Linux or
+/// macOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PathDialect {
+    /// POSIX path syntax used by Linux and macOS.
+    Posix,
+    /// Windows drive, UNC, and separator syntax.
+    Windows,
+}
+
+impl PathDialect {
+    /// Returns the dialect of the compiling host.
+    pub const fn native() -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            Self::Windows
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Self::Posix
+        }
+    }
+}
+
+/// A hashable lexical path identity for an explicitly selected dialect.
+///
+/// Unlike [`NativePathKey`], this key does not use the compiling host target.
+/// It is intended for portable configuration and profile merging. It does
+/// not inspect the filesystem or resolve links.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PlatformPathKey {
+    dialect: PathDialect,
+    components: Vec<PlatformComponentKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum PlatformComponentKey {
+    Prefix(String),
+    Root,
+    Parent,
+    Normal(String),
+}
+
+impl PlatformPathKey {
+    /// Creates a lexical identity using the explicitly selected dialect.
+    pub fn new(value: &str, dialect: PathDialect) -> Self {
+        Self {
+            dialect,
+            components: lexical_components(value, dialect),
+        }
+    }
+}
+
+/// Returns whether `value` is absolute according to `dialect`.
+pub fn is_absolute_text(value: &str, dialect: PathDialect) -> bool {
+    match dialect {
+        PathDialect::Posix => value.starts_with('/'),
+        PathDialect::Windows => {
+            let bytes = value.as_bytes();
+            value.starts_with("\\\\")
+                || value.starts_with("//")
+                || (bytes.len() >= 3
+                    && bytes[0].is_ascii_alphabetic()
+                    && bytes[1] == b':'
+                    && matches!(bytes[2], b'/' | b'\\'))
+        }
+    }
+}
+
+/// Returns whether `value` contains a literal parent traversal component.
+pub fn contains_parent_traversal_text(value: &str, dialect: PathDialect) -> bool {
+    let is_separator = |character: char| match dialect {
+        PathDialect::Posix => character == '/',
+        PathDialect::Windows => matches!(character, '/' | '\\'),
+    };
+    let mut component = String::new();
+    for character in value.chars().chain(std::iter::once('/')) {
+        if is_separator(character) {
+            if component == ".." {
+                return true;
+            }
+            component.clear();
+        } else {
+            component.push(character);
+        }
+    }
+    false
+}
+
+fn lexical_components(value: &str, dialect: PathDialect) -> Vec<PlatformComponentKey> {
+    match dialect {
+        PathDialect::Posix => lexical_posix_components(value),
+        PathDialect::Windows => lexical_windows_components(value),
+    }
+}
+
+fn lexical_posix_components(value: &str) -> Vec<PlatformComponentKey> {
+    let mut components = Vec::new();
+    if value.starts_with('/') {
+        components.push(PlatformComponentKey::Root);
+    }
+    for component in value.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => components.push(PlatformComponentKey::Parent),
+            value => components.push(PlatformComponentKey::Normal(value.to_owned())),
+        }
+    }
+    components
+}
+
+fn lexical_windows_components(value: &str) -> Vec<PlatformComponentKey> {
+    let mut value = value.replace('\\', "/");
+    if value
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//?/unc/"))
+        || value
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//./unc/"))
+    {
+        value = format!("//{}", &value[8..]);
+    } else if value
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//?/"))
+        || value
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//./"))
+    {
+        value = value[4..].to_owned();
+    }
+
+    let mut components = Vec::new();
+    let mut parts = value.split('/');
+    if let Some(first) = parts.next()
+        && first.len() == 2
+        && first.as_bytes()[1] == b':'
+        && first.as_bytes()[0].is_ascii_alphabetic()
+    {
+        components.push(PlatformComponentKey::Prefix(first.to_ascii_lowercase()));
+        if value.as_bytes().get(2) == Some(&b'/') {
+            components.push(PlatformComponentKey::Root);
+        }
+    } else {
+        if value.starts_with("//") {
+            components.push(PlatformComponentKey::Root);
+            components.push(PlatformComponentKey::Prefix("unc".to_owned()));
+        }
+        parts = value.split('/');
+    }
+
+    for component in parts {
+        match component {
+            "" | "." => {}
+            value
+                if value.len() == 2
+                    && value.as_bytes()[1] == b':'
+                    && value.as_bytes()[0].is_ascii_alphabetic()
+                    && components
+                        .iter()
+                        .any(|entry| matches!(entry, PlatformComponentKey::Prefix(_))) => {}
+            ".." => components.push(PlatformComponentKey::Parent),
+            value => components.push(PlatformComponentKey::Normal(value.to_lowercase())),
+        }
+    }
+    components
+}
+
 /// A hashable and orderable lexical path identity using native case rules.
 ///
 /// The key is useful when another crate needs a map or set whose identity must
@@ -48,6 +218,56 @@ impl NativePathKey {
 pub fn contains_parent_traversal(path: &Path) -> bool {
     path.components()
         .any(|component| component == Component::ParentDir)
+}
+
+/// The lexical validation failures returned by [`resolve_lexical_path`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathResolutionError {
+    /// The declaration is empty.
+    Empty,
+    /// The declaration contains a NUL byte.
+    ContainsNul,
+    /// The declaration contains a parent traversal component.
+    ParentTraversal,
+}
+
+impl std::fmt::Display for PathResolutionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::Empty => "path declaration is empty",
+            Self::ContainsNul => "path declaration contains NUL",
+            Self::ParentTraversal => "path declaration contains parent traversal",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for PathResolutionError {}
+
+/// Resolves a relative-or-absolute declaration against `base` lexically.
+///
+/// The declaration is validated before joining, and the result removes only
+/// current-directory components. It does not access the filesystem, resolve
+/// symlinks, or canonicalize the result.
+pub fn resolve_lexical_path(
+    base: &Path,
+    declaration: &Path,
+) -> Result<PathBuf, PathResolutionError> {
+    if declaration.as_os_str().is_empty() {
+        return Err(PathResolutionError::Empty);
+    }
+    if declaration.as_os_str().to_string_lossy().contains('\0') {
+        return Err(PathResolutionError::ContainsNul);
+    }
+    if contains_parent_traversal(declaration) {
+        return Err(PathResolutionError::ParentTraversal);
+    }
+    let resolved = if declaration.is_absolute() {
+        declaration.to_path_buf()
+    } else {
+        base.join(declaration)
+    };
+    Ok(normalize_lexical_path(&resolved).into_owned())
 }
 
 /// Normalizes lexical aliases that the target platform treats as the same path.

@@ -12,10 +12,12 @@ use crate::error::{ConfigError, invalid_value};
 use crate::merge::{
     MergedProfile, ProfileMerger, domain_rule_key, environment_filter_key, filesystem_rule_key,
 };
-use crate::model::{RawApproval, RawConfig, RawProfile, RawRuntime};
+use crate::model::{RawApproval, RawConfig, RawRuntime};
 use cageforge_command::{CommandRequest, EnvironmentNameKey};
 use cageforge_network_proxy::GatewayConfig;
-use cageforge_path::{NativePathKey, contains_parent_traversal};
+use cageforge_path::{
+    PathDialect, PlatformPathKey, contains_parent_traversal_text, is_absolute_text,
+};
 use cageforge_permissions::{ApprovalConfig, PermissionMode, PlatformId};
 use cageforge_policy::SandboxPolicy;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -218,7 +220,7 @@ impl Config {
             }
         }
 
-        let mut merger = ProfileMerger::default();
+        let mut merger = ProfileMerger::new(path_dialect(platform));
         for profile_name in order {
             let Some(profile) = self.raw.profiles.get(&profile_name) else {
                 return Err(ConfigError::UnknownProfile { name: profile_name });
@@ -289,25 +291,29 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
             });
         }
     }
+    let native_dialect = PathDialect::native();
     for (name, profile) in &config.profiles {
         validate_profile_name(name)?;
-        validate_profile_policy_duplicates(name, profile)?;
+        validate_policy_duplicates(
+            name,
+            profile.filesystem.as_ref(),
+            profile.network.as_ref(),
+            native_dialect,
+        )?;
         validate_approval(name, profile.approval.as_ref())?;
         validate_runtime(name, profile.runtime.as_ref(), None)?;
+        validate_workspace_roots(name, &profile.workspace_roots, native_dialect)?;
         for (platform, overlay) in &profile.platforms {
+            let dialect = path_dialect(Some(*platform));
+            validate_policy_duplicates(
+                name,
+                overlay.filesystem.as_ref(),
+                overlay.network.as_ref(),
+                dialect,
+            )?;
             validate_approval(name, overlay.approval.as_ref())?;
             validate_runtime(name, overlay.runtime.as_ref(), Some(*platform))?;
-        }
-        let mut roots = HashSet::with_capacity(profile.workspace_roots.len());
-        for root in profile.workspace_roots.keys() {
-            validate_workspace_root(name, root)?;
-            if !roots.insert(NativePathKey::new(Path::new(root))) {
-                return Err(invalid_value(
-                    name,
-                    "workspace_roots",
-                    format!("duplicate path under native semantics {root:?}"),
-                ));
-            }
+            validate_workspace_roots(name, &overlay.workspace_roots, dialect)?;
         }
         let mut inherited = BTreeSet::new();
         for parent in &profile.inherits {
@@ -402,11 +408,16 @@ fn build_approval(
     .map_err(|error| invalid_value(profile, "approval", error.to_string()))
 }
 
-fn validate_profile_policy_duplicates(name: &str, profile: &RawProfile) -> Result<(), ConfigError> {
-    if let Some(filesystem) = &profile.filesystem {
+fn validate_policy_duplicates(
+    name: &str,
+    filesystem: Option<&crate::model::RawFilesystem>,
+    network: Option<&crate::model::RawNetwork>,
+    dialect: PathDialect,
+) -> Result<(), ConfigError> {
+    if let Some(filesystem) = filesystem {
         let mut rules = HashSet::with_capacity(filesystem.rules.len());
         for rule in &filesystem.rules {
-            if !rules.insert(filesystem_rule_key(rule)) {
+            if !rules.insert(filesystem_rule_key(rule, dialect)) {
                 return Err(invalid_value(
                     name,
                     "filesystem.rules",
@@ -417,7 +428,7 @@ fn validate_profile_policy_duplicates(name: &str, profile: &RawProfile) -> Resul
         let mut protected_paths =
             HashSet::with_capacity(filesystem.additional_protected_paths.len());
         for path in &filesystem.additional_protected_paths {
-            if !protected_paths.insert(NativePathKey::new(Path::new(path))) {
+            if !protected_paths.insert(PlatformPathKey::new(path, dialect)) {
                 return Err(invalid_value(
                     name,
                     "filesystem.additional_protected_paths",
@@ -426,7 +437,7 @@ fn validate_profile_policy_duplicates(name: &str, profile: &RawProfile) -> Resul
             }
         }
     }
-    if let Some(network) = &profile.network {
+    if let Some(network) = network {
         let mut domains = HashSet::with_capacity(network.domains.len());
         for rule in &network.domains {
             if !domains.insert(domain_rule_key(&rule.pattern)) {
@@ -439,7 +450,7 @@ fn validate_profile_policy_duplicates(name: &str, profile: &RawProfile) -> Resul
         }
         let mut sockets = HashSet::with_capacity(network.unix_sockets.len());
         for rule in &network.unix_sockets {
-            if !sockets.insert(NativePathKey::new(Path::new(&rule.path))) {
+            if !sockets.insert(PlatformPathKey::new(&rule.path, dialect)) {
                 return Err(invalid_value(
                     name,
                     "network.unix_sockets",
@@ -469,7 +480,30 @@ fn validate_profile_name(name: &str) -> Result<(), ConfigError> {
     }
 }
 
-fn validate_workspace_root(profile: &str, root: &str) -> Result<(), ConfigError> {
+fn validate_workspace_roots(
+    profile: &str,
+    values: &std::collections::BTreeMap<String, bool>,
+    dialect: PathDialect,
+) -> Result<(), ConfigError> {
+    let mut roots = HashSet::with_capacity(values.len());
+    for root in values.keys() {
+        validate_workspace_root(profile, root, dialect)?;
+        if !roots.insert(PlatformPathKey::new(root, dialect)) {
+            return Err(invalid_value(
+                profile,
+                "workspace_roots",
+                format!("duplicate path under target path semantics {root:?}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_workspace_root(
+    profile: &str,
+    root: &str,
+    dialect: PathDialect,
+) -> Result<(), ConfigError> {
     if root.is_empty() {
         return Err(invalid_value(
             profile,
@@ -484,7 +518,7 @@ fn validate_workspace_root(profile: &str, root: &str) -> Result<(), ConfigError>
             "path must not contain a NUL character",
         ));
     }
-    if contains_parent_traversal(Path::new(root)) {
+    if contains_parent_traversal_text(root, dialect) {
         return Err(invalid_value(
             profile,
             "workspace_roots",
@@ -518,22 +552,22 @@ fn validate_runtime(
                 "path must not contain a NUL character",
             ));
         }
-        let path = Path::new(root);
-        if !is_absolute_runtime_root(root, platform) {
+        let dialect = path_dialect(platform);
+        if !is_absolute_text(root, dialect) {
             return Err(invalid_value(
                 profile,
                 "runtime.executable_roots",
                 format!("path must be absolute: {root:?}"),
             ));
         }
-        if contains_runtime_parent_traversal(root) || contains_parent_traversal(path) {
+        if contains_parent_traversal_text(root, dialect) {
             return Err(invalid_value(
                 profile,
                 "runtime.executable_roots",
                 format!("path must not contain parent traversal: {root:?}"),
             ));
         }
-        if !roots.insert(NativePathKey::new(path)) {
+        if !roots.insert(PlatformPathKey::new(root, dialect)) {
             return Err(invalid_value(
                 profile,
                 "runtime.executable_roots",
@@ -544,26 +578,12 @@ fn validate_runtime(
     Ok(())
 }
 
-fn is_absolute_runtime_root(root: &str, platform: Option<PlatformId>) -> bool {
+fn path_dialect(platform: Option<PlatformId>) -> PathDialect {
     match platform {
-        Some(PlatformId::Linux | PlatformId::Macos) => root.starts_with('/'),
-        Some(PlatformId::Windows) => is_windows_absolute(root),
-        None => Path::new(root).is_absolute() || is_windows_absolute(root),
+        Some(PlatformId::Windows) => PathDialect::Windows,
+        Some(PlatformId::Linux | PlatformId::Macos) => PathDialect::Posix,
+        None => PathDialect::native(),
     }
-}
-
-fn is_windows_absolute(root: &str) -> bool {
-    let bytes = root.as_bytes();
-    root.starts_with("\\\\")
-        || root.starts_with("//")
-        || (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'/' | b'\\'))
-}
-
-fn contains_runtime_parent_traversal(root: &str) -> bool {
-    root.split(['/', '\\']).any(|component| component == "..")
 }
 
 fn source_location(source: &str, span: std::ops::Range<usize>) -> crate::SourceLocation {

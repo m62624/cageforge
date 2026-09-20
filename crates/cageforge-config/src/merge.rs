@@ -9,10 +9,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 use cageforge_command::{EnvironmentNameKey, EnvironmentPattern};
-use cageforge_path::{NativePathKey, case_fold, normalize_lexical_path};
+use cageforge_path::{PathDialect, PlatformPathKey};
 use cageforge_permissions::PlatformId;
 use cageforge_policy::{DomainAccess, DomainRule, PathPattern, PathSelector};
 
@@ -43,17 +43,14 @@ pub(crate) enum FilesystemRuleKey {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum SelectorKey {
     Valid(PathSelector),
-    Native(NativePathKey),
+    Platform(PlatformPathKey),
     Missing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum GlobKey {
-    Valid {
-        prefix: Option<String>,
-        components: Vec<String>,
-    },
-    Raw(String),
+    Valid { path: PlatformPathKey },
+    Raw { path: PlatformPathKey },
     Missing,
 }
 
@@ -63,19 +60,38 @@ pub(crate) enum EnvironmentFilterKey {
     Invalid(String),
 }
 
-#[derive(Default)]
 pub(crate) struct ProfileMerger {
+    dialect: PathDialect,
     merged: MergedProfile,
-    workspace_roots: HashMap<NativePathKey, String>,
-    protected_paths: HashSet<NativePathKey>,
+    workspace_roots: HashMap<PlatformPathKey, String>,
+    protected_paths: HashSet<PlatformPathKey>,
     filesystem_rules: HashMap<FilesystemRuleKey, usize>,
     domain_rules: HashMap<String, usize>,
-    unix_sockets: HashMap<NativePathKey, usize>,
-    local_ipc_unix_sockets: HashMap<NativePathKey, usize>,
+    unix_sockets: HashMap<PlatformPathKey, usize>,
+    local_ipc_unix_sockets: HashMap<PlatformPathKey, usize>,
     local_ipc_named_pipes: HashMap<String, usize>,
-    executable_roots: HashMap<NativePathKey, usize>,
+    executable_roots: HashMap<PlatformPathKey, usize>,
     environment_filters: HashMap<EnvironmentFilterKey, String>,
     environment_overrides: BTreeMap<EnvironmentNameKey, (String, Option<String>)>,
+}
+
+impl ProfileMerger {
+    pub(crate) fn new(dialect: PathDialect) -> Self {
+        Self {
+            dialect,
+            merged: MergedProfile::default(),
+            workspace_roots: HashMap::new(),
+            protected_paths: HashSet::new(),
+            filesystem_rules: HashMap::new(),
+            domain_rules: HashMap::new(),
+            unix_sockets: HashMap::new(),
+            local_ipc_unix_sockets: HashMap::new(),
+            local_ipc_named_pipes: HashMap::new(),
+            executable_roots: HashMap::new(),
+            environment_filters: HashMap::new(),
+            environment_overrides: BTreeMap::new(),
+        }
+    }
 }
 
 impl ProfileMerger {
@@ -135,7 +151,7 @@ impl ProfileMerger {
     fn merge_runtime(&mut self, child: &RawRuntime) {
         let merged = self.merged.runtime.get_or_insert_with(RawRuntime::default);
         for path in &child.executable_roots {
-            let key = NativePathKey::new(Path::new(path));
+            let key = PlatformPathKey::new(path, self.dialect);
             if let Some(&index) = self.executable_roots.get(&key) {
                 merged.executable_roots[index] = path.clone();
             } else {
@@ -171,7 +187,7 @@ impl ProfileMerger {
             .local_ipc
             .get_or_insert_with(RawLocalIpc::default);
         for path in &child.unix_sockets {
-            let key = NativePathKey::new(Path::new(path));
+            let key = PlatformPathKey::new(path, self.dialect);
             if let Some(&index) = self.local_ipc_unix_sockets.get(&key) {
                 merged.unix_sockets[index] = path.clone();
             } else {
@@ -214,7 +230,7 @@ impl ProfileMerger {
 
     fn merge_workspace_roots(&mut self, values: &BTreeMap<String, bool>) {
         for (path, enabled) in values {
-            let key = NativePathKey::new(Path::new(path));
+            let key = PlatformPathKey::new(path, self.dialect);
             if let Some(existing) = self.workspace_roots.insert(key, path.clone()) {
                 self.merged.workspace_roots.remove(&existing);
             }
@@ -244,7 +260,7 @@ impl ProfileMerger {
         for path in &child.additional_protected_paths {
             if self
                 .protected_paths
-                .insert(NativePathKey::new(Path::new(path)))
+                .insert(PlatformPathKey::new(path, self.dialect))
             {
                 merged.additional_protected_paths.push(path.clone());
             }
@@ -256,7 +272,7 @@ impl ProfileMerger {
             }
         }
         for rule in &child.rules {
-            let key = filesystem_rule_key(rule);
+            let key = filesystem_rule_key(rule, self.dialect);
             if let Some(&index) = self.filesystem_rules.get(&key) {
                 merged.rules[index] = rule.clone();
             } else {
@@ -305,7 +321,7 @@ impl ProfileMerger {
             }
         }
         for rule in &child.unix_sockets {
-            let key = NativePathKey::new(Path::new(&rule.path));
+            let key = PlatformPathKey::new(&rule.path, self.dialect);
             if let Some(&index) = self.unix_sockets.get(&key) {
                 merged.unix_sockets[index] = rule.clone();
             } else {
@@ -367,15 +383,18 @@ fn merge_gateway(parent: Option<RawGatewayConfig>, child: &RawGatewayConfig) -> 
     merged
 }
 
-pub(crate) fn filesystem_rule_key(rule: &RawFilesystemRule) -> FilesystemRuleKey {
+pub(crate) fn filesystem_rule_key(
+    rule: &RawFilesystemRule,
+    dialect: PathDialect,
+) -> FilesystemRuleKey {
     match rule.target {
         RawFilesystemTarget::Absolute => FilesystemRuleKey::Selector(
             rule.target,
-            selector_key(rule.path.as_deref(), PathSelector::absolute),
+            selector_key(rule.path.as_deref(), PathSelector::absolute, dialect),
         ),
         RawFilesystemTarget::Workspace => FilesystemRuleKey::Selector(
             rule.target,
-            selector_key(rule.path.as_deref(), PathSelector::workspace),
+            selector_key(rule.path.as_deref(), PathSelector::workspace, dialect),
         ),
         RawFilesystemTarget::WorkspaceRoot
         | RawFilesystemTarget::Root
@@ -386,11 +405,11 @@ pub(crate) fn filesystem_rule_key(rule: &RawFilesystemRule) -> FilesystemRuleKey
         }
         RawFilesystemTarget::AbsoluteGlob => FilesystemRuleKey::Glob(
             rule.target,
-            glob_key(rule.pattern.as_deref(), PathPattern::absolute),
+            glob_key(rule.pattern.as_deref(), PathPattern::absolute, dialect),
         ),
         RawFilesystemTarget::WorkspaceGlob => FilesystemRuleKey::Glob(
             rule.target,
-            glob_key(rule.pattern.as_deref(), PathPattern::workspace),
+            glob_key(rule.pattern.as_deref(), PathPattern::workspace, dialect),
         ),
     }
 }
@@ -398,12 +417,13 @@ pub(crate) fn filesystem_rule_key(rule: &RawFilesystemRule) -> FilesystemRuleKey
 fn selector_key(
     path: Option<&str>,
     constructor: impl FnOnce(PathBuf) -> Result<PathSelector, cageforge_policy::PolicyError>,
+    dialect: PathDialect,
 ) -> SelectorKey {
     let Some(path) = path else {
         return SelectorKey::Missing;
     };
     constructor(PathBuf::from(path)).map_or_else(
-        |_| SelectorKey::Native(NativePathKey::new(Path::new(path))),
+        |_| SelectorKey::Platform(PlatformPathKey::new(path, dialect)),
         SelectorKey::Valid,
     )
 }
@@ -411,29 +431,19 @@ fn selector_key(
 fn glob_key(
     pattern: Option<&str>,
     constructor: impl FnOnce(String) -> Result<PathPattern, cageforge_policy::PolicyError>,
+    dialect: PathDialect,
 ) -> GlobKey {
     let Some(pattern) = pattern else {
         return GlobKey::Missing;
     };
     if constructor(pattern.to_owned()).is_err() {
-        return GlobKey::Raw(case_fold(pattern));
+        return GlobKey::Raw {
+            path: PlatformPathKey::new(pattern, dialect),
+        };
     }
-
-    let normalized = normalize_lexical_path(Path::new(pattern));
-    let mut prefix = None;
-    let mut components = Vec::new();
-    for component in normalized.components() {
-        match component {
-            Component::Prefix(value) => {
-                prefix = Some(case_fold(&value.as_os_str().to_string_lossy()));
-            }
-            Component::Normal(value) => {
-                components.push(case_fold(&value.to_string_lossy()));
-            }
-            Component::RootDir | Component::CurDir | Component::ParentDir => {}
-        }
+    GlobKey::Valid {
+        path: PlatformPathKey::new(pattern, dialect),
     }
-    GlobKey::Valid { prefix, components }
 }
 
 pub(crate) fn domain_rule_key(pattern: &str) -> String {
@@ -514,4 +524,35 @@ fn merge_timeout(parent: Option<RawTimeout>, child: &RawTimeout) -> RawTimeout {
         merged.milliseconds = child.milliseconds;
     }
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::RawAccessMode;
+
+    #[test]
+    fn windows_glob_keys_use_target_separator_and_case_rules() {
+        let first = RawFilesystemRule {
+            target: RawFilesystemTarget::AbsoluteGlob,
+            path: None,
+            pattern: Some("C:/Runtime/**/*.DLL".to_owned()),
+            access: RawAccessMode::Deny,
+            missing_path: None,
+            read_only_subpaths: Vec::new(),
+        };
+        let second = RawFilesystemRule {
+            pattern: Some(r"c:\runtime\**\*.dll".to_owned()),
+            ..first.clone()
+        };
+
+        assert_eq!(
+            filesystem_rule_key(&first, PathDialect::Windows),
+            filesystem_rule_key(&second, PathDialect::Windows)
+        );
+        assert_ne!(
+            filesystem_rule_key(&first, PathDialect::Posix),
+            filesystem_rule_key(&second, PathDialect::Posix)
+        );
+    }
 }

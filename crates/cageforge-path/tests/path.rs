@@ -3,8 +3,9 @@
 #[cfg(windows)]
 use cageforge_path::NativePathKey;
 use cageforge_path::{
-    contains_component_path, contains_parent_traversal, is_within, normalize_lexical_path,
-    paths_equal,
+    PathDialect, PlatformPathKey, contains_component_path, contains_parent_traversal,
+    contains_parent_traversal_text, is_absolute_text, is_within, normalize_lexical_path,
+    paths_equal, resolve_lexical_path,
 };
 use proptest::prelude::*;
 use std::path::Path;
@@ -97,6 +98,70 @@ fn protected_component_matching_is_case_sensitive_on_posix() {
 fn parent_traversal_is_detected_without_filesystem_access() {
     assert!(contains_parent_traversal(Path::new("workspace/../outside")));
     assert!(!contains_parent_traversal(Path::new("workspace/src")));
+}
+
+#[test]
+fn target_dialect_validates_foreign_path_text_without_host_filesystem_semantics() {
+    assert!(is_absolute_text("C:/runtime", PathDialect::Windows));
+    assert!(is_absolute_text(
+        r"\\server\share\runtime",
+        PathDialect::Windows
+    ));
+    assert!(!is_absolute_text("runtime", PathDialect::Windows));
+    assert!(is_absolute_text("/runtime", PathDialect::Posix));
+    assert!(!is_absolute_text(r"C:\runtime", PathDialect::Posix));
+
+    assert!(contains_parent_traversal_text(
+        r"C:\runtime\..\other",
+        PathDialect::Windows
+    ));
+    assert!(!contains_parent_traversal_text(
+        r"C:\runtime\parent.txt",
+        PathDialect::Windows
+    ));
+    assert!(contains_parent_traversal_text(
+        "/runtime/../other",
+        PathDialect::Posix
+    ));
+}
+
+#[test]
+fn target_dialect_path_keys_use_the_selected_platform_identity() {
+    assert_eq!(
+        PlatformPathKey::new(r"C:\Runtime\bin", PathDialect::Windows),
+        PlatformPathKey::new("c:/runtime/bin", PathDialect::Windows)
+    );
+    assert_eq!(
+        PlatformPathKey::new(r"\\?\C:\Runtime", PathDialect::Windows),
+        PlatformPathKey::new("c:/runtime", PathDialect::Windows)
+    );
+    assert_ne!(
+        PlatformPathKey::new("/Runtime", PathDialect::Posix),
+        PlatformPathKey::new("/runtime", PathDialect::Posix)
+    );
+}
+
+#[test]
+fn lexical_resolution_is_shared_and_rejects_unsafe_declarations() {
+    let base = Path::new("/workspace");
+    assert_eq!(
+        resolve_lexical_path(base, Path::new("src/./lib"))
+            .expect("relative declaration should resolve"),
+        PathBuf::from("/workspace/src/lib")
+    );
+    assert_eq!(
+        resolve_lexical_path(base, Path::new("/opt/tool"))
+            .expect("absolute declaration should remain absolute"),
+        PathBuf::from("/opt/tool")
+    );
+    assert_eq!(
+        resolve_lexical_path(base, Path::new("src/../secret")),
+        Err(cageforge_path::PathResolutionError::ParentTraversal)
+    );
+    assert_eq!(
+        resolve_lexical_path(base, Path::new("")),
+        Err(cageforge_path::PathResolutionError::Empty)
+    );
 }
 
 fn absolute_root() -> PathBuf {

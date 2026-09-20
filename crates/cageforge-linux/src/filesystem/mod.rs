@@ -15,7 +15,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use cageforge_backend_api::{BackendCapability, PreparedBackendRequest};
-use cageforge_path::normalize_lexical_path;
+use cageforge_path::{is_within, normalize_lexical_path};
 use cageforge_policy::{
     AccessMode, FilesystemDecision, FilesystemMode, FilesystemTarget, MissingPathBehavior,
 };
@@ -134,7 +134,7 @@ fn is_redundant_bind(path: &Path, mount: Mount, mounts: &BTreeMap<PathBuf, Mount
 
     mounts
         .iter()
-        .filter(|(ancestor, _)| ancestor != &path && path.starts_with(ancestor))
+        .filter(|(ancestor, _)| ancestor != &path && is_within(path, ancestor))
         .max_by_key(|(ancestor, _)| ancestor.components().count())
         .and_then(|(_, ancestor_mount)| ancestor_mount.effective_bind_access())
         == Some(access)
@@ -207,7 +207,7 @@ pub(crate) fn lower<'a>(
     reject_reserved_runtime_paths(&mounts, &shared_state_root)?;
     if mounts
         .iter()
-        .any(|(path, mount)| mount.is_bind() && shared_state_root.starts_with(path))
+        .any(|(path, mount)| mount.is_bind() && is_within(&shared_state_root, path))
     {
         insert_mount(&mut mounts, shared_state_root, Mount::Deny);
     }
@@ -325,7 +325,7 @@ impl<'scope, 'request> LayerMountCollector<'scope, 'request> {
                         )?;
                         for subpath in rule.read_only_subpaths() {
                             for subpath in self.context.resolve(subpath) {
-                                if subpath.starts_with(&path) {
+                                if is_within(&subpath, &path) {
                                     add_read_only_path(
                                         self.backend,
                                         self.prepared,
@@ -475,9 +475,7 @@ fn reject_unsafe_bind_symlinks(mounts: &BTreeMap<PathBuf, Mount>) -> Result<(), 
     }
 
     for (path, mount) in mounts.iter().filter(|(_, mount)| mount.is_bind()) {
-        let under_writable_root = writable_roots
-            .iter()
-            .any(|root| path == *root || path.starts_with(root));
+        let under_writable_root = writable_roots.iter().any(|root| is_within(path, root));
         if (*mount == Mount::Write || under_writable_root)
             && let Some(symlink) = first_symlink_component(path)
         {
@@ -579,7 +577,7 @@ fn materialize_missing_masks(
         };
         if !writable_roots
             .iter()
-            .any(|root| first_missing.starts_with(root))
+            .any(|root| is_within(&first_missing, root))
         {
             mounts.remove(&path);
             continue;
@@ -604,7 +602,7 @@ fn prune_redundant_denied_descendants(mounts: &mut BTreeMap<PathBuf, Mount>) {
         .collect::<Vec<_>>();
     for path in denied {
         if mounts.iter().any(|(ancestor, mount)| {
-            *mount == Mount::Deny && ancestor != &path && path.starts_with(ancestor)
+            *mount == Mount::Deny && ancestor != &path && is_within(&path, ancestor)
         }) {
             mounts.remove(&path);
         }
@@ -669,10 +667,10 @@ fn reject_reserved_runtime_paths(
     let runtime = Path::new(PRIVATE_RUNTIME_ROOT);
     if let Some(path) = mounts.keys().find(|path| {
         path.as_path() != Path::new("/")
-            && (path.starts_with("/proc")
-                || path.starts_with(runtime)
-                || runtime.starts_with(path.as_path())
-                || path.starts_with(shared_state_root))
+            && (is_within(path, Path::new("/proc"))
+                || is_within(path, runtime)
+                || is_within(runtime, path.as_path())
+                || is_within(path, shared_state_root))
     }) {
         return Err(LinuxBackendError::FilesystemLoweringFailed {
             path: path.clone(),
@@ -958,7 +956,7 @@ fn append_missing_mount_parent_dirs(
     let Some(parent) = mount_target.parent() else {
         return;
     };
-    if !parent.starts_with(first_missing) {
+    if !is_within(parent, first_missing) {
         return;
     }
 
@@ -996,7 +994,7 @@ fn descendant_mount_directories(
     let mut directories = BTreeSet::new();
     for (path, _) in ordered_mounts
         .iter()
-        .filter(|(path, _)| path != masked_path && path.starts_with(masked_path))
+        .filter(|(path, _)| path != masked_path && is_within(path, masked_path))
     {
         let metadata =
             fs::metadata(path).map_err(|source| LinuxBackendError::FilesystemLoweringFailed {
@@ -1013,7 +1011,7 @@ fn descendant_mount_directories(
         };
         let mut current = target.to_path_buf();
         let mut reversed = Vec::new();
-        while current != masked_path && current.starts_with(masked_path) {
+        while current != masked_path && is_within(&current, masked_path) {
             reversed.push(current.clone());
             let Some(parent) = current.parent() else {
                 break;
@@ -1040,7 +1038,7 @@ fn first_writable_symlink(path: &Path, writable_roots: &[PathBuf]) -> Option<Pat
         if metadata.file_type().is_symlink()
             && writable_roots
                 .iter()
-                .any(|root| current.starts_with(root) && current != *root)
+                .any(|root| is_within(&current, root) && current != *root)
         {
             return Some(current);
         }

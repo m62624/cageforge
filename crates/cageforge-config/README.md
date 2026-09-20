@@ -237,8 +237,9 @@ may still override the matching inherited entry explicitly.
 
 `workspace_roots` is an inheritable path-to-enabled map. `true` enables a root
 and `false` disables an inherited root. Inheritance compares roots with the
-native path identity from `cageforge-path`, so a Windows case variant can
-override the same inherited root. The resolved paths are declarations;
+selected target dialect from `cageforge-path`, so a Windows case variant can
+override the same inherited root even when the portable TOML is read on a
+different host. The resolved paths are declarations;
 the backend resolves relative paths against its execution context before
 registering absolute roots in its path context. When passing these roots to
 `cageforge-policy-compose`, resolve them first: composition accepts only

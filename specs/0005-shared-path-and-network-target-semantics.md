@@ -39,6 +39,17 @@ workspace ceilings, and upstream-review path validation. This keeps a path
 that is equal or inside another path under the same native semantics in every
 layer.
 
+Portable configuration adds an explicit target dialect to this contract.
+`NativePathKey` remains the identity for values being evaluated by the
+compiling native backend. `PathDialect` and `PlatformPathKey` are used when a
+configuration parser reads or merges a platform overlay for another target.
+They validate POSIX or Windows path text without consulting the host
+`std::path` interpretation, including Windows drive, UNC, separator, case,
+and supported device-alias rules. `contains_parent_traversal_text` applies the
+same explicit dialect to lexical string validation. These helpers perform no
+filesystem I/O and do not make an off-host policy executable; the selected
+native backend still owns policy construction and filesystem enforcement.
+
 `PathSelector` delegates its equality, hashing, and ordering identity to the
 same native component rules. Config profile inheritance applies those rules to
 `workspace_roots`, so a child cannot leave a semantically duplicate inherited
@@ -50,6 +61,12 @@ components form the collection identity; the original pattern text remains
 available through `as_str()` for diagnostics and serialization. This prevents a
 Windows case variant from becoming a second policy key while preserving the
 declared spelling at the API boundary.
+
+Adapters that resolve a workspace or runtime declaration use
+`resolve_lexical_path` rather than repeating the empty, NUL, parent-traversal,
+join, and current-directory normalization sequence. It remains lexical: the
+filesystem and native backend still own canonicalization, symlink, reparse,
+mount, and TOCTOU checks.
 
 Path-pattern matching applies the same native fold to the glob and candidate
 components before invoking `globset`. This is intentional: `globset`'s
@@ -132,8 +149,8 @@ network I/O, so CI remains deterministic and short.
 `globset` belongs to `cageforge-policy`, not to `cageforge-path`. A glob is
 interpreted there as a filesystem or domain policy rule with access modes,
 deny precedence, and portability restrictions. `cageforge-path` owns only
-native path identity and containment, so it remains reusable by projects that
-do not use policy globs.
+native and explicitly selected target path identity and containment, so it
+remains reusable by projects that do not use policy globs.
 
 `cageforge-policy` exposes `ResolvedNetworkTarget` for a normalized host and
 one exact resolution snapshot. A native backend must call

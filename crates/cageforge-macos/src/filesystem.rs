@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use cageforge_backend_api::{PreparedBackendRequest, SandboxBackend};
-use cageforge_path::{NativePathKey, is_within, normalize_lexical_path};
+use cageforge_path::{NativePathKey, contains_parent_traversal, is_within, normalize_lexical_path};
 use cageforge_policy::{AccessMode, FilesystemDecision, FilesystemMode, FilesystemTarget};
 use cageforge_policy_compose::{EffectiveFilesystemLayer, EffectivePathContext};
 
@@ -265,7 +265,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
         missing: cageforge_policy::MissingPathBehavior,
     ) -> Result<Option<PathBuf>, MacosFilesystemError> {
         let path = normalize_macos_system_alias(path);
-        if !path.is_absolute() || contains_parent_component(&path) {
+        if !path.is_absolute() || contains_parent_traversal(&path) {
             return Err(MacosFilesystemError::InvalidScope { path });
         }
         let Some(existing) = self.first_missing_component(&path)? else {
@@ -390,7 +390,7 @@ impl<'scope, 'request, B: SandboxBackend> FilesystemCollector<'scope, 'request, 
 
 fn validate_executable_root(path: &Path) -> Result<PathBuf, MacosFilesystemError> {
     let path = normalize_macos_system_alias(path.to_path_buf());
-    if !path.is_absolute() || contains_parent_component(&path) {
+    if !path.is_absolute() || contains_parent_traversal(&path) {
         return Err(MacosFilesystemError::InvalidExecutableRoot { path });
     }
     let mut current = PathBuf::from("/");
@@ -444,11 +444,6 @@ fn normalize_macos_system_alias(path: PathBuf) -> PathBuf {
         }
     }
     path
-}
-
-fn contains_parent_component(path: &Path) -> bool {
-    path.components()
-        .any(|component| component == Component::ParentDir)
 }
 
 fn canonicalize_glob_static_prefix(pattern: &str) -> Result<Option<String>, MacosFilesystemError> {

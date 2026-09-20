@@ -12,6 +12,11 @@ systems and case-insensitively on Windows. Windows drive, UNC, verbatim, and
 supported device aliases share one lexical identity; malformed native strings
 remain distinct instead of passing through lossy Unicode conversion.
 
+Portable configuration uses [`PathDialect`] and [`PlatformPathKey`] when it
+validates or merges a path for a target platform other than the compiling host.
+This keeps a Windows overlay's drive, UNC, separator, and case rules intact
+even when the TOML is read on Linux or macOS.
+
 The crate does not access the filesystem, resolve symlinks, or canonicalize
 paths. Native backends remain responsible for those operations.
 
@@ -70,6 +75,15 @@ environment and domain rows intentionally have their own portable semantics.
 - `paths_equal(left, right)` compares complete native path components.
 - `NativePathKey` supplies the same equality, hashing, and ordering identity
   for maps and sets.
+- `PathDialect` selects POSIX or Windows lexical syntax independently of the
+  compiling host.
+- `is_absolute_text` and `contains_parent_traversal_text` validate path text
+  for that explicit dialect.
+- `PlatformPathKey` supplies target-platform equality, hashing, and ordering
+  for portable configuration merges.
+- `resolve_lexical_path(base, declaration)` resolves a relative or absolute
+  declaration after applying the shared empty, NUL, and parent-traversal
+  checks.
 - `normalize_lexical_path(path)` exposes supported native alias normalization
   without filesystem access.
 - `strings_equal(left, right)` and `case_fold(value)` expose the same native

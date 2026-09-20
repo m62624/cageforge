@@ -12,6 +12,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use cageforge_path::is_within;
 use sha2::{Digest, Sha256};
 
 use crate::config::{
@@ -720,7 +721,7 @@ fn find_in_search_paths(
     let current_directory_is_root = current_directory.parent().is_none();
     search_paths.into_iter().find_map(|directory| {
         let candidate = fs::canonicalize(directory.join(program)).ok()?;
-        if (!current_directory_is_root && candidate.starts_with(&current_directory))
+        if (!current_directory_is_root && is_within(&candidate, &current_directory))
             || validate_executable(&candidate).is_err()
         {
             None

@@ -247,6 +247,33 @@ executable_roots = ["C:/Program Files/example-runtime"]
 }
 
 #[test]
+fn windows_overlay_merges_use_windows_identity_on_a_non_windows_host() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "child"
+
+[profiles.base.platforms.windows.runtime]
+executable_roots = ["C:/Runtime"]
+
+[profiles.child]
+inherits = ["base"]
+
+[profiles.child.platforms.windows.runtime]
+executable_roots = ["c:\\runtime"]
+"#,
+    )
+    .expect("portable Windows overlay should parse");
+
+    let resolved = config
+        .resolve_default_for_platform(PlatformId::Windows)
+        .expect("Windows overlay should resolve");
+    assert_eq!(
+        resolved.executable_roots(),
+        &[std::path::PathBuf::from("c:\\runtime")]
+    );
+}
+
+#[test]
 fn runtime_roots_require_absolute_unique_safe_paths() {
     for source in [
         "[profiles.tool.runtime]\nexecutable_roots = [\"runtime\"]\n",

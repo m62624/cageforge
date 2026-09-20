@@ -479,17 +479,11 @@ fn resolve_workspace_roots(
     declarations
         .iter()
         .map(|declaration| {
-            if cageforge::contains_parent_traversal(declaration) {
-                return Err(CliError::InvalidWorkspaceRoot {
+            cageforge::resolve_lexical_path(current_directory, declaration).map_err(|_| {
+                CliError::InvalidWorkspaceRoot {
                     path: declaration.clone(),
-                });
-            }
-            let path = if declaration.is_absolute() {
-                declaration.clone()
-            } else {
-                current_directory.join(declaration)
-            };
-            Ok(cageforge::normalize_lexical_path(&path).into_owned())
+                }
+            })
         })
         .collect()
 }

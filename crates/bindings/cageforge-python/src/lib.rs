@@ -438,17 +438,8 @@ fn resolve_workspace_roots(
     declarations
         .iter()
         .map(|declaration| {
-            if cageforge::contains_parent_traversal(declaration) {
-                return Err(format!(
-                    "workspace root contains parent traversal: {declaration:?}"
-                ));
-            }
-            let path = if declaration.is_absolute() {
-                declaration.clone()
-            } else {
-                current_directory.join(declaration)
-            };
-            Ok(cageforge::normalize_lexical_path(&path).into_owned())
+            cageforge::resolve_lexical_path(current_directory, declaration)
+                .map_err(|error| format!("invalid workspace root {declaration:?}: {error}"))
         })
         .collect()
 }
