@@ -76,9 +76,9 @@ const NETWORK_TARGET: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NETWORK_TARGET";
 const NAMED_PIPE_ALLOWED: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_ALLOWED";
 #[cfg(target_os = "windows")]
 const NAMED_PIPE_DENIED: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_NAMED_PIPE_DENIED";
-// The backend's launch timeout is 15 seconds. Keep the fixture's socket
-// timeout above it so a slow Windows/WFP handshake is reported by the
-// sandbox boundary instead of being converted into a misleading empty EOF.
+// Keep the fixture's socket timeout above the native network probe budget so a
+// slow Windows/WFP handshake is reported by the sandbox boundary instead of
+// being converted into a misleading empty EOF.
 const FIXTURE_IO_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "windows")]
 const UNRELATED_HANDLE: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATED_HANDLE";

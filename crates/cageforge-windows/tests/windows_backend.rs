@@ -81,6 +81,11 @@ const PARENT_DEATH_STATE: &str = "CAGEFORGE_WINDOWS_PARENT_DEATH_STATE";
 const PARENT_DEATH_CHILD: &str = "CAGEFORGE_WINDOWS_PARENT_DEATH_CHILD";
 const POWERSHELL_COMMAND: &str = "powershell";
 const END_TO_END_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+// Native Windows network clients can spend longer than the ordinary process
+// smoke budget starting under WFP, even though each fixture operation has its
+// own short I/O timeout. Keep this test bounded without changing the backend's
+// production default timeout.
+const NATIVE_NETWORK_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const FIXTURE_START_DEADLINE: Duration = Duration::from_secs(5);
 const NAMED_PIPE_FIXTURE_INSTANCE_RESERVE: usize = 16;
 const NAMED_PIPE_FIXTURE_DEFAULT_TIMEOUT_MS: u32 = 60_000;
@@ -1722,7 +1727,7 @@ fn setup_state_recovery_active_child_exclusion_and_cleanup_are_end_to_end() {
     let backend = WindowsBackend::new(
         WindowsBackendConfig::new()
             .with_setup(setup.config().clone())
-            .with_default_timeout(END_TO_END_PROBE_TIMEOUT)
+            .with_default_timeout(NATIVE_NETWORK_PROBE_TIMEOUT)
             .expect("bounded end-to-end probe timeout"),
     )
     .expect("backend after capability-state recovery");
