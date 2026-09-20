@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cageforge_config::Config;
+use cageforge_permissions::PlatformId;
 use cageforge_policy::FilesystemTarget;
 
 fn toml_examples(directory: &Path) -> Vec<PathBuf> {
@@ -97,7 +98,9 @@ fn runnable_examples_allow_the_platform_minimal_runtime() {
             .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
         let resolved = Config::from_toml(&source)
             .unwrap_or_else(|error| panic!("{} should parse: {error}", path.display()))
-            .resolve_default()
+            .resolve_default_for_platform(
+                PlatformId::current().expect("the test target must have a Cageforge platform"),
+            )
             .unwrap_or_else(|error| panic!("{} should resolve: {error}", path.display()));
         assert!(
             resolved

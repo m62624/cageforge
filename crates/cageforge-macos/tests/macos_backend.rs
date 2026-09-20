@@ -253,11 +253,51 @@ fn compile_runtime_fixture(runtime_root: &Path, executable: &Path) {
     .expect("write runtime library source");
     fs::write(
         &program_source,
-        r#"#include <stdio.h>
+        r#"#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 extern const char *cageforge_runtime_message(void);
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc < 1 || argv[0] == NULL) {
+        return 70;
+    }
+    char library_path[PATH_MAX];
+    int written = snprintf(library_path, sizeof(library_path), "%s", argv[0]);
+    if (written < 0 || (size_t)written >= sizeof(library_path)) {
+        return 71;
+    }
+    char *separator = strrchr(library_path, '/');
+    if (separator == NULL) {
+        return 72;
+    }
+    const char *library_name = "libcageforge_runtime.dylib";
+    size_t prefix_length = (size_t)(separator - library_path) + 1;
+    if (prefix_length + strlen(library_name) + 1 > sizeof(library_path)) {
+        return 72;
+    }
+    memcpy(separator + 1, library_name, strlen(library_name) + 1);
+    int descriptor = open(library_path, O_RDONLY);
+    if (descriptor < 0) {
+        return 73;
+    }
+    struct stat metadata;
+    if (fstat(descriptor, &metadata) != 0 || metadata.st_size <= 0) {
+        close(descriptor);
+        return 74;
+    }
+    void *mapping = mmap(NULL, (size_t)metadata.st_size, PROT_READ | PROT_EXEC,
+                         MAP_PRIVATE, descriptor, 0);
+    close(descriptor);
+    if (mapping == MAP_FAILED) {
+        return 75;
+    }
+    munmap(mapping, (size_t)metadata.st_size);
     puts(cageforge_runtime_message());
     return 0;
 }
