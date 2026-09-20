@@ -72,11 +72,6 @@ impl Drop for LaunchdTestJob {
 }
 
 fn context(workspace: &Path) -> PathResolutionContext {
-    let test_executable_root = std::env::current_exe()
-        .expect("test executable")
-        .parent()
-        .expect("test executable directory")
-        .to_path_buf();
     PathResolutionContext::new()
         .with_root(PathBuf::from("/"))
         .expect("root")
@@ -96,8 +91,22 @@ fn context(workspace: &Path) -> PathResolutionContext {
         .expect("slash tmp")
         .with_current_directory(workspace.to_path_buf())
         .expect("cwd")
-        .with_executable_root(test_executable_root)
-        .expect("test executable root")
+}
+
+fn context_for_command(workspace: &Path, program: &Path) -> PathResolutionContext {
+    let context = context(workspace);
+    let test_executable = std::env::current_exe().expect("test executable");
+    if program == test_executable {
+        return context
+            .with_executable_root(
+                test_executable
+                    .parent()
+                    .expect("test executable directory")
+                    .to_path_buf(),
+            )
+            .expect("test executable root");
+    }
+    context
 }
 
 #[test]
@@ -424,7 +433,8 @@ fn request_for(
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    (command, effective, context(workspace))
+    let context = context_for_command(workspace, Path::new(command.command().program()));
+    (command, effective, context)
 }
 
 fn network_request(
@@ -458,7 +468,9 @@ fn network_request(
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    (command, effective, context(workspace))
+    let executable = PathBuf::from(std::env::current_exe().expect("test executable"));
+    let context = context_for_command(workspace, &executable);
+    (command, effective, context)
 }
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
@@ -590,7 +602,9 @@ fn unix_network_request(
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    (command, effective, context(workspace))
+    let executable = PathBuf::from(std::env::current_exe().expect("test executable"));
+    let context = context_for_command(workspace, &executable);
+    (command, effective, context)
 }
 
 fn proxy_endpoint(value: &str) -> SocketAddr {
@@ -2010,7 +2024,7 @@ fn successful_wait_terminates_descendants_that_change_group_or_session() {
         let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
         let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
             .expect("compose policy");
-        let context = context(&root)
+        let context = context_for_command(&root, &executable)
             .with_minimal_path(executable.clone())
             .expect("fixture runtime path");
         let command = CommandRequest::new(
