@@ -154,6 +154,31 @@ pub enum MacosFilesystemError {
         /// The missing path.
         path: PathBuf,
     },
+    /// A configured executable runtime root was not present at preflight.
+    #[error("configured executable runtime root is missing: {path:?}")]
+    ExecutableRootMissing {
+        /// The missing runtime root.
+        path: PathBuf,
+    },
+    /// A configured executable runtime root was not a directory.
+    #[error("configured executable runtime root is not a directory: {path:?}")]
+    ExecutableRootNotDirectory {
+        /// The rejected runtime root.
+        path: PathBuf,
+    },
+    /// A configured executable runtime root was not granted read or write
+    /// access by the effective filesystem policy.
+    #[error("configured executable runtime root is not readable: {path:?}")]
+    ExecutableRootNotReadable {
+        /// The runtime root without an effective read grant.
+        path: PathBuf,
+    },
+    /// A configured executable runtime root was not an absolute safe path.
+    #[error("configured executable runtime root is not an absolute safe path: {path:?}")]
+    InvalidExecutableRoot {
+        /// The rejected runtime root.
+        path: PathBuf,
+    },
     /// The backend could not inspect a path.
     #[error("failed to inspect filesystem scope {path:?}: {source}")]
     Metadata {

@@ -368,6 +368,11 @@ impl ProfileBuilder {
                 plan.write_denied_paths(),
             )?;
         }
+        self.add_executable_roots(
+            plan.executable_roots(),
+            plan.denied_paths(),
+            plan.denied_globs(),
+        )?;
         self.add_denied_glob_rules(plan.denied_globs())?;
         self.add_writable_root_anchor_denies(plan.write_roots());
         self.add_protected_ancestor_denies(plan)?;
@@ -391,6 +396,39 @@ impl ProfileBuilder {
                 "(deny file-write-unlink (subpath (param \"{name}\")))\n"
             ));
         }
+        Ok(())
+    }
+
+    fn add_executable_roots(
+        &mut self,
+        roots: &[PathBuf],
+        denied_paths: &[PathBuf],
+        denied_globs: &[String],
+    ) -> Result<(), SeatbeltProfileError> {
+        if roots.is_empty() {
+            return Ok(());
+        }
+        self.policy.push_str("\n(allow file-map-executable\n");
+        for (index, path) in roots.iter().enumerate() {
+            let name = format!("EXECUTABLE_ROOT_{index}");
+            self.add_definition(name.clone(), path.clone())?;
+            let mut requirements = vec![format!("(subpath (param \"{name}\"))")];
+            for (denied_index, denied) in denied_paths.iter().enumerate() {
+                if is_within(denied, path) {
+                    self.push_path_exclusion(&mut requirements, "DENIED_PATH", denied_index);
+                }
+            }
+            for pattern in denied_globs {
+                let regex = glob_to_seatbelt_regex(pattern);
+                requirements.push(format!(
+                    r#"(require-not (regex #"{}"))"#,
+                    escape_regex_literal(&regex)
+                ));
+            }
+            self.policy
+                .push_str(&format!("  (require-all {})\n", requirements.join(" ")));
+        }
+        self.policy.push_str(")\n");
         Ok(())
     }
 

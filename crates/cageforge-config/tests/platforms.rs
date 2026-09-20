@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use cageforge_config::Config;
+use cageforge_config::{Config, ConfigError};
 use cageforge_permissions::PlatformId;
 use cageforge_permissions::{ApprovalPersistence, PermissionMode};
 
@@ -185,4 +185,44 @@ named_pipes = ["\\\\.\\pipe\\windows-service"]
             .named_pipe()
             .is_some()
     );
+}
+
+#[test]
+fn macos_runtime_roots_are_selected_only_by_the_macos_overlay() {
+    let config = Config::from_toml(
+        r#"
+default_profile = "tool"
+
+[profiles.tool.platforms.macos.runtime]
+executable_roots = ["/opt/example-runtime"]
+"#,
+    )
+    .expect("runtime-root configuration");
+
+    assert_eq!(
+        config
+            .resolve_default_for_platform(PlatformId::Macos)
+            .expect("macOS profile")
+            .executable_roots(),
+        &[std::path::PathBuf::from("/opt/example-runtime")]
+    );
+    assert!(
+        config
+            .resolve_default_for_platform(PlatformId::Linux)
+            .expect("Linux profile")
+            .executable_roots()
+            .is_empty()
+    );
+}
+
+#[test]
+fn runtime_roots_require_absolute_unique_safe_paths() {
+    for source in [
+        "[profiles.tool.runtime]\nexecutable_roots = [\"runtime\"]\n",
+        "[profiles.tool.runtime]\nexecutable_roots = [\"/opt/../runtime\"]\n",
+        "[profiles.tool.runtime]\nexecutable_roots = [\"/opt/runtime\", \"/opt/runtime/\"]\n",
+    ] {
+        let error = Config::from_toml(source).expect_err("unsafe runtime root must be rejected");
+        assert!(matches!(error, ConfigError::InvalidValue { .. }));
+    }
 }

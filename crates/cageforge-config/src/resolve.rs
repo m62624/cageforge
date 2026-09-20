@@ -12,7 +12,7 @@ use crate::error::{ConfigError, invalid_value};
 use crate::merge::{
     MergedProfile, ProfileMerger, domain_rule_key, environment_filter_key, filesystem_rule_key,
 };
-use crate::model::{RawApproval, RawConfig, RawProfile};
+use crate::model::{RawApproval, RawConfig, RawProfile, RawRuntime};
 use cageforge_command::{CommandRequest, EnvironmentNameKey};
 use cageforge_network_proxy::GatewayConfig;
 use cageforge_path::{NativePathKey, contains_parent_traversal};
@@ -33,6 +33,7 @@ pub struct Config {
 pub struct ResolvedProfile {
     description: Option<String>,
     workspace_roots: Vec<PathBuf>,
+    executable_roots: Vec<PathBuf>,
     policy: SandboxPolicy,
     command: Option<CommandRequest>,
     network_gateway: GatewayConfig,
@@ -114,10 +115,16 @@ impl Config {
             .into_iter()
             .filter_map(|(path, enabled)| enabled.then_some(PathBuf::from(path)))
             .collect();
+        let executable_roots = merged
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.executable_roots.iter().map(PathBuf::from).collect())
+            .unwrap_or_default();
         let approval = build_approval(merged.approval.as_ref(), name)?;
         Ok(ResolvedProfile {
             description: merged.description,
             workspace_roots,
+            executable_roots,
             policy,
             command,
             network_gateway,
@@ -237,6 +244,12 @@ impl ResolvedProfile {
         &self.workspace_roots
     }
 
+    /// Returns absolute runtime roots whose executable files may be mapped by
+    /// a supporting native backend.
+    pub fn executable_roots(&self) -> &[PathBuf] {
+        &self.executable_roots
+    }
+
     /// Returns the resolved sandbox policy.
     pub fn policy(&self) -> &SandboxPolicy {
         &self.policy
@@ -280,8 +293,10 @@ fn validate_raw_config(config: &RawConfig) -> Result<(), ConfigError> {
         validate_profile_name(name)?;
         validate_profile_policy_duplicates(name, profile)?;
         validate_approval(name, profile.approval.as_ref())?;
+        validate_runtime(name, profile.runtime.as_ref())?;
         for overlay in profile.platforms.values() {
             validate_approval(name, overlay.approval.as_ref())?;
+            validate_runtime(name, overlay.runtime.as_ref())?;
         }
         let mut roots = HashSet::with_capacity(profile.workspace_roots.len());
         for root in profile.workspace_roots.keys() {
@@ -475,6 +490,52 @@ fn validate_workspace_root(profile: &str, root: &str) -> Result<(), ConfigError>
             "workspace_roots",
             "path must not contain parent traversal",
         ));
+    }
+    Ok(())
+}
+
+fn validate_runtime(profile: &str, runtime: Option<&RawRuntime>) -> Result<(), ConfigError> {
+    let Some(runtime) = runtime else {
+        return Ok(());
+    };
+    let mut roots = HashSet::with_capacity(runtime.executable_roots.len());
+    for root in &runtime.executable_roots {
+        if root.is_empty() {
+            return Err(invalid_value(
+                profile,
+                "runtime.executable_roots",
+                "path must not be empty",
+            ));
+        }
+        if root.contains('\0') {
+            return Err(invalid_value(
+                profile,
+                "runtime.executable_roots",
+                "path must not contain a NUL character",
+            ));
+        }
+        let path = Path::new(root);
+        if !path.is_absolute() {
+            return Err(invalid_value(
+                profile,
+                "runtime.executable_roots",
+                format!("path must be absolute: {root:?}"),
+            ));
+        }
+        if contains_parent_traversal(path) {
+            return Err(invalid_value(
+                profile,
+                "runtime.executable_roots",
+                format!("path must not contain parent traversal: {root:?}"),
+            ));
+        }
+        if !roots.insert(NativePathKey::new(path)) {
+            return Err(invalid_value(
+                profile,
+                "runtime.executable_roots",
+                format!("duplicate path under native semantics: {root:?}"),
+            ));
+        }
     }
     Ok(())
 }

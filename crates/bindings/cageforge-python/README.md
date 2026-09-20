@@ -153,6 +153,9 @@ paths, and Windows supplies the system root and `System32` paths. Use the
 separate files under
 [`cageforge-config/examples/runnable/`](https://github.com/m62624/cageforge/tree/main/crates/cageforge-config/examples/runnable/)
 when the command or path syntax is OS-specific.
+The macOS `runtime.executable_roots` overlay is passed through the same
+preflight request; its filesystem capabilities expose `map-executable`
+separately from `read`.
 
 ## Processes, asyncio, and errors
 

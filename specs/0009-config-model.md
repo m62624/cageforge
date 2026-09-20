@@ -107,6 +107,9 @@ milliseconds = 60000
 Filesystem rule targets are `absolute`, `workspace`, `workspace-root`, `root`,
 `minimal`, `tmpdir`, `slash-tmp`, `absolute-glob`, and `workspace-glob`.
 Absolute and workspace paths are still validated by `cageforge-policy`.
+macOS runtime mapping is an additional explicit `runtime.executable_roots`
+declaration described in [Specification 0024](0024-macos-executable-runtime-roots.md);
+it is not implied by a readable filesystem rule.
 
 Network modes are `disabled`, `enabled`, and `external`. Domain and Unix
 socket defaults are `disabled`, `enabled`, or `restricted`.
@@ -235,6 +238,7 @@ The crate exposes:
 - `ResolvedProfile::policy` and `ResolvedProfile::command`;
 - `ResolvedProfile::network_gateway`;
 - `ResolvedProfile::description` and `ResolvedProfile::workspace_roots`;
+- `ResolvedProfile::executable_roots` for selected native runtime roots;
 - `config_schema_json` for editor and preflight tooling;
 - `ConfigError::diagnostic` for stable JSON-ready diagnostics with parser
   locations when available;

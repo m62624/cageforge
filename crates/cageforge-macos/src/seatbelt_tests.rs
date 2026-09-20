@@ -12,6 +12,7 @@ fn filesystem_plan(denied_path: &str) -> MacosFilesystemPlan {
     MacosFilesystemPlan {
         read_roots: vec![PathBuf::from("/workspace")],
         write_roots: vec![PathBuf::from("/workspace")],
+        executable_roots: Vec::new(),
         denied_paths: vec![PathBuf::from(denied_path)],
         write_denied_paths: vec![PathBuf::from("/workspace/readonly")],
         denied_globs: vec![

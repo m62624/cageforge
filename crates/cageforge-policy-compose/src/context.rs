@@ -66,6 +66,11 @@ impl EffectivePathContext {
         self.context.minimal_paths()
     }
 
+    /// Returns runtime roots retained for native executable mapping.
+    pub fn executable_roots(&self) -> &[PathBuf] {
+        self.context.executable_roots()
+    }
+
     /// Returns the platform temporary directory, if one was supplied.
     pub fn tmpdir(&self) -> Option<&std::path::Path> {
         self.context.tmpdir()

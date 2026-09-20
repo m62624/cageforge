@@ -19,7 +19,7 @@ use cageforge_policy::{DomainAccess, DomainRule, PathPattern, PathSelector};
 use crate::model::{
     RawApproval, RawCommand, RawEnvironment, RawFilesystem, RawFilesystemMode, RawFilesystemRule,
     RawFilesystemTarget, RawGatewayConfig, RawLocalIpc, RawNetwork, RawNetworkMode,
-    RawPlatformProfile, RawProfile, RawStdio, RawTimeout,
+    RawPlatformProfile, RawProfile, RawRuntime, RawStdio, RawTimeout,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -31,6 +31,7 @@ pub(crate) struct MergedProfile {
     pub(crate) local_ipc: Option<RawLocalIpc>,
     pub(crate) command: Option<RawCommand>,
     pub(crate) approval: Option<RawApproval>,
+    pub(crate) runtime: Option<RawRuntime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,6 +73,7 @@ pub(crate) struct ProfileMerger {
     unix_sockets: HashMap<NativePathKey, usize>,
     local_ipc_unix_sockets: HashMap<NativePathKey, usize>,
     local_ipc_named_pipes: HashMap<String, usize>,
+    executable_roots: HashMap<NativePathKey, usize>,
     environment_filters: HashMap<EnvironmentFilterKey, String>,
     environment_overrides: BTreeMap<EnvironmentNameKey, (String, Option<String>)>,
 }
@@ -94,6 +96,9 @@ impl ProfileMerger {
         }
         if let Some(approval) = &profile.approval {
             self.merge_approval(approval);
+        }
+        if let Some(runtime) = &profile.runtime {
+            self.merge_runtime(runtime);
         }
         if let Some(platform) = platform
             && let Some(overlay) = profile.platforms.get(&platform)
@@ -121,6 +126,23 @@ impl ProfileMerger {
         }
         if let Some(approval) = &overlay.approval {
             self.merge_approval(approval);
+        }
+        if let Some(runtime) = &overlay.runtime {
+            self.merge_runtime(runtime);
+        }
+    }
+
+    fn merge_runtime(&mut self, child: &RawRuntime) {
+        let merged = self.merged.runtime.get_or_insert_with(RawRuntime::default);
+        for path in &child.executable_roots {
+            let key = NativePathKey::new(Path::new(path));
+            if let Some(&index) = self.executable_roots.get(&key) {
+                merged.executable_roots[index] = path.clone();
+            } else {
+                self.executable_roots
+                    .insert(key, merged.executable_roots.len());
+                merged.executable_roots.push(path.clone());
+            }
         }
     }
 

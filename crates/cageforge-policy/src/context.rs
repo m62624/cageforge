@@ -25,6 +25,8 @@ pub struct PathResolutionContext {
     workspace_root_keys: HashSet<NativePathKey>,
     minimal_paths: Vec<PathBuf>,
     minimal_path_keys: HashSet<NativePathKey>,
+    executable_roots: Vec<PathBuf>,
+    executable_root_keys: HashSet<NativePathKey>,
     tmpdir: Option<PathBuf>,
     slash_tmp: Option<PathBuf>,
     current_directory: Option<PathBuf>,
@@ -40,6 +42,8 @@ impl PathResolutionContext {
             workspace_root_keys: HashSet::new(),
             minimal_paths: Vec::new(),
             minimal_path_keys: HashSet::new(),
+            executable_roots: Vec::new(),
+            executable_root_keys: HashSet::new(),
             tmpdir: None,
             slash_tmp: None,
             current_directory: None,
@@ -73,6 +77,20 @@ impl PathResolutionContext {
         let path = validated_absolute(path.into())?;
         if self.minimal_path_keys.insert(NativePathKey::new(&path)) {
             self.minimal_paths.push(path);
+        }
+        Ok(self)
+    }
+
+    /// Adds one absolute runtime root whose executable files may be mapped by
+    /// a backend that supports this capability.
+    ///
+    /// This declaration is intentionally separate from readable filesystem
+    /// roots. Reading a runtime file does not by itself authorize the native
+    /// loader to map it executable.
+    pub fn with_executable_root(mut self, path: impl Into<PathBuf>) -> Result<Self, PolicyError> {
+        let path = validated_absolute(path.into())?;
+        if self.executable_root_keys.insert(NativePathKey::new(&path)) {
+            self.executable_roots.push(path);
         }
         Ok(self)
     }
@@ -112,6 +130,11 @@ impl PathResolutionContext {
     /// Returns the configured minimal runtime paths.
     pub fn minimal_paths(&self) -> &[PathBuf] {
         &self.minimal_paths
+    }
+
+    /// Returns runtime roots declared for native executable mapping.
+    pub fn executable_roots(&self) -> &[PathBuf] {
+        &self.executable_roots
     }
 
     /// Returns the configured platform temporary directory.

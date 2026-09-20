@@ -1,0 +1,26 @@
+# A macOS runtime-root example. Replace the placeholder root with the
+# directory that contains the executable and its runtime libraries.
+default_profile = "runtime"
+
+[profiles.runtime]
+workspace_roots = { "." = true }
+
+[profiles.runtime.filesystem]
+mode = "restricted"
+rules = [{ target = "workspace-root", access = "write" }]
+
+[profiles.runtime.network]
+mode = "disabled"
+
+[profiles.runtime.platforms.macos.command]
+program = "/tmp/cageforge-runtime-executable-root/echo"
+args = ["cageforge-runtime-root-smoke"]
+
+[profiles.runtime.platforms.macos.filesystem]
+rules = [
+  { target = "minimal", access = "read" },
+  { target = "absolute", path = "/tmp/cageforge-runtime-executable-root", access = "read" },
+]
+
+[profiles.runtime.platforms.macos.runtime]
+executable_roots = ["/tmp/cageforge-runtime-executable-root"]

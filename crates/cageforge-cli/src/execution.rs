@@ -147,7 +147,11 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
     let command = command_from_args(&profile, args.command)?;
     let current_directory = std::env::current_dir()?;
     let workspace_roots = resolve_workspace_roots(&current_directory, profile.workspace_roots())?;
-    let context = runtime_context(&current_directory, &workspace_roots)?;
+    let context = runtime_context(
+        &current_directory,
+        &workspace_roots,
+        profile.executable_roots(),
+    )?;
     let environment = command.environment().clone();
     let mut ceiling = cageforge::PolicyCeiling::new(profile.policy().clone(), environment.clone());
     if !workspace_roots.is_empty() {
@@ -494,6 +498,7 @@ fn resolve_workspace_roots(
 fn runtime_context(
     current_directory: &Path,
     workspace_roots: &[PathBuf],
+    executable_roots: &[PathBuf],
 ) -> Result<cageforge::PathResolutionContext, CliError> {
     let mut context = cageforge::PathResolutionContext::new()
         .with_root(platform_root(current_directory))?
@@ -517,6 +522,9 @@ fn runtime_context(
     }
     for root in workspace_roots {
         context = context.with_workspace_root(root.clone())?;
+    }
+    for root in executable_roots {
+        context = context.with_executable_root(root.clone())?;
     }
     Ok(context)
 }

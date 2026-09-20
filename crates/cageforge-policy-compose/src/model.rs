@@ -198,6 +198,11 @@ impl EffectiveSandbox {
                 .with_minimal_path(path.clone())
                 .map_err(|source| CompositionError::InvalidPathContext { source })?;
         }
+        for path in base.executable_roots() {
+            context = context
+                .with_executable_root(path.clone())
+                .map_err(|source| CompositionError::InvalidPathContext { source })?;
+        }
         if let Some(path) = base.tmpdir() {
             context = context
                 .with_tmpdir(path.to_path_buf())

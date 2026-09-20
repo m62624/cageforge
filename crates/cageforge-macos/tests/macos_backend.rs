@@ -7,6 +7,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
@@ -137,6 +138,112 @@ fn runnable_macos_profile_launches_through_the_native_backend_api() {
         "macOS runnable profile failed: {status:?}"
     );
     assert_eq!(stdout.trim(), "cageforge-macos-smoke");
+}
+
+struct RuntimeLaunchOutcome {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn launch_runtime_profile(source: &str, workspace: &Path) -> Result<RuntimeLaunchOutcome, String> {
+    let profile = Config::from_toml(source)
+        .map_err(|error| error.to_string())?
+        .resolve_default_for_platform(PlatformId::Macos)
+        .map_err(|error| error.to_string())?;
+    let command = profile
+        .command()
+        .cloned()
+        .ok_or_else(|| "runtime example must provide a command".to_owned())?
+        .with_working_directory(workspace.to_path_buf())
+        .map_err(|error| error.to_string())?;
+    let environment = command.environment().clone();
+    let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
+    let effective = compose(CompositionRequest::new(
+        profile.policy(),
+        &environment,
+        &ceiling,
+    ))
+    .map_err(|error| error.to_string())?;
+    let mut runtime_context = context(workspace);
+    for root in profile.executable_roots() {
+        runtime_context = runtime_context
+            .with_executable_root(root.clone())
+            .map_err(|error| error.to_string())?;
+    }
+    let backend = backend();
+    let prepared = backend
+        .prepare(BackendRequest::new(&command, &effective), &runtime_context)
+        .map_err(|error| error.to_string())?;
+    let mut child = backend.spawn(prepared).map_err(|error| error.to_string())?;
+    let status = child.wait().map_err(|error| error.to_string())?;
+    let mut stdout = String::new();
+    child
+        .stdout()
+        .ok_or_else(|| "runtime example did not provide stdout".to_owned())?
+        .read_to_string(&mut stdout)
+        .map_err(|error| error.to_string())?;
+    let mut stderr = String::new();
+    child
+        .stderr()
+        .ok_or_else(|| "runtime example did not provide stderr".to_owned())?
+        .read_to_string(&mut stderr)
+        .map_err(|error| error.to_string())?;
+    Ok(RuntimeLaunchOutcome {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+#[test]
+fn custom_macos_runtime_requires_explicit_executable_mapping() {
+    const PLACEHOLDER: &str = "/tmp/cageforge-runtime-executable-root";
+    let template_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cageforge-config/examples/runnable/macos/runtime-executable.toml");
+    let template = fs::read_to_string(&template_path).expect("runtime-root example");
+    let temporary = TempDir::new().expect("runtime-root workspace");
+    let runtime_root = temporary.path().join("runtime");
+    let workspace = temporary.path().join("workspace");
+    fs::create_dir(&runtime_root).expect("runtime root");
+    fs::create_dir(&workspace).expect("runtime workspace");
+
+    let source_executable = if Path::new("/bin/echo").is_file() {
+        "/bin/echo"
+    } else {
+        "/usr/bin/echo"
+    };
+    let runtime_executable = runtime_root.join("echo");
+    fs::copy(source_executable, &runtime_executable).expect("copy Mach-O runtime helper");
+    fs::set_permissions(&runtime_executable, fs::Permissions::from_mode(0o755))
+        .expect("make runtime helper executable");
+
+    let runtime_root_text = runtime_root.to_str().expect("UTF-8 runtime root");
+    let source = template.replace(PLACEHOLDER, runtime_root_text);
+    let runtime_section = format!(
+        "\n[profiles.runtime.platforms.macos.runtime]\nexecutable_roots = [\"{runtime_root_text}\"]\n"
+    );
+    let without_mapping = source.replace(&runtime_section, "");
+
+    let denied = launch_runtime_profile(&without_mapping, &workspace);
+    match denied {
+        Ok(outcome) => assert!(
+            !outcome.status.success(),
+            "runtime launched without file-map-executable: stdout={:?} stderr={:?}",
+            outcome.stdout,
+            outcome.stderr
+        ),
+        Err(error) => assert!(!error.is_empty(), "empty failure without mapping: {error}"),
+    }
+
+    let allowed = launch_runtime_profile(&source, &workspace).expect("mapped runtime launch");
+    assert!(
+        allowed.status.success(),
+        "mapped runtime failed: stdout={:?} stderr={:?}",
+        allowed.stdout,
+        allowed.stderr
+    );
+    assert_eq!(allowed.stdout.trim(), "cageforge-runtime-root-smoke");
 }
 
 fn backend() -> MacosBackend {

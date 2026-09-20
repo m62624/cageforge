@@ -19,6 +19,7 @@ impl fmt::Display for BackendCapability {
             Self::FilesystemUnrestricted => "unrestricted filesystem execution",
             Self::FilesystemExternal => "external filesystem enforcement",
             Self::FilesystemScopes => "filesystem scope resolution, including workspace roots",
+            Self::FilesystemExecutableMapping => "validated executable runtime-root mapping",
             Self::FilesystemAbsoluteScopes => "absolute filesystem scope resolution",
             Self::FilesystemWorkspaceScopes => "workspace-root filesystem scope resolution",
             Self::FilesystemRootScopes => "system-root filesystem scope resolution",

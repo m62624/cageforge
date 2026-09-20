@@ -155,6 +155,7 @@ fn all_capabilities() -> BackendCapabilities {
         BackendCapability::FilesystemRestricted,
         BackendCapability::FilesystemUnrestricted,
         BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemExecutableMapping,
         BackendCapability::FilesystemAbsoluteScopes,
         BackendCapability::FilesystemWorkspaceScopes,
         BackendCapability::FilesystemRootScopes,
@@ -350,6 +351,32 @@ fn reports_the_first_missing_capability_deterministically() {
 }
 
 #[test]
+fn executable_mapping_requires_an_advertised_native_capability() {
+    let (command, sandbox) = effective_request();
+    let backend = TestBackend {
+        capabilities: all_capabilities()
+            .iter()
+            .copied()
+            .filter(|capability| *capability != BackendCapability::FilesystemExecutableMapping)
+            .collect(),
+    };
+    let context = workspace_context()
+        .with_executable_root(native_path("/runtime"))
+        .unwrap();
+
+    let error = BackendRequest::new(&command, &sandbox)
+        .prepare_for(&backend, &context)
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        BackendContractError::UnsupportedCapability {
+            capability: BackendCapability::FilesystemExecutableMapping,
+        }
+    );
+}
+
+#[test]
 fn every_capability_has_a_human_readable_description() {
     for capability in [
         BackendCapability::CommandExecution,
@@ -364,6 +391,7 @@ fn every_capability_has_a_human_readable_description() {
         BackendCapability::FilesystemUnrestricted,
         BackendCapability::FilesystemExternal,
         BackendCapability::FilesystemScopes,
+        BackendCapability::FilesystemExecutableMapping,
         BackendCapability::FilesystemAbsoluteScopes,
         BackendCapability::FilesystemWorkspaceScopes,
         BackendCapability::FilesystemRootScopes,

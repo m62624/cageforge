@@ -47,11 +47,24 @@ let request = PermissionRequest::new(
 let grant = GrantAuthority::new().approve(&request);
 ```
 
+Filesystem capabilities use the stable operation labels `read`, `write`,
+`deny`, and `map-executable`. The last one is deliberately separate from
+`read`: a native runtime may be readable without being eligible for executable
+memory mapping. A request that contains `map-executable` must also contain the
+corresponding read capability when the native policy is restricted.
+
 `PermissionRequest` is descriptive input. `PermissionGrant` has private
 fields and can only be created by `GrantAuthority`; callers cannot forge a
 grant by deserializing or reconstructing its representation. A grant is bound
 to the complete request identity and can be narrowed to a subset of the
 requested capabilities before launch.
+
+The request is normally produced from the application's TOML profile by the
+facade or a binding. Its JSON representation is an optional transport format
+for a trusted host; it is not a second policy file. A persistent
+`PermissionGrant` is stored in `permissions.json` and can be reused only for
+the same request identity and capabilities. A changed profile is resolved
+again and produces a new request rather than widening an existing grant.
 
 `PermissionRequest` is intentionally different from a launch request. A
 `CommandRequest` describes the executable and its argv, while a backend
@@ -69,6 +82,11 @@ The host performs this sequence before starting a process:
 
 There is no permission escalation inside a running process. A request that
 cannot be approved before launch is rejected with a typed error.
+
+For a second command that needs more access, select a profile with the
+additional rules and create a new request and grant for that launch. The
+existing sandbox keeps its original policy; `PermissionStore` may reuse a
+matching persistent grant later, but it never widens a running process.
 
 `PermissionScope::Launch` and `PermissionScope::Session` remain in memory.
 `PermissionScope::Persistent` may be written to the store only after the

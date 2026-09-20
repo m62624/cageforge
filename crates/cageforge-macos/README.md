@@ -117,6 +117,15 @@ the policy to `root`.
 The runnable example is
 [`runnable/macos/smoke.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/macos/smoke.toml).
 
+For a native runtime outside the fixed system baseline, readable files and
+executable mapping are separate. Add a read rule for the runtime directory and
+declare the same directory under `platforms.macos.runtime.executable_roots`;
+the backend then emits a narrow Seatbelt `file-map-executable` allowlist. The
+complete runnable example is
+[`runnable/macos/runtime-executable.toml`](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/runnable/macos/runtime-executable.toml),
+and the full validation rules are in the
+[configuration guide](https://github.com/m62624/cageforge/blob/main/crates/cageforge-config/examples/CONFIGURATION_GUIDE.md#macos-executable-runtime-roots).
+
 Compose the portable values first, provide the runtime paths used by symbolic
 selectors, then prepare and spawn through the same backend instance:
 
