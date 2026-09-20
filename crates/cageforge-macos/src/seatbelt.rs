@@ -150,6 +150,10 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (sysctl-name "kern.osvariant_status")
   (sysctl-name "kern.osversion")
   (sysctl-name "kern.secure_kernel")
+  ; Python's ProcessPoolExecutor queries this limit through sysconf.
+  (sysctl-name "kern.sysv.semmns")
+  (sysctl-name "kern.bootargs")
+  (sysctl-name "security.mac.lockdown_mode_state")
   (sysctl-name "kern.usrstack64")
   (sysctl-name "kern.version")
   (sysctl-name "sysctl.proc_cputype")
@@ -206,6 +210,11 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (literal "/System/Volumes")
   (literal "/System/Volumes/Data")
   (literal "/System/Volumes/Data/Users"))
+(allow file-read-metadata file-test-existence
+  (literal "/System/Cryptexes")
+  (literal "/System/Cryptexes/OS")
+  (literal "/Users")
+  (regex #"^/Users/[^/]+$"))
 (allow file-read* file-test-existence
   (literal "/System/Volumes/Data")
   (literal "/System/Volumes/Data/Users")
@@ -368,6 +377,12 @@ impl ProfileBuilder {
                 plan.denied_globs(),
                 plan.write_denied_paths(),
             )?;
+            self.add_root_metadata_ancestors(
+                plan.read_roots()
+                    .iter()
+                    .map(PathBuf::as_path)
+                    .chain(plan.executable_roots().iter().map(PathBuf::as_path)),
+            )?;
         }
         self.add_executable_roots(
             plan.executable_roots(),
@@ -428,6 +443,31 @@ impl ProfileBuilder {
             }
             self.policy
                 .push_str(&format!("  (require-all {})\n", requirements.join(" ")));
+        }
+        self.policy.push_str(")\n");
+        Ok(())
+    }
+
+    fn add_root_metadata_ancestors<'path>(
+        &mut self,
+        roots: impl IntoIterator<Item = &'path Path>,
+    ) -> Result<(), SeatbeltProfileError> {
+        let ancestors = roots
+            .into_iter()
+            .flat_map(Path::ancestors)
+            .map(Path::to_path_buf)
+            .collect::<BTreeSet<_>>();
+        if ancestors.is_empty() {
+            return Ok(());
+        }
+
+        self.policy
+            .push_str("\n(allow file-read-metadata file-test-existence\n");
+        for (index, ancestor) in ancestors.into_iter().enumerate() {
+            let name = format!("ROOT_METADATA_ANCESTOR_{index}");
+            self.add_definition(name.clone(), ancestor)?;
+            self.policy
+                .push_str(&format!("  (literal (param \"{name}\"))\n"));
         }
         self.policy.push_str(")\n");
         Ok(())
