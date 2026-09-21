@@ -4,26 +4,12 @@
 
 use std::error::Error;
 
+use cageforge_backend_api::{BackendDiagnostic, BackendDiagnosticMetadata};
+
 use crate::DynSandbox;
 
-/// Stable source-field metadata for a native launch failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeDiagnosticMetadata {
-    code: &'static str,
-    field: Option<&'static str>,
-}
-
-impl NativeDiagnosticMetadata {
-    /// Returns the stable native diagnostic code.
-    pub const fn code(self) -> &'static str {
-        self.code
-    }
-
-    /// Returns the logical configuration field associated with the failure.
-    pub const fn field(self) -> Option<&'static str> {
-        self.field
-    }
-}
+/// Backwards-compatible facade name for the shared backend diagnostic type.
+pub type NativeDiagnosticMetadata = BackendDiagnosticMetadata;
 
 /// Configuration of the backend selected for the compilation target.
 #[cfg(target_os = "linux")]
@@ -55,77 +41,47 @@ pub enum NativeSandboxError {
 
 /// Classifies a typed native failure for source-aware adapters.
 ///
-/// This function only selects stable presentation metadata. The original
-/// error remains the typed source error and must be retained by the caller.
+/// Target-specific classification remains in the selected native backend.
+/// This facade function only dispatches to that backend; the original error
+/// remains the typed source error and must be retained by the caller.
 pub fn native_diagnostic_metadata(error: &(dyn Error + 'static)) -> NativeDiagnosticMetadata {
     #[cfg(target_os = "macos")]
     {
-        if let Some(native) = find_error::<cageforge_macos::MacosFilesystemError>(error) {
-            return match native {
-                cageforge_macos::MacosFilesystemError::ProgramRequiresRead { .. } => {
-                    NativeDiagnosticMetadata {
-                        code: "macos_program_requires_read",
-                        field: Some("command.program"),
-                    }
-                }
-                cageforge_macos::MacosFilesystemError::ProgramRequiresExecutableRoot { .. } => {
-                    NativeDiagnosticMetadata {
-                        code: "macos_program_requires_executable_root",
-                        field: Some("runtime.executable_roots"),
-                    }
-                }
-                cageforge_macos::MacosFilesystemError::ExecutableRootMissing { .. }
-                | cageforge_macos::MacosFilesystemError::ExecutableRootNotDirectory { .. }
-                | cageforge_macos::MacosFilesystemError::ExecutableRootNotReadable { .. }
-                | cageforge_macos::MacosFilesystemError::InvalidExecutableRoot { .. } => {
-                    NativeDiagnosticMetadata {
-                        code: "macos_invalid_executable_root",
-                        field: Some("runtime.executable_roots"),
-                    }
-                }
-                _ => NativeDiagnosticMetadata {
-                    code: "macos_native_error",
-                    field: None,
-                },
-            };
-        }
-        NativeDiagnosticMetadata {
-            code: "macos_native_error",
-            field: None,
-        }
+        find_error_source::<cageforge_macos::MacosBackendError>(error)
+            .map(BackendDiagnostic::diagnostic_metadata)
+            .or_else(|| {
+                find_error_source::<cageforge_macos::MacosFilesystemError>(error)
+                    .map(BackendDiagnostic::diagnostic_metadata)
+            })
+            .unwrap_or_else(|| BackendDiagnosticMetadata::new("macos_native_error", None))
     }
 
     #[cfg(target_os = "linux")]
     {
-        let _ = error;
-        NativeDiagnosticMetadata {
-            code: "linux_native_error",
-            field: None,
-        }
+        find_error_source::<cageforge_linux::LinuxBackendError>(error)
+            .map(BackendDiagnostic::diagnostic_metadata)
+            .unwrap_or_else(|| BackendDiagnosticMetadata::new("linux_native_error", None))
     }
+
     #[cfg(target_os = "windows")]
     {
-        let _ = error;
-        NativeDiagnosticMetadata {
-            code: "windows_native_error",
-            field: None,
-        }
+        find_error_source::<cageforge_windows::WindowsBackendError>(error)
+            .map(BackendDiagnostic::diagnostic_metadata)
+            .unwrap_or_else(|| BackendDiagnosticMetadata::new("windows_native_error", None))
     }
+
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = error;
-        NativeDiagnosticMetadata {
-            code: "native_error",
-            field: None,
-        }
+        BackendDiagnosticMetadata::new("native_error", None)
     }
 }
 
-#[cfg(target_os = "macos")]
-fn find_error<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a T> {
+fn find_error_source<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a T> {
     if let Some(value) = error.downcast_ref::<T>() {
         return Some(value);
     }
+
     let mut source = error.source();
     while let Some(value) = source {
         if let Some(value) = value.downcast_ref::<T>() {

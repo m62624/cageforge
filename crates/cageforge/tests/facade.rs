@@ -28,7 +28,16 @@ fn native_diagnostic_metadata_uses_the_host_platform_code() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_native_diagnostic_metadata_preserves_runtime_fields() {
+    use cageforge::BackendDiagnostic;
     use std::path::PathBuf;
+
+    let direct = cageforge::MacosFilesystemError::ProgramRequiresRead {
+        path: PathBuf::from("/opt/tool/bin/runner"),
+    };
+    assert_eq!(
+        direct.diagnostic_metadata().code(),
+        "macos_program_requires_read"
+    );
 
     let cases: &[(Box<dyn std::error::Error>, &str, Option<&str>)] = &[
         (

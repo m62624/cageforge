@@ -18,6 +18,7 @@ mod acl_contract;
 mod backend;
 mod capability;
 mod config;
+mod diagnostic;
 mod error;
 mod filesystem;
 mod firewall_contract;

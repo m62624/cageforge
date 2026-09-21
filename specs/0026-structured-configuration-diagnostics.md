@@ -44,6 +44,15 @@ duplicate the Seatbelt baseline. The CLI and host-language adapters may wrap
 the typed native cause in a source-aware diagnostic, but must retain the
 original typed error for programmatic inspection.
 
+The portable `cageforge-backend-api` crate defines the minimal
+`BackendDiagnostic` trait and `BackendDiagnosticMetadata` value used by
+adapters. Each native backend implements that trait for its own public typed
+errors and owns the mapping of platform-specific variants to stable codes and
+portable fields. A caller using a native backend crate directly can inspect
+the complete OS-specific error and optionally call the trait method; the
+facade adds only source-chain dispatch for callers whose errors are already
+wrapped behind `dyn Error`.
+
 ## Foreign bindings
 
 Python raises `CageforgeConfigurationError` for config failures and

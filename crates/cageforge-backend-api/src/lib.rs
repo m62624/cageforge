@@ -18,6 +18,7 @@
 #![deny(missing_docs)]
 
 mod capability;
+mod diagnostic;
 mod execution;
 mod requirements;
 
@@ -41,6 +42,7 @@ use cageforge_policy_compose::{
 };
 mod model;
 
+pub use diagnostic::{BackendDiagnostic, BackendDiagnosticMetadata};
 pub use execution::{DynSandbox, Sandbox, SandboxChild, SandboxExecutionError};
 
 pub use model::{
