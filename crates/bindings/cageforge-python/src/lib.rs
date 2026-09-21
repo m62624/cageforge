@@ -394,14 +394,15 @@ fn launch_error(error: impl ToString) -> PyErr {
 fn launch_diagnostic_error(
     source: &cageforge::ProfileSourceContext,
     command: &cageforge::CommandRequest,
-    error: impl ToString,
+    error: &(dyn std::error::Error + 'static),
 ) -> PyErr {
     let source = source.clone().with_command(display_command(command));
+    let metadata = cageforge::native_diagnostic_metadata(error);
     let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
         &source,
-        "native_launch_error",
+        metadata.code(),
         error.to_string(),
-        Some("command.program"),
+        metadata.field(),
     );
     let exception = CageforgeLaunchError::new_err(diagnostic.render_human());
     Python::attach(|py| {
@@ -1268,7 +1269,7 @@ impl Cageforge {
             let mut child = runtime
                 .backend
                 .launch(backend_request, &runtime.context)
-                .map_err(|error| launch_diagnostic_error(&source, &request, error))?;
+                .map_err(|error| launch_diagnostic_error(&source, &request, &error))?;
             Ok::<_, PyErr>(ChildState {
                 stdin: Mutex::new(child.take_stdin()),
                 stdout: Mutex::new(child.take_stdout()),
@@ -1368,7 +1369,7 @@ impl Cageforge {
             let mut child = runtime
                 .backend
                 .launch(backend_request, &context)
-                .map_err(|error| launch_diagnostic_error(&source, &request, error))?;
+                .map_err(|error| launch_diagnostic_error(&source, &request, &error))?;
             Ok::<_, PyErr>(ChildState {
                 stdin: Mutex::new(child.take_stdin()),
                 stdout: Mutex::new(child.take_stdout()),

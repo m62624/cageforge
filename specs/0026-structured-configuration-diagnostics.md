@@ -46,19 +46,22 @@ original typed error for programmatic inspection.
 
 ## Foreign bindings
 
-Python raises `CageforgeConfigurationError` with stable attributes:
-`code`, `config_path`, `profile`, `platform`, `field`, `line`, and `column`.
-Java raises `CageforgeConfigurationException` with the equivalent properties.
-Bindings must preserve the error category and nested native cause, never let a
-Rust panic cross FFI, and never use raw stderr or a sentinel success value as
-the public error protocol.
+Python raises `CageforgeConfigurationError` for config failures and
+`CageforgeLaunchError` for source-aware native launch failures. Java raises
+`CageforgeConfigurationException` and `CageforgeLaunchException` respectively.
+Both pairs expose the stable attributes `code`, `config_path`, `profile`,
+`platform`, `field`, `line`, `column`, and `command` where available.
+Bindings must preserve the error category and nested native cause, use the same
+platform-specific native diagnostic codes and logical fields as the CLI, never
+let a Rust panic cross FFI, and never use raw stderr or a sentinel success value
+as the public error protocol.
 
 ## Verification
 
-Rust tests cover typed variants, source context, platform overlays, and native
-preflight failures. CLI snapshots cover generic native failures, missing
-filesystem read access, and missing executable-root declarations, including
+Rust tests cover typed variants, shared native-code classification, source
+context, platform overlays, and native preflight failures. CLI snapshots cover
+generic Linux/Windows failures and every macOS runtime/read variant, including
 the platform, command, profile, field, and source location. Python and Java
-tests verify the stable exception category and metadata. Native jobs remain
-responsible for executing the backend-specific checks on their actual
-operating system.
+tests verify the stable exception category and metadata; their launch adapters
+reuse the same native-code classifier. Native jobs remain responsible for
+executing the backend-specific checks on their actual operating system.

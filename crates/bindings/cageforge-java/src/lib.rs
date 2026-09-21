@@ -1310,13 +1310,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
             .backend
             .launch(backend_request, &runtime.context)
             .map_err(|error| {
-                BindingError::runtime(
-                    BindingErrorKind::Launch,
-                    &runtime.source,
-                    &request,
-                    "native_launch_error",
-                    error.to_string(),
-                )
+                BindingError::runtime(BindingErrorKind::Launch, &runtime.source, &request, &error)
             })?;
         let stdin = child.take_stdin();
         let stdout = child.take_stdout();
@@ -1370,8 +1364,7 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunchEscalated<'cal
                     BindingErrorKind::Escalation,
                     &runtime.source,
                     &request,
-                    "native_escalation_error",
-                    error.to_string(),
+                    &error,
                 )
             })?;
         Ok(Box::into_raw(Box::new(ChildState {

@@ -622,66 +622,17 @@ fn execute_native_inner(invocation: Invocation) -> Result<u8, CliError> {
     any(target_os = "linux", target_os = "windows", target_os = "macos",)
 ))]
 fn enrich_native_error(source: cageforge::ProfileSourceContext, error: CliError) -> CliError {
-    let (code, field) = native_diagnostic_metadata(&error);
-    let diagnostic =
-        cageforge::ConfigDiagnostic::for_runtime_failure(&source, code, error.to_string(), field);
+    let metadata = cageforge::native_diagnostic_metadata(&error);
+    let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
+        &source,
+        metadata.code(),
+        error.to_string(),
+        metadata.field(),
+    );
     CliError::NativeDiagnostic {
         diagnostic: Box::new(diagnostic),
         source: Box::new(error),
     }
-}
-
-#[cfg(all(
-    feature = "config",
-    any(target_os = "linux", target_os = "windows", target_os = "macos",)
-))]
-fn native_diagnostic_metadata(error: &CliError) -> (&'static str, Option<&'static str>) {
-    #[cfg(target_os = "macos")]
-    if let Some(native) = find_error::<cageforge::MacosFilesystemError>(error) {
-        return match native {
-            cageforge::MacosFilesystemError::ProgramRequiresRead { .. } => {
-                ("macos_program_requires_read", Some("command.program"))
-            }
-            cageforge::MacosFilesystemError::ProgramRequiresExecutableRoot { .. } => (
-                "macos_program_requires_executable_root",
-                Some("runtime.executable_roots"),
-            ),
-            cageforge::MacosFilesystemError::ExecutableRootMissing { .. }
-            | cageforge::MacosFilesystemError::ExecutableRootNotDirectory { .. }
-            | cageforge::MacosFilesystemError::ExecutableRootNotReadable { .. }
-            | cageforge::MacosFilesystemError::InvalidExecutableRoot { .. } => (
-                "macos_invalid_executable_root",
-                Some("runtime.executable_roots"),
-            ),
-            _ => ("macos_native_error", None),
-        };
-    }
-
-    #[cfg(target_os = "linux")]
-    let code = "linux_native_error";
-    #[cfg(target_os = "windows")]
-    let code = "windows_native_error";
-    #[cfg(target_os = "macos")]
-    let code = "macos_native_error";
-    let _ = error;
-    (code, None)
-}
-
-#[cfg(all(feature = "config", target_os = "macos"))]
-fn find_error<'a, T: std::error::Error + 'static>(
-    error: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a T> {
-    if let Some(value) = error.downcast_ref::<T>() {
-        return Some(value);
-    }
-    let mut source = error.source();
-    while let Some(value) = source {
-        if let Some(value) = value.downcast_ref::<T>() {
-            return Some(value);
-        }
-        source = value.source();
-    }
-    None
 }
 
 #[cfg(all(

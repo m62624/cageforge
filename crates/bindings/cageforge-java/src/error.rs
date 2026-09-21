@@ -125,16 +125,15 @@ impl BindingDiagnostic {
     pub(crate) fn from_runtime(
         source: &cageforge::ProfileSourceContext,
         command: &cageforge::CommandRequest,
-        kind: &'static str,
-        message: impl Into<String>,
+        error: &(dyn std::error::Error + 'static),
     ) -> (Self, String) {
         let source = source.clone().with_command(display_command(command));
-        let message = message.into();
+        let metadata = cageforge::native_diagnostic_metadata(error);
         let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
             &source,
-            kind,
-            message,
-            Some("command.program"),
+            metadata.code(),
+            error.to_string(),
+            metadata.field(),
         );
         let location = diagnostic.location();
         (
@@ -200,11 +199,9 @@ impl BindingError {
         kind: BindingErrorKind,
         source: &cageforge::ProfileSourceContext,
         command: &cageforge::CommandRequest,
-        code: &'static str,
-        message: impl Into<String>,
+        error: &(dyn std::error::Error + 'static),
     ) -> Self {
-        let (diagnostic, rendered) =
-            BindingDiagnostic::from_runtime(source, command, code, message);
+        let (diagnostic, rendered) = BindingDiagnostic::from_runtime(source, command, error);
         Self {
             message: rendered,
             kind,
