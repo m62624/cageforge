@@ -622,13 +622,7 @@ fn execute_native_inner(invocation: Invocation) -> Result<u8, CliError> {
     any(target_os = "linux", target_os = "windows", target_os = "macos",)
 ))]
 fn enrich_native_error(source: cageforge::ProfileSourceContext, error: CliError) -> CliError {
-    let metadata = cageforge::native_diagnostic_metadata(&error);
-    let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
-        &source,
-        metadata.code(),
-        error.to_string(),
-        metadata.field(),
-    );
+    let diagnostic = cageforge::config_diagnostic_for_runtime_failure(&source, None, &error);
     CliError::NativeDiagnostic {
         diagnostic: Box::new(diagnostic),
         source: Box::new(error),

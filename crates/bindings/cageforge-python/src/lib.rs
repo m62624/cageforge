@@ -396,14 +396,9 @@ fn launch_diagnostic_error(
     command: &cageforge::CommandRequest,
     error: &(dyn std::error::Error + 'static),
 ) -> PyErr {
-    let source = source.clone().with_command(display_command(command));
-    let metadata = cageforge::native_diagnostic_metadata(error);
-    let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
-        &source,
-        metadata.code(),
-        error.to_string(),
-        metadata.field(),
-    );
+    let command = display_command(command);
+    let diagnostic =
+        cageforge::config_diagnostic_for_runtime_failure(source, Some(&command), error);
     let exception = CageforgeLaunchError::new_err(diagnostic.render_human());
     Python::attach(|py| {
         let value = exception.value(py);

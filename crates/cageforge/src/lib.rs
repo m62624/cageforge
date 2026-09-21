@@ -21,6 +21,8 @@
 mod native;
 mod preflight;
 
+#[cfg(feature = "config")]
+pub use native::config_diagnostic_for_runtime_failure;
 pub use native::{
     NativeDiagnosticMetadata, NativeSandboxError, native_diagnostic_metadata, native_sandbox,
 };

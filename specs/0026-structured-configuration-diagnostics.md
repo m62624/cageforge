@@ -33,6 +33,13 @@ semantic policy value. Native adapters use that metadata to attach the
 selected profile, effective command, logical field, and TOML line/column to a
 backend failure without making the backend parse TOML.
 
+When the facade is built with its `config` feature, Rust applications use
+`cageforge::config_diagnostic_for_runtime_failure` for the same combination.
+The helper accepts the retained `ProfileSourceContext`, an optional effective
+command, and the original typed native error. It does not replace that error;
+it only applies the backend-owned diagnostic metadata to the config-owned
+source context.
+
 ## Native boundary
 
 The selected backend performs native capability checks after composition and
@@ -40,9 +47,10 @@ before process creation. For macOS, Seatbelt owns the fixed executable
 baseline and checks absolute custom programs against effective read access and
 explicit `runtime.executable_roots`. It returns typed errors such as
 `ProgramRequiresRead` and `ProgramRequiresExecutableRoot`; config does not
-duplicate the Seatbelt baseline. The CLI and host-language adapters may wrap
-the typed native cause in a source-aware diagnostic, but must retain the
-original typed error for programmatic inspection.
+duplicate the Seatbelt baseline. The CLI, Rust facade helper, and
+host-language adapters may wrap the typed native cause in a source-aware
+diagnostic, but must retain the original typed error for programmatic
+inspection.
 
 The portable `cageforge-backend-api` crate defines the minimal
 `BackendDiagnostic` trait and `BackendDiagnosticMetadata` value used by

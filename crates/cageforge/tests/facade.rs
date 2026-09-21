@@ -25,6 +25,26 @@ fn native_diagnostic_metadata_uses_the_host_platform_code() {
     assert_eq!(metadata.field(), None);
 }
 
+#[cfg(feature = "config")]
+#[test]
+fn config_diagnostic_helper_combines_backend_and_toml_context() {
+    let config = cageforge::Config::from_toml("default_profile = \"safe\"\n\n[profiles.safe]\n")
+        .expect("valid profile");
+    let profile = config.resolve("safe").expect("profile resolves");
+    let error = std::io::Error::other("native test error");
+
+    let diagnostic = cageforge::config_diagnostic_for_runtime_failure(
+        profile.source_context(),
+        Some("/bin/tool --worker"),
+        &error,
+    );
+
+    assert_eq!(diagnostic.profile(), Some("safe"));
+    assert_eq!(diagnostic.command(), Some("/bin/tool --worker"));
+    assert!(diagnostic.location().is_some());
+    assert_eq!(diagnostic.message(), "native test error");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_native_diagnostic_metadata_preserves_runtime_fields() {

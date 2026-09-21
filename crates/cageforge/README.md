@@ -320,6 +320,13 @@ types.
 waiting, and termination. Native child types and errors remain available when
 platform-specific behavior or diagnostics are needed.
 
+With the `config` feature, pass a resolved profile's `source_context()` and
+the original native error to
+`config_diagnostic_for_runtime_failure`. The facade then combines the
+backend-owned error code and field with the TOML path, profile, platform, and
+line/column metadata. The returned diagnostic is presentation data; the
+original typed error remains available for programmatic handling.
+
 The public API is synchronous. Internal network gateways may use helper
 threads or asynchronous tasks. An async application only needs to run the
 blocking process operations in its blocking-task facility.

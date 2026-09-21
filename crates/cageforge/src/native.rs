@@ -77,6 +77,32 @@ pub fn native_diagnostic_metadata(error: &(dyn Error + 'static)) -> NativeDiagno
     }
 }
 
+/// Builds the common source-aware diagnostic for a native launch failure.
+///
+/// The selected backend supplies the stable code and logical field through
+/// [`BackendDiagnostic`]. The configuration layer supplies the profile,
+/// platform, TOML path, and source location. The original error remains the
+/// caller's typed source error; this helper only combines presentation
+/// metadata for an application using the `config` feature.
+#[cfg(feature = "config")]
+pub fn config_diagnostic_for_runtime_failure(
+    source: &cageforge_config::ProfileSourceContext,
+    command: Option<&str>,
+    error: &(dyn Error + 'static),
+) -> cageforge_config::ConfigDiagnostic {
+    let source = command.map_or_else(
+        || source.clone(),
+        |command| source.clone().with_command(command.to_owned()),
+    );
+    let metadata = native_diagnostic_metadata(error);
+    cageforge_config::ConfigDiagnostic::for_runtime_failure(
+        &source,
+        metadata.code(),
+        error.to_string(),
+        metadata.field(),
+    )
+}
+
 fn find_error_source<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a T> {
     if let Some(value) = error.downcast_ref::<T>() {
         return Some(value);

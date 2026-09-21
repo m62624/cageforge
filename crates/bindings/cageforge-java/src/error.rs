@@ -127,14 +127,9 @@ impl BindingDiagnostic {
         command: &cageforge::CommandRequest,
         error: &(dyn std::error::Error + 'static),
     ) -> (Self, String) {
-        let source = source.clone().with_command(display_command(command));
-        let metadata = cageforge::native_diagnostic_metadata(error);
-        let diagnostic = cageforge::ConfigDiagnostic::for_runtime_failure(
-            &source,
-            metadata.code(),
-            error.to_string(),
-            metadata.field(),
-        );
+        let command = display_command(command);
+        let diagnostic =
+            cageforge::config_diagnostic_for_runtime_failure(source, Some(&command), error);
         let location = diagnostic.location();
         (
             Self {
