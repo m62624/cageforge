@@ -121,6 +121,7 @@ fn invalid_number(profile: &str, field: &str, value: u64) -> ConfigError {
         profile: profile.to_owned(),
         field: field.to_owned(),
         value: format!("{value} must be representable and greater than zero"),
+        context: None,
     }
 }
 
@@ -128,5 +129,6 @@ fn gateway_error(profile: &str, source: GatewayConfigError) -> ConfigError {
     ConfigError::NetworkGateway {
         profile: profile.to_owned(),
         source,
+        context: None,
     }
 }

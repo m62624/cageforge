@@ -19,6 +19,7 @@ use std::process::ExitCode;
 mod backend;
 mod bwrap;
 mod config;
+mod diagnostic;
 mod environment_transport;
 mod error;
 mod filesystem;

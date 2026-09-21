@@ -93,6 +93,44 @@ fn context(workspace: &Path) -> PathResolutionContext {
         .expect("cwd")
 }
 
+fn context_for_command(workspace: &Path, program: &Path) -> PathResolutionContext {
+    let context = context(workspace);
+    let test_executable = std::env::current_exe().expect("test executable");
+    if program == test_executable {
+        return context
+            .with_executable_root(
+                test_executable
+                    .parent()
+                    .expect("test executable directory")
+                    .to_path_buf(),
+            )
+            .expect("test executable root");
+    }
+    context
+}
+
+fn policy_for_command(policy: &SandboxPolicy, program: &Path) -> SandboxPolicy {
+    let test_executable = std::env::current_exe().expect("test executable");
+    if program != test_executable
+        || policy.filesystem().mode() != cageforge_policy::FilesystemMode::Restricted
+    {
+        return policy.clone();
+    }
+    let root = test_executable
+        .parent()
+        .expect("test executable directory")
+        .to_path_buf();
+    let filesystem = policy
+        .filesystem()
+        .clone()
+        .with_rule(FilesystemRule::new(
+            PathSelector::absolute(root).expect("test executable root selector"),
+            AccessMode::Read,
+        ))
+        .expect("restricted test policy");
+    SandboxPolicy::new(filesystem, policy.network().clone())
+}
+
 #[test]
 fn runnable_macos_profile_launches_through_the_native_backend_api() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -351,6 +389,24 @@ fn backend() -> MacosBackend {
     MacosBackend::new(MacosBackendConfig::new()).expect("macOS Seatbelt is available")
 }
 
+#[test]
+fn absolute_custom_program_is_rejected_by_backend_without_executable_mapping() {
+    let workspace = TempDir::new().expect("workspace");
+    let policy = SandboxPolicy::full_access();
+    let command = CommandSpec::new("/tmp/cageforge-custom-program").expect("program");
+    let (command, effective, context) = request_for(workspace.path(), &policy, command);
+    let error = backend()
+        .prepare(BackendRequest::new(&command, &effective), &context)
+        .expect_err("custom absolute program must require an executable root");
+
+    assert!(matches!(
+        error,
+        MacosBackendError::Filesystem(MacosFilesystemError::ProgramRequiresExecutableRoot {
+            path
+        }) if path == Path::new("/tmp/cageforge-custom-program")
+    ));
+}
+
 fn restricted_policy(workspace: &Path) -> SandboxPolicy {
     SandboxPolicy::new(
         FilesystemPolicy::restricted([
@@ -386,20 +442,36 @@ fn request_for(
     cageforge_policy_compose::EffectiveSandbox,
     PathResolutionContext,
 ) {
+    request_for_with_stdin(workspace, policy, command, StdioMode::Inherit)
+}
+
+fn request_for_with_stdin(
+    workspace: &Path,
+    policy: &SandboxPolicy,
+    command: CommandSpec,
+    stdin_mode: StdioMode,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
     let environment = EnvironmentSpec::inherit_core();
+    let policy = policy_for_command(policy, Path::new(command.program()));
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective =
-        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+        compose(CompositionRequest::new(&policy, &environment, &ceiling)).expect("compose policy");
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
         .with_stdio(
             StdioSpec::inherited()
+                .with_stdin(stdin_mode)
                 .with_stdout(StdioMode::Pipe)
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    (command, effective, context(workspace))
+    let context = context_for_command(workspace, Path::new(command.command().program()));
+    (command, effective, context)
 }
 
 fn network_request(
@@ -421,9 +493,13 @@ fn network_request(
         .expect("test executable command")
         .with_args(["--exact", "network_client_fixture", "--nocapture"])
         .expect("fixture arguments");
+    let policy = policy_for_command(
+        policy,
+        std::env::current_exe().expect("test executable").as_path(),
+    );
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective =
-        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+        compose(CompositionRequest::new(&policy, &environment, &ceiling)).expect("compose policy");
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
@@ -433,7 +509,9 @@ fn network_request(
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    (command, effective, context(workspace))
+    let executable = std::env::current_exe().expect("test executable");
+    let context = context_for_command(workspace, &executable);
+    (command, effective, context)
 }
 
 fn start_http_server() -> (SocketAddr, thread::JoinHandle<io::Result<()>>) {
@@ -553,9 +631,13 @@ fn unix_network_request(
         .expect("test executable command")
         .with_args(["--exact", "network_client_fixture", "--nocapture"])
         .expect("fixture arguments");
+    let policy = policy_for_command(
+        policy,
+        std::env::current_exe().expect("test executable").as_path(),
+    );
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
     let effective =
-        compose(CompositionRequest::new(policy, &environment, &ceiling)).expect("compose policy");
+        compose(CompositionRequest::new(&policy, &environment, &ceiling)).expect("compose policy");
     let command = CommandRequest::new(command)
         .with_working_directory(workspace.to_path_buf())
         .expect("working directory")
@@ -565,7 +647,9 @@ fn unix_network_request(
                 .with_stderr(StdioMode::Pipe),
         )
         .with_environment(environment);
-    (command, effective, context(workspace))
+    let executable = std::env::current_exe().expect("test executable");
+    let context = context_for_command(workspace, &executable);
+    (command, effective, context)
 }
 
 fn proxy_endpoint(value: &str) -> SocketAddr {
@@ -685,7 +769,7 @@ fn exiting_marker_child(
         .expect("shell option")
         .with_arg(
             format!("(sleep {MARKER_DELAY_SECONDS}; touch \"$1\") & descendant=$!; ")
-                + "printf 'ready:%s\\n' \"$descendant\"; exit 0",
+                + "printf 'ready:%s\\n' \"$descendant\"; IFS= read -r _; exit 0",
         )
         .expect("shell script")
         .with_arg("cageforge-marker")
@@ -693,7 +777,8 @@ fn exiting_marker_child(
         .with_arg(marker.as_os_str())
         .expect("marker argument");
     let policy = writable_policy(workspace);
-    let (command, effective, context) = request_for(workspace, &policy, command);
+    let (command, effective, context) =
+        request_for_with_stdin(workspace, &policy, command, StdioMode::Pipe);
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare");
@@ -1894,6 +1979,11 @@ fn reaped_leader_does_not_leave_a_running_descendant() {
         "descendant {descendant} escaped boundary group {}",
         child.id()
     );
+    child
+        .stdin()
+        .expect("leader stdin pipe")
+        .write_all(b"release\n")
+        .expect("release leader fixture");
     assert!(child.wait().expect("wait").success());
     thread::sleep(Duration::from_secs(2));
     assert!(
@@ -1981,11 +2071,11 @@ fn successful_wait_terminates_descendants_that_change_group_or_session() {
             .expect("fixture mode")
             .with_var(GROUP_CHANGE_ROOT, root.as_os_str())
             .expect("fixture root");
-        let policy = writable_policy(&root);
+        let policy = policy_for_command(&writable_policy(&root), &executable);
         let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
         let effective = compose(CompositionRequest::new(&policy, &environment, &ceiling))
             .expect("compose policy");
-        let context = context(&root)
+        let context = context_for_command(&root, &executable)
             .with_minimal_path(executable.clone())
             .expect("fixture runtime path");
         let command = CommandRequest::new(

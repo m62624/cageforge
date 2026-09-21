@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from cageforge import (
     Cageforge,
+    CageforgeConfigurationError,
     CageforgeError,
     CageforgeEscalationError,
     CageforgeInvalidCursorError,
@@ -92,6 +93,40 @@ def runtime_context(tmp_path: Path) -> RuntimeContext:
     minimal_path = tmp_path / "minimal"
     minimal_path.mkdir()
     return RuntimeContext(tmp_path, minimal_path)
+
+
+def test_configuration_errors_expose_stable_source_fields() -> None:
+    source = (
+        'default_profile = "broken"\n\n'
+        '[profiles.broken]\n'
+        'workspace_roots = { "../outside" = true }\n'
+    )
+
+    with pytest.raises(CageforgeConfigurationError) as caught:
+        Cageforge.check_toml(source)
+
+    error = caught.value
+    assert error.code == "invalid_value"
+    assert error.profile == "broken"
+    assert error.field == "workspace_roots"
+    assert error.config_path is None
+    assert error.line == 4
+    assert error.column == 1
+
+
+def test_configuration_errors_from_file_keep_the_config_path(tmp_path: Path) -> None:
+    config = tmp_path / "broken.toml"
+    config.write_text(
+        'default_profile = "broken"\n\n'
+        '[profiles.broken]\n'
+        'workspace_roots = { "../outside" = true }\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CageforgeConfigurationError) as caught:
+        Cageforge.from_toml_file(config)
+
+    assert caught.value.config_path == str(config.resolve())
 
 
 def smoke_argv() -> list[str]:

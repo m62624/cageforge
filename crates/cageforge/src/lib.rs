@@ -21,9 +21,13 @@
 mod native;
 mod preflight;
 
+#[cfg(feature = "config")]
+pub use native::config_diagnostic_for_runtime_failure;
+pub use native::{
+    NativeDiagnosticMetadata, NativeSandboxError, native_diagnostic_metadata, native_sandbox,
+};
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub use native::{NativeSandboxConfig, native_sandbox_with};
-pub use native::{NativeSandboxError, native_sandbox};
 
 pub use cageforge_backend_api::*;
 pub use cageforge_command::*;

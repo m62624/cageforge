@@ -292,6 +292,7 @@ The legal and provenance records are maintained in
 [`specs/0023-local-ipc-capability.md`](specs/0023-local-ipc-capability.md),
 [`specs/0024-macos-executable-runtime-roots.md`](specs/0024-macos-executable-runtime-roots.md),
 [`specs/0025-dynamic-permission-escalation.md`](specs/0025-dynamic-permission-escalation.md),
+[`specs/0026-structured-configuration-diagnostics.md`](specs/0026-structured-configuration-diagnostics.md),
 [`NOTICE`](NOTICE), [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and
 [`UPSTREAM.md`](UPSTREAM.md).
 

@@ -30,6 +30,7 @@ struct RuntimeState {
     preflight_required: bool,
     approved_program: Option<String>,
     preflight_plan: Option<cageforge::PreflightPlan>,
+    source: cageforge::ProfileSourceContext,
 }
 
 struct ChildState {
@@ -236,10 +237,8 @@ fn runtime_from_toml(
     let minimal_directory = minimal_directory
         .map(|value| path(value, "minimal directory"))
         .transpose()?;
-    let config = config_from_toml(&toml)
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
-    let profile = resolve_profile(&config, profile_name.as_deref())
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let config = config_from_toml(&toml)?;
+    let profile = resolve_profile(&config, profile_name.as_deref())?;
     let (context, effective, environment, ceiling) =
         runtime_inputs_with_ceiling(&profile, &current_directory, minimal_directory.as_deref())
             .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
@@ -254,6 +253,7 @@ fn runtime_from_toml(
             preflight_required: false,
             approved_program: None,
             preflight_plan: None,
+            source: profile.source_context().clone(),
         };
         return Ok(Box::into_raw(Box::new(state)) as jlong);
     }
@@ -304,6 +304,7 @@ fn runtime_from_toml(
         preflight_required: requires_grant,
         approved_program,
         preflight_plan: Some(plan),
+        source: profile.source_context().clone(),
     };
     Ok(Box::into_raw(Box::new(state)) as jlong)
 }
@@ -335,8 +336,8 @@ fn preflight_identity(
     ))
 }
 
-fn config_from_toml(toml: &str) -> Result<cageforge::Config, String> {
-    cageforge::Config::from_toml(toml).map_err(|error| error.to_string())
+fn config_from_toml(toml: &str) -> Result<cageforge::Config, BindingError> {
+    cageforge::Config::from_toml(toml).map_err(BindingError::configuration)
 }
 
 fn permission_request_from_toml(
@@ -346,10 +347,8 @@ fn permission_request_from_toml(
     minimal_directory: Option<&Path>,
     identity: cageforge::PreflightIdentity,
 ) -> Result<cageforge::PermissionRequest, BindingError> {
-    let config = config_from_toml(toml)
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
-    let profile = resolve_profile(&config, profile_name)
-        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
+    let config = config_from_toml(toml)?;
+    let profile = resolve_profile(&config, profile_name)?;
     let (context, effective, environment, ceiling) =
         runtime_inputs_with_ceiling(&profile, current_directory, minimal_directory)
             .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error))?;
@@ -376,13 +375,14 @@ fn permission_request_from_toml(
 fn resolve_profile(
     config: &cageforge::Config,
     profile_name: Option<&str>,
-) -> Result<cageforge::ResolvedProfile, String> {
-    let platform = cageforge::PlatformId::current().map_err(|error| error.to_string())?;
+) -> Result<cageforge::ResolvedProfile, BindingError> {
+    let platform = cageforge::PlatformId::current()
+        .map_err(|error| BindingError::new(BindingErrorKind::Configuration, error.to_string()))?;
     match profile_name {
         Some(name) if !name.is_empty() => config.resolve_for_platform(name, platform),
         _ => config.resolve_default_for_platform(platform),
     }
-    .map_err(|error| error.to_string())
+    .map_err(BindingError::configuration)
 }
 
 fn runtime_inputs(
@@ -1309,7 +1309,9 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunch<'caller>(
         let mut child = runtime
             .backend
             .launch(backend_request, &runtime.context)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                BindingError::runtime(BindingErrorKind::Launch, &runtime.source, &request, &error)
+            })?;
         let stdin = child.take_stdin();
         let stdout = child.take_stdout();
         let stderr = child.take_stderr();
@@ -1357,7 +1359,14 @@ pub extern "system" fn Java_ai_cageforge_NativeBridge_nativeLaunchEscalated<'cal
         let mut child = runtime
             .backend
             .launch(backend_request, &context)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                BindingError::runtime(
+                    BindingErrorKind::Escalation,
+                    &runtime.source,
+                    &request,
+                    &error,
+                )
+            })?;
         Ok(Box::into_raw(Box::new(ChildState {
             stdin: Mutex::new(child.take_stdin()),
             stdout: Mutex::new(child.take_stdout()),

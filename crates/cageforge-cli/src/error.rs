@@ -37,6 +37,16 @@ pub enum CliError {
     #[cfg(feature = "config")]
     #[error("configuration: {0}")]
     Config(#[from] cageforge::ConfigError),
+    /// A native failure enriched with the selected profile's source context.
+    #[cfg(feature = "config")]
+    #[error("{diagnostic}")]
+    NativeDiagnostic {
+        /// Stable source-aware presentation metadata.
+        diagnostic: Box<cageforge::ConfigDiagnostic>,
+        /// The original typed CLI/native failure.
+        #[source]
+        source: Box<Self>,
+    },
     /// The portable command model rejected a value.
     #[error("command: {0}")]
     Command(#[from] cageforge::CommandError),
@@ -112,5 +122,18 @@ pub enum CliError {
 impl CliError {
     pub(crate) const fn exit_code(&self) -> u8 {
         2
+    }
+
+    pub(crate) fn render(&self) -> String {
+        match self {
+            #[cfg(feature = "config")]
+            Self::Config(error) => format!(
+                "configuration error:\n{}",
+                error.diagnostic().render_human()
+            ),
+            #[cfg(feature = "config")]
+            Self::NativeDiagnostic { diagnostic, .. } => diagnostic.render_human(),
+            _ => self.to_string(),
+        }
     }
 }

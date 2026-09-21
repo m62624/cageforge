@@ -54,7 +54,7 @@ pub fn run() -> ExitCode {
     match execute(cli) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
-            let _ = writeln!(stderr, "cageforge-cli: {error}");
+            let _ = writeln!(stderr, "cageforge-cli: {}", error.render());
             ExitCode::from(error.exit_code())
         }
     }

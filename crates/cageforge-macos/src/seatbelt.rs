@@ -12,6 +12,7 @@ use cageforge_path::is_within;
 use crate::error::SeatbeltProfileError;
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::{MacosNetworkPlan, MacosUnixSocketPlan};
+use crate::runtime::FIXED_EXECUTABLE_ROOTS;
 
 const SEATBELT_BASE_POLICY: &str = r#"
 (version 1)
@@ -62,16 +63,6 @@ const SEATBELT_BASE_POLICY: &str = r#"
   (subpath "/System/iOSSupport/System/Library/PrivateFrameworks")
   (subpath "/System/iOSSupport/System/Library/SubFrameworks")
   (subpath "/usr/lib"))
-(allow file-read-data (subpath "/bin"))
-(allow file-read-metadata (subpath "/bin"))
-(allow file-read-data (subpath "/sbin"))
-(allow file-read-metadata (subpath "/sbin"))
-(allow file-read-data (subpath "/usr/bin"))
-(allow file-read-metadata (subpath "/usr/bin"))
-(allow file-read-data (subpath "/usr/sbin"))
-(allow file-read-metadata (subpath "/usr/sbin"))
-(allow file-read-data (subpath "/usr/libexec"))
-(allow file-read-metadata (subpath "/usr/libexec"))
 (allow file-read* (subpath "/Library/Preferences"))
 (allow file-read* (subpath "/private/etc"))
 (allow file-read* (subpath "/etc"))
@@ -295,6 +286,7 @@ impl SeatbeltProfile {
     ) -> Result<Self, SeatbeltProfileError> {
         let mut builder = ProfileBuilder::new();
         builder.push_raw(SEATBELT_BASE_POLICY);
+        builder.add_fixed_system_executable_roots();
         builder.add_filesystem(filesystem)?;
         if filesystem.unrestricted() {
             builder.push_raw(SEATBELT_PREFERENCES_POLICY);
@@ -344,6 +336,16 @@ impl ProfileBuilder {
     fn push_raw(&mut self, value: &str) {
         self.policy.push_str(value);
         self.policy.push('\n');
+    }
+
+    fn add_fixed_system_executable_roots(&mut self) {
+        for root in FIXED_EXECUTABLE_ROOTS {
+            self.policy
+                .push_str(&format!("(allow file-read-data (subpath \"{root}\"))\n"));
+            self.policy.push_str(&format!(
+                "(allow file-read-metadata (subpath \"{root}\"))\n"
+            ));
+        }
     }
 
     fn add_filesystem(&mut self, plan: &MacosFilesystemPlan) -> Result<(), SeatbeltProfileError> {

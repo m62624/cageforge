@@ -4,7 +4,12 @@
 
 use std::error::Error;
 
+use cageforge_backend_api::{BackendDiagnostic, BackendDiagnosticMetadata};
+
 use crate::DynSandbox;
+
+/// Backwards-compatible facade name for the shared backend diagnostic type.
+pub type NativeDiagnosticMetadata = BackendDiagnosticMetadata;
 
 /// Configuration of the backend selected for the compilation target.
 #[cfg(target_os = "linux")]
@@ -32,6 +37,85 @@ pub enum NativeSandboxError {
         /// The original backend error, available for downcasting.
         source: Box<dyn Error + Send + Sync>,
     },
+}
+
+/// Classifies a typed native failure for source-aware adapters.
+///
+/// Target-specific classification remains in the selected native backend.
+/// This facade function only dispatches to that backend; the original error
+/// remains the typed source error and must be retained by the caller.
+pub fn native_diagnostic_metadata(error: &(dyn Error + 'static)) -> NativeDiagnosticMetadata {
+    #[cfg(target_os = "macos")]
+    {
+        find_error_source::<cageforge_macos::MacosBackendError>(error)
+            .map(BackendDiagnostic::diagnostic_metadata)
+            .or_else(|| {
+                find_error_source::<cageforge_macos::MacosFilesystemError>(error)
+                    .map(BackendDiagnostic::diagnostic_metadata)
+            })
+            .unwrap_or_else(|| BackendDiagnosticMetadata::new("macos_native_error", None))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        find_error_source::<cageforge_linux::LinuxBackendError>(error)
+            .map(BackendDiagnostic::diagnostic_metadata)
+            .unwrap_or_else(|| BackendDiagnosticMetadata::new("linux_native_error", None))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        find_error_source::<cageforge_windows::WindowsBackendError>(error)
+            .map(BackendDiagnostic::diagnostic_metadata)
+            .unwrap_or_else(|| BackendDiagnosticMetadata::new("windows_native_error", None))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        let _ = error;
+        BackendDiagnosticMetadata::new("native_error", None)
+    }
+}
+
+/// Builds the common source-aware diagnostic for a native launch failure.
+///
+/// The selected backend supplies the stable code and logical field through
+/// [`BackendDiagnostic`]. The configuration layer supplies the profile,
+/// platform, TOML path, and source location. The original error remains the
+/// caller's typed source error; this helper only combines presentation
+/// metadata for an application using the `config` feature.
+#[cfg(feature = "config")]
+pub fn config_diagnostic_for_runtime_failure(
+    source: &cageforge_config::ProfileSourceContext,
+    command: Option<&str>,
+    error: &(dyn Error + 'static),
+) -> cageforge_config::ConfigDiagnostic {
+    let source = command.map_or_else(
+        || source.clone(),
+        |command| source.clone().with_command(command.to_owned()),
+    );
+    let metadata = native_diagnostic_metadata(error);
+    cageforge_config::ConfigDiagnostic::for_runtime_failure(
+        &source,
+        metadata.code(),
+        error.to_string(),
+        metadata.field(),
+    )
+}
+
+fn find_error_source<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a T> {
+    if let Some(value) = error.downcast_ref::<T>() {
+        return Some(value);
+    }
+
+    let mut source = error.source();
+    while let Some(value) = source {
+        if let Some(value) = value.downcast_ref::<T>() {
+            return Some(value);
+        }
+        source = value.source();
+    }
+    None
 }
 
 /// Creates the host's native backend with its default configuration.

@@ -14,10 +14,12 @@
 
 mod backend;
 mod config;
+mod diagnostic;
 mod error;
 mod filesystem;
 mod network;
 mod process;
+mod runtime;
 mod seatbelt;
 
 #[cfg(test)]

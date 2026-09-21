@@ -25,11 +25,19 @@ rules = [
 executable_roots = ["/opt/example-runtime"]
 ```
 
-`runtime.executable_roots` contains existing absolute directories. The config
-layer rejects empty, NUL-containing, relative, parent-traversing, and duplicate
-paths. The macOS backend additionally rejects missing roots, symlinked
-ancestors, non-directories, and roots not covered by effective read or write
-filesystem access. The root is canonicalized before native policy generation.
+`runtime.executable_roots` contains absolute directories. The config layer
+validates only the portable TOML shape: empty, NUL-containing, relative,
+parent-traversing, and duplicate paths are rejected. It selects the overlay
+but does not decide which paths the macOS Seatbelt baseline treats as native
+system runtime paths. That decision belongs to the macOS backend.
+
+The macOS backend additionally rejects missing roots, symlinked ancestors,
+non-directories, and roots not covered by effective read or write filesystem
+access. The root is canonicalized before native policy generation. An absolute
+command outside the backend's fixed executable baseline must be readable and
+must be contained by an explicit executable root; otherwise preparation
+returns a typed `ProgramRequiresRead` or `ProgramRequiresExecutableRoot`
+failure before spawn.
 
 Platform overlays validate path syntax for their declared target platform, so
 one portable TOML document may contain all three operating-system overlays.
@@ -66,9 +74,12 @@ directory contents, sibling paths, or write access. The metadata ancestors are
 derived from the validated root, not from a global `/Users`, `/Library`, or
 `/Applications` allowlist.
 
-System runtime paths retain the fixed Seatbelt baseline. This capability is for
-non-system runtime roots and must not be implemented by granting executable
-mapping to all readable paths or the whole filesystem.
+System runtime paths retain the fixed Seatbelt baseline. The baseline list is
+owned by `cageforge-macos` and is used both by command validation and Seatbelt
+policy generation. It is not duplicated in `cageforge-config` or
+`cageforge-path`. This capability is for non-system runtime roots and must not
+be implemented by granting executable mapping to all readable paths or the
+whole filesystem.
 
 ## Permission and binding contract
 

@@ -162,6 +162,13 @@ The native backend owns:
 - platform-specific core environment selection; and
 - process launch, stdio, timeout, cancellation, and lifecycle handling.
 
+The native backend also owns classification of its typed launch errors. The
+shared `BackendDiagnosticMetadata` and `BackendDiagnostic` contract is defined
+here; each target backend supplies its own mapping, while the `cageforge`
+facade only dispatches to the backend selected by `target_os`. This metadata
+helps adapters present stable categories without replacing the original typed
+error.
+
 `cageforge` provides the ergonomic library API and target-specific backend
 selection that connect this contract to a concrete execution flow.
 

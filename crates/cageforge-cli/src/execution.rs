@@ -41,6 +41,7 @@ struct Invocation {
     effective: cageforge::EffectiveSandbox,
     context: cageforge::PathResolutionContext,
     gateway: cageforge::GatewayConfig,
+    source: cageforge::ProfileSourceContext,
 }
 
 /// Executes a parsed CLI request and returns the process exit code.
@@ -138,6 +139,7 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
             profile: args.profile.clone().unwrap_or_else(|| "default".to_owned()),
             field: "platform".to_owned(),
             value: error.to_string(),
+            context: None,
         })
     })?;
     let profile = match args.profile.as_deref() {
@@ -145,6 +147,10 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
         None => config.resolve_default_for_platform(platform)?,
     };
     let command = command_from_args(&profile, args.command)?;
+    let source = profile
+        .source_context()
+        .clone()
+        .with_command(display_command(&command));
     let current_directory = std::env::current_dir()?;
     let workspace_roots = resolve_workspace_roots(&current_directory, profile.workspace_roots())?;
     let context = runtime_context(
@@ -235,6 +241,7 @@ fn execute_run(args: RunArgs) -> Result<u8, CliError> {
         effective,
         context,
         gateway: profile.network_gateway().clone(),
+        source,
     };
     #[cfg(target_os = "windows")]
     warn_if_windows_setup_is_unavailable();
@@ -472,6 +479,21 @@ fn command_from_args(
 }
 
 #[cfg(feature = "config")]
+fn display_command(command: &cageforge::CommandRequest) -> String {
+    std::iter::once(command.command().program())
+        .chain(
+            command
+                .command()
+                .args()
+                .iter()
+                .map(std::ffi::OsString::as_os_str),
+        )
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(feature = "config")]
 fn resolve_workspace_roots(
     current_directory: &Path,
     declarations: &[PathBuf],
@@ -573,6 +595,15 @@ fn platform_minimal_root(current_directory: &Path) -> Result<PathBuf, CliError> 
     any(target_os = "linux", target_os = "windows", target_os = "macos",)
 ))]
 fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
+    let source = invocation.source.clone();
+    execute_native_inner(invocation).map_err(|error| enrich_native_error(source, error))
+}
+
+#[cfg(all(
+    feature = "config",
+    any(target_os = "linux", target_os = "windows", target_os = "macos",)
+))]
+fn execute_native_inner(invocation: Invocation) -> Result<u8, CliError> {
     let config = cageforge::NativeSandboxConfig::new().with_network_gateway(invocation.gateway);
     #[cfg(target_os = "linux")]
     let config = config.with_hardening_helper_path(std::env::current_exe()?);
@@ -588,6 +619,18 @@ fn execute_native(invocation: Invocation) -> Result<u8, CliError> {
 
 #[cfg(all(
     feature = "config",
+    any(target_os = "linux", target_os = "windows", target_os = "macos",)
+))]
+fn enrich_native_error(source: cageforge::ProfileSourceContext, error: CliError) -> CliError {
+    let diagnostic = cageforge::config_diagnostic_for_runtime_failure(&source, None, &error);
+    CliError::NativeDiagnostic {
+        diagnostic: Box::new(diagnostic),
+        source: Box::new(error),
+    }
+}
+
+#[cfg(all(
+    feature = "config",
     not(any(target_os = "linux", target_os = "windows", target_os = "macos",))
 ))]
 fn execute_native(_invocation: Invocation) -> Result<u8, CliError> {
@@ -596,8 +639,9 @@ fn execute_native(_invocation: Invocation) -> Result<u8, CliError> {
         effective,
         context,
         gateway,
+        source,
     } = _invocation;
-    drop((command, effective, context, gateway));
+    drop((command, effective, context, gateway, source));
     Err(CliError::NativeSandbox(
         cageforge::NativeSandboxError::UnsupportedPlatform {
             target_os: std::env::consts::OS,

@@ -23,6 +23,52 @@ class RuntimeContextTest {
     }
 
     @Test
+    fun configurationExceptionKeepsStructuredDiagnosticFields() {
+        val error =
+            CageforgeConfigurationException(
+                "invalid configuration",
+                "invalid_value",
+                "/tmp/tool.toml",
+                "broken",
+                "macos",
+                "command.program",
+                12,
+                3,
+            )
+        assertEquals("invalid_value", error.code)
+        assertEquals("/tmp/tool.toml", error.configPath)
+        assertEquals("broken", error.profile)
+        assertEquals("macos", error.platform)
+        assertEquals("command.program", error.field)
+        assertEquals(12, error.line)
+        assertEquals(3, error.column)
+    }
+
+    @Test
+    fun launchExceptionKeepsNativeSourceFields() {
+        val error =
+            CageforgeLaunchException(
+                "native launch failed",
+                "macos_program_requires_executable_root",
+                "/tmp/tool.toml",
+                "tool",
+                "macos",
+                "runtime.executable_roots",
+                8,
+                1,
+                "/opt/tool/bin/runner --worker one",
+            )
+        assertEquals("macos_program_requires_executable_root", error.code)
+        assertEquals("/tmp/tool.toml", error.configPath)
+        assertEquals("tool", error.profile)
+        assertEquals("macos", error.platform)
+        assertEquals("runtime.executable_roots", error.field)
+        assertEquals(8, error.line)
+        assertEquals(1, error.column)
+        assertEquals("/opt/tool/bin/runner --worker one", error.command)
+    }
+
+    @Test
     fun windowsSetupIsTypedAndNonDestructiveOnNonWindows() {
         if (WindowsSetup.isSupported()) return
         assertFailsWith<UnsupportedPlatformException> { WindowsSetup.install() }

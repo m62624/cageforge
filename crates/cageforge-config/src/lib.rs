@@ -32,8 +32,8 @@ mod resolve;
 mod schema;
 
 pub use diagnostics::{ConfigDiagnostic, DiagnosticSeverity};
-pub use error::{ConfigError, SourceLocation};
-pub use resolve::{Config, ResolvedProfile};
+pub use error::{ConfigError, ConfigErrorContext, SourceLocation};
+pub use resolve::{Config, ProfileSourceContext, ResolvedProfile};
 pub use schema::config_schema_json;
 
 pub use cageforge_command::CommandRequest;

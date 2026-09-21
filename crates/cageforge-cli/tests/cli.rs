@@ -3,6 +3,8 @@
 use std::ffi::OsString;
 use std::process::Command as ProcessCommand;
 
+#[cfg(feature = "config")]
+use cageforge::{Config, ConfigDiagnostic};
 use cageforge::{GrantAuthority, PermissionRequest, PermissionScope, PermissionSet, PlatformId};
 #[cfg(target_os = "windows")]
 use cageforge_cli::SetupCommand;
@@ -185,6 +187,164 @@ fn permission_revoke_validation_error_is_snapshotted() {
         .expect("run permission revoke");
     assert_eq!(output.status.code(), Some(2));
     insta::assert_snapshot!(String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn configuration_error_is_rendered_with_source_context() {
+    let workspace = tempfile::tempdir().expect("temporary configuration directory");
+    let config = workspace.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "default_profile = \"broken\"\n\n[profiles.broken]\nworkspace_roots = { \"../outside\" = true }\n",
+    )
+    .expect("write invalid configuration");
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cageforge-cli"))
+        .args([
+            "run",
+            "--config",
+            config.to_str().expect("UTF-8 config path"),
+            "--",
+            "/bin/true",
+        ])
+        .output()
+        .expect("run cageforge-cli with invalid configuration");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr)
+        .replace(&config.display().to_string(), "<config.toml>");
+    insta::assert_snapshot!(stderr);
+}
+
+#[cfg(feature = "config")]
+#[test]
+fn native_diagnostic_variants_are_snapshotted_with_source_context() {
+    let workspace = tempfile::tempdir().expect("temporary diagnostic configuration");
+    let config_path = workspace.path().join("tool.toml");
+    std::fs::write(
+        &config_path,
+        r#"default_profile = "tool"
+
+[profiles.tool.platforms.macos.command]
+program = "/opt/tool/bin/runner"
+args = ["--worker", "one"]
+
+[profiles.tool.platforms.macos.runtime]
+executable_roots = ["/opt/tool/runtime"]
+"#,
+    )
+    .expect("write diagnostic fixture");
+    let config = Config::from_file(&config_path).expect("valid diagnostic fixture");
+    let profile = config
+        .resolve_for_platform("tool", PlatformId::Macos)
+        .expect("diagnostic fixture resolves");
+    let source = profile
+        .source_context()
+        .clone()
+        .with_command("/opt/tool/bin/runner --worker one");
+
+    for (name, code, message, field) in [
+        (
+            "native_generic_failure",
+            "macos_native_error",
+            "sandbox preparation failed: native setup failed",
+            None,
+        ),
+        (
+            "native_program_requires_read",
+            "macos_program_requires_read",
+            "macOS program requires a filesystem read rule: \"/opt/tool/bin/runner\"",
+            Some("command.program"),
+        ),
+        (
+            "native_program_requires_executable_root",
+            "macos_program_requires_executable_root",
+            "macOS program requires runtime.executable_roots: \"/opt/tool/bin/runner\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
+            "native_executable_root_missing",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is missing: \"/opt/tool/runtime\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
+            "native_executable_root_not_directory",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is not a directory: \"/opt/tool/runtime\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
+            "native_executable_root_not_readable",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is not readable: \"/opt/tool/runtime\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
+            "native_invalid_executable_root",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is not an absolute safe path: \"relative/runtime\"",
+            Some("runtime.executable_roots"),
+        ),
+    ] {
+        let diagnostic = ConfigDiagnostic::for_runtime_failure(&source, code, message, field);
+        let rendered = diagnostic
+            .render_human()
+            .replace(&config_path.display().to_string(), "<config.toml>");
+        insta::assert_snapshot!(name, rendered);
+    }
+}
+
+#[cfg(feature = "config")]
+#[test]
+fn native_platform_diagnostics_are_snapshotted() {
+    let workspace = tempfile::tempdir().expect("temporary platform diagnostic configuration");
+    let config_path = workspace.path().join("platforms.toml");
+    std::fs::write(
+        &config_path,
+        r#"default_profile = "tool"
+
+[profiles.tool.platforms.macos.command]
+program = "/opt/tool/bin/macos-runner"
+args = ["--macos"]
+
+[profiles.tool.command]
+program = "/opt/tool/bin/runner"
+args = ["--worker", "one"]
+"#,
+    )
+    .expect("write platform diagnostic fixture");
+    let config = Config::from_file(&config_path).expect("valid platform diagnostic fixture");
+
+    for (name, platform, code) in [
+        (
+            "native_linux_failure",
+            PlatformId::Linux,
+            "linux_native_error",
+        ),
+        (
+            "native_windows_failure",
+            PlatformId::Windows,
+            "windows_native_error",
+        ),
+    ] {
+        let profile = config
+            .resolve_for_platform("tool", platform)
+            .expect("platform diagnostic fixture resolves");
+        let source = profile
+            .source_context()
+            .clone()
+            .with_command("/opt/tool/bin/runner --worker one");
+        let diagnostic = ConfigDiagnostic::for_runtime_failure(
+            &source,
+            code,
+            "sandbox preparation failed: native setup failed",
+            None,
+        );
+        let rendered = diagnostic
+            .render_human()
+            .replace(&config_path.display().to_string(), "<config.toml>");
+        insta::assert_snapshot!(name, rendered);
+    }
 }
 
 #[test]

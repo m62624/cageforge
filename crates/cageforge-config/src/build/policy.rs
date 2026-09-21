@@ -30,6 +30,7 @@ pub(crate) fn build_policy(
     policy.validate().map_err(|source| ConfigError::Policy {
         profile: profile.to_owned(),
         source,
+        context: None,
     })?;
     Ok(policy)
 }
@@ -52,6 +53,7 @@ fn build_filesystem(
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     for path in &raw.additional_protected_paths {
@@ -60,6 +62,7 @@ fn build_filesystem(
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     if raw
@@ -83,11 +86,13 @@ fn build_filesystem(
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     policy.validate().map_err(|source| ConfigError::Policy {
         profile: profile.to_owned(),
         source,
+        context: None,
     })?;
     Ok(policy)
 }
@@ -154,6 +159,7 @@ fn build_filesystem_rule(
                 .map_err(|source| ConfigError::Policy {
                     profile: profile.to_owned(),
                     source,
+                    context: None,
                 })?,
             )
         }
@@ -174,6 +180,7 @@ fn build_filesystem_rule(
                 .map_err(|source| ConfigError::Policy {
                     profile: profile.to_owned(),
                     source,
+                    context: None,
                 })?,
             )
         }
@@ -189,6 +196,7 @@ fn build_filesystem_rule(
         FilesystemRule::from_target(target, access).map_err(|source| ConfigError::Policy {
             profile: profile.to_owned(),
             source,
+            context: None,
         })?;
     if let Some(missing_path) = &raw.missing_path {
         let behavior = match missing_path {
@@ -207,6 +215,7 @@ fn build_filesystem_rule(
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     Ok(rule)
@@ -264,6 +273,7 @@ fn build_selector(
     result.map_err(|source| ConfigError::Policy {
         profile: profile.to_owned(),
         source,
+        context: None,
     })
 }
 
@@ -305,6 +315,7 @@ fn build_network(
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     for RawUnixSocketRule { path, access } in &raw.unix_sockets {
@@ -313,6 +324,7 @@ fn build_network(
             .map_err(|source| ConfigError::Policy {
                 profile: profile.to_owned(),
                 source,
+                context: None,
             })?;
     }
     if let Some(local_ipc) = local_ipc {
@@ -323,6 +335,7 @@ fn build_network(
                         ConfigError::Policy {
                             profile: profile.to_owned(),
                             source,
+                            context: None,
                         }
                     })?,
                     DomainAccess::Allow,
@@ -330,6 +343,7 @@ fn build_network(
                 .map_err(|source| ConfigError::Policy {
                     profile: profile.to_owned(),
                     source,
+                    context: None,
                 })?;
         }
         for name in &local_ipc.named_pipes {
@@ -339,6 +353,7 @@ fn build_network(
                         ConfigError::Policy {
                             profile: profile.to_owned(),
                             source,
+                            context: None,
                         }
                     })?,
                     DomainAccess::Allow,
@@ -346,12 +361,14 @@ fn build_network(
                 .map_err(|source| ConfigError::Policy {
                     profile: profile.to_owned(),
                     source,
+                    context: None,
                 })?;
         }
     }
     policy.validate().map_err(|source| ConfigError::Policy {
         profile: profile.to_owned(),
         source,
+        context: None,
     })?;
     Ok(policy)
 }

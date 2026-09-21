@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::filesystem::MacosFilesystemPlan;
 use crate::network::MacosNetworkPlan;
-
+use crate::runtime::{FIXED_EXECUTABLE_ROOTS, is_fixed_executable};
 use crate::seatbelt::{SeatbeltProfile, glob_to_seatbelt_regex, glob_to_seatbelt_regex_exact};
 
 fn filesystem_plan(denied_path: &str) -> MacosFilesystemPlan {
@@ -22,6 +22,36 @@ fn filesystem_plan(denied_path: &str) -> MacosFilesystemPlan {
         ],
         unrestricted: false,
     }
+}
+
+#[test]
+fn fixed_runtime_baseline_covers_shared_system_executable_roots() {
+    let profile = SeatbeltProfile::build(
+        &filesystem_plan("/workspace/private"),
+        &MacosNetworkPlan::Disabled {
+            unix: Default::default(),
+        },
+    )
+    .expect("profile");
+    let policy = profile.policy();
+
+    for root in FIXED_EXECUTABLE_ROOTS {
+        assert!(
+            policy.contains(&format!("(subpath \"{root}\")")),
+            "fixed macOS baseline does not mention {root}"
+        );
+    }
+}
+
+#[test]
+fn fixed_runtime_classifier_does_not_cover_library_roots() {
+    assert!(!is_fixed_executable(Path::new(
+        "/System/Library/PrivateTool"
+    )));
+    assert!(!is_fixed_executable(Path::new(
+        "/Library/Apple/PrivateTool"
+    )));
+    assert!(!is_fixed_executable(Path::new("/usr/bin-not-a-root/tool")));
 }
 
 #[test]
