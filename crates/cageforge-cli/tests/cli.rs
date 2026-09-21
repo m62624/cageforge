@@ -262,6 +262,24 @@ executable_roots = ["/opt/tool/runtime"]
             Some("runtime.executable_roots"),
         ),
         (
+            "native_executable_root_missing",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is missing: \"/opt/tool/runtime\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
+            "native_executable_root_not_directory",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is not a directory: \"/opt/tool/runtime\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
+            "native_executable_root_not_readable",
+            "macos_invalid_executable_root",
+            "configured executable runtime root is not readable: \"/opt/tool/runtime\"",
+            Some("runtime.executable_roots"),
+        ),
+        (
             "native_invalid_executable_root",
             "macos_invalid_executable_root",
             "configured executable runtime root is not an absolute safe path: \"relative/runtime\"",
@@ -269,6 +287,55 @@ executable_roots = ["/opt/tool/runtime"]
         ),
     ] {
         let diagnostic = ConfigDiagnostic::for_runtime_failure(&source, code, message, field);
+        let rendered = diagnostic
+            .render_human()
+            .replace(&config_path.display().to_string(), "<config.toml>");
+        insta::assert_snapshot!(name, rendered);
+    }
+}
+
+#[cfg(feature = "config")]
+#[test]
+fn native_platform_diagnostics_are_snapshotted() {
+    let workspace = tempfile::tempdir().expect("temporary platform diagnostic configuration");
+    let config_path = workspace.path().join("platforms.toml");
+    std::fs::write(
+        &config_path,
+        r#"default_profile = "tool"
+
+[profiles.tool.command]
+program = "/opt/tool/bin/runner"
+args = ["--worker", "one"]
+"#,
+    )
+    .expect("write platform diagnostic fixture");
+    let config = Config::from_file(&config_path).expect("valid platform diagnostic fixture");
+
+    for (name, platform, code) in [
+        (
+            "native_linux_failure",
+            PlatformId::Linux,
+            "linux_native_error",
+        ),
+        (
+            "native_windows_failure",
+            PlatformId::Windows,
+            "windows_native_error",
+        ),
+    ] {
+        let profile = config
+            .resolve_for_platform("tool", platform)
+            .expect("platform diagnostic fixture resolves");
+        let source = profile
+            .source_context()
+            .clone()
+            .with_command("/opt/tool/bin/runner --worker one");
+        let diagnostic = ConfigDiagnostic::for_runtime_failure(
+            &source,
+            code,
+            "sandbox preparation failed: native setup failed",
+            None,
+        );
         let rendered = diagnostic
             .render_human()
             .replace(&config_path.display().to_string(), "<config.toml>");

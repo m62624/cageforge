@@ -1,0 +1,9 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: rendered
+---
+[linux_native_error] sandbox preparation failed: native setup failed
+  --> <config.toml>:3:1
+  profile: tool
+  platform: linux
+  command: /opt/tool/bin/runner --worker one

@@ -1,0 +1,9 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: rendered
+---
+[windows_native_error] sandbox preparation failed: native setup failed
+  --> <config.toml>:3:1
+  profile: tool
+  platform: windows
+  command: /opt/tool/bin/runner --worker one

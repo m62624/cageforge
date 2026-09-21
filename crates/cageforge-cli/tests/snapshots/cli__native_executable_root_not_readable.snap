@@ -1,0 +1,10 @@
+---
+source: crates/cageforge-cli/tests/cli.rs
+expression: rendered
+---
+[macos_invalid_executable_root] configured executable runtime root is not readable: "/opt/tool/runtime"
+  --> <config.toml>:8:1
+  profile: tool
+  platform: macos
+  command: /opt/tool/bin/runner --worker one
+  field: runtime.executable_roots
