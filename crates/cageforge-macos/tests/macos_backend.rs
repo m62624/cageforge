@@ -442,6 +442,19 @@ fn request_for(
     cageforge_policy_compose::EffectiveSandbox,
     PathResolutionContext,
 ) {
+    request_for_with_stdin(workspace, policy, command, StdioMode::Inherit)
+}
+
+fn request_for_with_stdin(
+    workspace: &Path,
+    policy: &SandboxPolicy,
+    command: CommandSpec,
+    stdin_mode: StdioMode,
+) -> (
+    CommandRequest,
+    cageforge_policy_compose::EffectiveSandbox,
+    PathResolutionContext,
+) {
     let environment = EnvironmentSpec::inherit_core();
     let policy = policy_for_command(policy, Path::new(command.program()));
     let ceiling = PolicyCeiling::new(SandboxPolicy::full_access(), environment.clone());
@@ -452,6 +465,7 @@ fn request_for(
         .expect("working directory")
         .with_stdio(
             StdioSpec::inherited()
+                .with_stdin(stdin_mode)
                 .with_stdout(StdioMode::Pipe)
                 .with_stderr(StdioMode::Pipe),
         )
@@ -755,7 +769,7 @@ fn exiting_marker_child(
         .expect("shell option")
         .with_arg(
             format!("(sleep {MARKER_DELAY_SECONDS}; touch \"$1\") & descendant=$!; ")
-                + "printf 'ready:%s\\n' \"$descendant\"; exit 0",
+                + "printf 'ready:%s\\n' \"$descendant\"; IFS= read -r _; exit 0",
         )
         .expect("shell script")
         .with_arg("cageforge-marker")
@@ -763,7 +777,8 @@ fn exiting_marker_child(
         .with_arg(marker.as_os_str())
         .expect("marker argument");
     let policy = writable_policy(workspace);
-    let (command, effective, context) = request_for(workspace, &policy, command);
+    let (command, effective, context) =
+        request_for_with_stdin(workspace, &policy, command, StdioMode::Pipe);
     let prepared = backend
         .prepare(BackendRequest::new(&command, &effective), &context)
         .expect("prepare");
@@ -1964,6 +1979,11 @@ fn reaped_leader_does_not_leave_a_running_descendant() {
         "descendant {descendant} escaped boundary group {}",
         child.id()
     );
+    child
+        .stdin()
+        .expect("leader stdin pipe")
+        .write_all(b"release\n")
+        .expect("release leader fixture");
     assert!(child.wait().expect("wait").success());
     thread::sleep(Duration::from_secs(2));
     assert!(
