@@ -375,21 +375,28 @@ impl SourceDocument {
         profile: &str,
         platform: Option<PlatformId>,
     ) -> Option<SourceLocation> {
+        let base_prefix = format!("[profiles.{profile}");
         let prefixes = platform
             .map(|platform| {
                 vec![
-                    format!("[profiles.{profile}.platforms.{}", platform.as_str()),
-                    format!("[profiles.{profile}"),
+                    (
+                        format!("[profiles.{profile}.platforms.{}", platform.as_str()),
+                        false,
+                    ),
+                    (base_prefix.clone(), true),
                 ]
             })
-            .unwrap_or_else(|| vec![format!("[profiles.{profile}")]);
+            .unwrap_or_else(|| vec![(base_prefix, true)]);
 
-        for prefix in prefixes {
+        for (prefix, is_base) in prefixes {
             let mut offset = 0;
             for line in self.text.split_inclusive('\n') {
                 let current = line.trim();
-                let matches = current.starts_with(&prefix)
-                    && matches!(current.as_bytes().get(prefix.len()), Some(b'.' | b']'));
+                let suffix = current.strip_prefix(&prefix);
+                let matches = suffix.is_some_and(|suffix| {
+                    matches!(suffix.as_bytes().first(), Some(b'.' | b']'))
+                        && !(is_base && suffix.starts_with(".platforms"))
+                });
                 if matches {
                     return Some(source_location(&self.text, offset..offset + current.len()));
                 }

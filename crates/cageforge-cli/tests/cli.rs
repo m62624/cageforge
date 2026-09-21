@@ -303,6 +303,10 @@ fn native_platform_diagnostics_are_snapshotted() {
         &config_path,
         r#"default_profile = "tool"
 
+[profiles.tool.platforms.macos.command]
+program = "/opt/tool/bin/macos-runner"
+args = ["--macos"]
+
 [profiles.tool.command]
 program = "/opt/tool/bin/runner"
 args = ["--worker", "one"]
