@@ -1543,7 +1543,7 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
     let workspace = tempfile::tempdir().expect("workspace");
     // Keep the file outside the writable workspace and grant only this leaf.
     let resources = tempfile::tempdir().expect("external resources");
-    let file = resources.path().join("single resource.jar");
+    let file = resources.path().join("single-resource.jar");
     let sibling = resources.path().join("unrelated.txt");
     fs::write(&file, b"cageforge-file-root\r\n").expect("readable file");
     fs::write(&sibling, b"unrelated").expect("neighboring file");
@@ -1557,8 +1557,8 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
     }
     let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
     for (script, expected_success) in [
-        (format!(r#"type "{}""#, file.display()), true),
-        (format!(r#"echo forbidden>> "{}""#, file.display()), false),
+        (format!("type {}", file.display()), true),
+        (format!("echo forbidden>> {}", file.display()), false),
     ] {
         let command = CommandSpec::new(system_root.join("System32/cmd.exe"))
             .expect("system cmd.exe")
