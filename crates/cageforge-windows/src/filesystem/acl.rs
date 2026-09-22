@@ -649,10 +649,13 @@ impl<'plan> AclPlanBuilder<'plan> {
             merge_pending(
                 &mut self.foundation,
                 validated.final_path(),
-                vec![AclEntry::allow_exact(
-                    self.group_sid,
-                    PATH_TRAVERSAL_ALLOW_MASK,
-                )],
+                vec![
+                    AclEntry::allow_exact(self.group_sid, PATH_TRAVERSAL_ALLOW_MASK),
+                    AclEntry::allow_exact(
+                        &self.authorities.read_base_sid,
+                        PATH_TRAVERSAL_ALLOW_MASK,
+                    ),
+                ],
                 false,
                 Vec::new(),
                 Vec::new(),
