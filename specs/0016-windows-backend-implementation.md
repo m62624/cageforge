@@ -686,6 +686,16 @@ descendant disappears before its ACL handle can be opened, only
 and skipped. Reparse substitution, final-path drift, access denial, malformed
 ACLs, and every other open failure remain typed fail-closed errors.
 
+An explicit file root is still accessed by the child through its pathname. The
+planner therefore adds a temporary, exact (non-inheriting) ancestor ACE with
+only `FILE_TRAVERSE | FILE_READ_ATTRIBUTES` on each existing non-volume parent
+that the restricted token must cross. These ACEs do not grant directory listing,
+file data, child inheritance, or access to sibling files. Each parent is opened
+and validated without following reparse points, journaled under the same ACL
+transaction, read back, and restored with the exact original descriptor during
+release. A failure to validate or restore any parent blocks launch or cleanup;
+the implementation must not replace this with a broad parent read root.
+
 All capability-state and ACL reconciliation uses the same protected
 cross-process lock. A later profile may preserve another profile's capability
 ACEs but must never revoke or rewrite them as its own. Persistent state records
