@@ -94,6 +94,7 @@ struct AclPlanBuilder<'plan> {
     foundation: BTreeMap<NativePathKey, PendingAclOperation>,
     continuation: BTreeMap<NativePathKey, PendingAclOperation>,
     denies: BTreeMap<NativePathKey, PendingAclOperation>,
+    file_path_ancestors: BTreeSet<NativePathKey>,
     write_roots: Vec<PathBuf>,
 }
 
@@ -554,6 +555,7 @@ impl<'plan> AclPlanBuilder<'plan> {
             foundation: BTreeMap::new(),
             continuation: BTreeMap::new(),
             denies: BTreeMap::new(),
+            file_path_ancestors: BTreeSet::new(),
             write_roots,
         }
     }
@@ -646,6 +648,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                 ancestor = Some(parent.to_path_buf());
                 continue;
             }
+            self.file_path_ancestors.insert(key);
             merge_pending(
                 &mut self.foundation,
                 validated.final_path(),
@@ -737,7 +740,9 @@ impl<'plan> AclPlanBuilder<'plan> {
     fn expand_existing_descendants(&mut self) -> Result<(), FilesystemAclError> {
         let allow_roots = self
             .foundation
-            .values()
+            .iter()
+            .filter(|(key, _)| !self.file_path_ancestors.contains(*key))
+            .map(|(_, operation)| operation)
             .map(|operation| {
                 (
                     operation.path.clone(),
