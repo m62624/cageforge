@@ -1557,17 +1557,14 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
     }
     let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
     for (script, expected_success) in [
-        (r#"type "%CAGEFORGE_READ_FILE%""#, true),
-        (r#"type "%CAGEFORGE_READ_FILE%""#, true),
-        (r#"echo forbidden>> "%CAGEFORGE_READ_FILE%""#, false),
+        (format!(r#"type "{}""#, file.display()), true),
+        (format!(r#"echo forbidden>> "{}""#, file.display()), false),
     ] {
         let command = CommandSpec::new(system_root.join("System32/cmd.exe"))
             .expect("system cmd.exe")
-            .with_args(["/d", "/c", script])
+            .with_args(["/d", "/c", script.as_str()])
             .expect("cmd arguments");
-        let environment = EnvironmentSpec::inherit_core()
-            .with_var("CAGEFORGE_READ_FILE", file.as_os_str())
-            .expect("file path environment");
+        let environment = EnvironmentSpec::inherit_core();
         let filesystem = FilesystemPolicy::restricted([
             FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
             FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
