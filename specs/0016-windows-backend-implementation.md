@@ -672,8 +672,10 @@ disagreement before its no-write read-back is typed descriptor drift and blocks
 launch. Thus an idempotent launch cannot cause duplicate inherited ACEs in
 existing descendants. New descendants inherit from the protected root while new siblings
 outside it continue to inherit the deny.
-The scan retains each object's directory-or-file kind: direct ACEs on existing
-files are exact, while ACEs on existing directories retain their required
+ACL preparation obtains each object's directory-or-file kind from the same
+non-reparse handle used for descriptor inspection and mutation. This applies
+to explicitly selected file roots as well as enumerated descendants. Direct
+ACEs on files are exact, while ACEs on directories retain their required
 inheritance flags for future children. Windows correctly strips inheritance
 flags from a file ACE, so Cageforge never treats that canonicalization as either
 evidence of enforcement or a reason to weaken a directory ACE check. Unknown or
@@ -1170,6 +1172,17 @@ account that owns an attacker-created lookalike retains implicit DACL-control
 rights even if it writes visually equivalent ACEs.
 
 ### 12.3 Filesystem ACL review record
+
+File-root inheritance was additionally compared with
+`windows-sandbox-rs/src/acl.rs::ensure_allow_mask_aces_with_inheritance` at the
+frozen baseline and the local upstream revision
+`50d77959bf927293c4b5ddcca81d05331ae582ea`. Those implementations pass the
+caller's inheritance flags to `SetEntriesInAclW` and apply the resulting ACL
+through `SetNamedSecurityInfoW`. Cageforge determines the native object kind
+through its retained handle before constructing the expected descriptor, so
+file ACEs have exact scope in both the durable journal and native read-back.
+Directory inheritance, masks, SID matching, descriptor equality, and original
+DACL restoration retain their existing contracts.
 
 Filesystem lowering and ACL reconciliation were reviewed line by line against
 the frozen versions of `src/acl.rs`, `src/allow.rs`, `src/workspace_acl.rs`,
