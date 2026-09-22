@@ -1515,6 +1515,129 @@ fn restricted_command_can_start_a_native_runtime_program() {
 }
 
 #[test]
+fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
+    let _setup_test_guard = setup_test_lock();
+    let temporary = tempfile::tempdir().expect("temporary state");
+    let config = WindowsSetupConfig::new()
+        .with_state_directory(temporary.path().join("state"))
+        .expect("absolute state directory")
+        .with_setup_helper_path(PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup")))
+        .expect("setup helper")
+        .with_command_runner_path(PathBuf::from(env!(
+            "CARGO_BIN_EXE_cageforge-windows-command-runner"
+        )))
+        .expect("command runner");
+    let setup = WindowsSetup::new(config);
+    let mut cleanup = SetupCleanup {
+        setup: &setup,
+        armed: true,
+    };
+    setup.install().expect("install file-root setup");
+    let backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(END_TO_END_PROBE_TIMEOUT)
+            .expect("bounded probe"),
+    )
+    .expect("file-root backend");
+    let workspace = tempfile::tempdir().expect("workspace");
+    // Keep the file outside the writable workspace and grant only this leaf.
+    let resources = tempfile::tempdir().expect("external resources");
+    let file = resources.path().join("single resource.jar");
+    let sibling = resources.path().join("unrelated.txt");
+    fs::write(&file, b"cageforge-file-root\r\n").expect("readable file");
+    fs::write(&sibling, b"unrelated").expect("neighboring file");
+    let paths = [file.as_path(), sibling.as_path(), resources.path()];
+    let before = paths.map(raw_dacl_fingerprint);
+    for descriptor in &before {
+        assert!(
+            descriptor.starts_with("bytes="),
+            "DACL capture failed: {descriptor}"
+        );
+    }
+    let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+    for (script, expected_success) in [
+        (r#"type "%CAGEFORGE_READ_FILE%""#, true),
+        (r#"type "%CAGEFORGE_READ_FILE%""#, true),
+        (r#"echo forbidden>> "%CAGEFORGE_READ_FILE%""#, false),
+    ] {
+        let command = CommandSpec::new(system_root.join("System32/cmd.exe"))
+            .expect("system cmd.exe")
+            .with_args(["/d", "/c", script])
+            .expect("cmd arguments");
+        let environment = EnvironmentSpec::inherit_core()
+            .with_var("CAGEFORGE_READ_FILE", file.as_os_str())
+            .expect("file path environment");
+        let filesystem = FilesystemPolicy::restricted([
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+            FilesystemRule::new(
+                PathSelector::absolute(&file).expect("absolute file"),
+                AccessMode::Read,
+            ),
+        ]);
+        let (request, effective, context) = request_with_filesystem_environment(
+            workspace.path(),
+            filesystem,
+            NetworkPolicy::disabled(),
+            command,
+            environment,
+        );
+        let prepared = backend
+            .prepare(BackendRequest::new(&request, &effective), &context)
+            .expect("prepare explicit file-root policy");
+        let mut child = backend
+            .spawn(prepared)
+            .expect("spawn with explicit read file root");
+        let status = child.wait().expect("wait file-root command");
+        let mut stdout = String::new();
+        child
+            .stdout()
+            .expect("stdout")
+            .read_to_string(&mut stdout)
+            .expect("read stdout");
+        let mut stderr = String::new();
+        child
+            .stderr()
+            .expect("stderr")
+            .read_to_string(&mut stderr)
+            .expect("read stderr");
+        assert_eq!(
+            status.success(),
+            expected_success,
+            "status={status:?}; stdout={stdout:?}; stderr={stderr:?}"
+        );
+        if expected_success {
+            assert_eq!(stdout, "cageforge-file-root\r\n");
+        }
+        assert_eq!(
+            fs::read(&file).expect("read original file"),
+            b"cageforge-file-root\r\n"
+        );
+    }
+    assert_eq!(
+        raw_dacl_fingerprint(&sibling),
+        before[1],
+        "sibling DACL changed"
+    );
+    assert_eq!(
+        raw_dacl_fingerprint(resources.path()),
+        before[2],
+        "parent DACL changed"
+    );
+    drop(backend);
+    setup
+        .uninstall()
+        .expect("restore file-root ACL and uninstall");
+    cleanup.armed = false;
+    assert_eq!(
+        paths.map(raw_dacl_fingerprint),
+        before,
+        "original DACLs were not restored"
+    );
+}
+
+#[test]
 fn runnable_windows_profile_launches_through_the_native_backend_api() {
     let _setup_test_guard = setup_test_lock();
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
