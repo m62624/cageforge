@@ -75,6 +75,7 @@ pub(crate) struct FilesystemAclEnforcement {
 
 pub(crate) struct FilesystemAuthorities {
     profile_guard_sid: String,
+    read_profile_sid: String,
     write_root_sids: BTreeMap<NativePathKey, String>,
     token_sids: Vec<String>,
 }
@@ -443,10 +444,16 @@ impl FilesystemAuthorities {
         filesystem: &FilesystemPlan,
         state: &mut CapabilityStateSession<'_>,
     ) -> Result<Self, FilesystemAclError> {
-        let mut declarations = vec![(
-            filesystem.profile_anchor().to_path_buf(),
-            CapabilityRole::ProfileGuard,
-        )];
+        let mut declarations = vec![
+            (
+                filesystem.profile_anchor().to_path_buf(),
+                CapabilityRole::ProfileGuard,
+            ),
+            (
+                filesystem.profile_anchor().to_path_buf(),
+                CapabilityRole::ReadProfile,
+            ),
+        ];
         let mut write_roots = Vec::new();
         for target in filesystem.targets() {
             if target.access() == FilesystemPlanAccess::WriteRoot {
@@ -456,7 +463,7 @@ impl FilesystemAuthorities {
             }
         }
         let sids = state.ensure_authorities(filesystem.profile_sha256(), declarations)?;
-        let expected = write_roots.len() + 1;
+        let expected = write_roots.len() + 2;
         if sids.len() != expected {
             return Err(FilesystemAclError::AuthorityCount {
                 expected,
@@ -464,17 +471,23 @@ impl FilesystemAuthorities {
             });
         }
         let profile_guard_sid = sids[0].clone();
+        let read_profile_sid = sids[1].clone();
         let mut write_root_sids = BTreeMap::new();
-        for (path, sid) in write_roots.into_iter().zip(sids.into_iter().skip(1)) {
+        for (path, sid) in write_roots.into_iter().zip(sids.into_iter().skip(2)) {
             write_root_sids.insert(NativePathKey::new(&path), sid);
         }
         let read_base_sid = state.read_base_sid()?;
-        let mut token_sids = vec![read_base_sid.clone(), profile_guard_sid.clone()];
+        let mut token_sids = vec![
+            read_base_sid,
+            profile_guard_sid.clone(),
+            read_profile_sid.clone(),
+        ];
         token_sids.extend(write_root_sids.values().cloned());
         token_sids.sort_unstable();
         token_sids.dedup();
         Ok(Self {
             profile_guard_sid,
+            read_profile_sid,
             write_root_sids,
             token_sids,
         })
@@ -558,9 +571,9 @@ impl<'plan> AclPlanBuilder<'plan> {
                 FilesystemPlanAccess::ReadRoot => {
                     let entries = vec![
                         AclEntry::allow(self.group_sid, READ_ALLOW_MASK),
-                        // The installation-wide read SID is also present in unrelated
-                        // concurrent sandboxes. Bind policy reads to this profile.
-                        AclEntry::allow(&self.authorities.profile_guard_sid, READ_ALLOW_MASK),
+                        // The installation-wide read SID is shared by concurrent sandboxes.
+                        // Use a profile-specific SID distinct from the deny guard.
+                        AclEntry::allow(&self.authorities.read_profile_sid, READ_ALLOW_MASK),
                     ];
                     self.insert_foundation(path, entries, true, self.inherited_write_sids(path));
                 }
@@ -572,7 +585,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                     })?;
                     let entries = vec![
                         AclEntry::allow(self.group_sid, WRITE_ALLOW_MASK),
-                        AclEntry::allow(&self.authorities.profile_guard_sid, READ_ALLOW_MASK),
+                        AclEntry::allow(&self.authorities.read_profile_sid, READ_ALLOW_MASK),
                         AclEntry::allow(write_sid, WRITE_ALLOW_MASK),
                     ];
                     self.insert_foundation(
@@ -640,7 +653,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                 directory,
                 vec![
                     AclEntry::allow(self.group_sid, WRITE_ALLOW_MASK),
-                    AclEntry::allow(&self.authorities.profile_guard_sid, READ_ALLOW_MASK),
+                    AclEntry::allow(&self.authorities.read_profile_sid, READ_ALLOW_MASK),
                     AclEntry::allow(write_sid, WRITE_ALLOW_MASK),
                 ],
                 true,
