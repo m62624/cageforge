@@ -686,15 +686,13 @@ descendant disappears before its ACL handle can be opened, only
 and skipped. Reparse substitution, final-path drift, access denial, malformed
 ACLs, and every other open failure remain typed fail-closed errors.
 
-An explicit file root is still accessed by the child through its pathname. The
-planner therefore adds a temporary, exact (non-inheriting) ancestor ACE with
-only `FILE_TRAVERSE | FILE_READ_ATTRIBUTES` on each existing non-volume parent
-that the restricted token must cross. These ACEs do not grant directory listing,
-file data, child inheritance, or access to sibling files. Each parent is opened
-and validated without following reparse points, journaled under the same ACL
-transaction, read back, and restored with the exact original descriptor during
-release. A failure to validate or restore any parent blocks launch or cleanup;
-the implementation must not replace this with a broad parent read root.
+An explicit file read root grants access to that file without changing its
+parent or siblings. The verified `SeChangeNotifyPrivilege` permits traversal
+to an authorized file; it does not grant directory listing. Applications that
+enumerate the containing directory need a separate directory read rule.
+The backend must not infer that broader grant from an individual file rule.
+File and directory grants use the same exact journal and uninstall restoration
+contract.
 
 All capability-state and ACL reconciliation uses the same protected
 cross-process lock. A later profile may preserve another profile's capability

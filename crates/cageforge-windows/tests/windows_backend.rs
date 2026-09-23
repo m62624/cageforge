@@ -1544,10 +1544,17 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
     // Keep the file outside the writable workspace and grant only this leaf.
     let resources = tempfile::tempdir().expect("external resources");
     let file = resources.path().join("single-resource.jar");
+    let spaced_file = resources.path().join("single resource.jar");
     let sibling = resources.path().join("unrelated.txt");
     fs::write(&file, b"cageforge-file-root\r\n").expect("readable file");
+    fs::write(&spaced_file, b"cageforge-file-root\r\n").expect("readable spaced file");
     fs::write(&sibling, b"unrelated").expect("neighboring file");
-    let paths = [file.as_path(), sibling.as_path(), resources.path()];
+    let paths = [
+        file.as_path(),
+        sibling.as_path(),
+        resources.path(),
+        spaced_file.as_path(),
+    ];
     let before = paths.map(raw_dacl_fingerprint);
     for descriptor in &before {
         assert!(
@@ -1562,42 +1569,78 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
         &fixture,
     )
     .expect("copy file-root fixture");
-    let direct_probe = CommandSpec::new(&fixture)
-        .expect("fixture command")
-        .with_args([
-            std::ffi::OsStr::new("--file-root-probe"),
-            file.as_os_str(),
-            sibling.as_os_str(),
-        ])
-        .expect("fixture arguments");
+    let direct_probe = || {
+        CommandSpec::new(&fixture)
+            .expect("fixture command")
+            .with_args([
+                std::ffi::OsStr::new("--file-root-probe"),
+                file.as_os_str(),
+                sibling.as_os_str(),
+                spaced_file.as_os_str(),
+            ])
+            .expect("fixture arguments")
+    };
     let shell = |script: String| {
         CommandSpec::new(system_root.join("System32/cmd.exe"))
             .expect("system cmd.exe")
             .with_args(["/d", "/c", script.as_str()])
             .expect("cmd arguments")
     };
-    for (command, expected_success, expected_stdout) in [
-        (direct_probe, true, None),
+    for (command, allow_parent, expected_success, expected_stdout) in [
+        (direct_probe(), false, true, Some("file-root-contract-ok")),
+        (direct_probe(), false, true, Some("file-root-contract-ok")),
+        // TYPE enumerates the directory, beyond opening the approved file.
         (
             shell(format!("type {}", file.display())),
-            true,
-            Some("cageforge-file-root\r\n"),
+            false,
+            false,
+            Some(""),
         ),
         (
             shell(format!("echo forbidden>> {}", file.display())),
             false,
-            None,
+            false,
+            Some(""),
+        ),
+        // Keep the identical shell command as a positive control with an
+        // explicit directory grant; never infer that grant from a file rule.
+        (
+            shell(format!("type {}", file.display())),
+            true,
+            true,
+            Some("cageforge-file-root\r\n"),
         ),
     ] {
+        assert_eq!(
+            raw_dacl_fingerprint(&sibling),
+            before[1],
+            "sibling DACL changed by file grant"
+        );
+        assert_eq!(
+            raw_dacl_fingerprint(resources.path()),
+            before[2],
+            "parent DACL changed by file grant"
+        );
         let environment = EnvironmentSpec::inherit_core();
-        let filesystem = FilesystemPolicy::restricted([
+        let mut rules = vec![
             FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
             FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
             FilesystemRule::new(
                 PathSelector::absolute(&file).expect("absolute file"),
                 AccessMode::Read,
             ),
-        ]);
+            FilesystemRule::new(
+                PathSelector::absolute(&spaced_file).expect("absolute spaced file"),
+                AccessMode::Read,
+            ),
+        ];
+        if allow_parent {
+            rules.push(FilesystemRule::new(
+                PathSelector::absolute(resources.path()).expect("absolute resource directory"),
+                AccessMode::Read,
+            ));
+        }
+        let filesystem = FilesystemPolicy::restricted(rules);
         let (request, effective, context) = request_with_filesystem_environment(
             workspace.path(),
             filesystem,
@@ -1624,11 +1667,10 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
             .expect("stderr")
             .read_to_string(&mut stderr)
             .expect("read stderr");
-        eprintln!("file-root probe: status={status:?}; stdout={stdout:?}; stderr={stderr:?}");
         assert_eq!(
             status.success(),
             expected_success,
-            "status={status:?}; stdout={stdout:?}; stderr={stderr:?}"
+            "allow_parent={allow_parent}; status={status:?}; stdout={stdout:?}; stderr={stderr:?}"
         );
         if let Some(expected_stdout) = expected_stdout {
             assert_eq!(stdout, expected_stdout);
@@ -1638,16 +1680,6 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
             b"cageforge-file-root\r\n"
         );
     }
-    assert_eq!(
-        raw_dacl_fingerprint(&sibling),
-        before[1],
-        "sibling DACL changed"
-    );
-    assert_eq!(
-        raw_dacl_fingerprint(resources.path()),
-        before[2],
-        "parent DACL changed"
-    );
     drop(backend);
     setup
         .uninstall()

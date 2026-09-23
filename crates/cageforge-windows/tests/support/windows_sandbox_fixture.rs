@@ -101,32 +101,30 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(target_os = "windows")]
 fn file_root_probe() -> Result<(), String> {
     let file = PathBuf::from(std::env::args_os().nth(2).ok_or("missing file path")?);
     let sibling = PathBuf::from(std::env::args_os().nth(3).ok_or("missing sibling path")?);
+    let spaced_file = PathBuf::from(
+        std::env::args_os()
+            .nth(4)
+            .ok_or("missing spaced file path")?,
+    );
     let parent = file.parent().ok_or("missing parent")?;
-    let read = std::fs::read(&file);
+    for path in [&file, &spaced_file] {
+        let data =
+            std::fs::read(path).map_err(|error| format!("read approved file {path:?}: {error}"))?;
+        if data != b"cageforge-file-root\r\n" {
+            return Err(format!("unexpected approved file contents: {path:?}"));
+        }
+        let metadata = std::fs::metadata(path)
+            .map_err(|error| format!("read approved file metadata {path:?}: {error}"))?;
+        if !metadata.is_file() || metadata.len() != data.len() as u64 {
+            return Err(format!("unexpected approved file metadata: {path:?}"));
+        }
+    }
     let write = std::fs::OpenOptions::new().write(true).open(&file);
     let sibling_read = std::fs::read(&sibling);
     let listing = std::fs::read_dir(parent);
-    println!("file read: {read:?}");
-    println!("file write-open: {write:?}");
-    println!("sibling read: {sibling_read:?}");
-    println!("parent listing: {listing:?}");
-    println!("file metadata: {:?}", std::fs::metadata(&file));
-    println!("parent metadata: {:?}", std::fs::metadata(parent));
-    let cmd = PathBuf::from(environment("SystemRoot")?).join("System32/cmd.exe");
-    for script in [
-        format!("type {}", file.display()),
-        format!("type < {}", file.display()),
-    ] {
-        let output = Command::new(&cmd).args(["/d", "/c", &script]).output();
-        println!("command {script:?}: {output:?}");
-    }
-    if read.as_deref().map_err(|error| error.kind()) != Ok(b"cageforge-file-root\r\n") {
-        return Err("explicit file read failed".to_string());
-    }
     for (operation, error) in [
         ("file write", write.err()),
         ("sibling read", sibling_read.err()),
@@ -138,12 +136,9 @@ fn file_root_probe() -> Result<(), String> {
             ));
         }
     }
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn file_root_probe() -> Result<(), String> {
-    Err("file-root probe requires Windows".to_string())
+    std::io::stdout()
+        .write_all(b"file-root-contract-ok")
+        .map_err(|error| format!("write file-root result: {error}"))
 }
 
 fn run() -> Result<(), String> {

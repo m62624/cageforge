@@ -32,9 +32,9 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA,
     FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_DISPOSITION_INFO,
-    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
-    FILE_WRITE_EA, FileDispositionInfo, SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
+    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, FileDispositionInfo,
+    SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
 
 use crate::capability::state::{
@@ -57,7 +57,6 @@ const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 const WRITE_ALLOW_MASK: u32 =
     FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 const READ_ALLOW_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
-const PATH_TRAVERSAL_ALLOW_MASK: u32 = FILE_READ_ATTRIBUTES | FILE_TRAVERSE;
 const WRITE_DENY_MASK: u32 = FILE_GENERIC_WRITE
     | FILE_WRITE_DATA
     | FILE_APPEND_DATA
@@ -94,7 +93,6 @@ struct AclPlanBuilder<'plan> {
     foundation: BTreeMap<NativePathKey, PendingAclOperation>,
     continuation: BTreeMap<NativePathKey, PendingAclOperation>,
     denies: BTreeMap<NativePathKey, PendingAclOperation>,
-    file_path_ancestors: BTreeSet<NativePathKey>,
     write_roots: Vec<PathBuf>,
 }
 
@@ -221,11 +219,6 @@ pub(crate) enum FilesystemAclError {
     CapabilityTransition(#[from] CapabilityStateTransitionError),
     #[error(transparent)]
     InvalidPath(#[from] ValidatedPathError),
-    #[error("Windows filesystem ACL expected directory path {path:?}, but found a file")]
-    PathKindMismatch {
-        path: PathBuf,
-        expected_directory: bool,
-    },
     #[error("capability state returned {actual} authorities for {expected} filesystem roles")]
     AuthorityCount { expected: usize, actual: usize },
     #[error("no write-root capability SID exists for {path:?}")]
@@ -555,7 +548,6 @@ impl<'plan> AclPlanBuilder<'plan> {
             foundation: BTreeMap::new(),
             continuation: BTreeMap::new(),
             denies: BTreeMap::new(),
-            file_path_ancestors: BTreeSet::new(),
             write_roots,
         }
     }
@@ -571,9 +563,6 @@ impl<'plan> AclPlanBuilder<'plan> {
                         AclEntry::allow(&self.authorities.read_base_sid, READ_ALLOW_MASK),
                     ];
                     self.insert_foundation(path, entries, true, self.inherited_write_sids(path));
-                    if !target.path().is_directory() {
-                        self.insert_file_path_ancestors(path)?;
-                    }
                 }
                 FilesystemPlanAccess::WriteRoot => {
                     let write_sid = self.authorities.write_sid(path).ok_or_else(|| {
@@ -625,47 +614,6 @@ impl<'plan> AclPlanBuilder<'plan> {
             }
         }
         self.expand_existing_descendants()
-    }
-
-    fn insert_file_path_ancestors(&mut self, file: &Path) -> Result<(), FilesystemAclError> {
-        let mut ancestor = file.parent().map(Path::to_path_buf);
-        while let Some(path) = ancestor {
-            let Some(parent) = path.parent() else {
-                break;
-            };
-            if paths_equal(&path, parent) {
-                break;
-            }
-            let validated = ValidatedPath::open_for_acl(&path)?;
-            if !validated.is_directory() {
-                return Err(FilesystemAclError::PathKindMismatch {
-                    path: path.clone(),
-                    expected_directory: true,
-                });
-            }
-            let key = NativePathKey::new(validated.final_path());
-            if self.foundation.contains_key(&key) {
-                ancestor = Some(parent.to_path_buf());
-                continue;
-            }
-            self.file_path_ancestors.insert(key);
-            merge_pending(
-                &mut self.foundation,
-                validated.final_path(),
-                vec![
-                    AclEntry::allow_exact(self.group_sid, PATH_TRAVERSAL_ALLOW_MASK),
-                    AclEntry::allow_exact(
-                        &self.authorities.read_base_sid,
-                        PATH_TRAVERSAL_ALLOW_MASK,
-                    ),
-                ],
-                false,
-                Vec::new(),
-                Vec::new(),
-            );
-            ancestor = Some(parent.to_path_buf());
-        }
-        Ok(())
     }
 
     fn collect_materialized_foundations(
@@ -740,9 +688,7 @@ impl<'plan> AclPlanBuilder<'plan> {
     fn expand_existing_descendants(&mut self) -> Result<(), FilesystemAclError> {
         let allow_roots = self
             .foundation
-            .iter()
-            .filter(|(key, _)| !self.file_path_ancestors.contains(*key))
-            .map(|(_, operation)| operation)
+            .values()
             .map(|operation| {
                 (
                     operation.path.clone(),
@@ -1353,15 +1299,6 @@ impl AclEntry {
             mode: AclAccessMode::Deny,
             mask,
             inheritance: AclInheritance::Subtree,
-        }
-    }
-
-    fn allow_exact(sid: &str, mask: u32) -> Self {
-        Self {
-            sid: sid.to_string(),
-            mode: AclAccessMode::Allow,
-            mask,
-            inheritance: AclInheritance::Exact,
         }
     }
 }
