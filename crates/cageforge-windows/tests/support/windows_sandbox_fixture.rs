@@ -87,6 +87,7 @@ const UNRELATED_NAMED_OBJECT: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATE
 
 fn main() -> ExitCode {
     let result = match std::env::args_os().nth(1).as_deref() {
+        Some(argument) if argument == "--file-root-probe" => file_root_probe(),
         Some(argument) if argument == "--process-broker-child" => process_broker_child(),
         Some(argument) if argument == "--shell-activation-child" => shell_activation_child(),
         _ => run(),
@@ -98,6 +99,51 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn file_root_probe() -> Result<(), String> {
+    let file = PathBuf::from(std::env::args_os().nth(2).ok_or("missing file path")?);
+    let sibling = PathBuf::from(std::env::args_os().nth(3).ok_or("missing sibling path")?);
+    let parent = file.parent().ok_or("missing parent")?;
+    let read = std::fs::read(&file);
+    let write = std::fs::OpenOptions::new().write(true).open(&file);
+    let sibling_read = std::fs::read(&sibling);
+    let listing = std::fs::read_dir(parent);
+    println!("file read: {read:?}");
+    println!("file write-open: {write:?}");
+    println!("sibling read: {sibling_read:?}");
+    println!("parent listing: {listing:?}");
+    println!("file metadata: {:?}", std::fs::metadata(&file));
+    println!("parent metadata: {:?}", std::fs::metadata(parent));
+    let cmd = PathBuf::from(environment("SystemRoot")?).join("System32/cmd.exe");
+    for script in [
+        format!("type {}", file.display()),
+        format!("type < {}", file.display()),
+    ] {
+        let output = Command::new(&cmd).args(["/d", "/c", &script]).output();
+        println!("command {script:?}: {output:?}");
+    }
+    if read.as_deref().map_err(|error| error.kind()) != Ok(b"cageforge-file-root\r\n") {
+        return Err("explicit file read failed".to_string());
+    }
+    for (operation, error) in [
+        ("file write", write.err()),
+        ("sibling read", sibling_read.err()),
+        ("parent listing", listing.err()),
+    ] {
+        if error.as_ref().map(std::io::Error::kind) != Some(std::io::ErrorKind::PermissionDenied) {
+            return Err(format!(
+                "{operation}: expected access denied, got {error:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn file_root_probe() -> Result<(), String> {
+    Err("file-root probe requires Windows".to_string())
 }
 
 fn run() -> Result<(), String> {

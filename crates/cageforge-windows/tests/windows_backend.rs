@@ -1556,14 +1556,39 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
         );
     }
     let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
-    for (script, expected_success) in [
-        (format!("type {}", file.display()), true),
-        (format!("echo forbidden>> {}", file.display()), false),
-    ] {
-        let command = CommandSpec::new(system_root.join("System32/cmd.exe"))
+    let fixture = workspace.path().join("file-root-probe.exe");
+    fs::copy(
+        env!("CARGO_BIN_EXE_cageforge-windows-test-fixture"),
+        &fixture,
+    )
+    .expect("copy file-root fixture");
+    let direct_probe = CommandSpec::new(&fixture)
+        .expect("fixture command")
+        .with_args([
+            std::ffi::OsStr::new("--file-root-probe"),
+            file.as_os_str(),
+            sibling.as_os_str(),
+        ])
+        .expect("fixture arguments");
+    let shell = |script: String| {
+        CommandSpec::new(system_root.join("System32/cmd.exe"))
             .expect("system cmd.exe")
             .with_args(["/d", "/c", script.as_str()])
-            .expect("cmd arguments");
+            .expect("cmd arguments")
+    };
+    for (command, expected_success, expected_stdout) in [
+        (direct_probe, true, None),
+        (
+            shell(format!("type {}", file.display())),
+            true,
+            Some("cageforge-file-root\r\n"),
+        ),
+        (
+            shell(format!("echo forbidden>> {}", file.display())),
+            false,
+            None,
+        ),
+    ] {
         let environment = EnvironmentSpec::inherit_core();
         let filesystem = FilesystemPolicy::restricted([
             FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
@@ -1599,13 +1624,14 @@ fn explicit_read_file_root_supports_launch_and_exact_acl_cleanup() {
             .expect("stderr")
             .read_to_string(&mut stderr)
             .expect("read stderr");
+        eprintln!("file-root probe: status={status:?}; stdout={stdout:?}; stderr={stderr:?}");
         assert_eq!(
             status.success(),
             expected_success,
             "status={status:?}; stdout={stdout:?}; stderr={stderr:?}"
         );
-        if expected_success {
-            assert_eq!(stdout, "cageforge-file-root\r\n");
+        if let Some(expected_stdout) = expected_stdout {
+            assert_eq!(stdout, expected_stdout);
         }
         assert_eq!(
             fs::read(&file).expect("read original file"),
