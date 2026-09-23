@@ -1275,6 +1275,51 @@ fn sandbox_process_fixture() {
             std::thread::sleep(Duration::from_secs(2));
             fs::write(marker, b"escaped").expect("write descendant escape marker");
         }
+        "cross-session-read-guard" => {
+            let secret =
+                PathBuf::from(std::env::var_os(SANDBOX_FIXTURE_DENIED_READ).expect("secret path"));
+            let trigger =
+                PathBuf::from(std::env::var_os(SANDBOX_FIXTURE_MARKER).expect("trigger path"));
+            let progress =
+                PathBuf::from(std::env::var_os(SANDBOX_FIXTURE_PROGRESS).expect("progress path"));
+            for phase in 1..=3 {
+                let deadline = Instant::now() + Duration::from_secs(60);
+                while fs::read_to_string(&trigger).ok().as_deref()
+                    != Some(match phase {
+                        1 => "1",
+                        2 => "2",
+                        _ => "3",
+                    })
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "read-guard trigger timed out at phase {phase}"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                let access = match fs::read(&secret) {
+                    Ok(_) => "allowed",
+                    Err(error) if error.kind() == io::ErrorKind::PermissionDenied => "denied",
+                    Err(error) => panic!("unexpected read error at phase {phase}: {error}"),
+                };
+                fs::write(&progress, format!("{phase}:{access}"))
+                    .expect("write read-guard progress");
+            }
+        }
+        "cross-session-read-grant" => {
+            let secret =
+                PathBuf::from(std::env::var_os(SANDBOX_FIXTURE_DENIED_READ).expect("secret path"));
+            let ready = PathBuf::from(std::env::var_os(SANDBOX_FIXTURE_READY).expect("ready path"));
+            let marker =
+                PathBuf::from(std::env::var_os(SANDBOX_FIXTURE_MARKER).expect("release path"));
+            assert_eq!(fs::read(&secret).expect("granted file read"), b"secret");
+            fs::write(&ready, b"ready").expect("write grant-ready marker");
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !marker.exists() {
+                assert!(Instant::now() < deadline, "read-grant release timed out");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         "sleep" => std::thread::sleep(Duration::from_secs(30)),
         other => panic!("unknown Windows sandbox fixture mode: {other}"),
     }
@@ -1510,6 +1555,140 @@ fn restricted_command_can_start_a_native_runtime_program() {
             worker.join().expect("dynamic worker");
         }
     });
+    drop(backend);
+    drop(cleanup);
+}
+
+#[test]
+fn concurrent_read_grant_does_not_widen_an_existing_sandbox() {
+    let _setup_test_guard = setup_test_lock();
+    let temporary = tempfile::tempdir().expect("temporary state");
+    let config = WindowsSetupConfig::new()
+        .with_state_directory(temporary.path().join("state"))
+        .expect("absolute state directory")
+        .with_setup_helper_path(PathBuf::from(env!("CARGO_BIN_EXE_cageforge-windows-setup")))
+        .expect("setup helper")
+        .with_command_runner_path(PathBuf::from(env!(
+            "CARGO_BIN_EXE_cageforge-windows-command-runner"
+        )))
+        .expect("command runner");
+    let setup = WindowsSetup::new(config);
+    let cleanup = SetupCleanup {
+        setup: &setup,
+        armed: true,
+    };
+    setup.install().expect("install read-isolation setup");
+    let backend = WindowsBackend::new(
+        WindowsBackendConfig::new()
+            .with_setup(setup.config().clone())
+            .with_default_timeout(Duration::from_secs(90))
+            .expect("bounded probe"),
+    )
+    .expect("read-isolation backend");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let resources = tempfile::tempdir().expect("external resources");
+    let secret = resources.path().join("secret.txt");
+    fs::write(&secret, b"secret").expect("secret fixture");
+    let fixture = workspace.path().join("read-isolation-probe.exe");
+    fs::copy(std::env::current_exe().expect("test executable"), &fixture)
+        .expect("copy read-isolation fixture");
+    let trigger = workspace.path().join("guardian-trigger");
+    let progress = workspace.path().join("guardian-progress");
+    let ready = workspace.path().join("grant-ready");
+    let release = workspace.path().join("grant-release");
+    let common_rules = || {
+        vec![
+            FilesystemRule::new(PathSelector::minimal(), AccessMode::Read),
+            FilesystemRule::new(PathSelector::workspace_root(), AccessMode::Write),
+        ]
+    };
+    let guardian_env = EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, "cross-session-read-guard")
+        .expect("guardian mode")
+        .with_var(SANDBOX_FIXTURE_DENIED_READ, secret.as_os_str())
+        .expect("secret path")
+        .with_var(SANDBOX_FIXTURE_MARKER, trigger.as_os_str())
+        .expect("guardian trigger")
+        .with_var(SANDBOX_FIXTURE_PROGRESS, progress.as_os_str())
+        .expect("guardian progress");
+    let (guardian_request, guardian_effective, guardian_context) =
+        request_with_filesystem_environment(
+            workspace.path(),
+            FilesystemPolicy::restricted(common_rules()),
+            NetworkPolicy::disabled(),
+            fixture_command(&fixture),
+            guardian_env,
+        );
+    let prepared = backend
+        .prepare(
+            BackendRequest::new(&guardian_request, &guardian_effective),
+            &guardian_context,
+        )
+        .expect("prepare guardian");
+    let mut guardian = backend.spawn(prepared).expect("spawn guardian");
+    let check_guardian = |phase: u8| {
+        fs::write(&trigger, phase.to_string()).expect("signal guardian");
+        let expected = format!("{phase}:denied");
+        let leaked = format!("{phase}:allowed");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let observed = fs::read_to_string(&progress).unwrap_or_default();
+            assert_ne!(observed, leaked, "concurrent grant widened the guardian");
+            if observed == expected {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "guardian phase {phase} timed out: {observed}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+    check_guardian(1);
+
+    let mut grant_rules = common_rules();
+    grant_rules.push(FilesystemRule::new(
+        PathSelector::absolute(&secret).expect("absolute secret"),
+        AccessMode::Read,
+    ));
+    let grant_env = EnvironmentSpec::inherit_core()
+        .with_var(SANDBOX_FIXTURE_MODE, "cross-session-read-grant")
+        .expect("grant mode")
+        .with_var(SANDBOX_FIXTURE_DENIED_READ, secret.as_os_str())
+        .expect("secret path")
+        .with_var(SANDBOX_FIXTURE_READY, ready.as_os_str())
+        .expect("ready path")
+        .with_var(SANDBOX_FIXTURE_MARKER, release.as_os_str())
+        .expect("release path");
+    let (grant_request, grant_effective, grant_context) = request_with_filesystem_environment(
+        workspace.path(),
+        FilesystemPolicy::restricted(grant_rules),
+        NetworkPolicy::disabled(),
+        fixture_command(&fixture),
+        grant_env,
+    );
+    let prepared = backend
+        .prepare(
+            BackendRequest::new(&grant_request, &grant_effective),
+            &grant_context,
+        )
+        .expect("prepare grant");
+    let mut granted = backend.spawn(prepared).expect("spawn concurrent grant");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "concurrent grant never became ready"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    check_guardian(2);
+    fs::write(&release, b"release").expect("release grant");
+    assert!(granted.wait().expect("wait grant").success());
+    drop(granted);
+    check_guardian(3);
+    assert!(guardian.wait().expect("wait guardian").success());
+    drop(guardian);
     drop(backend);
     drop(cleanup);
 }
