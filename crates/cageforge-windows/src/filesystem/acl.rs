@@ -74,7 +74,6 @@ pub(crate) struct FilesystemAclEnforcement {
 }
 
 pub(crate) struct FilesystemAuthorities {
-    read_base_sid: String,
     profile_guard_sid: String,
     write_root_sids: BTreeMap<NativePathKey, String>,
     token_sids: Vec<String>,
@@ -475,7 +474,6 @@ impl FilesystemAuthorities {
         token_sids.sort_unstable();
         token_sids.dedup();
         Ok(Self {
-            read_base_sid,
             profile_guard_sid,
             write_root_sids,
             token_sids,
@@ -560,7 +558,9 @@ impl<'plan> AclPlanBuilder<'plan> {
                 FilesystemPlanAccess::ReadRoot => {
                     let entries = vec![
                         AclEntry::allow(self.group_sid, READ_ALLOW_MASK),
-                        AclEntry::allow(&self.authorities.read_base_sid, READ_ALLOW_MASK),
+                        // The installation-wide read SID is also present in unrelated
+                        // concurrent sandboxes. Bind policy reads to this profile.
+                        AclEntry::allow(&self.authorities.profile_guard_sid, READ_ALLOW_MASK),
                     ];
                     self.insert_foundation(path, entries, true, self.inherited_write_sids(path));
                 }
@@ -572,7 +572,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                     })?;
                     let entries = vec![
                         AclEntry::allow(self.group_sid, WRITE_ALLOW_MASK),
-                        AclEntry::allow(&self.authorities.read_base_sid, READ_ALLOW_MASK),
+                        AclEntry::allow(&self.authorities.profile_guard_sid, READ_ALLOW_MASK),
                         AclEntry::allow(write_sid, WRITE_ALLOW_MASK),
                     ];
                     self.insert_foundation(
@@ -640,7 +640,7 @@ impl<'plan> AclPlanBuilder<'plan> {
                 directory,
                 vec![
                     AclEntry::allow(self.group_sid, WRITE_ALLOW_MASK),
-                    AclEntry::allow(&self.authorities.read_base_sid, READ_ALLOW_MASK),
+                    AclEntry::allow(&self.authorities.profile_guard_sid, READ_ALLOW_MASK),
                     AclEntry::allow(write_sid, WRITE_ALLOW_MASK),
                 ],
                 true,
