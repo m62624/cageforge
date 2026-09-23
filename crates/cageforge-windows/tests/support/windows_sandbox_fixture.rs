@@ -87,6 +87,7 @@ const UNRELATED_NAMED_OBJECT: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATE
 
 fn main() -> ExitCode {
     let result = match std::env::args_os().nth(1).as_deref() {
+        Some(argument) if argument == "--file-root-probe" => file_root_probe(),
         Some(argument) if argument == "--process-broker-child" => process_broker_child(),
         Some(argument) if argument == "--shell-activation-child" => shell_activation_child(),
         _ => run(),
@@ -98,6 +99,46 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn file_root_probe() -> Result<(), String> {
+    let file = PathBuf::from(std::env::args_os().nth(2).ok_or("missing file path")?);
+    let sibling = PathBuf::from(std::env::args_os().nth(3).ok_or("missing sibling path")?);
+    let spaced_file = PathBuf::from(
+        std::env::args_os()
+            .nth(4)
+            .ok_or("missing spaced file path")?,
+    );
+    let parent = file.parent().ok_or("missing parent")?;
+    for path in [&file, &spaced_file] {
+        let data =
+            std::fs::read(path).map_err(|error| format!("read approved file {path:?}: {error}"))?;
+        if data != b"cageforge-file-root\r\n" {
+            return Err(format!("unexpected approved file contents: {path:?}"));
+        }
+        let metadata = std::fs::metadata(path)
+            .map_err(|error| format!("read approved file metadata {path:?}: {error}"))?;
+        if !metadata.is_file() || metadata.len() != data.len() as u64 {
+            return Err(format!("unexpected approved file metadata: {path:?}"));
+        }
+    }
+    let write = std::fs::OpenOptions::new().write(true).open(&file);
+    let sibling_read = std::fs::read(&sibling);
+    let listing = std::fs::read_dir(parent);
+    for (operation, error) in [
+        ("file write", write.err()),
+        ("sibling read", sibling_read.err()),
+        ("parent listing", listing.err()),
+    ] {
+        if error.as_ref().map(std::io::Error::kind) != Some(std::io::ErrorKind::PermissionDenied) {
+            return Err(format!(
+                "{operation}: expected access denied, got {error:?}"
+            ));
+        }
+    }
+    std::io::stdout()
+        .write_all(b"file-root-contract-ok")
+        .map_err(|error| format!("write file-root result: {error}"))
 }
 
 fn run() -> Result<(), String> {

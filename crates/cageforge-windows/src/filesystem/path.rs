@@ -15,17 +15,18 @@ use windows_sys::Win32::Foundation::{
     ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GetLastError, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FileAttributeTagInfo, GetFileInformationByHandleEx,
-    GetFinalPathNameByHandleW, GetLongPathNameW, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_DOS,
-    WRITE_DAC,
+    CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_GENERIC_READ, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
+    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, GetLongPathNameW, OPEN_EXISTING,
+    READ_CONTROL, VOLUME_NAME_DOS, WRITE_DAC,
 };
 
 pub(crate) struct ValidatedPath {
     handle: OwnedHandle,
     final_path: PathBuf,
     identity: FilesystemObjectIdentity,
+    is_directory: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -174,6 +175,10 @@ impl ValidatedPath {
         &self.identity
     }
 
+    pub(crate) const fn is_directory(&self) -> bool {
+        self.is_directory
+    }
+
     pub(crate) fn try_clone_file(&self) -> std::io::Result<File> {
         self.handle.try_clone().map(File::from)
     }
@@ -204,7 +209,7 @@ impl ValidatedPath {
             });
         }
         let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
-        reject_reparse_point(path, handle.as_raw_handle() as _)?;
+        let is_directory = validate_object_kind(path, handle.as_raw_handle() as _)?;
         let identity = object_identity(path, handle.as_raw_handle() as _)?;
         let final_path = final_path(path, handle.as_raw_handle() as _)?;
         let expanded_path = long_path(path)?;
@@ -218,6 +223,7 @@ impl ValidatedPath {
             handle,
             final_path,
             identity,
+            is_directory,
         })
     }
 }
@@ -295,10 +301,10 @@ fn validate_lexical_path(path: &Path) -> Result<(), ValidatedPathError> {
 }
 
 #[allow(unsafe_code)]
-fn reject_reparse_point(
+fn validate_object_kind(
     path: &Path,
     handle: windows_sys::Win32::Foundation::HANDLE,
-) -> Result<(), ValidatedPathError> {
+) -> Result<bool, ValidatedPathError> {
     let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
     if unsafe {
         GetFileInformationByHandleEx(
@@ -319,7 +325,7 @@ fn reject_reparse_point(
             path: path.to_path_buf(),
         })
     } else {
-        Ok(())
+        Ok(attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0)
     }
 }
 
