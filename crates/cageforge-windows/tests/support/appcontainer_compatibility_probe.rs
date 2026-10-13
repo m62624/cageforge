@@ -33,9 +33,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::super::desktop::PrivateDesktop;
-use super::{
-    RestrictedPrimaryToken, open_base_token, sid_to_string, token_group_sid_set, token_user_sid,
-};
+use super::{RestrictedPrimaryToken, open_base_token, token_group_sid_set, token_user_sid};
 
 #[path = "appcontainer_profile.rs"]
 mod appcontainer_profile;
@@ -121,26 +119,20 @@ fn job() -> OwnedHandle {
 #[allow(unsafe_code)]
 fn exercise(strict_local_ipc: bool) {
     let mut profile = Profile::new();
-    let profile_sid = sid_to_string("AppContainer package", profile.sid).expect("package SID");
     let base = open_base_token().expect("base primary token");
     let user = token_user_sid(base.as_raw_handle()).expect("base user");
     // An identity marker, not an object-access capability. Production generates
     // fresh route SIDs; this test only checks that lowbox creation preserves it.
     let route = "S-1-5-21-117733-229955-331177-440099";
-    // Distinguish an invalid package-SID restriction from a runner-account
-    // prerequisite. This control has the existing Cageforge SID shape and
-    // never requests AppContainer process creation.
-    let control = RestrictedPrimaryToken::create(
+    // Preserve Cageforge restriction identities. The AppContainer package SID
+    // belongs in SECURITY_CAPABILITIES, not in this ordinary restricting set.
+    let token = RestrictedPrimaryToken::create(
         &["S-1-5-21-117733-229955-331177-440100".to_owned()],
         strict_local_ipc,
         Some(route),
         &user,
     )
     .expect("ordinary restricted-token control before AppContainer");
-    drop(control);
-    let token =
-        RestrictedPrimaryToken::create(&[profile_sid], strict_local_ipc, Some(route), &user)
-            .expect("production restricted-token constructor");
     let expected = token_group_sid_set(token.raw(), TokenRestrictedSids, "input restrictions")
         .expect("input restrictions");
     let desktop = PrivateDesktop::create(&token).expect("production private desktop");
