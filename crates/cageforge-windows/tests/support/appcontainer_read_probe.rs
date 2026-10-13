@@ -6,8 +6,6 @@
 //! Two distinct package identities receive disjoint file grants. Both processes
 //! must start, read their own file, and fail to read/write the unapproved file.
 
-#![cfg(target_os = "windows")]
-
 use std::ffi::{OsStr, c_void};
 use std::fs;
 use std::mem::size_of;
@@ -27,17 +25,18 @@ use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, FreeSid, GetTokenInformation, SECURITY_CAPABILITIES, TOKEN_QUERY,
-    TokenIsAppContainer,
+    DACL_SECURITY_INFORMATION, FreeSid, GetTokenInformation, SECURITY_CAPABILITIES,
+    TOKEN_DUPLICATE, TOKEN_QUERY, TokenIsAppContainer,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+use windows_sys::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+    GetExitCodeProcess, InitializeProcThreadAttributeList, OpenProcessToken,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 struct Profile {
@@ -54,6 +53,7 @@ struct Child {
 
 struct Attributes(Vec<usize>);
 struct LocalAllocation(*mut c_void);
+struct Environment(*mut c_void);
 
 #[allow(unsafe_code)]
 impl Profile {
@@ -154,6 +154,13 @@ impl Drop for Attributes {
 impl Drop for LocalAllocation {
     fn drop(&mut self) {
         unsafe { LocalFree(self.0) };
+    }
+}
+
+#[allow(unsafe_code)]
+impl Drop for Environment {
+    fn drop(&mut self) {
+        unsafe { DestroyEnvironmentBlock(self.0) };
     }
 }
 
@@ -302,16 +309,27 @@ fn launch(profile: &Profile, executable: &Path, own: &Path, other: &Path) -> Chi
     command.push(0);
     let program = wide(executable.as_os_str());
     let cwd = wide(executable.parent().expect("fixture directory").as_os_str());
-    let mut environment = wide(
-        &std::env::var_os("SystemRoot")
-            .map(|root| {
-                let mut value = std::ffi::OsString::from("SystemRoot=");
-                value.push(root);
-                value
-            })
-            .expect("SystemRoot"),
+    let mut user_token = null_mut();
+    assert_ne!(
+        unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_QUERY | TOKEN_DUPLICATE,
+                &mut user_token,
+            )
+        },
+        0
     );
-    environment.push(0);
+    let user_token = unsafe { OwnedHandle::from_raw_handle(user_token) };
+    let mut environment = null_mut();
+    // Build the system/user baseline without inheriting the CI process env.
+    assert_ne!(
+        unsafe { CreateEnvironmentBlock(&mut environment, user_token.as_raw_handle(), 0) },
+        0,
+        "CreateEnvironmentBlock: {}",
+        unsafe { GetLastError() }
+    );
+    let environment = Environment(environment);
     let mut information = PROCESS_INFORMATION::default();
     let created = unsafe {
         CreateProcessW(
@@ -324,7 +342,7 @@ fn launch(profile: &Profile, executable: &Path, own: &Path, other: &Path) -> Chi
                 | CREATE_NO_WINDOW
                 | CREATE_SUSPENDED
                 | CREATE_UNICODE_ENVIRONMENT,
-            environment.as_ptr().cast(),
+            environment.0,
             cwd.as_ptr(),
             &startup.StartupInfo,
             &mut information,

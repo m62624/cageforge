@@ -2,6 +2,9 @@
 
 #![cfg(target_os = "windows")]
 
+#[path = "support/appcontainer_read_probe.rs"]
+mod appcontainer_read_probe;
+
 use std::ffi::c_void;
 use std::fs;
 use std::io::{self, Read, Write};
