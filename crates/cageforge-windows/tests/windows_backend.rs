@@ -1626,16 +1626,15 @@ fn concurrent_read_grant_does_not_widen_an_existing_sandbox() {
         )
         .expect("prepare guardian");
     let mut guardian = backend.spawn(prepared).expect("spawn guardian");
-    let check_guardian = |phase: u8| {
+    let probe_guardian = |phase: u8| {
         fs::write(&trigger, phase.to_string()).expect("signal guardian");
         let expected = format!("{phase}:denied");
         let leaked = format!("{phase}:allowed");
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let observed = fs::read_to_string(&progress).unwrap_or_default();
-            assert_ne!(observed, leaked, "concurrent grant widened the guardian");
-            if observed == expected {
-                break;
+            if observed == expected || observed == leaked {
+                break observed;
             }
             assert!(
                 Instant::now() < deadline,
@@ -1644,7 +1643,11 @@ fn concurrent_read_grant_does_not_widen_an_existing_sandbox() {
             thread::sleep(Duration::from_millis(10));
         }
     };
-    check_guardian(1);
+    let before = probe_guardian(1);
+    assert_eq!(
+        before, "1:denied",
+        "guardian must start without read access"
+    );
 
     let mut grant_rules = common_rules();
     grant_rules.push(FilesystemRule::new(
@@ -1682,15 +1685,22 @@ fn concurrent_read_grant_does_not_widen_an_existing_sandbox() {
         );
         thread::sleep(Duration::from_millis(10));
     }
-    check_guardian(2);
+    // Collect both observations even when the live grant leaks. Failing here
+    // would hide whether the grant remains effective after its process exits.
+    let during = probe_guardian(2);
     fs::write(&release, b"release").expect("release grant");
     assert!(granted.wait().expect("wait grant").success());
     drop(granted);
-    check_guardian(3);
+    let after = probe_guardian(3);
     assert!(guardian.wait().expect("wait guardian").success());
     drop(guardian);
     drop(backend);
     drop(cleanup);
+    assert_eq!(
+        [before.as_str(), during.as_str(), after.as_str()],
+        ["1:denied", "2:denied", "3:denied"],
+        "guardian read access before, during, and after another sandbox's grant"
+    );
 }
 
 #[test]
