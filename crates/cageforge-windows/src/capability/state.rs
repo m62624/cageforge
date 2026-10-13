@@ -130,6 +130,7 @@ pub(crate) struct PersistedDacl {
 pub(crate) enum CapabilityRole {
     ProfileGuard,
     WriteRoot,
+    ReadProfile,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -570,6 +571,7 @@ pub(crate) fn authority_key(
     let role = match role {
         CapabilityRole::ProfileGuard => 0,
         CapabilityRole::WriteRoot => 1,
+        CapabilityRole::ReadProfile => 2,
     };
     (profile_sha256.to_string(), role, NativePathKey::new(path))
 }

@@ -30,6 +30,10 @@ use crate::runner_protocol::{WindowsRunnerFailureCode, WindowsRunnerFailureStage
 use super::{range_fits_buffer, sid_fits_buffer};
 use crate::native_strings::local_sid_string;
 
+#[cfg(test)]
+#[path = "../../../tests/support/appcontainer_compatibility_probe.rs"]
+mod appcontainer_compatibility_probe;
+
 const GENERIC_ALL: u32 = 0x1000_0000;
 const SE_GROUP_LOGON_ID: u32 = 0xc000_0000;
 const WRITE_RESTRICTED: u32 = 0x0000_0008;
