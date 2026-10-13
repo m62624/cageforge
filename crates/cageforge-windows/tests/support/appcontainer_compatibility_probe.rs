@@ -127,6 +127,17 @@ fn exercise(strict_local_ipc: bool) {
     // An identity marker, not an object-access capability. Production generates
     // fresh route SIDs; this test only checks that lowbox creation preserves it.
     let route = "S-1-5-21-117733-229955-331177-440099";
+    // Distinguish an invalid package-SID restriction from a runner-account
+    // prerequisite. This control has the existing Cageforge SID shape and
+    // never requests AppContainer process creation.
+    let control = RestrictedPrimaryToken::create(
+        &["S-1-5-21-117733-229955-331177-440100".to_owned()],
+        strict_local_ipc,
+        Some(route),
+        &user,
+    )
+    .expect("ordinary restricted-token control before AppContainer");
+    drop(control);
     let token =
         RestrictedPrimaryToken::create(&[profile_sid], strict_local_ipc, Some(route), &user)
             .expect("production restricted-token constructor");
