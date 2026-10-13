@@ -2,6 +2,9 @@
 
 #![cfg(target_os = "windows")]
 
+#[path = "support/process_security_environment_probe.rs"]
+mod process_security_environment_probe;
+
 use std::ffi::c_void;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -1562,6 +1565,7 @@ fn restricted_command_can_start_a_native_runtime_program() {
 #[test]
 fn concurrent_read_grant_does_not_widen_an_existing_sandbox() {
     let _setup_test_guard = setup_test_lock();
+    process_security_environment_probe::report();
     let temporary = tempfile::tempdir().expect("temporary state");
     let config = WindowsSetupConfig::new()
         .with_state_directory(temporary.path().join("state"))
