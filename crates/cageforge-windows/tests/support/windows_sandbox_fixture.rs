@@ -87,6 +87,7 @@ const UNRELATED_NAMED_OBJECT: &str = "CAGEFORGE_WINDOWS_SANDBOX_FIXTURE_UNRELATE
 
 fn main() -> ExitCode {
     let result = match std::env::args_os().nth(1).as_deref() {
+        Some(argument) if argument == "--appcontainer-read-probe" => appcontainer_read_probe(),
         Some(argument) if argument == "--file-root-probe" => file_root_probe(),
         Some(argument) if argument == "--process-broker-child" => process_broker_child(),
         Some(argument) if argument == "--shell-activation-child" => shell_activation_child(),
@@ -99,6 +100,32 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+// Temporary OS-primitive probe, independent of the production runner. Success
+// requires an actual allowed read as well as denied read/write operations.
+fn appcontainer_read_probe() -> Result<(), String> {
+    let own = PathBuf::from(std::env::args_os().nth(2).ok_or("missing own file")?);
+    let other = PathBuf::from(std::env::args_os().nth(3).ok_or("missing other file")?);
+    if std::fs::read(&own).map_err(|error| format!("own read: {error}"))?
+        != b"appcontainer-read-probe"
+    {
+        return Err("unexpected own file contents".into());
+    }
+    for (operation, error) in [
+        ("other read", std::fs::read(&other).err()),
+        (
+            "own write",
+            std::fs::OpenOptions::new().write(true).open(&own).err(),
+        ),
+    ] {
+        if error.as_ref().map(std::io::Error::kind) != Some(std::io::ErrorKind::PermissionDenied) {
+            return Err(format!(
+                "{operation}: expected access denied, got {error:?}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn file_root_probe() -> Result<(), String> {
