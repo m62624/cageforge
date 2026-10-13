@@ -89,8 +89,5 @@ cageforge-config.workspace = true
 cageforge-permissions.workspace = true
 pretty_assertions.workspace = true
 
-[target.'cfg(target_os = "windows")'.dev-dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_LibraryLoader"] }
-
 [lints]
 workspace = true
