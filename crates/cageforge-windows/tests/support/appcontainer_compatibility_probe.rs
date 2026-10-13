@@ -10,6 +10,13 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+    mpsc,
+};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{GetLastError, WAIT_OBJECT_0};
 use windows_sys::Win32::Security::{
@@ -39,6 +46,12 @@ use super::{RestrictedPrimaryToken, open_base_token, token_group_sid_set, token_
 mod appcontainer_profile;
 use appcontainer_profile::Profile;
 
+struct ProbeDeadline {
+    phase: Arc<AtomicU8>,
+    cancel: mpsc::Sender<()>,
+    worker: Option<JoinHandle<()>>,
+}
+
 struct Child {
     process: OwnedHandle,
     thread: OwnedHandle,
@@ -47,6 +60,55 @@ struct Child {
 
 struct Attributes(Vec<usize>);
 struct Environment(*mut c_void);
+
+impl ProbeDeadline {
+    fn new(strict: bool) -> Self {
+        let phase = Arc::new(AtomicU8::new(0));
+        let observed = Arc::clone(&phase);
+        let (cancel, receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            if receiver.recv_timeout(Duration::from_secs(60)).is_err() {
+                let names = [
+                    "profile",
+                    "restricted token",
+                    "private desktop",
+                    "job/attributes",
+                    "CreateProcessAsUserW",
+                    "child token read-back",
+                    "resume/wait",
+                    "cleanup",
+                ];
+                let phase = observed.load(Ordering::Acquire) as usize;
+                eprintln!(
+                    "AppContainer compatibility probe exceeded 60s: strict IPC={strict}, phase={}",
+                    names.get(phase).copied().unwrap_or("unknown")
+                );
+                // A blocked Win32 call cannot be unwound by a Rust watchdog.
+                // Fail this test process; Windows closes its kill-on-close Job.
+                // This experiment runs on an ephemeral native CI machine only.
+                std::process::exit(124);
+            }
+        });
+        Self {
+            phase,
+            cancel,
+            worker: Some(worker),
+        }
+    }
+
+    fn stage(&self, phase: u8) {
+        self.phase.store(phase, Ordering::Release);
+    }
+}
+
+impl Drop for ProbeDeadline {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
 
 #[allow(unsafe_code)]
 impl Drop for Child {
@@ -118,7 +180,10 @@ fn job() -> OwnedHandle {
 
 #[allow(unsafe_code)]
 fn exercise(strict_local_ipc: bool) {
+    // Must outlive every other owner, including cleanup during panic unwinding.
+    let deadline = ProbeDeadline::new(strict_local_ipc);
     let mut profile = Profile::new();
+    deadline.stage(1);
     let base = open_base_token().expect("base primary token");
     let user = token_user_sid(base.as_raw_handle()).expect("base user");
     // An identity marker, not an object-access capability. Production generates
@@ -135,7 +200,9 @@ fn exercise(strict_local_ipc: bool) {
     .expect("ordinary restricted-token control before AppContainer");
     let expected = token_group_sid_set(token.raw(), TokenRestrictedSids, "input restrictions")
         .expect("input restrictions");
+    deadline.stage(2);
     let desktop = PrivateDesktop::create(&token).expect("production private desktop");
+    deadline.stage(3);
     let job = job();
     let jobs = [job.as_raw_handle()];
     let mut capabilities = SECURITY_CAPABILITIES {
@@ -205,6 +272,7 @@ fn exercise(strict_local_ipc: bool) {
     );
     let environment = Environment(environment);
     let mut information = PROCESS_INFORMATION::default();
+    deadline.stage(4);
     let created = unsafe {
         CreateProcessAsUserW(
             token.raw(),
@@ -234,6 +302,7 @@ fn exercise(strict_local_ipc: bool) {
         thread: unsafe { OwnedHandle::from_raw_handle(information.hThread) },
         job,
     };
+    deadline.stage(5);
     let mut child_token = null_mut();
     assert_ne!(
         unsafe { OpenProcessToken(child.process.as_raw_handle(), TOKEN_QUERY, &mut child_token) },
@@ -281,6 +350,7 @@ fn exercise(strict_local_ipc: bool) {
         0
     );
     assert_ne!(assigned, 0, "atomic Job assignment");
+    deadline.stage(6);
     assert_ne!(
         unsafe { ResumeThread(child.thread.as_raw_handle()) },
         u32::MAX
@@ -299,6 +369,7 @@ fn exercise(strict_local_ipc: bool) {
         status, 0,
         "restricted AppContainer exit (strict IPC={strict_local_ipc}): {status:#x}"
     );
+    deadline.stage(7);
     drop(child_token);
     drop(child);
     drop(desktop);
