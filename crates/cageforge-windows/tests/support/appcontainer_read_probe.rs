@@ -21,12 +21,9 @@ use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, SE_FILE_OBJECT, SetEntriesInAclW,
     SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
-use windows_sys::Win32::Security::Isolation::{
-    CreateAppContainerProfile, DeleteAppContainerProfile,
-};
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, FreeSid, GetTokenInformation, SECURITY_CAPABILITIES,
-    TOKEN_DUPLICATE, TOKEN_QUERY, TokenIsAppContainer,
+    DACL_SECURITY_INFORMATION, GetTokenInformation, SECURITY_CAPABILITIES, TOKEN_DUPLICATE,
+    TOKEN_QUERY, TokenIsAppContainer,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows_sys::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
@@ -39,11 +36,9 @@ use windows_sys::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
-struct Profile {
-    name: Vec<u16>,
-    sid: *mut c_void,
-    removed: bool,
-}
+#[path = "appcontainer_profile.rs"]
+mod appcontainer_profile;
+use appcontainer_profile::Profile;
 
 struct Child {
     process: OwnedHandle,
@@ -54,53 +49,6 @@ struct Child {
 struct Attributes(Vec<usize>);
 struct LocalAllocation(*mut c_void);
 struct Environment(*mut c_void);
-
-#[allow(unsafe_code)]
-impl Profile {
-    fn new() -> Self {
-        let mut entropy = [0_u8; 16];
-        getrandom::fill(&mut entropy).expect("profile identity entropy");
-        let suffix: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
-        let name = wide(OsStr::new(&format!("CageforgeProbe.{suffix}")));
-        let mut sid = null_mut();
-        // All strings are owned NUL-terminated buffers; no capabilities granted.
-        let status = unsafe {
-            CreateAppContainerProfile(
-                name.as_ptr(),
-                name.as_ptr(),
-                name.as_ptr(),
-                null(),
-                0,
-                &mut sid,
-            )
-        };
-        assert_eq!(status, 0, "CreateAppContainerProfile: {status:#x}");
-        assert!(!sid.is_null());
-        Self {
-            name,
-            sid,
-            removed: false,
-        }
-    }
-
-    fn remove(&mut self) {
-        let status = unsafe { DeleteAppContainerProfile(self.name.as_ptr()) };
-        assert_eq!(status, 0, "DeleteAppContainerProfile: {status:#x}");
-        self.removed = true;
-    }
-}
-
-#[allow(unsafe_code)]
-impl Drop for Profile {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.removed {
-                DeleteAppContainerProfile(self.name.as_ptr());
-            }
-            FreeSid(self.sid);
-        }
-    }
-}
 
 #[allow(unsafe_code)]
 impl Child {
